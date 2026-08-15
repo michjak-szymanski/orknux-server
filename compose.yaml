@@ -1,0 +1,83 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: gyloli
+      POSTGRES_USER: gyloli
+      POSTGRES_PASSWORD: gyloli
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U gyloli -d gyloli" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ldap:
+    image: osixia/openldap:1.5.0
+    command: [ "--copy-service" ]
+    environment:
+      LDAP_ORGANISATION: Gyloli
+      LDAP_DOMAIN: gyloli.io
+      LDAP_ADMIN_PASSWORD: admin
+    ports:
+      - "389:389"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+      - ./docker/ldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=gyloli,dc=io -D cn=admin,dc=gyloli,dc=io -w admin" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Durable execution for the workflow module, alongside the app rather than
+  # inside it. It keeps its own databases (temporal, temporal_visibility) in the
+  # Postgres above, so a deployment runs one database server, not two.
+  #
+  # auto-setup applies the schema on every start, which is what makes it a
+  # one-line development dependency and also what makes it unfit for
+  # production: there, use temporalio/server with temporal-sql-tool.
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: gyloli
+      POSTGRES_PWD: gyloli
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7233:7233"
+    volumes:
+      - ./docker/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    healthcheck:
+      test: [ "CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Not required by anything; it is how a run that went wrong is looked at.
+  temporal-ui:
+    image: temporalio/ui:2.53.3
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      # 8080 is the app, 5173 the UI.
+      - "8233:8080"
+
+volumes:
+  postgres-data:
+  ldap-data:
+  ldap-config:

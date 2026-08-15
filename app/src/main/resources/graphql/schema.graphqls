@@ -1,0 +1,1026 @@
+type Query {
+    teams(page: Int = 0, size: Int = 20): TeamPage!
+    team(id: ID!): Team
+    "Audit entries, newest first. Without a teamId every visible team is included."
+    teamAudit(
+        teamId: ID,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        category: TeamAuditCategory,
+        userId: String,
+        "Only entries from the last N days; omit for all time."
+        days: Int
+    ): TeamAuditPage!
+    "The users who appear in the organization audit log, for the filter."
+    auditUsers: [String!]!
+    "The health of the service and what it depends on. Administrators only."
+    components: [Component!]!
+    "The organization's default connections, ordered by name. Administrators only."
+    connections(page: Int = 0, size: Int = 20): ConnectionPage!
+    connection(id: ID!): Connection
+    "The connections one team holds, ordered by name."
+    teamConnections(teamId: ID!): [TeamConnection!]!
+    teamConnection(id: ID!): TeamConnection
+    "The MCP servers a team's agents may connect to, ordered by name."
+    mcpServers(teamId: ID!): [McpServer!]!
+    mcpServer(id: ID!): McpServer
+    "Workflows assigned to a team, ordered by name."
+    teamWorkflows(teamId: ID!, page: Int = 0, size: Int = 20): TeamWorkflowPage!
+    "The team's action catalogue: the blocks its workflows are built from."
+    teamActions(teamId: ID!, page: Int = 0, size: Int = 20): ActionPage!
+    action(id: ID!): Action
+    "The team's conditions: the questions its workflows ask."
+    teamConditions(teamId: ID!, page: Int = 0, size: Int = 20): ConditionPage!
+    condition(id: ID!): Condition
+    "The team's JavaScript functions, callable from an action."
+    teamFunctions(teamId: ID!, page: Int = 0, size: Int = 20): FunctionPage!
+    function(id: ID!): Function
+    "What starts a team's workflows, ordered by name."
+    teamTriggers(teamId: ID!, page: Int = 0, size: Int = 20): TriggerPage!
+    trigger(id: ID!): Trigger
+    "Agents configured by a team, ordered by name."
+    teamAgents(teamId: ID!, page: Int = 0, size: Int = 20): AgentPage!
+    agent(id: ID!): Agent
+    "Everything that happened inside one team, newest first."
+    teamActivity(
+        teamId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        category: TeamAuditCategory,
+        userId: String,
+        "Only entries from the last N days; omit for all time."
+        days: Int
+    ): TeamAuditPage!
+    "The users who appear in a team's audit log, for the filter."
+    teamActivityUsers(teamId: ID!): [String!]!
+    "The editable graph of a workflow the team has assigned."
+    workflowGraph(teamId: ID!, workflowId: ID!): WorkflowGraph!
+    "What one run did: the graph as it ran, per-node outcome, and its log."
+    execution(id: ID!): ExecutionDetail
+    "Runs of a team's workflows, newest first."
+    teamExecutions(
+        teamId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        status: ExecutionStatus,
+        workflowId: ID,
+        "Only runs started in the last N days; omit for all time."
+        days: Int,
+        search: String
+    ): ExecutionPage!
+}
+
+type Mutation {
+    createTeam(input: CreateTeamInput!): Team!
+    "Saves the team settings form: name, description and directory group."
+    updateTeam(id: ID!, input: UpdateTeamInput!): Team!
+    deleteTeam(id: ID!): Boolean!
+    "Creates the workflow definition and assigns it to the team."
+    createWorkflow(input: CreateWorkflowInput!): TeamWorkflow!
+    setWorkflowEnabled(id: ID!, enabled: Boolean!): TeamWorkflow!
+    "Saves the workflow settings form; the definition is shared by every team using it."
+    updateWorkflow(id: ID!, input: UpdateWorkflowInput!): TeamWorkflow!
+    "Unassigns the workflow from the team; the definition is kept."
+    removeWorkflow(id: ID!): Boolean!
+    "Replaces the whole graph and puts the workflow back into draft."
+    saveWorkflowGraph(teamId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
+    publishWorkflow(teamId: ID!, workflowId: ID!): WorkflowGraph!
+    createAgent(input: CreateAgentInput!): Agent!
+    "Saves the agent settings form."
+    updateAgent(id: ID!, input: UpdateAgentInput!): Agent!
+    setAgentEnabled(id: ID!, enabled: Boolean!): Agent!
+    deleteAgent(id: ID!): Boolean!
+    "Defines a default connection, assigned to teams created from now on."
+    createConnection(input: ConnectionInput!): Connection!
+    "Also updates the copy held by every team provisioned with this default."
+    updateConnection(id: ID!, input: ConnectionInput!): Connection!
+    "Removes the default; teams keep the copy they hold, credentials included."
+    deleteConnection(id: ID!): Boolean!
+    "Adds a connection that belongs to this team alone."
+    createTeamConnection(input: CreateTeamConnectionInput!): TeamConnection!
+    "Saves the connection settings form; inherited fields are left to the default."
+    updateTeamConnection(id: ID!, input: UpdateTeamConnectionInput!): TeamConnection!
+    "Clears the team's credentials; a team-owned connection is removed outright."
+    disconnectTeamConnection(id: ID!): Boolean!
+    "Calls the service and records what came back, which is what status reports."
+    testTeamConnection(id: ID!): TeamConnection!
+    "Returns the stored credentials and records that they were revealed."
+    revealTeamConnectionSecret(id: ID!): String
+    createMcpServer(input: CreateMcpServerInput!): McpServer!
+    updateMcpServer(id: ID!, input: UpdateMcpServerInput!): McpServer!
+    removeMcpServer(id: ID!): Boolean!
+    "Returns the stored credentials and records that they were revealed."
+    revealMcpServerSecret(id: ID!): String
+    createFunction(input: CreateFunctionInput!): Function!
+    "Saves the function editor: the code, the details and the parameters."
+    updateFunction(id: ID!, input: UpdateFunctionInput!): Function!
+    "Parses the source and says where it broke; the editor's Validate."
+    validateFunctionSource(teamId: ID!, source: String!): FunctionValidation!
+    "Refused while an action still calls it."
+    deleteFunction(id: ID!): Boolean!
+    createCondition(input: CreateConditionInput!): Condition!
+    "Saves the condition builder."
+    updateCondition(id: ID!, input: UpdateConditionInput!): Condition!
+    "Refused while an action, a node or another condition still uses it."
+    deleteCondition(id: ID!): Boolean!
+    createAction(input: CreateActionInput!): Action!
+    "Saves the action settings form."
+    updateAction(id: ID!, input: UpdateActionInput!): Action!
+    deleteAction(id: ID!): Boolean!
+    createTrigger(input: CreateTriggerInput!): Trigger!
+    "Saves the trigger settings form."
+    updateTrigger(id: ID!, input: UpdateTriggerInput!): Trigger!
+    "The toggle in the list; a disabled trigger stays, and stops firing."
+    setTriggerEnabled(id: ID!, enabled: Boolean!): Trigger!
+    deleteTrigger(id: ID!): Boolean!
+    "Runs a workflow the team has assigned, with the graph as it stands now."
+    startExecution(teamId: ID!, workflowId: ID!, input: String): ExecutionDetail!
+    "Runs the workflow of an earlier run again."
+    rerunExecution(id: ID!): ExecutionDetail!
+}
+
+type Team {
+    id: ID!
+    name: String!
+    description: String
+    "Directory group whose members may see this team, e.g. cn=backend,ou=teams,dc=gyloli,dc=io."
+    ldapGroup: String
+}
+
+input CreateTeamInput {
+    name: String!
+    description: String
+}
+
+input UpdateTeamInput {
+    name: String!
+    description: String
+    ldapGroup: String
+}
+
+"A slice of teams, ordered by name."
+type TeamPage {
+    content: [Team!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input CreateWorkflowInput {
+    teamId: ID!
+    name: String!
+    description: String
+}
+
+input UpdateWorkflowInput {
+    name: String!
+    description: String
+}
+
+enum WorkflowStatus {
+    DRAFT
+    PUBLISHED
+}
+
+enum NodeKind {
+    TRIGGER
+    AGENT
+    "An instance of one of the team's actions."
+    ACTION
+    "Asks one of the team's conditions; the run stops when it does not hold."
+    CONDITION
+    DATA_TASK
+    PUBLISH_TASK
+}
+
+type WorkflowNode {
+    "Stable within a workflow; what edges refer to."
+    key: String!
+    kind: NodeKind!
+    name: String!
+    description: String
+    agentClass: String
+    modelProvider: String
+    "The trigger definition a TRIGGER node instances, if it names one."
+    triggerId: ID
+    "The action an ACTION node instances, if it names one."
+    actionId: ID
+    "The condition a CONDITION node asks, if it names one."
+    conditionId: ID
+    x: Float!
+    y: Float!
+    "What the node needs, read off whatever it points at."
+    inputs: [ActionParam!]!
+    "What it hands on."
+    outputs: [ActionParam!]!
+}
+
+type WorkflowEdge {
+    source: String!
+    target: String!
+}
+
+type WorkflowGraph {
+    workflowId: ID!
+    name: String!
+    description: String
+    status: WorkflowStatus!
+    nodes: [WorkflowNode!]!
+    edges: [WorkflowEdge!]!
+    "What the graph is missing, worst first; empty when it holds together."
+    problems: [GraphProblem!]!
+}
+
+"How much a problem matters: an error is refused on save, a warning is advice."
+enum GraphProblemSeverity {
+    ERROR
+    WARNING
+}
+
+type GraphProblem {
+    severity: GraphProblemSeverity!
+    "The node it is about; an edge is reported against the node it reaches."
+    nodeKey: String!
+    message: String!
+}
+
+input WorkflowNodeInput {
+    key: String!
+    kind: NodeKind!
+    name: String!
+    description: String
+    agentClass: String
+    modelProvider: String
+    "The trigger definition a TRIGGER node instances; ignored on any other kind."
+    triggerId: ID
+    "The action an ACTION node instances; ignored on any other kind."
+    actionId: ID
+    "The condition a CONDITION node asks; ignored on any other kind."
+    conditionId: ID
+    x: Float!
+    y: Float!
+}
+
+input WorkflowEdgeInput {
+    source: String!
+    target: String!
+}
+
+input WorkflowGraphInput {
+    nodes: [WorkflowNodeInput!]!
+    edges: [WorkflowEdgeInput!]!
+}
+
+enum ExecutionStatus {
+    RUNNING
+    COMPLETED
+    FAILED
+}
+
+enum ExecutionTrigger {
+    WEBHOOK
+    MANUAL
+    SCHEDULE
+    API
+}
+
+type Execution {
+    id: ID!
+    workflowId: ID!
+    workflowName: String!
+    status: ExecutionStatus!
+    "Set when a condition ended the run early; null for an ordinary finish."
+    stoppedReason: String
+    trigger: ExecutionTrigger!
+    "ISO-8601 offset date-time."
+    startedAt: String!
+    finishedAt: String
+    "Null while the run is still going."
+    durationSeconds: Int
+}
+
+type ExecutionPage {
+    content: [Execution!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+"The most recent run of a workflow, so the list shows where it got to."
+type LastRun {
+    executionId: ID!
+    status: ExecutionStatus!
+    "ISO-8601 offset date-time."
+    startedAt: String!
+    durationSeconds: Int
+}
+
+"A workflow as it appears for one team."
+type TeamWorkflow {
+    "Identifies the assignment, not the definition."
+    id: ID!
+    workflowId: ID!
+    name: String!
+    description: String
+    enabled: Boolean!
+    "Where it last got to; null until it has run."
+    lastRun: LastRun
+    "When a scheduled trigger will start it next, ISO-8601; null when nothing schedules it."
+    nextRun: String
+}
+
+type TeamWorkflowPage {
+    content: [TeamWorkflow!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+enum AgentType {
+    REACT
+    LLM
+}
+
+type Agent {
+    id: ID!
+    teamId: ID!
+    name: String!
+    type: AgentType!
+    description: String
+    systemPrompt: String
+    enabled: Boolean!
+    "MCP servers this agent may connect to."
+    mcpServers: [String!]!
+}
+
+type AgentPage {
+    content: [Agent!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input CreateAgentInput {
+    teamId: ID!
+    name: String!
+    type: AgentType!
+    description: String
+    systemPrompt: String
+}
+
+input UpdateAgentInput {
+    name: String!
+    description: String
+    systemPrompt: String
+    type: AgentType
+    "Null leaves the list alone; an empty list clears it."
+    mcpServers: [String!]
+}
+
+enum TeamOperationType {
+    ADD
+    REMOVE
+    RENAME
+}
+
+enum TeamAuditCategory {
+    TEAM
+    WORKFLOW
+    AGENT
+    INTEGRATION
+}
+
+type TeamAuditEntry {
+    id: ID!
+    "Null for organization-wide entries, such as a default connection change."
+    teamId: ID
+    category: TeamAuditCategory!
+    "Ready to show: \"Agent Research Agent enabled\"."
+    message: String!
+    oldTeamName: String
+    newTeamName: String
+    "Only set for team lifecycle entries."
+    operationType: TeamOperationType
+    "ISO-8601 offset date-time, e.g. 2026-08-14T17:04:11.123+02:00."
+    date: String!
+    "LDAP uid of the user who performed the operation."
+    userId: String!
+}
+
+"A slice of audit entries, newest first."
+type TeamAuditPage {
+    content: [TeamAuditEntry!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+enum ConnectionType {
+    SLACK
+    "Slack over Socket Mode: a bot token and an app-level token, and gyloli listens on it."
+    SLACK_SOCKET_MODE
+    GITHUB
+    JIRA
+    TEAMS
+    "Anything that is just an HTTP endpoint, until it earns a type of its own."
+    WEBHOOK
+}
+
+"How requests to the service are authenticated."
+enum AuthType {
+    NONE
+    API_KEY
+    BEARER_TOKEN
+    BASIC
+}
+
+"An extra HTTP header sent with every request."
+type HttpHeader {
+    name: String!
+    value: String!
+}
+
+input HttpHeaderInput {
+    name: String!
+    value: String!
+}
+
+"An organization-wide default connection."
+type Connection {
+    id: ID!
+    name: String!
+    type: ConnectionType!
+    url: String!
+}
+
+type ConnectionPage {
+    content: [Connection!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input ConnectionInput {
+    name: String!
+    type: ConnectionType!
+    url: String!
+    "Also hand the connection to the teams that already exist. Ignored on update."
+    addToExistingTeams: Boolean
+}
+
+"A connection as one team holds it, with that team's credentials."
+type TeamConnection {
+    id: ID!
+    teamId: ID!
+    name: String!
+    type: ConnectionType!
+    "The organization default, or the team's own URL for a connection it added."
+    url: String!
+    urlOverride: String
+    "Where requests actually go: the override when set, the default otherwise."
+    effectiveUrl: String!
+    authType: AuthType!
+    headers: [HttpHeader!]!
+    "True while the team follows an organization default, which locks name, type and URL."
+    inherited: Boolean!
+    "Whether credentials are stored; the credentials themselves are never listed."
+    secretSet: Boolean!
+    "Whether an app-level token is stored, which is what lets gyloli listen for events."
+    appTokenSet: Boolean!
+    "What the last check found; CONNECTED only once the service has answered."
+    status: ConnectionStatus!
+    "What the last check reported."
+    lastCheckMessage: String
+    "ISO-8601 offset date-time, or null when no check has run."
+    lastCheckedAt: String
+}
+
+"What the team screen reports about a connection."
+enum ConnectionStatus {
+    "No credentials stored, so there is nothing to check."
+    NOT_CONFIGURED
+    "Configured, but no check has reached the service yet."
+    NOT_CHECKED
+    CONNECTED
+    FAILED
+}
+
+input CreateTeamConnectionInput {
+    teamId: ID!
+    name: String!
+    type: ConnectionType!
+    url: String!
+    authType: AuthType
+    secret: String
+    "Slack's Socket Mode app-level token, for the type that opens a websocket."
+    appToken: String
+    headers: [HttpHeaderInput!]
+}
+
+input UpdateTeamConnectionInput {
+    "Ignored for inherited connections, which follow the organization default."
+    name: String
+    type: ConnectionType
+    url: String
+    urlOverride: String
+    authType: AuthType
+    "Null leaves the stored credentials alone; empty clears them."
+    secret: String
+    "Slack's Socket Mode app-level token, with the same null and empty meaning."
+    appToken: String
+    headers: [HttpHeaderInput!]
+}
+
+"An MCP server a team's agents may connect to."
+type McpServer {
+    id: ID!
+    teamId: ID!
+    name: String!
+    address: String!
+    authType: AuthType!
+    headers: [HttpHeader!]!
+    secretSet: Boolean!
+}
+
+input CreateMcpServerInput {
+    teamId: ID!
+    name: String!
+    address: String!
+    authType: AuthType
+    secret: String
+    headers: [HttpHeaderInput!]
+}
+
+input UpdateMcpServerInput {
+    name: String!
+    address: String!
+    authType: AuthType
+    "Null leaves the stored credentials alone; empty clears them."
+    secret: String
+    headers: [HttpHeaderInput!]
+}
+
+"Where one node of the graph got to in a run."
+enum StepStatus {
+    "Never reached, because the run stopped or has not got there yet."
+    PENDING
+    RUNNING
+    COMPLETED
+    FAILED
+    SKIPPED
+}
+
+enum LogLevel {
+    INFO
+    SUCCESS
+    ERROR
+}
+
+"One node of the graph as a run saw it."
+type ExecutionStep {
+    "Matches the workflow node it came from; what edges and logs refer to."
+    key: String!
+    kind: NodeKind!
+    name: String!
+    description: String
+    status: StepStatus!
+    "ISO-8601 offset date-time."
+    startedAt: String
+    finishedAt: String
+    durationSeconds: Int
+    "What the step was handed and what it produced, as the engine recorded it."
+    input: String
+    output: String
+    error: String
+    "The catalogue entry the step ran, so the run can link back to it."
+    actionId: ID
+    conditionId: ID
+    x: Float!
+    y: Float!
+}
+
+type ExecutionLogLine {
+    id: ID!
+    "Null for lines about the run itself rather than one step."
+    nodeKey: String
+    "ISO-8601 offset date-time."
+    at: String!
+    level: LogLevel!
+    message: String!
+}
+
+type ExecutionDetail {
+    id: ID!
+    teamId: ID!
+    workflowId: ID!
+    workflowName: String!
+    status: ExecutionStatus!
+    trigger: ExecutionTrigger!
+    startedAt: String!
+    finishedAt: String
+    durationSeconds: Int
+    "The node that ended the run early, when a condition did not hold."
+    stoppedAtNodeKey: String
+    "What that node said; null for a run that went all the way through."
+    stoppedReason: String
+    "Why the run stopped, when it stopped badly."
+    error: String
+    steps: [ExecutionStep!]!
+    edges: [WorkflowEdge!]!
+    logs: [ExecutionLogLine!]!
+}
+
+"What a component reports about itself."
+enum ComponentStatus {
+    "Answering, and everything it depends on is answering too."
+    HEALTHY
+    "Answering, but something it depends on is not."
+    DEGRADED
+    "Not answering."
+    DOWN
+}
+
+"The service, as the monitoring screen shows it."
+type Component {
+    name: String!
+    description: String!
+    status: ComponentStatus!
+    version: String
+    "What the check saw, ready to show."
+    detail: String!
+    "ISO-8601 offset date-time."
+    lastCheckedAt: String!
+    "What it needs to be up, and whether each of them was."
+    dependencies: [Dependency!]!
+}
+
+"Something the service needs to be up."
+type Dependency {
+    name: String!
+    description: String!
+    reachable: Boolean!
+    "What the check saw, ready to show."
+    detail: String!
+}
+
+"What starts a workflow."
+enum TriggerType {
+    "An event arriving on one of the team's connections."
+    INCOMING_CONNECTION
+    "The clock, on a cron expression."
+    SCHEDULED
+}
+
+"The event on a connection that starts the workflow."
+enum TriggerAction {
+    MENTION
+    REPLY
+    MESSAGE
+    ISSUE_CREATED
+    ISSUE_UPDATED
+}
+
+"One entry in a team's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
+type Trigger {
+    id: ID!
+    teamId: ID!
+    name: String!
+    type: TriggerType!
+    connectionId: ID
+    action: TriggerAction
+    cron: String
+    timezone: String
+    "JSON object handed to the runs this starts; null when it says nothing."
+    payload: String
+    enabled: Boolean!
+    "Where the event comes from, ready to show: the connection, or \"Cron\"."
+    source: String!
+    "What the event is, ready to show: \"Mention\", or the cron expression."
+    event: String!
+}
+
+type TriggerPage {
+    content: [Trigger!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input CreateTriggerInput {
+    teamId: ID!
+    name: String!
+    type: TriggerType!
+    "Required for an incoming connection trigger."
+    connectionId: ID
+    action: TriggerAction
+    "Required for a scheduled trigger; five or six cron fields."
+    cron: String
+    timezone: String
+    "JSON object handed to the runs this starts."
+    payload: String
+}
+
+input UpdateTriggerInput {
+    name: String!
+    connectionId: ID
+    action: TriggerAction
+    cron: String
+    timezone: String
+    payload: String
+}
+
+"The shape of a value crossing between a workflow and a script."
+enum ValueType {
+    STRING
+    NUMBER
+    BOOLEAN
+    OBJECT
+    ARRAY
+}
+
+"A named piece of JavaScript a team wrote, run in a sandbox with no host, files or network."
+type Function {
+    id: ID!
+    teamId: ID!
+    name: String!
+    description: String
+    source: String!
+    returnType: ValueType!
+    params: [FunctionParam!]!
+    "\"(input: object, format: string)\", ready for the list."
+    signature: String!
+    "ISO-8601 offset date-time."
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type FunctionParam {
+    name: String!
+    type: ValueType!
+}
+
+type FunctionPage {
+    content: [Function!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+"What parsing the source found; valid with no message when it parsed."
+type FunctionValidation {
+    valid: Boolean!
+    message: String
+    line: Int
+    column: Int
+}
+
+input FunctionParamInput {
+    name: String!
+    type: ValueType!
+}
+
+input CreateFunctionInput {
+    teamId: ID!
+    name: String!
+    description: String
+    "Left out for a new function, which starts from a stub that runs."
+    source: String
+    returnType: ValueType
+    params: [FunctionParamInput!]
+}
+
+input UpdateFunctionInput {
+    name: String
+    description: String
+    source: String
+    returnType: ValueType
+    params: [FunctionParamInput!]
+}
+
+"What an action does when a workflow reaches it."
+enum ActionType {
+    EXECUTE
+    WAIT
+}
+
+"How it does it; each subtype belongs to one type."
+enum ActionSubtype {
+    OUTGOING_CONNECTION
+    HTTP_REQUEST
+    FUNCTION
+    "Waits until an expression written into the action holds."
+    INLINE_CONDITION
+    "Waits until one of the team's conditions holds."
+    CONDITION
+    TIME
+}
+
+enum ConnectionActionKind {
+    SEND_MESSAGE
+    REPLY_IN_THREAD
+    CREATE_ISSUE
+    UPDATE_ISSUE
+}
+
+enum MessageTarget {
+    CHANNEL
+    USER
+}
+
+"One function argument, and what the action hands it."
+type ArgumentMapping {
+    argument: String!
+    expression: String!
+}
+
+"Read off the action's settings rather than stored."
+type ActionParam {
+    name: String!
+    type: ValueType!
+    "\"message: string\", as the list and the form show it."
+    display: String!
+}
+
+"A reusable block a workflow is built from; an action node instances one."
+type Action {
+    id: ID!
+    teamId: ID!
+    name: String!
+    type: ActionType!
+    subtype: ActionSubtype!
+    "\"Outgoing Connection\", for the Subtype column."
+    subtypeLabel: String!
+    connectionId: ID
+    connectionName: String
+    connectionAction: ConnectionActionKind
+    content: String
+    target: MessageTarget
+    targetName: String
+    url: String
+    method: String
+    headers: String
+    functionId: ID
+    functionName: String
+    mappings: [ArgumentMapping!]!
+    conditionExpression: String
+    conditionId: ID
+    conditionName: String
+    timeoutSeconds: Int
+    retryIntervalSeconds: Int
+    durationSeconds: Int
+    "What the action has to be given, read off its settings."
+    inputParams: [ActionParam!]!
+    "What it hands on, which follows from what it does."
+    outputParams: [ActionParam!]!
+}
+
+type ActionPage {
+    content: [Action!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input ArgumentMappingInput {
+    argument: String!
+    expression: String!
+}
+
+input CreateActionInput {
+    teamId: ID!
+    name: String!
+    type: ActionType!
+    subtype: ActionSubtype!
+    connectionId: ID
+    connectionAction: ConnectionActionKind
+    content: String
+    target: MessageTarget
+    targetName: String
+    url: String
+    method: String
+    headers: String
+    functionId: ID
+    mappings: [ArgumentMappingInput!]
+    conditionExpression: String
+    conditionId: ID
+    timeoutSeconds: Int
+    retryIntervalSeconds: Int
+    durationSeconds: Int
+}
+
+input UpdateActionInput {
+    name: String
+    subtype: ActionSubtype
+    connectionId: ID
+    connectionAction: ConnectionActionKind
+    content: String
+    target: MessageTarget
+    targetName: String
+    url: String
+    method: String
+    headers: String
+    functionId: ID
+    mappings: [ArgumentMappingInput!]
+    conditionExpression: String
+    conditionId: ID
+    timeoutSeconds: Int
+    retryIntervalSeconds: Int
+    durationSeconds: Int
+}
+
+"What a condition asks about."
+enum ConditionType {
+    SLACK
+    JIRA
+    TIME
+    "One of the team's functions, which has to return a boolean."
+    FUNCTION
+    ANY_OF
+    ALL_OF
+}
+
+"Which part of what arrived is being asked about."
+enum ConditionProperty {
+    MESSAGE_AUTHOR
+    MESSAGE_CHANNEL
+    MESSAGE_TEXT
+    ISSUE_PRIORITY
+    ISSUE_STATUS
+    ISSUE_TYPE
+    CURRENT_TIME
+}
+
+"How the property is tested."
+enum ConditionCheck {
+    IN_LIST
+    EQUALS
+    CONTAINS
+    MATCHES
+    BETWEEN
+    TEAMMATE
+}
+
+"A question a team asks about what a run is carrying, defined once."
+type Condition {
+    id: ID!
+    teamId: ID!
+    name: String!
+    type: ConditionType!
+    "\"Any Of\", for the badge and the form."
+    typeLabel: String!
+    property: ConditionProperty
+    check: ConditionCheck
+    "Answers the opposite; what makes \"is external\" the negation of \"is a teammate\"."
+    negate: Boolean!
+    functionId: ID
+    functionName: String
+    "What the check compares against."
+    values: [String!]!
+    "The conditions a composite is made of."
+    members: [ID!]!
+    memberNames: [String!]!
+    "What it asks, in words; read off the definition rather than stored."
+    description: String!
+}
+
+type ConditionPage {
+    content: [Condition!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input CreateConditionInput {
+    teamId: ID!
+    name: String!
+    type: ConditionType!
+    property: ConditionProperty
+    check: ConditionCheck
+    negate: Boolean
+    functionId: ID
+    values: [String!]
+    members: [ID!]
+}
+
+input UpdateConditionInput {
+    name: String
+    type: ConditionType
+    property: ConditionProperty
+    check: ConditionCheck
+    negate: Boolean
+    functionId: ID
+    values: [String!]
+    members: [ID!]
+}

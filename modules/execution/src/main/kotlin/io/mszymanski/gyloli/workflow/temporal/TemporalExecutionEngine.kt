@@ -1,0 +1,64 @@
+package io.mszymanski.gyloli.workflow.temporal
+
+import io.mszymanski.gyloli.workflow.execution.ExecutionEngine
+import io.mszymanski.gyloli.workflow.execution.ExecutionPlanner
+import io.mszymanski.gyloli.workflow.execution.ExecutionTrigger
+import io.mszymanski.gyloli.workflow.execution.WorkflowExecution
+import io.temporal.client.WorkflowClient
+import io.temporal.client.WorkflowOptions
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
+import org.springframework.stereotype.Service
+import java.time.Duration
+
+/**
+ * Hands the run to Temporal and answers as soon as it is accepted.
+ *
+ * The run is planned here, while the caller waits, so a workflow that cannot be
+ * read or ordered is still a rejected request. What Temporal is given is the
+ * durable part: carrying the steps out, retrying the ones that fail for a
+ * reason worth retrying, and finishing the run on whichever worker is up when
+ * the time comes.
+ */
+@Service
+@ConditionalOnProperty(name = ["gyloli.temporal.enabled"], havingValue = "true", matchIfMissing = true)
+class TemporalExecutionEngine(
+    private val planner: ExecutionPlanner,
+    private val client: WorkflowClient,
+    private val properties: TemporalProperties,
+) : ExecutionEngine {
+
+    override fun start(
+        teamId: Long,
+        workflowId: Long,
+        trigger: ExecutionTrigger,
+        input: String?,
+    ): WorkflowExecution {
+        val plan = planner.plan(teamId, workflowId, trigger, input)
+        val executionId = requireNotNull(plan.execution.id)
+
+        val workflow = client.newWorkflowStub(
+            ExecutionWorkflow::class.java,
+            WorkflowOptions.newBuilder()
+                .setTaskQueue(properties.taskQueue)
+                // One workflow per recorded run, which also means asking twice
+                // for the same run cannot start it twice.
+                .setWorkflowId("$WORKFLOW_ID_PREFIX$executionId")
+                .setWorkflowExecutionTimeout(Duration.ofHours(properties.runTimeoutHours))
+                .build(),
+        )
+
+        // Started, not awaited: a run outlives the request that asked for it.
+        WorkflowClient.start(workflow::run, RunPlan(
+            executionId = executionId,
+            workflowName = plan.execution.workflowName,
+            steps = plan.steps.map { it.nodeKey },
+            input = input,
+        ))
+
+        return plan.execution
+    }
+
+    private companion object {
+        const val WORKFLOW_ID_PREFIX = "gyloli-execution-"
+    }
+}

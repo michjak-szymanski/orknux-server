@@ -1,0 +1,10 @@
+# What the Temporal service reads at runtime. The defaults suit a development
+# cluster on SQL storage; this exists because auto-setup expects the file.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  # Development only: makes a search attribute usable the moment it is added,
+  # at the cost of a read per lookup.
+  - value: true
+    constraints: {}

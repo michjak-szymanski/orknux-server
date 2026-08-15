@@ -1,0 +1,86 @@
+spring:
+  application:
+    name: gyloli-server
+  datasource:
+    url: jdbc:postgresql://localhost:5432/gyloli
+    username: gyloli
+    password: gyloli
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  ldap:
+    urls: ldap://localhost:389
+    base: dc=gyloli,dc=io
+    username: cn=admin,dc=gyloli,dc=io
+    password: admin
+
+server:
+  servlet:
+    session:
+      cookie:
+        same-site: lax
+        http-only: true
+
+db-scheduler:
+  # The clock behind scheduled triggers. It keeps its state in the database, so
+  # one instance fires a schedule however many are running.
+  enabled: true
+  threads: 4
+  polling-interval: 10s
+
+gyloli:
+  # Filled in from the build, and reported on the monitoring screen.
+  version: "@project.version@"
+  web:
+    allowed-origins: http://localhost:5173
+  security:
+    # Sees the organization section and every team.
+    admin-role: ROLE_ADMINS
+  ldap:
+    user-search-base: ou=people
+    user-search-filter: (uid={0})
+    # Team groups have to live under this base for membership to be picked up;
+    # point it at the OU that holds them (an empty value disables group search).
+    group-search-base: ou=groups
+    group-search-filter: (member={0})
+  connection:
+    # A connection check calls the configured URL; these bound what that may do.
+    probe-timeout-seconds: 5
+    # Link-local addresses reach cloud instance metadata. Private and loopback
+    # addresses stay reachable, since internal services are the point.
+    allow-link-local: false
+  slack:
+    # Opens one Socket Mode websocket per Slack connection that holds an
+    # app-level token, and turns arriving mentions into workflow runs.
+    enabled: true
+    # How often the open sockets are compared with the stored connections, so a
+    # token pasted into the settings form starts listening without a restart.
+    reconcile-seconds: 30
+    # How long a connection Slack refused is left alone; changing the token
+    # clears the wait, so a corrected credential is not held back by it.
+    retry-failed-seconds: 300
+  script:
+    # A team's JavaScript runs in a GraalJS sandbox with no host access, no
+    # files, no network and no threads. These bound what it can spend.
+    timeout-millis: 5000
+    statement-limit: 5000000
+  action:
+    # A wait holds the thread carrying the run, so it is capped here whatever
+    # the action asks for.
+    max-wait: 5m
+  temporal:
+    # False runs workflows on the calling thread, with no retries and no
+    # resumption. The tests do that; a deployment should not.
+    enabled: true
+    target: localhost:7233
+    namespace: default
+    task-queue: gyloli-workflow
+    # A model call is slow, so a step is given minutes, and tried again a
+    # couple of times, since most of what a step does is call something else.
+    step-timeout-seconds: 300
+    step-attempts: 3
+    run-timeout-hours: 24

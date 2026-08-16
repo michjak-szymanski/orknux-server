@@ -27,7 +27,7 @@ ALTER TABLE workflow_trigger
     ADD COLUMN last_fired_at TIMESTAMPTZ;
 
 -- Slack over Socket Mode is its own connection type: it holds two credentials
--- and is the one gyloli opens a websocket for. The column is widened first,
+-- and is the one orknux opens a websocket for. The column is widened first,
 -- since the name does not fit in what was there.
 ALTER TABLE connection
     ALTER COLUMN type TYPE VARCHAR(24);

@@ -1,0 +1,201 @@
+package io.mszymanski.orknux.workflow.temporal
+
+import io.mszymanski.orknux.server.OrknuxServer
+import io.mszymanski.orknux.workflow.execution.ExecutionPlanner
+import io.mszymanski.orknux.workflow.execution.ExecutionStatus
+import io.mszymanski.orknux.workflow.execution.ExecutionStepRepository
+import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
+import io.mszymanski.orknux.workflow.execution.ExecutionLogRepository
+import io.mszymanski.orknux.workflow.execution.FakeWorkflowGraphSource
+import io.mszymanski.orknux.workflow.execution.ExecutionTestConfig
+import io.mszymanski.orknux.workflow.execution.GraphEdge
+import io.mszymanski.orknux.workflow.execution.GraphNode
+import io.mszymanski.orknux.workflow.execution.LogLevel
+import io.mszymanski.orknux.workflow.execution.NodeKind
+import io.mszymanski.orknux.workflow.execution.StepStatus
+import io.mszymanski.orknux.workflow.execution.WorkflowExecutionRepository
+import io.mszymanski.orknux.workflow.execution.WorkflowGraph
+import io.mszymanski.orknux.workflow.execution.WorkflowGraphSource
+import io.temporal.activity.ActivityOptions
+import io.temporal.client.WorkflowOptions
+import io.temporal.common.RetryOptions
+import io.temporal.testing.TestWorkflowEnvironment
+import io.temporal.worker.WorkflowImplementationOptions
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
+import org.springframework.test.context.TestPropertySource
+import java.time.Duration
+
+/**
+ * The interpreter, against Temporal's in-process test service: a real workflow
+ * execution, real activities and the real database, without a Temporal service
+ * to bring up.
+ *
+ * Temporal is disabled in the context, so nothing tries to reach one at
+ * startup; the client under test is the environment's own.
+ */
+@SpringBootTest(classes = [OrknuxServer::class])
+@Import(ExecutionTestConfig::class)
+@TestPropertySource(properties = ["orknux.temporal.enabled=false"])
+class ExecutionWorkflowTest(
+    @Autowired val planner: ExecutionPlanner,
+    @Autowired val activities: ExecutionActivities,
+    @Autowired val executions: WorkflowExecutionRepository,
+    @Autowired val steps: ExecutionStepRepository,
+    @Autowired val logs: ExecutionLogRepository,
+    @Autowired val graphs: WorkflowGraphSource,
+) {
+
+    private lateinit var environment: TestWorkflowEnvironment
+
+    @BeforeEach
+    fun start() {
+        executions.deleteAll()
+        (graphs as FakeWorkflowGraphSource).graphs.clear()
+
+        environment = TestWorkflowEnvironment.newInstance()
+        val worker = environment.newWorker(QUEUE)
+        worker.registerWorkflowImplementationTypes(
+            WorkflowImplementationOptions.newBuilder()
+                .setDefaultActivityOptions(
+                    ActivityOptions.newBuilder()
+                        .setStartToCloseTimeout(Duration.ofSeconds(30))
+                        // Two, so a step that keeps failing proves it is tried
+                        // again rather than only that it failed.
+                        .setRetryOptions(RetryOptions.newBuilder().setMaximumAttempts(2).build())
+                        .build(),
+                )
+                .build(),
+            ExecutionWorkflowImpl::class.java,
+        )
+        worker.registerActivitiesImplementations(activities)
+        environment.start()
+    }
+
+    @AfterEach
+    fun stop() {
+        environment.close()
+    }
+
+    @Test
+    fun `walks the graph, hands each step's output to the next, and finishes the run`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Data Processing Pipeline",
+                nodes = listOf(node("ok"), node("ok-2"), node("nothing")),
+                edges = listOf(GraphEdge("ok", "ok-2"), GraphEdge("ok-2", "nothing")),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        assertThat(status).isEqualTo(ExecutionStatus.COMPLETED)
+        val executionId = plan.executionId
+        assertThat(executions.findById(executionId).orElseThrow().status).isEqualTo(ExecutionStatus.COMPLETED)
+
+        val recorded = steps.findByExecutionIdOrderByOrderAsc(executionId)
+        assertThat(recorded.map { it.nodeKey }).containsExactly("ok", "ok-2", "nothing")
+        assertThat(recorded.map { it.status })
+            .containsExactly(StepStatus.COMPLETED, StepStatus.COMPLETED, StepStatus.SKIPPED)
+        assertThat(recorded[0].input).isEqualTo("start here")
+        assertThat(recorded[1].input).isEqualTo("ok did the work")
+        // The step with no runtime passed on what it was handed.
+        assertThat(recorded[2].input).isEqualTo("ok-2 did the work")
+    }
+
+    @Test
+    fun `a step that parks is asked again on a timer, holding no worker while it waits`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Change Approval",
+                nodes = listOf(node("ok"), node("wait-for-approval"), node("ok-2")),
+                edges = listOf(GraphEdge("ok", "wait-for-approval"), GraphEdge("wait-for-approval", "ok-2")),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        // The node parked for an hour, and the worker here is registered with a
+        // thirty-second step timeout: the run could only have got past it by
+        // waiting on Temporal's clock rather than in the activity.
+        assertThat(status).isEqualTo(ExecutionStatus.COMPLETED)
+
+        val recorded = steps.findByExecutionIdOrderByOrderAsc(plan.executionId)
+        assertThat(recorded.map { it.status })
+            .containsExactly(StepStatus.COMPLETED, StepStatus.COMPLETED, StepStatus.COMPLETED)
+
+        // The deadline it parked against is still on the step, which is what a
+        // wait resumed on another worker reads instead of starting again.
+        val waited = recorded[1]
+        assertThat(waited.waitUntil).isNotNull()
+        assertThat(waited.output).isEqualTo("wait-for-approval did the work")
+        // And what it was waiting on reached the node after it.
+        assertThat(recorded[2].input).isEqualTo("wait-for-approval did the work")
+
+        // Twice through the node, but the log says it is waiting once: a wait
+        // that asks every thirty seconds must not bury the run's own lines.
+        val lines = logs.findByExecutionIdOrderBySequenceAsc(plan.executionId).map { it.message }
+        assertThat(lines.filter { it.contains("is waiting") }).hasSize(1)
+    }
+
+    @Test
+    fun `tries a failing step again, then stops the run where it failed`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Nightly Report",
+                nodes = listOf(node("ok"), node("boom"), node("after")),
+                edges = listOf(GraphEdge("ok", "boom"), GraphEdge("boom", "after")),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        assertThat(status).isEqualTo(ExecutionStatus.FAILED)
+        val execution = executions.findById(plan.executionId).orElseThrow()
+        assertThat(execution.status).isEqualTo(ExecutionStatus.FAILED)
+        assertThat(execution.error).isEqualTo("boom has no answer")
+
+        assertThat(steps.findByExecutionIdOrderByOrderAsc(plan.executionId).map { it.status })
+            .containsExactly(StepStatus.COMPLETED, StepStatus.FAILED, StepStatus.PENDING)
+
+        // Two attempts at the step, so two failures in the log, and the run's
+        // own line after them.
+        val failures = logs.findByExecutionIdOrderBySequenceAsc(plan.executionId)
+            .filter { it.level == LogLevel.ERROR }
+        assertThat(failures.filter { it.nodeKey == "boom" }).hasSize(2)
+        assertThat(failures.last().message).contains("stopped at boom with 1 steps unreached")
+    }
+
+    private fun workflow() = environment.workflowClient.newWorkflowStub(
+        ExecutionWorkflow::class.java,
+        WorkflowOptions.newBuilder().setTaskQueue(QUEUE).build(),
+    )
+
+    /** Records the run the way [TemporalExecutionEngine] would, then hands it over. */
+    private fun plan(graph: WorkflowGraph): RunPlan {
+        (graphs as FakeWorkflowGraphSource).graphs[WORKFLOW] = graph
+        val planned = planner.plan(WORKSPACE, WORKFLOW, ExecutionTrigger.API, "start here")
+        return RunPlan(
+            executionId = requireNotNull(planned.execution.id),
+            workflowName = planned.execution.workflowName,
+            steps = planned.steps.map { it.nodeKey },
+            input = "start here",
+        )
+    }
+
+    private fun node(key: String) = GraphNode(key = key, kind = NodeKind.DATA_TASK, name = key)
+
+    private companion object {
+        const val QUEUE = "execution-workflow-test"
+        const val WORKSPACE = 7L
+        const val WORKFLOW = 1L
+    }
+}

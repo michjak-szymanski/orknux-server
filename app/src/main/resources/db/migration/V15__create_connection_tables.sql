@@ -1,6 +1,6 @@
 -- The connection module's tables: organization-wide default connections, the
 -- copies teams hold with their own credentials, and the MCP servers a team
--- talks to. Folded back in from gyloli-connector, which is why they arrive
+-- talks to. Folded back in from orknux-connector, which is why they arrive
 -- after the migrations that dropped an earlier copy of them.
 --
 -- team_id is a plain column: the module owns these tables and the team table

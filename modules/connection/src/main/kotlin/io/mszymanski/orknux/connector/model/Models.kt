@@ -1,0 +1,299 @@
+package io.mszymanski.orknux.connector.model
+
+import jakarta.persistence.Column
+import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
+import jakarta.persistence.GeneratedValue
+import jakarta.persistence.GenerationType
+import jakarta.persistence.Id
+import jakarta.persistence.Table
+import org.springframework.data.domain.Sort
+import org.springframework.data.jpa.repository.JpaRepository
+import java.math.BigDecimal
+import java.time.LocalDate
+import java.time.OffsetDateTime
+
+/** What a model is for, which is what decides whether an agent may use it. */
+enum class ModelKind {
+    CHAT,
+    EMBEDDING,
+    COMPLETION,
+}
+
+/** How often a token quota starts again. */
+enum class ResetInterval {
+    DAILY,
+    WEEKLY,
+    MONTHLY,
+
+    /** The quota is a total, not a rate. */
+    NEVER,
+}
+
+/** The services a provider can be. Each brings its own settings and its own way in. */
+enum class ProviderType {
+    OPENAI,
+    ANTHROPIC,
+    AZURE_OPENAI,
+    GOOGLE_AI,
+    OLLAMA,
+
+    /** Anything that speaks one of the above well enough, until it earns a type. */
+    CUSTOM,
+}
+
+/** How a provider is authenticated. */
+enum class ProviderAuthMethod {
+    /** A key sent on every request, in whichever header the type wants it. */
+    API_KEY,
+
+    /**
+     * Microsoft Entra ID: a token fetched with a tenant, a client and a secret,
+     * for the scope the resource asks for. Azure OpenAI only.
+     */
+    ENTRA_ID,
+}
+
+/**
+ * What the Models screen says about a provider.
+ *
+ * CONNECTED only once a check reached the provider and it answered, which is
+ * the same rule a workspace connection follows: a stored credential is not a working
+ * one, and saying otherwise would be a guess dressed up as a fact.
+ */
+enum class ProviderStatus {
+    /** Nothing to check with yet. */
+    NOT_CONFIGURED,
+
+    /** Configured, but no check has reached it. */
+    NOT_CHECKED,
+    CONNECTED,
+    FAILED,
+}
+
+/**
+ * An LLM provider a workspace reaches models through.
+ *
+ * It holds a key, which is why it lives in this module: credentials are read in
+ * one place. Every provider authenticates the same way, so there is no auth
+ * type to choose — a bearer key, or nothing configured yet.
+ */
+@Entity
+@Table(name = "model_provider")
+class ModelProvider(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
+    @Column(name = "workspace_id", nullable = false)
+    val workspaceId: Long,
+
+    /** The display name, which is the workspace's to choose: "Azure OpenAI Production". */
+    @Column(nullable = false, length = 120)
+    var name: String,
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 24)
+    var type: ProviderType = ProviderType.OPENAI,
+
+    @Column(nullable = false, length = 1000)
+    var endpoint: String,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "auth_method", nullable = false, length = 16)
+    var authMethod: ProviderAuthMethod = ProviderAuthMethod.API_KEY,
+
+    /** The API key, or the Entra client secret: one column, one place to read. */
+    @Column(length = 1000)
+    var secret: String? = null,
+
+    @Column(name = "api_version", length = 32)
+    var apiVersion: String? = null,
+
+    @Column(name = "deployment_name", length = 120)
+    var deploymentName: String? = null,
+
+    @Column(length = 64)
+    var region: String? = null,
+
+    @Column(name = "tenant_id", length = 120)
+    var tenantId: String? = null,
+
+    @Column(name = "client_id", length = 120)
+    var clientId: String? = null,
+
+    @Column(length = 300)
+    var scope: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    var status: ProviderStatus = ProviderStatus.NOT_CONFIGURED,
+
+    @Column(name = "last_check_message", length = 500)
+    var lastCheckMessage: String? = null,
+
+    @Column(name = "last_checked_at")
+    var lastCheckedAt: OffsetDateTime? = null,
+) {
+
+    /**
+     * Whether there is enough here to try the provider at all.
+     *
+     * A key is enough on its own; Entra ID needs the three things the token
+     * request is made of, and no amount of one of them substitutes for another.
+     */
+    fun configured(): Boolean = when (authMethod) {
+        ProviderAuthMethod.API_KEY -> !secret.isNullOrBlank()
+        ProviderAuthMethod.ENTRA_ID ->
+            !secret.isNullOrBlank() && !tenantId.isNullOrBlank() && !clientId.isNullOrBlank()
+    }
+
+    /** Called after anything that could change whether it is worth checking. */
+    fun forgetCheck() {
+        status = if (configured()) ProviderStatus.NOT_CHECKED else ProviderStatus.NOT_CONFIGURED
+        lastCheckMessage = null
+        lastCheckedAt = null
+    }
+}
+
+/**
+ * One model the workspace may use, and the quotas the workspace puts on it.
+ *
+ * [name] is what a person calls it and [modelId] is what the provider's API is
+ * given; they differ often enough — "Claude 3.5 Sonnet" against
+ * `claude-3-5-sonnet-20241022` — that keeping one would lose the other.
+ */
+@Entity
+@Table(name = "llm_model")
+class LlmModel(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
+    @Column(name = "provider_id", nullable = false)
+    val providerId: Long,
+
+    @Column(nullable = false, length = 120)
+    var name: String,
+
+    @Column(name = "model_id", nullable = false, length = 200)
+    var modelId: String,
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 16)
+    var kind: ModelKind = ModelKind.CHAT,
+
+    @Column(name = "context_window")
+    var contextWindow: Int? = null,
+
+    @Column(name = "max_output")
+    var maxOutput: Int? = null,
+
+    @Column(nullable = false)
+    var enabled: Boolean = true,
+
+    /** Null is no limit. */
+    @Column(name = "token_limit")
+    var tokenLimit: Long? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "reset_interval", nullable = false, length = 16)
+    var resetInterval: ResetInterval = ResetInterval.MONTHLY,
+
+    @Column(name = "requests_per_minute")
+    var requestsPerMinute: Int? = null,
+
+    @Column(name = "input_cost_per_million", precision = 12, scale = 4)
+    var inputCostPerMillion: BigDecimal? = null,
+
+    @Column(name = "output_cost_per_million", precision = 12, scale = 4)
+    var outputCostPerMillion: BigDecimal? = null,
+)
+
+/**
+ * What one model did on one day.
+ *
+ * Latency is summed rather than averaged, because an average of averages is not
+ * an average: the mean over a window is the total time over the total requests.
+ */
+@Entity
+@Table(name = "model_usage_day")
+class ModelUsageDay(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
+    @Column(name = "model_id", nullable = false)
+    val modelId: Long,
+
+    @Column(nullable = false)
+    val day: LocalDate,
+
+    @Column(nullable = false)
+    var requests: Int = 0,
+
+    @Column(name = "input_tokens", nullable = false)
+    var inputTokens: Long = 0,
+
+    @Column(name = "output_tokens", nullable = false)
+    var outputTokens: Long = 0,
+
+    @Column(name = "latency_millis_total", nullable = false)
+    var latencyMillisTotal: Long = 0,
+)
+
+interface ModelProviderRepository : JpaRepository<ModelProvider, Long> {
+
+    fun findByWorkspaceId(workspaceId: Long, sort: Sort): List<ModelProvider>
+
+    fun findByWorkspaceIdAndName(workspaceId: Long, name: String): ModelProvider?
+}
+
+interface LlmModelRepository : JpaRepository<LlmModel, Long> {
+
+    fun findByProviderIdIn(providerIds: Collection<Long>, sort: Sort): List<LlmModel>
+
+    fun findByProviderIdAndName(providerId: Long, name: String): LlmModel?
+
+    fun findByProviderId(providerId: Long): List<LlmModel>
+}
+
+interface ModelUsageRepository : JpaRepository<ModelUsageDay, Long> {
+
+    fun findByModelIdAndDayBetweenOrderByDayAsc(
+        modelId: Long,
+        from: LocalDate,
+        to: LocalDate,
+    ): List<ModelUsageDay>
+
+    /** The row a call adds itself to; there is one per model per day. */
+    fun findByModelIdAndDay(modelId: Long, day: LocalDate): ModelUsageDay?
+}
+
+class ModelProviderNotFoundException(id: Long) : RuntimeException("No model provider with id $id")
+
+class ModelProviderNameTakenException(name: String) :
+    RuntimeException("A provider named \"$name\" already exists in this workspace")
+
+class ModelProviderNameInvalidException : RuntimeException("A provider name is required")
+
+class ModelProviderEndpointInvalidException : RuntimeException("A provider API endpoint is required")
+
+class ModelNotFoundException(id: Long) : RuntimeException("No model with id $id")
+
+class ModelNameTakenException(name: String) :
+    RuntimeException("A model named \"$name\" already exists on this provider")
+
+class ModelNameInvalidException : RuntimeException("A model name is required")
+
+class ModelIdInvalidException : RuntimeException("A model id is required")
+
+/**
+ * Asking a provider what it offers did not get an answer.
+ *
+ * Carries the provider's own words, because "could not discover models" tells
+ * nobody whether the key is wrong, the endpoint is wrong, or the box is off.
+ */
+class ModelDiscoveryFailedException(name: String, reason: String) :
+    RuntimeException("Could not ask $name what it offers: $reason")

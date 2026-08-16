@@ -1,5 +1,5 @@
--- Connections, MCP servers and every credential now live in gyloli-connector.
--- gyloli-server keeps only what it can decide on: who may see a team, and what
+-- Connections, MCP servers and every credential now live in orknux-connector.
+-- orknux-server keeps only what it can decide on: who may see a team, and what
 -- was done. Nothing is copied across by this migration — a deployment holding
 -- real credentials has to export them into the connector before it runs.
 DROP TABLE IF EXISTS team_connection_header;

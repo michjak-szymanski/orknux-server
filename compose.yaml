@@ -1,16 +1,20 @@
+# Pinned so container and volume names follow the product, not the directory
+# this happens to be checked out into.
+name: orknux-server
+
 services:
   postgres:
     image: postgres:18
     environment:
-      POSTGRES_DB: gyloli
-      POSTGRES_USER: gyloli
-      POSTGRES_PASSWORD: gyloli
+      POSTGRES_DB: orknux
+      POSTGRES_USER: orknux
+      POSTGRES_PASSWORD: orknux
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U gyloli -d gyloli" ]
+      test: [ "CMD-SHELL", "pg_isready -U orknux -d orknux" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -19,8 +23,8 @@ services:
     image: osixia/openldap:1.5.0
     command: [ "--copy-service" ]
     environment:
-      LDAP_ORGANISATION: Gyloli
-      LDAP_DOMAIN: gyloli.io
+      LDAP_ORGANISATION: Orknux
+      LDAP_DOMAIN: orknux.io
       LDAP_ADMIN_PASSWORD: admin
     ports:
       - "389:389"
@@ -29,7 +33,7 @@ services:
       - ldap-config:/etc/ldap/slapd.d
       - ./docker/ldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif:ro
     healthcheck:
-      test: [ "CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=gyloli,dc=io -D cn=admin,dc=gyloli,dc=io -w admin" ]
+      test: [ "CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=orknux,dc=io -D cn=admin,dc=orknux,dc=io -w admin" ]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -50,8 +54,8 @@ services:
       DB: postgres12
       DB_PORT: 5432
       POSTGRES_SEEDS: postgres
-      POSTGRES_USER: gyloli
-      POSTGRES_PWD: gyloli
+      POSTGRES_USER: orknux
+      POSTGRES_PWD: orknux
       DBNAME: temporal
       VISIBILITY_DBNAME: temporal_visibility
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml

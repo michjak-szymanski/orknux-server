@@ -6,12 +6,12 @@
 
     <parent>
         <groupId>io.mszymanski</groupId>
-        <artifactId>gyloli-server</artifactId>
+        <artifactId>orknux-server</artifactId>
         <version>1.0.0-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>gyloli-app</artifactId>
+    <artifactId>orknux-app</artifactId>
 
     <!--
         The deployable: teams, workflow definitions, agents, sign-in and the
@@ -21,7 +21,7 @@
     -->
 
     <properties>
-        <start-class>io.mszymanski.gyloli.server.GyloliServerKt</start-class>
+        <start-class>io.mszymanski.orknux.server.OrknuxServerKt</start-class>
     </properties>
 
     <dependencies>
@@ -41,11 +41,11 @@
 
         <dependency>
             <groupId>io.mszymanski</groupId>
-            <artifactId>gyloli-connection</artifactId>
+            <artifactId>orknux-connection</artifactId>
         </dependency>
         <dependency>
             <groupId>io.mszymanski</groupId>
-            <artifactId>gyloli-execution</artifactId>
+            <artifactId>orknux-execution</artifactId>
         </dependency>
 
         <dependency>
@@ -69,6 +69,15 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-graphql</artifactId>
         </dependency>
+        <!--
+            Chat history. The store is Spring AI's, keyed by conversation id, so
+            the same history a chat keeps is the history a workflow run will hand
+            to every agent in it. Flyway owns the table; see V31.
+        -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-chat-memory-repository-jdbc</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -89,6 +98,32 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-graphql-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            The suite gets its own Postgres, thrown away afterwards.
+
+            The fixtures start from a known state by deleting everything, and
+            deleteAll() cannot tell whose rows are whose: pointed at the
+            development database it takes the workspaces, models and chat
+            history somebody was looking at. A container per run cannot reach
+            anything but itself. Versions come from Boot's BOM, which is on
+            Testcontainers 2 — where the module is `testcontainers-postgresql`
+            rather than the `postgresql` of every 1.x example.
+        -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers-postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+            TestDatabase is a LauncherSessionListener, and surefire only puts
+            the launcher on the classpath to run with — compiling against it
+            needs it declared.
+        -->
+        <dependency>
+            <groupId>org.junit.platform</groupId>
+            <artifactId>junit-platform-launcher</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- For the one test that waits on a scheduler doing its own timing. -->
@@ -158,9 +193,12 @@
                             needs a Temporal server to be up. The Temporal path has
                             its own test, which brings up an in-process environment.
                         -->
-                        <gyloli.temporal.enabled>false</gyloli.temporal.enabled>
+                        <orknux.temporal.enabled>false</orknux.temporal.enabled>
                         <!-- No websockets out to Slack from a test run. -->
-                        <gyloli.slack.enabled>false</gyloli.slack.enabled>
+                        <orknux.slack.enabled>false</orknux.slack.enabled>
+                        <!-- No sweep calls a provider while a suite is running. -->
+                        <orknux.model.check.enabled>false</orknux.model.check.enabled>
+                        <orknux.connection.check.enabled>false</orknux.connection.check.enabled>
                         <!-- The tick is called directly by the test that wants it. -->
                         <db-scheduler.enabled>false</db-scheduler.enabled>
                         <!-- Each distinct set of test properties builds its own

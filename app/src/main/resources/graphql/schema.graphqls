@@ -1,67 +1,121 @@
 type Query {
-    teams(page: Int = 0, size: Int = 20): TeamPage!
-    team(id: ID!): Team
-    "Audit entries, newest first. Without a teamId every visible team is included."
-    teamAudit(
-        teamId: ID,
+    workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
+    workspace(id: ID!): Workspace
+    "Audit entries, newest first. Without a workspaceId every visible workspace is included."
+    workspaceAudit(
+        workspaceId: ID,
         page: Int = 0,
         size: Int = 20,
         search: String,
-        category: TeamAuditCategory,
+        category: WorkspaceAuditCategory,
         userId: String,
         "Only entries from the last N days; omit for all time."
         days: Int
-    ): TeamAuditPage!
-    "The users who appear in the organization audit log, for the filter."
+    ): WorkspaceAuditPage!
+    "The users who appear in the admin audit log, for the filter."
     auditUsers: [String!]!
     "The health of the service and what it depends on. Administrators only."
     components: [Component!]!
-    "The organization's default connections, ordered by name. Administrators only."
+    "The admin default connections, ordered by name. Administrators only."
     connections(page: Int = 0, size: Int = 20): ConnectionPage!
     connection(id: ID!): Connection
-    "The connections one team holds, ordered by name."
-    teamConnections(teamId: ID!): [TeamConnection!]!
-    teamConnection(id: ID!): TeamConnection
-    "The MCP servers a team's agents may connect to, ordered by name."
-    mcpServers(teamId: ID!): [McpServer!]!
+    "The connections one workspace holds, ordered by name."
+    workspaceConnections(workspaceId: ID!): [WorkspaceConnection!]!
+    workspaceConnection(id: ID!): WorkspaceConnection
+    "The MCP servers a workspace's agents may connect to, ordered by name."
+    mcpServers(workspaceId: ID!): [McpServer!]!
     mcpServer(id: ID!): McpServer
-    "Workflows assigned to a team, ordered by name."
-    teamWorkflows(teamId: ID!, page: Int = 0, size: Int = 20): TeamWorkflowPage!
-    "The team's action catalogue: the blocks its workflows are built from."
-    teamActions(teamId: ID!, page: Int = 0, size: Int = 20): ActionPage!
+    "The workspace's LLM providers, ordered by name."
+    modelProviders(workspaceId: ID!): [ModelProvider!]!
+    modelProvider(id: ID!): ModelProvider
+    "Every model the workspace may reach, provider first and then name."
+    models(workspaceId: ID!): [Model!]!
+    model(id: ID!): Model
+    "What a model has been used for, over the last `days` and against the days before them."
+    modelUsage(id: ID!, days: Int = 30): ModelUsage!
+    """
+    What the provider itself says it can run, against what has already been added.
+    Asks the provider, so it fails the way a connection check fails.
+    """
+    discoveredModels(providerId: ID!): [DiscoveredModel!]!
+    "Workflows assigned to a workspace, ordered by name."
+    workspaceWorkflows(workspaceId: ID!, page: Int = 0, size: Int = 20): WorkspaceWorkflowPage!
+    "The workspace's action catalogue: the blocks its workflows are built from."
+    workspaceActions(workspaceId: ID!, page: Int = 0, size: Int = 20): ActionPage!
     action(id: ID!): Action
-    "The team's conditions: the questions its workflows ask."
-    teamConditions(teamId: ID!, page: Int = 0, size: Int = 20): ConditionPage!
+    "The workspace's conditions: the questions its workflows ask."
+    workspaceConditions(workspaceId: ID!, page: Int = 0, size: Int = 20): ConditionPage!
     condition(id: ID!): Condition
-    "The team's JavaScript functions, callable from an action."
-    teamFunctions(teamId: ID!, page: Int = 0, size: Int = 20): FunctionPage!
+    "The workspace's JavaScript functions, callable from an action."
+    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20): FunctionPage!
     function(id: ID!): Function
-    "What starts a team's workflows, ordered by name."
-    teamTriggers(teamId: ID!, page: Int = 0, size: Int = 20): TriggerPage!
+    "What starts a workspace's workflows, ordered by name."
+    workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerPage!
     trigger(id: ID!): Trigger
-    "Agents configured by a team, ordered by name."
-    teamAgents(teamId: ID!, page: Int = 0, size: Int = 20): AgentPage!
+    "The events this installation can actually deliver; the picker offers these."
+    supportedTriggerActions: [TriggerAction!]!
+    "What a trigger has done, newest first — including the firings no run came of."
+    triggerFirings(triggerId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
+    "Agents configured by a workspace, ordered by name."
+    workspaceAgents(workspaceId: ID!, page: Int = 0, size: Int = 20): AgentPage!
+    "The JavaScript tools a workspace's agents may call, ordered by name."
+    workspaceTools(workspaceId: ID!, page: Int = 0, size: Int = 20): ToolPage!
+    tool(id: ID!): Tool
+    "The chats the caller holds in this workspace: pinned first, then most recent."
+    chatSessions(workspaceId: ID!): [ChatSession!]!
+    chatSession(id: ID!): ChatSession
+    "Everything said in one chat, oldest first, as Spring AI's store kept it."
+    chatMessages(id: ID!): [ChatMessage!]!
+    "The instruction sets a workspace's agents are guided by; one catalog's when `catalogId` names one."
+    workspaceSkills(workspaceId: ID!, catalogId: ID, page: Int = 0, size: Int = 20): SkillPage!
+    "The workspace's skill catalogs, by name, each with what it holds."
+    skillCatalogs(workspaceId: ID!): [SkillCatalog!]!
+    skill(id: ID!): Skill
+    "The workspace's memory catalogs, by name, each with what it holds."
+    memoryCatalogs(workspaceId: ID!): [MemoryCatalog!]!
+    memoryCatalog(id: ID!): MemoryCatalog
+    "One memory, by id: what the editor opens, whichever page of its catalog it is on."
+    memory(id: ID!): Memory
+    """
+    One page of a catalog. A blank `search` or `author` is no filter rather than
+    a search for nothing, so the screen can send what is in its boxes.
+    """
+    memories(
+        catalogId: ID!,
+        search: String,
+        author: String,
+        sort: MemorySort = LAST_MODIFIED,
+        page: Int = 0,
+        size: Int = 20
+    ): MemoryPage!
+    "Who has written in this catalog, which is what the author filter offers."
+    memoryAuthors(catalogId: ID!): [String!]!
+    "The workspace's objects: the shapes its workflows pass around."
+    workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20): ObjectPage!
+    workflowObject(id: ID!): WorkflowObject
     agent(id: ID!): Agent
-    "Everything that happened inside one team, newest first."
-    teamActivity(
-        teamId: ID!,
+    "Everything that happened inside one workspace, newest first."
+    workspaceActivity(
+        workspaceId: ID!,
         page: Int = 0,
         size: Int = 20,
         search: String,
-        category: TeamAuditCategory,
+        category: WorkspaceAuditCategory,
         userId: String,
         "Only entries from the last N days; omit for all time."
         days: Int
-    ): TeamAuditPage!
-    "The users who appear in a team's audit log, for the filter."
-    teamActivityUsers(teamId: ID!): [String!]!
-    "The editable graph of a workflow the team has assigned."
-    workflowGraph(teamId: ID!, workflowId: ID!): WorkflowGraph!
+    ): WorkspaceAuditPage!
+    "The users who appear in a workspace's audit log, for the filter."
+    workspaceActivityUsers(workspaceId: ID!): [String!]!
+    "The editable graph of a workflow the workspace has assigned."
+    workflowGraph(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
+    "What a node would pass if pointed at this action: the seed the editor shows."
+    actionParameterDefaults(workspaceId: ID!, actionId: ID!): [NodeMapping!]!
     "What one run did: the graph as it ran, per-node outcome, and its log."
     execution(id: ID!): ExecutionDetail
-    "Runs of a team's workflows, newest first."
-    teamExecutions(
-        teamId: ID!,
+    "Runs of a workspace's workflows, newest first."
+    workspaceExecutions(
+        workspaceId: ID!,
         page: Int = 0,
         size: Int = 20,
         status: ExecutionStatus,
@@ -73,51 +127,116 @@ type Query {
 }
 
 type Mutation {
-    createTeam(input: CreateTeamInput!): Team!
-    "Saves the team settings form: name, description and directory group."
-    updateTeam(id: ID!, input: UpdateTeamInput!): Team!
-    deleteTeam(id: ID!): Boolean!
-    "Creates the workflow definition and assigns it to the team."
-    createWorkflow(input: CreateWorkflowInput!): TeamWorkflow!
-    setWorkflowEnabled(id: ID!, enabled: Boolean!): TeamWorkflow!
-    "Saves the workflow settings form; the definition is shared by every team using it."
-    updateWorkflow(id: ID!, input: UpdateWorkflowInput!): TeamWorkflow!
-    "Unassigns the workflow from the team; the definition is kept."
+    createWorkspace(input: CreateWorkspaceInput!): Workspace!
+    "Saves the workspace settings form: name, description and directory group."
+    updateWorkspace(id: ID!, input: UpdateWorkspaceInput!): Workspace!
+    deleteWorkspace(id: ID!): Boolean!
+    "Creates the workflow definition and assigns it to the workspace."
+    createWorkflow(input: CreateWorkflowInput!): WorkspaceWorkflow!
+    setWorkflowEnabled(id: ID!, enabled: Boolean!): WorkspaceWorkflow!
+    "Saves the workflow settings form; the definition is shared by every workspace using it."
+    updateWorkflow(id: ID!, input: UpdateWorkflowInput!): WorkspaceWorkflow!
+    "Unassigns the workflow from the workspace; the definition is kept."
     removeWorkflow(id: ID!): Boolean!
     "Replaces the whole graph and puts the workflow back into draft."
-    saveWorkflowGraph(teamId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
-    publishWorkflow(teamId: ID!, workflowId: ID!): WorkflowGraph!
+    saveWorkflowGraph(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
+    publishWorkflow(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
     createAgent(input: CreateAgentInput!): Agent!
     "Saves the agent settings form."
     updateAgent(id: ID!, input: UpdateAgentInput!): Agent!
     setAgentEnabled(id: ID!, enabled: Boolean!): Agent!
     deleteAgent(id: ID!): Boolean!
-    "Defines a default connection, assigned to teams created from now on."
+    createTool(input: CreateToolInput!): Tool!
+    "Backs the tool editor: the code on the left, the details on the right."
+    updateTool(id: ID!, input: UpdateToolInput!): Tool!
+    setToolEnabled(id: ID!, enabled: Boolean!): Tool!
+    "Parses the source and says where it broke; the editor's Validate."
+    validateToolSource(workspaceId: ID!, source: String!): SourceValidation!
+    deleteTool(id: ID!): Boolean!
+    "Chooses the model for the workspace's own small jobs. Null clears it."
+    setWorkspaceCompanionModel(workspaceId: ID!, modelId: ID): Workspace!
+
+    createObject(input: CreateObjectInput!): WorkflowObject!
+    "Backs the object editor: the properties on the left, the details on the right."
+    updateObject(id: ID!, input: UpdateObjectInput!): WorkflowObject!
+    "Refused while another object still points at it."
+    deleteObject(id: ID!): Boolean!
+    "The editor's Validate: a report, not a failure."
+    validateObject(workspaceId: ID!, properties: [ObjectPropertyInput!]!): ObjectValidation!
+
+    createSkillCatalog(workspaceId: ID!, name: String!): SkillCatalog!
+    renameSkillCatalog(id: ID!, name: String!): SkillCatalog!
+    "Deletes the catalog and the skills in it."
+    deleteSkillCatalog(id: ID!): Boolean!
+
+    createMemoryCatalog(workspaceId: ID!, name: String!): MemoryCatalog!
+    renameMemoryCatalog(id: ID!, name: String!): MemoryCatalog!
+    "Deletes the catalog and the memories in it."
+    deleteMemoryCatalog(id: ID!): Boolean!
+    createMemory(input: CreateMemoryInput!): Memory!
+    updateMemory(id: ID!, input: UpdateMemoryInput!): Memory!
+    deleteMemory(id: ID!): Boolean!
+
+    createSkill(input: CreateSkillInput!): Skill!
+    "Backs the skill editor: the markdown on the left, the details on the right."
+    updateSkill(id: ID!, input: UpdateSkillInput!): Skill!
+    setSkillEnabled(id: ID!, enabled: Boolean!): Skill!
+    "Checks the frontmatter shape and says where it broke; the editor's Validate."
+    validateSkillContent(workspaceId: ID!, content: String!): SourceValidation!
+    deleteSkill(id: ID!): Boolean!
+    startChat(input: StartChatInput!): ChatSession!
+    renameChat(id: ID!, title: String!): ChatSession!
+    setChatPinned(id: ID!, pinned: Boolean!): ChatSession!
+    "The model selector above the log. Null unsets it, which stops the chat."
+    chooseChatModel(id: ID!, modelId: ID): ChatSession!
+    "Hands the chat to an agent; null hands it back to a bare model."
+    chooseChatAgent(id: ID!, agentId: ID): ChatSession!
+    "Deletes the chat and the history with it."
+    deleteChat(id: ID!): Boolean!
+    "Says something and answers it, with the whole thread as context."
+    sendChatMessage(id: ID!, text: String!): ChatAnswer!
+    "Defines a default connection, assigned to workspaces created from now on."
     createConnection(input: ConnectionInput!): Connection!
-    "Also updates the copy held by every team provisioned with this default."
+    "Also updates the copy held by every workspace provisioned with this default."
     updateConnection(id: ID!, input: ConnectionInput!): Connection!
-    "Removes the default; teams keep the copy they hold, credentials included."
+    "Removes the default; workspaces keep the copy they hold, credentials included."
     deleteConnection(id: ID!): Boolean!
-    "Adds a connection that belongs to this team alone."
-    createTeamConnection(input: CreateTeamConnectionInput!): TeamConnection!
+    "Adds a connection that belongs to this workspace alone."
+    createWorkspaceConnection(input: CreateWorkspaceConnectionInput!): WorkspaceConnection!
     "Saves the connection settings form; inherited fields are left to the default."
-    updateTeamConnection(id: ID!, input: UpdateTeamConnectionInput!): TeamConnection!
-    "Clears the team's credentials; a team-owned connection is removed outright."
-    disconnectTeamConnection(id: ID!): Boolean!
+    updateWorkspaceConnection(id: ID!, input: UpdateWorkspaceConnectionInput!): WorkspaceConnection!
+    "Clears the workspace's credentials; a workspace-owned connection is removed outright."
+    disconnectWorkspaceConnection(id: ID!): Boolean!
     "Calls the service and records what came back, which is what status reports."
-    testTeamConnection(id: ID!): TeamConnection!
+    testWorkspaceConnection(id: ID!): WorkspaceConnection!
     "Returns the stored credentials and records that they were revealed."
-    revealTeamConnectionSecret(id: ID!): String
+    revealWorkspaceConnectionSecret(id: ID!): String
     createMcpServer(input: CreateMcpServerInput!): McpServer!
     updateMcpServer(id: ID!, input: UpdateMcpServerInput!): McpServer!
     removeMcpServer(id: ID!): Boolean!
     "Returns the stored credentials and records that they were revealed."
     revealMcpServerSecret(id: ID!): String
+    createModelProvider(input: CreateModelProviderInput!): ModelProvider!
+    updateModelProvider(id: ID!, input: UpdateModelProviderInput!): ModelProvider!
+    "Takes the provider's models with it."
+    removeModelProvider(id: ID!): Boolean!
+    "Returns the stored key and records that it was revealed."
+    revealModelProviderSecret(id: ID!): String
+    "Asks the provider whether it answers, and records what it said."
+    testModelProvider(id: ID!): ModelProvider!
+    "The model's own details. The form sends all of them, so a null is a cleared field."
+    createModel(input: CreateModelInput!): Model!
+    updateModel(id: ID!, input: UpdateModelInput!): Model!
+    "The Quotas and Limits card, whose fields are saved together. Null is no limit."
+    updateModelQuotas(id: ID!, input: ModelQuotasInput!): Model!
+    "The Active toggle on the models list."
+    setModelEnabled(id: ID!, enabled: Boolean!): Model!
+    removeModel(id: ID!): Boolean!
     createFunction(input: CreateFunctionInput!): Function!
     "Saves the function editor: the code, the details and the parameters."
     updateFunction(id: ID!, input: UpdateFunctionInput!): Function!
     "Parses the source and says where it broke; the editor's Validate."
-    validateFunctionSource(teamId: ID!, source: String!): FunctionValidation!
+    validateFunctionSource(workspaceId: ID!, source: String!): FunctionValidation!
     "Refused while an action still calls it."
     deleteFunction(id: ID!): Boolean!
     createCondition(input: CreateConditionInput!): Condition!
@@ -135,34 +254,39 @@ type Mutation {
     "The toggle in the list; a disabled trigger stays, and stops firing."
     setTriggerEnabled(id: ID!, enabled: Boolean!): Trigger!
     deleteTrigger(id: ID!): Boolean!
-    "Runs a workflow the team has assigned, with the graph as it stands now."
-    startExecution(teamId: ID!, workflowId: ID!, input: String): ExecutionDetail!
+    "Runs a workflow the workspace has assigned, with the graph as it stands now."
+    startExecution(workspaceId: ID!, workflowId: ID!, input: String): ExecutionDetail!
     "Runs the workflow of an earlier run again."
     rerunExecution(id: ID!): ExecutionDetail!
 }
 
-type Team {
+type Workspace {
     id: ID!
     name: String!
     description: String
-    "Directory group whose members may see this team, e.g. cn=backend,ou=teams,dc=gyloli,dc=io."
+    "Directory group whose members may see this workspace, e.g. cn=backend,ou=workspaces,dc=orknux,dc=io."
     ldapGroup: String
+    """
+    The model used for the workspace's own small jobs — naming a chat from what
+    was said. Null means those jobs do not happen.
+    """
+    companionModelId: ID
 }
 
-input CreateTeamInput {
+input CreateWorkspaceInput {
     name: String!
     description: String
 }
 
-input UpdateTeamInput {
+input UpdateWorkspaceInput {
     name: String!
     description: String
     ldapGroup: String
 }
 
-"A slice of teams, ordered by name."
-type TeamPage {
-    content: [Team!]!
+"A slice of workspaces, ordered by name."
+type WorkspacePage {
+    content: [Workspace!]!
     page: Int!
     size: Int!
     totalElements: Int!
@@ -170,7 +294,7 @@ type TeamPage {
 }
 
 input CreateWorkflowInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     description: String
 }
@@ -188,9 +312,9 @@ enum WorkflowStatus {
 enum NodeKind {
     TRIGGER
     AGENT
-    "An instance of one of the team's actions."
+    "An instance of one of the workspace's actions."
     ACTION
-    "Asks one of the team's conditions; the run stops when it does not hold."
+    "Asks one of the workspace's conditions; the run stops when it does not hold."
     CONDITION
     DATA_TASK
     PUBLISH_TASK
@@ -202,8 +326,8 @@ type WorkflowNode {
     kind: NodeKind!
     name: String!
     description: String
-    agentClass: String
-    modelProvider: String
+    "The agent an agent node instances."
+    agentId: ID
     "The trigger definition a TRIGGER node instances, if it names one."
     triggerId: ID
     "The action an ACTION node instances, if it names one."
@@ -216,6 +340,19 @@ type WorkflowNode {
     inputs: [ActionParam!]!
     "What it hands on."
     outputs: [ActionParam!]!
+    """
+    What this node passes to its action, one entry per parameter that action
+    has. Seeded from the action when the node first points at one and owned by
+    the node afterwards: editing these never changes the definition.
+    """
+    mappings: [NodeMapping!]!
+}
+
+"One parameter of a node, and where its value comes from."
+type NodeMapping {
+    name: String!
+    "`{{input.x}}` takes it from upstream; anything else is a literal."
+    expression: String!
 }
 
 type WorkflowEdge {
@@ -252,16 +389,27 @@ input WorkflowNodeInput {
     kind: NodeKind!
     name: String!
     description: String
-    agentClass: String
-    modelProvider: String
+    "The agent an agent node instances."
+    agentId: ID
     "The trigger definition a TRIGGER node instances; ignored on any other kind."
     triggerId: ID
     "The action an ACTION node instances; ignored on any other kind."
     actionId: ID
     "The condition a CONDITION node asks; ignored on any other kind."
     conditionId: ID
+    """
+    What this node passes to its action. Omitted leaves it to the action's own
+    suggestions, which is what a node freshly pointed at one wants. Names the
+    action does not have are dropped; ones it has and this omits are seeded.
+    """
+    mappings: [NodeMappingInput!]
     x: Float!
     y: Float!
+}
+
+input NodeMappingInput {
+    name: String!
+    expression: String!
 }
 
 input WorkflowEdgeInput {
@@ -319,8 +467,8 @@ type LastRun {
     durationSeconds: Int
 }
 
-"A workflow as it appears for one team."
-type TeamWorkflow {
+"A workflow as it appears for one workspace."
+type WorkspaceWorkflow {
     "Identifies the assignment, not the definition."
     id: ID!
     workflowId: ID!
@@ -333,8 +481,8 @@ type TeamWorkflow {
     nextRun: String
 }
 
-type TeamWorkflowPage {
-    content: [TeamWorkflow!]!
+type WorkspaceWorkflowPage {
+    content: [WorkspaceWorkflow!]!
     page: Int!
     size: Int!
     totalElements: Int!
@@ -348,14 +496,24 @@ enum AgentType {
 
 type Agent {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: AgentType!
     description: String
     systemPrompt: String
     enabled: Boolean!
+    "The model this agent thinks with. Null when none has been chosen."
+    modelId: ID
+    "What that model is called, or null when it has been removed."
+    modelName: String
     "MCP servers this agent may connect to."
     mcpServers: [String!]!
+    "Memory catalogs this agent may read, by name."
+    memoryCatalogs: [String!]!
+    "Which skill catalogs it may draw on."
+    skillCatalogs: [String!]!
+    "Which of the workspace's tools it may call."
+    tools: [String!]!
 }
 
 type AgentPage {
@@ -366,8 +524,208 @@ type AgentPage {
     totalPages: Int!
 }
 
+"""
+A named piece of JavaScript an agent may call while it runs.
+
+Not a workflow function: a function is called by an action node at a point the
+graph fixed in advance, a tool is offered to an agent that calls it if it judges
+that it should. Same sandbox, different caller.
+"""
+type Tool {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    "What the tool is for. An agent reads this to decide whether to call it."
+    description: String
+    source: String!
+    "Off leaves it defined but out of reach."
+    enabled: Boolean!
+    "ISO-8601 offset date-time, and the uid that saved it."
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type ToolPage {
+    content: [Tool!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+"A reusable instruction set that guides how an agent goes about something."
+type Skill {
+    id: ID!
+    workspaceId: ID!
+    catalogId: ID!
+    name: String!
+    description: String
+    "Markdown, opening with a frontmatter block naming and describing it."
+    content: String!
+    enabled: Boolean!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type SkillPage {
+    content: [Skill!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+"""
+One conversation. The messages are not here: they live in Spring AI's chat
+memory store, keyed by a conversation id, which is what lets a workflow run
+key one the same way and have every agent in it share a single thread.
+"""
+type ChatSession {
+    id: ID!
+    workspaceId: ID!
+    title: String!
+    pinned: Boolean!
+    "Which model answers; null once the model it named has been removed."
+    modelId: ID
+    modelName: String
+    "Set when an agent is answering rather than a bare model."
+    agentId: ID
+    "What that agent is called, or null once it has been deleted."
+    agentName: String
+    "ISO-8601 offset date-times. `lastMessageAt` is null until something is said."
+    createdAt: String!
+    lastMessageAt: String
+}
+
+"One message out of the history. Role is user, assistant, system or tool."
+type ChatMessage {
+    role: String!
+    content: String!
+}
+
+type ChatAnswer {
+    session: ChatSession!
+    answer: ChatMessage!
+    "How long the model took, which the screen shows as what it thought for."
+    millis: Float!
+}
+
+input StartChatInput {
+    workspaceId: ID!
+    title: String
+    modelId: ID
+}
+
+"What Validate found, in the tool and skill editors. `column` is null for a skill."
+type SourceValidation {
+    valid: Boolean!
+    message: String
+    line: Int
+    column: Int
+}
+
+input CreateToolInput {
+    workspaceId: ID!
+    name: String!
+    description: String
+    "Left out for a new tool, which starts from a stub that parses."
+    source: String
+}
+
+input UpdateToolInput {
+    name: String
+    description: String
+    source: String
+}
+
+"""
+A folder of skills. Its own thing rather than a label, because it exists — and
+has a count worth showing — before anything is in it, and because it is the unit
+an agent is granted.
+"""
+type SkillCatalog {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    skillCount: Int!
+    createdAt: String!
+    createdBy: String!
+}
+
+"""
+A folder of memories. Its own thing rather than a label, because it exists — and
+is worth counting — before anything has been put in it.
+"""
+type MemoryCatalog {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    "What the count badge shows."
+    memoryCount: Int!
+    createdAt: String!
+    createdBy: String!
+}
+
+"One thing the workspace wants remembered."
+type Memory {
+    id: ID!
+    catalogId: ID!
+    title: String!
+    content: String!
+    createdAt: String!
+    "Who added it. An editor does not become the author."
+    createdBy: String!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type MemoryPage {
+    content: [Memory!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+enum MemorySort {
+    LAST_MODIFIED
+    CREATED
+    TITLE
+}
+
+input CreateMemoryInput {
+    catalogId: ID!
+    title: String!
+    content: String!
+}
+
+"A null `catalogId` leaves the memory in the catalog it is in."
+input UpdateMemoryInput {
+    title: String!
+    content: String!
+    catalogId: ID
+}
+
+input CreateSkillInput {
+    workspaceId: ID!
+    name: String!
+    description: String
+    "Left out for a new skill, which starts from the shape with its parts named."
+    content: String
+    "Which folder it goes in; the workspace's first when nobody says."
+    catalogId: ID
+}
+
+input UpdateSkillInput {
+    name: String
+    description: String
+    content: String
+    "Moves it to another folder; null leaves it where it is."
+    catalogId: ID
+}
+
 input CreateAgentInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: AgentType!
     description: String
@@ -379,34 +737,44 @@ input UpdateAgentInput {
     description: String
     systemPrompt: String
     type: AgentType
+    "The model to think with. Null clears it."
+    modelId: ID
     "Null leaves the list alone; an empty list clears it."
     mcpServers: [String!]
+    "Same rule: null leaves it alone, an empty list clears it."
+    memoryCatalogs: [String!]
+    "Null leaves the grant alone."
+    skillCatalogs: [String!]
+    "Which tools it may call; null leaves the grant alone."
+    tools: [String!]
 }
 
-enum TeamOperationType {
+enum WorkspaceOperationType {
     ADD
     REMOVE
     RENAME
 }
 
-enum TeamAuditCategory {
-    TEAM
+enum WorkspaceAuditCategory {
+    WORKSPACE
     WORKFLOW
     AGENT
     INTEGRATION
+    "LLM providers, the models reached through them, and their quotas."
+    MODEL
 }
 
-type TeamAuditEntry {
+type WorkspaceAuditEntry {
     id: ID!
-    "Null for organization-wide entries, such as a default connection change."
-    teamId: ID
-    category: TeamAuditCategory!
+    "Null for admin-level entries, such as a default connection change."
+    workspaceId: ID
+    category: WorkspaceAuditCategory!
     "Ready to show: \"Agent Research Agent enabled\"."
     message: String!
-    oldTeamName: String
-    newTeamName: String
-    "Only set for team lifecycle entries."
-    operationType: TeamOperationType
+    oldWorkspaceName: String
+    newWorkspaceName: String
+    "Only set for workspace lifecycle entries."
+    operationType: WorkspaceOperationType
     "ISO-8601 offset date-time, e.g. 2026-08-14T17:04:11.123+02:00."
     date: String!
     "LDAP uid of the user who performed the operation."
@@ -414,8 +782,8 @@ type TeamAuditEntry {
 }
 
 "A slice of audit entries, newest first."
-type TeamAuditPage {
-    content: [TeamAuditEntry!]!
+type WorkspaceAuditPage {
+    content: [WorkspaceAuditEntry!]!
     page: Int!
     size: Int!
     totalElements: Int!
@@ -424,7 +792,7 @@ type TeamAuditPage {
 
 enum ConnectionType {
     SLACK
-    "Slack over Socket Mode: a bot token and an app-level token, and gyloli listens on it."
+    "Slack over Socket Mode: a bot token and an app-level token, and orknux listens on it."
     SLACK_SOCKET_MODE
     GITHUB
     JIRA
@@ -452,7 +820,7 @@ input HttpHeaderInput {
     value: String!
 }
 
-"An organization-wide default connection."
+"An admin-level default connection."
 type Connection {
     id: ID!
     name: String!
@@ -472,28 +840,28 @@ input ConnectionInput {
     name: String!
     type: ConnectionType!
     url: String!
-    "Also hand the connection to the teams that already exist. Ignored on update."
-    addToExistingTeams: Boolean
+    "Also hand the connection to the workspaces that already exist. Ignored on update."
+    addToExistingWorkspaces: Boolean
 }
 
-"A connection as one team holds it, with that team's credentials."
-type TeamConnection {
+"A connection as one workspace holds it, with that workspace's credentials."
+type WorkspaceConnection {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: ConnectionType!
-    "The organization default, or the team's own URL for a connection it added."
+    "The admin default, or the workspace's own URL for a connection it added."
     url: String!
     urlOverride: String
     "Where requests actually go: the override when set, the default otherwise."
     effectiveUrl: String!
     authType: AuthType!
     headers: [HttpHeader!]!
-    "True while the team follows an organization default, which locks name, type and URL."
+    "True while the workspace follows an admin default, which locks name, type and URL."
     inherited: Boolean!
     "Whether credentials are stored; the credentials themselves are never listed."
     secretSet: Boolean!
-    "Whether an app-level token is stored, which is what lets gyloli listen for events."
+    "Whether an app-level token is stored, which is what lets orknux listen for events."
     appTokenSet: Boolean!
     "What the last check found; CONNECTED only once the service has answered."
     status: ConnectionStatus!
@@ -503,7 +871,7 @@ type TeamConnection {
     lastCheckedAt: String
 }
 
-"What the team screen reports about a connection."
+"What the workspace screen reports about a connection."
 enum ConnectionStatus {
     "No credentials stored, so there is nothing to check."
     NOT_CONFIGURED
@@ -513,8 +881,8 @@ enum ConnectionStatus {
     FAILED
 }
 
-input CreateTeamConnectionInput {
-    teamId: ID!
+input CreateWorkspaceConnectionInput {
+    workspaceId: ID!
     name: String!
     type: ConnectionType!
     url: String!
@@ -525,8 +893,8 @@ input CreateTeamConnectionInput {
     headers: [HttpHeaderInput!]
 }
 
-input UpdateTeamConnectionInput {
-    "Ignored for inherited connections, which follow the organization default."
+input UpdateWorkspaceConnectionInput {
+    "Ignored for inherited connections, which follow the admin default."
     name: String
     type: ConnectionType
     url: String
@@ -539,10 +907,10 @@ input UpdateTeamConnectionInput {
     headers: [HttpHeaderInput!]
 }
 
-"An MCP server a team's agents may connect to."
+"An MCP server a workspace's agents may connect to."
 type McpServer {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     address: String!
     authType: AuthType!
@@ -551,7 +919,7 @@ type McpServer {
 }
 
 input CreateMcpServerInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     address: String!
     authType: AuthType
@@ -568,11 +936,223 @@ input UpdateMcpServerInput {
     headers: [HttpHeaderInput!]
 }
 
+"""
+What the Models screen says about a provider. CONNECTED only once a check
+reached it and it answered: a stored credential is not a working one.
+"""
+enum ProviderStatus {
+    NOT_CONFIGURED
+    NOT_CHECKED
+    CONNECTED
+    FAILED
+}
+
+"The services a provider can be; each brings its own settings and its own way in."
+enum ProviderType {
+    OPENAI
+    ANTHROPIC
+    AZURE_OPENAI
+    GOOGLE_AI
+    OLLAMA
+    CUSTOM
+}
+
+"How a provider is authenticated. ENTRA_ID is Azure OpenAI only."
+enum ProviderAuthMethod {
+    API_KEY
+    ENTRA_ID
+}
+
+"What a model is for."
+enum ModelKind {
+    CHAT
+    EMBEDDING
+    COMPLETION
+}
+
+"How often a token quota starts again; NEVER makes it a total rather than a rate."
+enum ResetInterval {
+    DAILY
+    WEEKLY
+    MONTHLY
+    NEVER
+}
+
+"""
+An LLM provider a workspace reaches models through. The credential is never returned
+here — revealing one is a mutation, and it is audited.
+"""
+type ModelProvider {
+    id: ID!
+    workspaceId: ID!
+    "The workspace's own name for it, e.g. \"Azure OpenAI Production\"."
+    name: String!
+    type: ProviderType!
+    endpoint: String!
+    authMethod: ProviderAuthMethod!
+    "Azure OpenAI's own settings; null on every other type."
+    apiVersion: String
+    deploymentName: String
+    region: String
+    "Entra ID. The client secret is held with the keys and is not returned."
+    tenantId: String
+    clientId: String
+    scope: String
+    status: ProviderStatus!
+    "What the last check found, and when it ran."
+    lastCheckMessage: String
+    lastCheckedAt: String
+    secretSet: Boolean!
+}
+
+"""
+A model a provider says it can run.
+
+`added` rather than leaving the ones already in the catalogue out: a picker that
+silently drops them looks like the provider stopped offering them.
+"""
+type DiscoveredModel {
+    "What the provider's API is given."
+    modelId: String!
+    added: Boolean!
+}
+
+"One model the workspace may use, with the quotas the workspace put on it."
+type Model {
+    id: ID!
+    providerId: ID!
+    workspaceId: ID!
+    providerName: String!
+    "What a person calls it."
+    name: String!
+    "What the provider's API is given, e.g. claude-3-5-sonnet-20241022."
+    modelId: String!
+    kind: ModelKind!
+    contextWindow: Int
+    maxOutput: Int
+    enabled: Boolean!
+    "Null is no limit."
+    tokenLimit: Float
+    resetInterval: ResetInterval!
+    requestsPerMinute: Int
+    "What the provider charges per million tokens; null when it is not recorded."
+    inputCostPerMillion: Float
+    outputCostPerMillion: Float
+}
+
+"One day of the usage chart."
+type ModelUsageDay {
+    "ISO-8601 date."
+    day: String!
+    requests: Int!
+    "Whole tokens. Float because a busy day can outgrow a 32-bit Int."
+    tokens: Float!
+}
+
+"""
+What a model has been used for, summed over the days it was used on.
+
+Every number here comes from recorded calls, so a model nothing has called
+reports `empty` rather than a set of zeros dressed up as a result.
+"""
+type ModelUsage {
+    modelId: ID!
+    "The window, and what it covers, as ISO-8601 dates."
+    days: Int!
+    from: String!
+    to: String!
+    "True when nothing was recorded in the window."
+    empty: Boolean!
+    requests: Int!
+    "Whole tokens, as Float for the range rather than for the precision."
+    inputTokens: Float!
+    outputTokens: Float!
+    totalTokens: Float!
+    averageLatencyMillis: Float!
+    "Null when the model carries no prices to work it out from."
+    costEstimate: Float
+    "Change against the window before this one, as a fraction; null when there was no such window."
+    requestsChange: Float
+    tokensChange: Float
+    latencyChange: Float
+    "Only the days something happened on."
+    series: [ModelUsageDay!]!
+    "Where the quota is counting from, following the reset interval."
+    periodStart: String!
+    periodTokens: Float!
+}
+
+input CreateModelProviderInput {
+    workspaceId: ID!
+    name: String!
+    endpoint: String!
+    type: ProviderType
+    authMethod: ProviderAuthMethod
+    "The API key, or the Entra client secret."
+    secret: String
+    apiVersion: String
+    deploymentName: String
+    region: String
+    tenantId: String
+    clientId: String
+    scope: String
+}
+
+input UpdateModelProviderInput {
+    name: String!
+    endpoint: String!
+    type: ProviderType
+    authMethod: ProviderAuthMethod
+    "Null leaves the stored credential alone; empty clears it."
+    secret: String
+    apiVersion: String
+    deploymentName: String
+    region: String
+    tenantId: String
+    clientId: String
+    scope: String
+}
+
+
+"The model's own details, all of them: the form that edits them sends every field."
+input CreateModelInput {
+    providerId: ID!
+    name: String!
+    modelId: String!
+    kind: ModelKind
+    contextWindow: Int
+    maxOutput: Int
+    tokenLimit: Float
+    resetInterval: ResetInterval
+    requestsPerMinute: Int
+    inputCostPerMillion: Float
+    outputCostPerMillion: Float
+}
+
+input UpdateModelInput {
+    name: String!
+    modelId: String!
+    kind: ModelKind
+    contextWindow: Int
+    maxOutput: Int
+    inputCostPerMillion: Float
+    outputCostPerMillion: Float
+}
+
+"The Quotas and Limits card. Null is no limit, which is what an emptied box means."
+input ModelQuotasInput {
+    tokenLimit: Float
+    resetInterval: ResetInterval
+    requestsPerMinute: Int
+}
+
 "Where one node of the graph got to in a run."
 enum StepStatus {
     "Never reached, because the run stopped or has not got there yet."
     PENDING
     RUNNING
+    "Parked until a time passes or something the step waits on holds."
+    WAITING
     COMPLETED
     FAILED
     SKIPPED
@@ -619,7 +1199,7 @@ type ExecutionLogLine {
 
 type ExecutionDetail {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     workflowId: ID!
     workflowName: String!
     status: ExecutionStatus!
@@ -673,7 +1253,7 @@ type Dependency {
 
 "What starts a workflow."
 enum TriggerType {
-    "An event arriving on one of the team's connections."
+    "An event arriving on one of the workspace's connections."
     INCOMING_CONNECTION
     "The clock, on a cron expression."
     SCHEDULED
@@ -688,10 +1268,10 @@ enum TriggerAction {
     ISSUE_UPDATED
 }
 
-"One entry in a team's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
+"One entry in a workspace's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
 type Trigger {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: TriggerType!
     connectionId: ID
@@ -700,11 +1280,53 @@ type Trigger {
     timezone: String
     "JSON object handed to the runs this starts; null when it says nothing."
     payload: String
+    "Asked of the event before anything starts; null fires on everything."
+    conditionId: ID
+    "The condition's name, for the list."
+    conditionName: String
+    "The most recent thing this trigger did; null when it has never been asked."
+    lastFiring: TriggerFiring
     enabled: Boolean!
     "Where the event comes from, ready to show: the connection, or \"Cron\"."
     source: String!
     "What the event is, ready to show: \"Mention\", or the cron expression."
     event: String!
+}
+
+"""
+One thing a trigger did. The entries worth having are mostly the ones no run
+came of: those appear nowhere else, which is what makes a working trigger and a
+silent one look alike.
+"""
+type TriggerFiring {
+    id: ID!
+    "ISO-8601."
+    at: String!
+    outcome: FiringOutcome!
+    "Worded as the screen shows it."
+    detail: String
+    runsStarted: Int!
+}
+
+enum FiringOutcome {
+    "Runs were started."
+    STARTED
+    "No workflow points a trigger node at this definition."
+    NO_INSTANCE
+    "The trigger's condition turned the event down."
+    CONDITION_DID_NOT_HOLD
+    "The condition could not be decided, so nothing was started."
+    UNDECIDED
+    "Something went wrong starting a run."
+    FAILED
+}
+
+type TriggerFiringPage {
+    content: [TriggerFiring!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
 }
 
 type TriggerPage {
@@ -716,7 +1338,7 @@ type TriggerPage {
 }
 
 input CreateTriggerInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: TriggerType!
     "Required for an incoming connection trigger."
@@ -727,6 +1349,8 @@ input CreateTriggerInput {
     timezone: String
     "JSON object handed to the runs this starts."
     payload: String
+    "Asked of the event before anything starts; null asks nothing."
+    conditionId: ID
 }
 
 input UpdateTriggerInput {
@@ -736,6 +1360,8 @@ input UpdateTriggerInput {
     cron: String
     timezone: String
     payload: String
+    "Asked of the event before anything starts; null asks nothing."
+    conditionId: ID
 }
 
 "The shape of a value crossing between a workflow and a script."
@@ -745,12 +1371,14 @@ enum ValueType {
     BOOLEAN
     OBJECT
     ARRAY
+    "Nothing at all: a function that acts rather than answers."
+    NONE
 }
 
-"A named piece of JavaScript a team wrote, run in a sandbox with no host, files or network."
+"A named piece of JavaScript a workspace wrote, run in a sandbox with no host, files or network."
 type Function {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     description: String
     source: String!
@@ -790,7 +1418,7 @@ input FunctionParamInput {
 }
 
 input CreateFunctionInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     description: String
     "Left out for a new function, which starts from a stub that runs."
@@ -820,7 +1448,7 @@ enum ActionSubtype {
     FUNCTION
     "Waits until an expression written into the action holds."
     INLINE_CONDITION
-    "Waits until one of the team's conditions holds."
+    "Waits until one of the workspace's conditions holds."
     CONDITION
     TIME
 }
@@ -854,7 +1482,7 @@ type ActionParam {
 "A reusable block a workflow is built from; an action node instances one."
 type Action {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: ActionType!
     subtype: ActionSubtype!
@@ -898,7 +1526,7 @@ input ArgumentMappingInput {
 }
 
 input CreateActionInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: ActionType!
     subtype: ActionSubtype!
@@ -944,7 +1572,7 @@ enum ConditionType {
     SLACK
     JIRA
     TIME
-    "One of the team's functions, which has to return a boolean."
+    "One of the workspace's functions, which has to return a boolean."
     FUNCTION
     ANY_OF
     ALL_OF
@@ -968,20 +1596,20 @@ enum ConditionCheck {
     CONTAINS
     MATCHES
     BETWEEN
-    TEAMMATE
+    WORKSPACEMATE
 }
 
-"A question a team asks about what a run is carrying, defined once."
+"A question a workspace asks about what a run is carrying, defined once."
 type Condition {
     id: ID!
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: ConditionType!
     "\"Any Of\", for the badge and the form."
     typeLabel: String!
     property: ConditionProperty
     check: ConditionCheck
-    "Answers the opposite; what makes \"is external\" the negation of \"is a teammate\"."
+    "Answers the opposite; what makes \"is external\" the negation of \"is a workspacemate\"."
     negate: Boolean!
     functionId: ID
     functionName: String
@@ -1003,7 +1631,7 @@ type ConditionPage {
 }
 
 input CreateConditionInput {
-    teamId: ID!
+    workspaceId: ID!
     name: String!
     type: ConditionType!
     property: ConditionProperty
@@ -1023,4 +1651,77 @@ input UpdateConditionInput {
     functionId: ID
     values: [String!]
     members: [ID!]
+}
+
+"""
+A named data structure the workspace can point at.
+
+Fields only. Deliberately not called a record: an object with members can grow
+methods later without the concept having to be renamed.
+"""
+type WorkflowObject {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    description: String
+    properties: [ObjectProperty!]!
+    "What the list's badge shows."
+    propertyCount: Int!
+    createdAt: String!
+    createdBy: String!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type ObjectProperty {
+    name: String!
+    kind: PropertyKind!
+    "The object this points at, when the kind is one or an array of them."
+    refObjectId: ID
+    "What an array holds when it holds scalars."
+    elementKind: PropertyKind
+    "Ready to show: `string`, `ApiResponse`, `array<FileObject>`."
+    display: String!
+}
+
+enum PropertyKind {
+    STRING
+    NUMBER
+    BOOLEAN
+    OBJECT
+    ARRAY
+}
+
+input ObjectPropertyInput {
+    name: String!
+    kind: PropertyKind!
+    refObjectId: ID
+    elementKind: PropertyKind
+}
+
+input CreateObjectInput {
+    workspaceId: ID!
+    name: String!
+    description: String
+    properties: [ObjectPropertyInput!]
+}
+
+input UpdateObjectInput {
+    name: String
+    description: String
+    "Null leaves the properties alone; a list replaces them wholesale."
+    properties: [ObjectPropertyInput!]
+}
+
+type ObjectValidation {
+    valid: Boolean!
+    message: String!
+}
+
+type ObjectPage {
+    content: [WorkflowObject!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
 }

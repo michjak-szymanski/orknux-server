@@ -6,7 +6,7 @@
 
     <version>1.0.0-SNAPSHOT</version>
     <groupId>io.mszymanski</groupId>
-    <artifactId>gyloli-server</artifactId>
+    <artifactId>orknux-server</artifactId>
     <packaging>pom</packaging>
 
     <!--
@@ -50,12 +50,12 @@
             </dependency>
             <dependency>
                 <groupId>io.mszymanski</groupId>
-                <artifactId>gyloli-connection</artifactId>
+                <artifactId>orknux-connection</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.mszymanski</groupId>
-                <artifactId>gyloli-execution</artifactId>
+                <artifactId>orknux-execution</artifactId>
                 <version>${project.version}</version>
             </dependency>
         </dependencies>

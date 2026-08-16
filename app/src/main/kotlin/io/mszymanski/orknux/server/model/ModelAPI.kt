@@ -1,0 +1,282 @@
+package io.mszymanski.orknux.server.model
+
+import io.mszymanski.orknux.connector.model.CreateModelInput
+import io.mszymanski.orknux.connector.model.CreateProviderInput
+import io.mszymanski.orknux.connector.model.DiscoveredModelView
+import io.mszymanski.orknux.connector.model.LlmModelView
+import io.mszymanski.orknux.connector.model.ModelProviderView
+import io.mszymanski.orknux.connector.model.ModelQuotasInput
+import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.connector.model.ModelUsageView
+import io.mszymanski.orknux.connector.model.ResetInterval
+import io.mszymanski.orknux.connector.model.UpdateModelInput
+import io.mszymanski.orknux.connector.model.UpdateProviderInput
+import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.graphql.data.method.annotation.Argument
+import org.springframework.graphql.data.method.annotation.MutationMapping
+import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.stereotype.Controller
+import java.time.format.DateTimeFormatter
+
+/**
+ * The workspace's LLM providers and the models it reaches through them.
+ *
+ * The connection module holds them, for the same reason it holds MCP servers:
+ * a provider carries a key. This checks access, calls the module and writes the
+ * audit entry, in that order.
+ */
+@Controller
+class ModelAPI(
+    private val models: ModelService,
+    private val workspaces: WorkspaceRepository,
+    private val access: WorkspaceAccess,
+    private val auditRecorder: WorkspaceAuditRecorder,
+) {
+
+    @QueryMapping
+    fun modelProviders(@Argument workspaceId: Long): List<ModelProviderView> {
+        requireWorkspaceAccess(workspaceId)
+        return models.providers(workspaceId)
+    }
+
+    @QueryMapping
+    fun modelProvider(@Argument id: Long): ModelProviderView? {
+        val provider = models.provider(id) ?: return null
+        requireWorkspaceAccess(provider.workspaceId)
+        return provider
+    }
+
+    @QueryMapping("models")
+    fun workspaceModels(@Argument workspaceId: Long): List<LlmModelView> {
+        requireWorkspaceAccess(workspaceId)
+        return models.models(workspaceId)
+    }
+
+    @QueryMapping
+    fun model(@Argument id: Long): LlmModelView? {
+        val model = models.model(id) ?: return null
+        requireWorkspaceAccess(model.workspaceId)
+        return model
+    }
+
+    /**
+     * A query, because asking a provider what it offers writes nothing: the
+     * catalogue only changes when somebody adds one of the answers.
+     */
+    @QueryMapping
+    fun discoveredModels(@Argument providerId: Long): List<DiscoveredModelView> {
+        val provider = models.provider(providerId) ?: throw ModelProviderNotFoundException(providerId)
+        requireWorkspaceAccess(provider.workspaceId)
+        return models.discoverModels(providerId)
+    }
+
+    @QueryMapping
+    fun modelUsage(@Argument id: Long, @Argument days: Int): ModelUsageResponse {
+        val model = models.model(id) ?: throw ModelNotFoundException(id)
+        requireWorkspaceAccess(model.workspaceId)
+        return ModelUsageResponse(models.usage(id, days))
+    }
+
+    @MutationMapping
+    fun createModelProvider(@Argument input: CreateProviderInput): ModelProviderView {
+        requireWorkspaceAccess(input.workspaceId)
+        val created = models.createProvider(input)
+        auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.MODEL, "Provider ${created.name} added")
+        return created
+    }
+
+    @MutationMapping
+    fun updateModelProvider(@Argument id: Long, @Argument input: UpdateProviderInput): ModelProviderView {
+        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
+        requireWorkspaceAccess(provider.workspaceId)
+
+        val updated = models.updateProvider(id, input)
+        val message = if (provider.name == updated.name) {
+            "Provider ${updated.name} updated"
+        } else {
+            "Provider ${provider.name} renamed to ${updated.name}"
+        }
+        auditRecorder.record(provider.workspaceId, WorkspaceAuditCategory.MODEL, message)
+        return updated
+    }
+
+    @MutationMapping
+    fun removeModelProvider(@Argument id: Long): Boolean {
+        val provider = models.provider(id) ?: return false
+        requireWorkspaceAccess(provider.workspaceId)
+        if (!models.removeProvider(id)) return false
+
+        auditRecorder.record(
+            provider.workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            "Provider ${provider.name} removed, with its models",
+        )
+        return true
+    }
+
+    @MutationMapping
+    fun revealModelProviderSecret(@Argument id: Long): String? {
+        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
+        requireWorkspaceAccess(provider.workspaceId)
+
+        auditRecorder.record(
+            provider.workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            "Credentials for ${provider.name} revealed",
+        )
+        return models.revealProviderSecret(id)
+    }
+
+    /** The Test Connection button: what comes back is what the provider said. */
+    @MutationMapping
+    fun testModelProvider(@Argument id: Long): ModelProviderView {
+        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
+        requireWorkspaceAccess(provider.workspaceId)
+
+        val checked = models.testProvider(id)
+        auditRecorder.record(
+            provider.workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            "Provider ${provider.name} checked: ${checked.lastCheckMessage}",
+        )
+        return checked
+    }
+
+    @MutationMapping
+    fun createModel(@Argument input: CreateModelInput): LlmModelView {
+        val provider = models.provider(input.providerId) ?: throw ModelProviderNotFoundException(input.providerId)
+        requireWorkspaceAccess(provider.workspaceId)
+
+        val created = models.createModel(input)
+        auditRecorder.record(
+            provider.workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            "Model ${created.name} added to ${provider.name}",
+        )
+        return created
+    }
+
+    @MutationMapping
+    fun updateModel(@Argument id: Long, @Argument input: UpdateModelInput): LlmModelView {
+        val model = models.model(id) ?: throw ModelNotFoundException(id)
+        requireWorkspaceAccess(model.workspaceId)
+
+        val updated = models.updateModel(id, input)
+        val message = if (model.name == updated.name) {
+            "Model ${updated.name} updated"
+        } else {
+            "Model ${model.name} renamed to ${updated.name}"
+        }
+        auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.MODEL, message)
+        return updated
+    }
+
+    /**
+     * Saves the Quotas and Limits card, whose fields go together: an emptied box
+     * is a limit the workspace took off, not one it forgot to mention.
+     */
+    @MutationMapping
+    fun updateModelQuotas(@Argument id: Long, @Argument input: ModelQuotasArgs): LlmModelView {
+        val model = models.model(id) ?: throw ModelNotFoundException(id)
+        requireWorkspaceAccess(model.workspaceId)
+
+        val updated = models.updateModelQuotas(
+            id,
+            ModelQuotasInput(
+                // Float on the wire, because a token limit outgrows a 32-bit Int.
+                tokenLimit = input.tokenLimit?.toLong(),
+                resetInterval = input.resetInterval ?: ResetInterval.MONTHLY,
+                requestsPerMinute = input.requestsPerMinute,
+            ),
+        )
+        auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.MODEL, "Quotas for ${model.name} updated")
+        return updated
+    }
+
+    @MutationMapping
+    fun setModelEnabled(@Argument id: Long, @Argument enabled: Boolean): LlmModelView {
+        val model = models.model(id) ?: throw ModelNotFoundException(id)
+        requireWorkspaceAccess(model.workspaceId)
+
+        val updated = models.setModelEnabled(id, enabled)
+        val what = if (enabled) "activated" else "deactivated"
+        auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.MODEL, "Model ${model.name} $what")
+        return updated
+    }
+
+    @MutationMapping
+    fun removeModel(@Argument id: Long): Boolean {
+        val model = models.model(id) ?: return false
+        requireWorkspaceAccess(model.workspaceId)
+        if (!models.removeModel(id)) return false
+
+        auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.MODEL, "Model ${model.name} removed")
+        return true
+    }
+
+    private fun requireWorkspaceAccess(workspaceId: Long) {
+        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+    }
+}
+
+/** The quotas card's values; the token limit arrives as a Float for its range. */
+data class ModelQuotasArgs(
+    val tokenLimit: Double? = null,
+    val resetInterval: ResetInterval? = null,
+    val requestsPerMinute: Int? = null,
+)
+
+/** [ModelUsageView] with its dates as the ISO-8601 strings the schema says. */
+data class ModelUsageResponse(
+    val modelId: Long,
+    val days: Int,
+    val from: String,
+    val to: String,
+    val empty: Boolean,
+    val requests: Int,
+    val inputTokens: Long,
+    val outputTokens: Long,
+    val totalTokens: Long,
+    val averageLatencyMillis: Double,
+    val costEstimate: Double?,
+    val requestsChange: Double?,
+    val tokensChange: Double?,
+    val latencyChange: Double?,
+    val series: List<ModelUsageDayResponse>,
+    val periodStart: String,
+    val periodTokens: Long,
+) {
+    constructor(usage: ModelUsageView) : this(
+        modelId = usage.modelId,
+        days = usage.days,
+        from = usage.from.format(DateTimeFormatter.ISO_LOCAL_DATE),
+        to = usage.to.format(DateTimeFormatter.ISO_LOCAL_DATE),
+        empty = usage.empty,
+        requests = usage.requests,
+        inputTokens = usage.inputTokens,
+        outputTokens = usage.outputTokens,
+        totalTokens = usage.totalTokens,
+        averageLatencyMillis = usage.averageLatencyMillis,
+        costEstimate = usage.costEstimate?.toDouble(),
+        requestsChange = usage.requestsChange,
+        tokensChange = usage.tokensChange,
+        latencyChange = usage.latencyChange,
+        series = usage.series.map {
+            ModelUsageDayResponse(it.day.format(DateTimeFormatter.ISO_LOCAL_DATE), it.requests, it.tokens)
+        },
+        periodStart = usage.periodStart.format(DateTimeFormatter.ISO_LOCAL_DATE),
+        periodTokens = usage.periodTokens,
+    )
+}
+
+data class ModelUsageDayResponse(val day: String, val requests: Int, val tokens: Long)
+
+class ModelProviderNotFoundException(id: Long) : RuntimeException("No model provider with id $id")
+
+class ModelNotFoundException(id: Long) : RuntimeException("No model with id $id")

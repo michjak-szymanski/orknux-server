@@ -6,9 +6,12 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
+        <module name="orknux-app" />
         <module name="gyloli-connection" />
-        <module name="gyloli-app" />
         <module name="gyloli-execution" />
+        <module name="orknux-execution" />
+        <module name="gyloli-app" />
+        <module name="orknux-connection" />
       </profile>
     </annotationProcessing>
   </component>

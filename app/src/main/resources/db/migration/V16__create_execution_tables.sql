@@ -1,5 +1,5 @@
 -- The execution module's tables: one row per run, the nodes as it ran them,
--- and the log it produced. Folded back in from gyloli-workflow.
+-- and the log it produced. Folded back in from orknux-workflow.
 --
 -- team_id and workflow_id are plain columns, for the same reason the connection
 -- module's are: those tables belong to another module.

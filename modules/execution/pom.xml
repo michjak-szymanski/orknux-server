@@ -6,18 +6,18 @@
 
     <parent>
         <groupId>io.mszymanski</groupId>
-        <artifactId>gyloli-server</artifactId>
+        <artifactId>orknux-server</artifactId>
         <version>1.0.0-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>gyloli-execution</artifactId>
+    <artifactId>orknux-execution</artifactId>
 
     <!-- Runs: the engine, the Temporal worker, and what each run recorded. Takes
          the graph to run from an interface the app implements. -->
 
     <dependencies>
-        <!-- GraalJS, for the JavaScript a team writes as a function. The
+        <!-- GraalJS, for the JavaScript a workspace writes as a function. The
              community distribution runs on any JDK, in the interpreter. -->
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
@@ -31,6 +31,15 @@
             <type>pom</type>
         </dependency>
 
+        <!--
+            A step keeps its own copy of the mappings it was given, as JSON in a
+            text column. Escaping that by hand is how a quotation mark in an
+            expression corrupts a run.
+        -->
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>

@@ -1,0 +1,105 @@
+package io.mszymanski.orknux.server.chat
+
+import io.mszymanski.orknux.connector.model.ChatCompletion
+import io.mszymanski.orknux.connector.model.ChatTurn
+import io.mszymanski.orknux.connector.model.ModelChatClient
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.slf4j.LoggerFactory
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+
+/**
+ * Naming a chat from what was said in it.
+ *
+ * "New chat" is the right name for an empty one and a useless name for a list of
+ * them, so the first exchange earns a real one. The work is done by the
+ * workspace's companion model rather than the model being talked to: it is not
+ * part of the conversation, and it should be able to be something cheap.
+ *
+ * A workspace with no companion model simply keeps the name it gave. Nothing
+ * about this is important enough to fail a chat over — a title that did not
+ * arrive is a title, and the person can rename it.
+ */
+@Service
+class ChatTitles(
+    private val sessions: ChatSessionRepository,
+    private val workspaces: WorkspaceRepository,
+    private val models: ModelChatClient,
+) {
+
+    /**
+     * Renames a chat still carrying its default name, from the exchange just had.
+     *
+     * Only the untouched default is replaced: a chat somebody named is named,
+     * and having it renamed underneath them would be worse than "New chat" ever
+     * was.
+     */
+    @Transactional
+    fun nameFrom(sessionId: Long, question: String, answer: String) {
+        val session = sessions.findByIdOrNull(sessionId) ?: return
+        if (session.title != DEFAULT_TITLE) return
+
+        val workspace = workspaces.findByIdOrNull(session.workspaceId) ?: return
+        val companion = workspace.companionModelId ?: return
+
+        val suggested = ask(companion, question, answer) ?: return
+        session.title = suggested
+    }
+
+    /**
+     * What the companion model made of it, or null when it could not be used.
+     *
+     * The answer is trimmed hard: models like to reply "Sure! Here is a title:
+     * …", and quotation marks around a title are a habit rather than a request.
+     * Anything that comes back long is cut rather than refused — a truncated
+     * title beats none.
+     */
+    private fun ask(modelId: Long, question: String, answer: String): String? {
+        val turns = listOf(
+            ChatTurn(
+                role = "system",
+                content = "You name conversations. Reply with a title of at most six words for the exchange " +
+                    "that follows. No quotation marks, no punctuation at the end, no preamble — the title only.",
+            ),
+            ChatTurn(role = "user", content = "Message: $question\n\nReply: ${answer.take(ANSWER_SAMPLE)}"),
+        )
+
+        return when (val completion = models.complete(modelId, turns)) {
+            // Naming a chat is one round with no tools offered, so this cannot
+            // happen; the compiler wants it said.
+            is ChatCompletion.CalledTools -> null
+            is ChatCompletion.Failed -> {
+                // Worth knowing about, not worth failing a chat over.
+                log.warn("Could not name chat with the companion model: {}", completion.reason)
+                null
+            }
+            is ChatCompletion.Answered -> clean(completion.content)
+        }
+    }
+
+    /** The first line, without the decoration models add to it. */
+    private fun clean(said: String): String? {
+        val line = said.trim().lineSequence().firstOrNull { it.isNotBlank() } ?: return null
+        return line
+            .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trimEnd('.', '!', ' ')
+            .take(TITLE_LENGTH)
+            .ifBlank { null }
+    }
+
+    private companion object {
+        val log = LoggerFactory.getLogger(ChatTitles::class.java)
+
+        /** What a chat is called before it has been anything. */
+        const val DEFAULT_TITLE = "New chat"
+
+        /** Enough of the answer to name it by; the whole of it is not needed. */
+        const val ANSWER_SAMPLE = 500
+
+        /** Matches the column. */
+        const val TITLE_LENGTH = 200
+    }
+}

@@ -1,40 +1,40 @@
-dn: ou=people,dc=gyloli,dc=io
+dn: ou=people,dc=orknux,dc=io
 objectClass: organizationalUnit
 ou: people
 
-dn: ou=groups,dc=gyloli,dc=io
+dn: ou=groups,dc=orknux,dc=io
 objectClass: organizationalUnit
 ou: groups
 
-dn: uid=alice,ou=people,dc=gyloli,dc=io
+dn: uid=alice,ou=people,dc=orknux,dc=io
 objectClass: inetOrgPerson
 uid: alice
 cn: Alice Example
 sn: Example
-mail: alice@gyloli.io
+mail: alice@orknux.io
 userPassword: password
 
-dn: uid=bob,ou=people,dc=gyloli,dc=io
+dn: uid=bob,ou=people,dc=orknux,dc=io
 objectClass: inetOrgPerson
 uid: bob
 cn: Bob Example
 sn: Example
-mail: bob@gyloli.io
+mail: bob@orknux.io
 userPassword: password
 
-dn: cn=admins,ou=groups,dc=gyloli,dc=io
+dn: cn=admins,ou=groups,dc=orknux,dc=io
 objectClass: groupOfNames
 cn: admins
-member: uid=alice,ou=people,dc=gyloli,dc=io
+member: uid=alice,ou=people,dc=orknux,dc=io
 
-dn: cn=users,ou=groups,dc=gyloli,dc=io
+dn: cn=users,ou=groups,dc=orknux,dc=io
 objectClass: groupOfNames
 cn: users
-member: uid=alice,ou=people,dc=gyloli,dc=io
-member: uid=bob,ou=people,dc=gyloli,dc=io
+member: uid=alice,ou=people,dc=orknux,dc=io
+member: uid=bob,ou=people,dc=orknux,dc=io
 
-# A group named after a team grants access to it: cn=backend -> ROLE_BACKEND -> team "backend".
-dn: cn=backend,ou=groups,dc=gyloli,dc=io
+# A group named after a workspace grants access to it: cn=backend -> ROLE_BACKEND -> workspace "backend".
+dn: cn=backend,ou=groups,dc=orknux,dc=io
 objectClass: groupOfNames
 cn: backend
-member: uid=bob,ou=people,dc=gyloli,dc=io
+member: uid=bob,ou=people,dc=orknux,dc=io

@@ -1,10 +1,18 @@
 spring:
+  ai:
+    chat:
+      memory:
+        repository:
+          jdbc:
+            # Flyway owns this schema, so Spring AI must not create its own
+            # table; V31 creates it exactly as the starter declares it.
+            initialize-schema: never
   application:
-    name: gyloli-server
+    name: orknux-server
   datasource:
-    url: jdbc:postgresql://localhost:5432/gyloli
-    username: gyloli
-    password: gyloli
+    url: jdbc:postgresql://localhost:5432/orknux
+    username: orknux
+    password: orknux
   jpa:
     hibernate:
       ddl-auto: validate
@@ -14,8 +22,8 @@ spring:
     locations: classpath:db/migration
   ldap:
     urls: ldap://localhost:389
-    base: dc=gyloli,dc=io
-    username: cn=admin,dc=gyloli,dc=io
+    base: dc=orknux,dc=io
+    username: cn=admin,dc=orknux,dc=io
     password: admin
 
 server:
@@ -32,18 +40,18 @@ db-scheduler:
   threads: 4
   polling-interval: 10s
 
-gyloli:
+orknux:
   # Filled in from the build, and reported on the monitoring screen.
   version: "@project.version@"
   web:
     allowed-origins: http://localhost:5173
   security:
-    # Sees the organization section and every team.
+    # Sees the Admin section and every workspace.
     admin-role: ROLE_ADMINS
   ldap:
     user-search-base: ou=people
     user-search-filter: (uid={0})
-    # Team groups have to live under this base for membership to be picked up;
+    # Workspace groups have to live under this base for membership to be picked up;
     # point it at the OU that holds them (an empty value disables group search).
     group-search-base: ou=groups
     group-search-filter: (member={0})
@@ -53,6 +61,13 @@ gyloli:
     # Link-local addresses reach cloud instance metadata. Private and loopback
     # addresses stay reachable, since internal services are the point.
     allow-link-local: false
+    check:
+      # The same argument as the model providers: a status on the screen should
+      # be one that was true recently, not whenever somebody last pressed a
+      # button — and "Not checked" should not outlive the save that caused it.
+      enabled: true
+      interval: 5m
+      initial-delay: 30s
   slack:
     # Opens one Socket Mode websocket per Slack connection that holds an
     # app-level token, and turns arriving mentions into workflow runs.
@@ -64,23 +79,39 @@ gyloli:
     # clears the wait, so a corrected credential is not held back by it.
     retry-failed-seconds: 300
   script:
-    # A team's JavaScript runs in a GraalJS sandbox with no host access, no
+    # A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
     # files, no network and no threads. These bound what it can spend.
     timeout-millis: 5000
     statement-limit: 5000000
-  action:
-    # A wait holds the thread carrying the run, so it is capped here whatever
-    # the action asks for.
-    max-wait: 5m
+  execution:
+    inline:
+      # Only the inline engine. It waits out a parked step on the thread
+      # carrying the run, so a run may spend this long waiting in total before
+      # the step fails and says what would have carried it. A Temporal wait is a
+      # timer, holds nothing, and is bounded by run-timeout-hours instead.
+      max-wait: 5m
   temporal:
     # False runs workflows on the calling thread, with no retries and no
     # resumption. The tests do that; a deployment should not.
     enabled: true
     target: localhost:7233
     namespace: default
-    task-queue: gyloli-workflow
+    task-queue: orknux-workflow
     # A model call is slow, so a step is given minutes, and tried again a
     # couple of times, since most of what a step does is call something else.
+    # This bounds the work a step does, not what it waits for: a wait parks the
+    # step and answers, so it is the run timeout that bounds a long wait.
     step-timeout-seconds: 300
     step-attempts: 3
     run-timeout-hours: 24
+  model:
+    check:
+      # Every configured provider is asked whether it still answers, so a status
+      # on the screen is one that was true recently rather than whenever somebody
+      # last pressed the button.
+      enabled: true
+      interval: 5m
+      initial-delay: 30s
+    # How long a model has to answer a chat message. Generous: a large local
+    # model on a laptop is slow, and giving up on it is worse than waiting.
+    timeout: 2m

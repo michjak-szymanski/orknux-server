@@ -66,7 +66,7 @@ class ArgumentMapping(
     @Column(name = "argument", nullable = false, length = 64)
     var argument: String = "",
 
-    /** Usually a placeholder, e.g. `{{input.payload}}`. */
+    /** What to pass: a value, or the name of a field a node reads. */
     @Column(name = "expression", nullable = false, length = 500)
     var expression: String = "",
 )
@@ -77,8 +77,8 @@ class ArgumentMapping(
  * An action is a definition in the workspace's catalogue, like a trigger: it names no
  * workflow, and a workflow uses one by pointing an action node at it. What the
  * action needs and what it produces are not stored — they are read off its
- * settings, so a placeholder added to the content is a parameter the moment it
- * is typed. See `ActionAPI.parametersOf`.
+ * settings, so the arguments of the function it calls are its parameters. See
+ * `ActionParameters`.
  */
 @Entity
 @Table(name = "workflow_action")
@@ -125,7 +125,7 @@ class WorkflowAction(
     @Column(length = 8)
     var method: String? = null,
 
-    /** JSON, as typed, with placeholders left in. */
+    /** JSON, exactly as typed. */
     @Column(columnDefinition = "text")
     var headers: String? = null,
 
@@ -152,6 +152,15 @@ class WorkflowAction(
 
     @Column(name = "duration_seconds")
     var durationSeconds: Int? = null,
+
+    /**
+     * Which icon a node drawn from this starts with.
+     *
+     * A seed, not a rule: the node owns its icon once it has one, the same way
+     * it owns the parameters this seeded. Null draws whatever the kind draws.
+     */
+    @Column(length = 40)
+    var icon: String? = null,
 )
 
 interface WorkflowActionRepository : JpaRepository<WorkflowAction, Long> {
@@ -174,6 +183,11 @@ class ActionNameInvalidException : RuntimeException("An action name is required"
 
 class ActionSettingMissingException(setting: String) :
     RuntimeException("This kind of action needs $setting")
+
+class ActionHoldsPlaceholderException(setting: String) : RuntimeException(
+    "$setting is used exactly as written, so {{…}} would be sent as text. " +
+        "Leave it empty and let each node say what goes there.",
+)
 
 class ActionSubtypeMismatchException(type: ActionType, subtype: ActionSubtype) :
     RuntimeException("A ${type.name.lowercase()} action cannot be ${subtype.name.lowercase().replace('_', ' ')}")

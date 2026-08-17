@@ -132,6 +132,15 @@ class WorkflowCondition(
     @OrderColumn(name = "position")
     @Column(name = "member_id")
     var members: MutableList<Long> = mutableListOf(),
+
+    /**
+     * Which icon a node drawn from this starts with.
+     *
+     * A seed, not a rule: the node owns its icon once it has one, the same way
+     * it owns the parameters this seeded. Null draws whatever the kind draws.
+     */
+    @Column(length = 40)
+    var icon: String? = null,
 ) {
 
     val composite: Boolean get() = type == ConditionType.ANY_OF || type == ConditionType.ALL_OF

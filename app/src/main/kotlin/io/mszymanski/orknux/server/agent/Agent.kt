@@ -14,8 +14,18 @@ import jakarta.persistence.JoinColumn
 import jakarta.persistence.OrderColumn
 import jakarta.persistence.Table
 
+/**
+ * There is one kind of agent.
+ *
+ * REACT was the other one, and the distinction never earned its place: every
+ * agent reaches the model the same way and every agent may call tools. What an
+ * agent is allowed to call is configured per agent, which is the setting that
+ * was actually doing the work all along.
+ *
+ * The enum is kept rather than the column dropped so that the shape of an agent
+ * does not change for one withdrawn value.
+ */
 enum class AgentType {
-    REACT,
     LLM,
 }
 
@@ -101,4 +111,13 @@ class Agent(
     @OrderColumn(name = "position")
     @Column(name = "name", nullable = false)
     var tools: MutableList<String> = mutableListOf(),
+
+    /**
+     * Which icon a node drawn from this starts with.
+     *
+     * A seed, not a rule: the node owns its icon once it has one, the same way
+     * it owns the parameters this seeded. Null draws whatever the kind draws.
+     */
+    @Column(length = 40)
+    var icon: String? = null,
 )

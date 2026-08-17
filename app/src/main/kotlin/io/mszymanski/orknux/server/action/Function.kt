@@ -49,6 +49,20 @@ class FunctionParam(
 )
 
 /**
+ * A variable this function is handed, whatever calls it.
+ *
+ * A declared parameter is the caller's to fill; an external one is not. The
+ * workspace decides what it holds, and the function receives it as an argument
+ * after the ones it declares — which is how a script gets at a secret without
+ * anybody pasting the secret into a graph.
+ */
+@Embeddable
+class FunctionExternal(
+    @Column(name = "variable_id", nullable = false)
+    var variableId: Long = 0,
+)
+
+/**
  * A named piece of JavaScript a workspace wrote, callable from an action.
  *
  * The source is a module whose default export is the function; it runs in the
@@ -82,6 +96,15 @@ class WorkflowFunction(
     @CollectionTable(name = "workflow_function_param", joinColumns = [JoinColumn(name = "function_id")])
     @OrderColumn(name = "position")
     var params: MutableList<FunctionParam> = mutableListOf(),
+
+    /**
+     * The workspace's variables this function is handed, in the order it
+     * receives them — after everything it declares.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "workflow_function_external", joinColumns = [JoinColumn(name = "function_id")])
+    @OrderColumn(name = "position")
+    var externals: MutableList<FunctionExternal> = mutableListOf(),
 
     @Column(name = "last_modified_at", nullable = false)
     var lastModifiedAt: OffsetDateTime = OffsetDateTime.now(),

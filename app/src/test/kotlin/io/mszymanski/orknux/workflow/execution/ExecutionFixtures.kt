@@ -31,7 +31,7 @@ class ScriptedNodeRunner : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = true
 
-    override fun run(step: ExecutionStep, input: String?): StepResult = when {
+    override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult = when {
         step.name == "boom" -> throw IllegalStateException("boom has no answer")
         step.name.startsWith("ok") -> StepResult(StepStatus.COMPLETED, "${step.name} did the work")
         step.name.startsWith("wait") -> park(step)

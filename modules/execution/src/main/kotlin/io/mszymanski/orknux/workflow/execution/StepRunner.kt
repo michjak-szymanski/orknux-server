@@ -17,8 +17,30 @@ data class StepOutcome(
     val resumeAfter: Duration? = null,
 )
 
-/** Raised when a step could not be carried out; carries a message worth showing. */
-class StepFailedException(val nodeKey: String, reason: String) : RuntimeException(reason)
+/**
+ * Implemented by a failure that knows whether it is worth trying again.
+ *
+ * Declared here so a runner in another module can say so without the execution
+ * module knowing what a Slack channel is.
+ */
+interface PermanentFailure {
+    val permanent: Boolean
+}
+
+/**
+ * Raised when a step could not be carried out; carries a message worth showing.
+ *
+ * @param permanent whether trying again could ever give a different answer. A
+ *   channel that does not exist will not start existing on the second attempt,
+ *   and a run that retries it three times only takes longer to say so; a network
+ *   that dropped might well work. Temporal reads this to decide whether to
+ *   retry, and the inline engine has no retries to decide about.
+ */
+class StepFailedException(
+    val nodeKey: String,
+    reason: String,
+    override val permanent: Boolean = false,
+) : RuntimeException(reason), PermanentFailure
 
 /**
  * The work of one step, and the two ways a run ends.
@@ -47,8 +69,14 @@ class StepRunner(
      * @throws StepFailedException if the runner could not; the step is left
      *   failed and the caller decides whether to try again.
      */
-    fun runStep(executionId: Long, nodeKey: String, input: String?): StepOutcome {
+    fun runStep(executionId: Long, nodeKey: String): StepOutcome {
         val step = stepOf(executionId, nodeKey)
+        val execution = executionOf(executionId)
+
+        // Read here rather than handed in: the payload belongs to the run, not
+        // to the message that asked for the step. A parked step picked up by
+        // another worker reads the same thing this one did.
+        val input = execution.carried ?: execution.input
 
         // A step that parked keeps the deadline it recorded, so a wait resumed
         // on another worker does not start its clock again. RUNNING with a
@@ -68,9 +96,16 @@ class StepRunner(
         steps.save(step)
 
         val result = try {
-            runnerFor(step.kind).run(step, input)
+            // What began the run, alongside what it is carrying now. The second
+            // is what lets a step deep in the graph still ask about the event
+            // that started everything.
+            runnerFor(step.kind).run(step, input, execution.input)
         } catch (failure: Exception) {
-            failStep(executionId, step, failure.message ?: failure::class.simpleName ?: "the step failed")
+            // A runner that knows its failure is final says so, and that travels
+            // with the step: Temporal reads it and stops retrying something that
+            // cannot come out differently.
+            val permanent = (failure as? PermanentFailure)?.permanent == true
+            failStep(executionId, step, failure.message ?: failure::class.simpleName ?: "the step failed", permanent)
         }
 
         if (result.status == StepStatus.WAITING) {
@@ -92,6 +127,14 @@ class StepRunner(
         step.finishedAt = OffsetDateTime.now()
         steps.save(step)
 
+        // What the run carries from here on. Written once, where it is read
+        // from, so both engines carry the same thing and neither has to hand it
+        // to the other.
+        if (result.status == StepStatus.COMPLETED) {
+            execution.carried = Payloads.carry(input, result.output)
+            executions.save(execution)
+        }
+
         log.write(
             executionId,
             nodeKey,
@@ -107,16 +150,21 @@ class StepRunner(
      * An engine that will not wait as long as a step asked ends up here, so a
      * step that failed looks the same whichever side gave up on it.
      */
-    fun failStep(executionId: Long, nodeKey: String, reason: String): Nothing =
-        failStep(executionId, stepOf(executionId, nodeKey), reason)
+    fun failStep(executionId: Long, nodeKey: String, reason: String, permanent: Boolean = false): Nothing =
+        failStep(executionId, stepOf(executionId, nodeKey), reason, permanent)
 
-    private fun failStep(executionId: Long, step: ExecutionStep, reason: String): Nothing {
+    private fun failStep(
+        executionId: Long,
+        step: ExecutionStep,
+        reason: String,
+        permanent: Boolean = false,
+    ): Nothing {
         step.status = StepStatus.FAILED
         step.error = reason.take(ERROR_LENGTH)
         step.finishedAt = OffsetDateTime.now()
         steps.save(step)
         log.write(executionId, step.nodeKey, LogLevel.ERROR, "${step.name} failed: $reason")
-        throw StepFailedException(step.nodeKey, reason)
+        throw StepFailedException(step.nodeKey, reason, permanent)
     }
 
     /** Stops the run. The steps it never reached stay pending, because they were. */

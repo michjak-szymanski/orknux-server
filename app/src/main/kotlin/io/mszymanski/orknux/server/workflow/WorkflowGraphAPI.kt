@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.workflow
 
 import io.mszymanski.orknux.server.action.ActionParameters
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -31,6 +32,7 @@ class WorkflowGraphAPI(
     private val validator: GraphValidator,
     private val parameters: ActionParameters,
     private val agents: AgentRepository,
+    private val objects: WorkflowObjectRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
@@ -54,7 +56,49 @@ class WorkflowGraphAPI(
         access.requireVisible(workspace)
         val action = actions.findByIdOrNull(actionId) ?: throw ActionNotInCatalogueException(actionId)
         if (action.workspaceId != workspaceId) throw ActionNotInCatalogueException(actionId)
-        return parameters.defaultsFor(action).map { NodeMappingView(it.name, it.expression) }
+        return parameters.defaultsFor(action).map { NodeMappingView(it.name, it.expression, it.mode) }
+    }
+
+    /**
+     * The same answer a save gives, for a graph that has not been saved.
+     *
+     * What a node needs and produces follows from what it points at and what it
+     * was told to pass, so it changes the moment either does — but it was only
+     * ever worked out when the graph was written down, which left the editor
+     * showing the ports and the problems of the graph as it was some edits ago.
+     *
+     * Nothing is written and nothing is refused: this is what the graph would be,
+     * asked of a graph somebody is still drawing.
+     */
+    @QueryMapping
+    fun workflowGraphPreview(
+        @Argument workspaceId: Long,
+        @Argument workflowId: Long,
+        @Argument input: WorkflowGraphInput,
+    ): WorkflowGraphView {
+        requireAssignment(workspaceId, workflowId)
+        val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
+
+        val known = input.nodes.map { it.key }.toSet()
+        val proposed = input.nodes.map { nodeOf(workflowId, it, refusing = false) }
+        // An edge to a node that is not there is something a half-drawn graph
+        // has; the validator is given the graph, not an argument about it.
+        val drawn = input.edges
+            .filter { it.source in known && it.target in known }
+            .map { WorkflowEdge(workflowId = workflowId, sourceKey = it.source, targetKey = it.target) }
+
+        return WorkflowGraphView(
+            workflowId = workflowId,
+            name = workflow.name,
+            description = workflow.description,
+            status = workflow.status,
+            nodes = proposed.map { node ->
+                val ports = validator.portsOf(node)
+                WorkflowNodeView(node, ports.inputs, ports.outputs)
+            },
+            edges = drawn.map(::WorkflowEdgeView),
+            problems = validator.problems(proposed, drawn),
+        )
     }
 
     /** Replaces the whole graph: the editor always sends the full picture. */
@@ -79,6 +123,7 @@ class WorkflowGraphAPI(
         input.nodes.forEach { requireActionBelongsToWorkspace(workspaceId, it) }
         input.nodes.forEach { requireConditionBelongsToWorkspace(workspaceId, it) }
         input.nodes.forEach { requireAgentBelongsToWorkspace(workspaceId, it) }
+        input.nodes.forEach { requireObjectBelongsToWorkspace(workspaceId, it) }
 
         // A graph is drawn before it is finished, so only the shapes that could
         // never run are refused; everything else comes back as advice.
@@ -88,6 +133,10 @@ class WorkflowGraphAPI(
                 nodeKey = node.key,
                 kind = node.kind,
                 name = node.name,
+                // Carried into the check because two nodes claiming one output
+                // name is one of the shapes a save refuses; without it here the
+                // rule would only ever be evaluated against a blank.
+                outputName = node.outputName?.trim()?.ifEmpty { null },
                 positionX = node.x,
                 positionY = node.y,
             )
@@ -101,24 +150,7 @@ class WorkflowGraphAPI(
         nodes.flush()
         edges.flush()
 
-        nodes.saveAll(
-            input.nodes.map { node ->
-                WorkflowNode(
-                    workflowId = workflowId,
-                    nodeKey = node.key,
-                    kind = node.kind,
-                    name = node.name.trim().ifEmpty { "Untitled node" },
-                    description = node.description?.trim()?.ifEmpty { null },
-                    agentId = node.agentId.takeIf { node.kind == NodeKind.AGENT },
-                    triggerId = node.triggerId.takeIf { node.kind == NodeKind.TRIGGER },
-                    actionId = node.actionId.takeIf { node.kind == NodeKind.ACTION },
-                    conditionId = node.conditionId.takeIf { node.kind == NodeKind.CONDITION },
-                    positionX = node.x,
-                    positionY = node.y,
-                    mappings = mappingsFor(node),
-                )
-            },
-        )
+        nodes.saveAll(input.nodes.map { nodeOf(workflowId, it) })
         edges.saveAll(
             input.edges.map { edge ->
                 WorkflowEdge(workflowId = workflowId, sourceKey = edge.source, targetKey = edge.target)
@@ -165,6 +197,40 @@ class WorkflowGraphAPI(
     }
 
     /**
+     * The node a save would write, which is also the node a preview describes.
+     *
+     * One place, so what the editor is shown and what it gets when it saves
+     * cannot be two different nodes.
+     *
+     * @param refusing whether a setting that could never work stops the caller.
+     *   A save refuses; a preview is asked about a graph somebody is still
+     *   typing into, where refusing would be arguing with them mid-word.
+     */
+    private fun nodeOf(workflowId: Long, node: WorkflowNodeInput, refusing: Boolean = true) = WorkflowNode(
+        workflowId = workflowId,
+        nodeKey = node.key,
+        kind = node.kind,
+        name = node.name.trim().ifEmpty { "Untitled node" },
+        description = node.description?.trim()?.ifEmpty { null },
+        agentId = node.agentId.takeIf { node.kind == NodeKind.AGENT },
+        triggerId = node.triggerId.takeIf { node.kind == NodeKind.TRIGGER },
+        actionId = node.actionId.takeIf { node.kind == NodeKind.ACTION },
+        conditionId = node.conditionId.takeIf { node.kind == NodeKind.CONDITION },
+        objectId = node.objectId.takeIf { node.kind == NodeKind.OBJECT },
+        outputName = node.outputName?.trim()?.ifEmpty { null }
+            // Only a node that produces something can name it; a trigger names
+            // its own fields and a condition passes through what it was given.
+            ?.takeIf {
+                node.kind == NodeKind.AGENT || node.kind == NodeKind.ACTION || node.kind == NodeKind.OBJECT
+            }
+            ?.also { if (refusing) requireReferenceable(it) },
+        icon = node.icon?.trim()?.ifEmpty { null },
+        positionX = node.x,
+        positionY = node.y,
+        mappings = mappingsFor(node, refusing),
+    )
+
+    /**
      * What this node will pass, resolved against the action it points at.
      *
      * Taken from what was sent where it names a parameter the action actually
@@ -177,14 +243,78 @@ class WorkflowGraphAPI(
      * they are what runs, so editing them cannot reach back into a definition
      * other nodes are using.
      */
-    private fun mappingsFor(node: WorkflowNodeInput): MutableList<NodeMapping> {
+    private fun mappingsFor(node: WorkflowNodeInput, refusing: Boolean): MutableList<NodeMapping> {
+        val sent = node.mappings.orEmpty().associateBy { it.name }
+
+        /*
+         * An agent's parameters are the node's own.
+         *
+         * There is no definition to seed them from — an agent declares no
+         * parameters — so what was sent is what is kept. This used to return
+         * nothing for every kind but ACTION, which meant a prompt typed into an
+         * agent node was accepted by the form, saved as nothing, and gone when
+         * the page was reopened.
+         */
+        if (node.kind == NodeKind.AGENT) {
+            return sent.values.map { mappingOf(it, refusing) }.toMutableList()
+        }
+
+        /*
+         * An object node's parameters are its fields.
+         *
+         * A saved shape decides which there are — a field the shape does not
+         * have is dropped, and one it has that the node did not fill arrives
+         * empty — so a shape edited afterwards is reflected without anything
+         * having to tidy up. A shape of the node's own is whatever it sent.
+         */
+        if (node.kind == NodeKind.OBJECT) {
+            val shape = node.objectId?.let { objects.findByIdOrNull(it) }
+                ?: return sent.values.map { mappingOf(it, refusing) }.toMutableList()
+
+            return shape.properties
+                .map { property -> sent[property.name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = property.name) }
+                .toMutableList()
+        }
+
         if (node.kind != NodeKind.ACTION) return mutableListOf()
         val action = node.actionId?.let { actions.findByIdOrNull(it) } ?: return mutableListOf()
 
-        val sent = node.mappings.orEmpty().associate { it.name to it.expression }
+        // The action decides which parameters exist; the node decides what fills
+        // them. A name the action does not have is dropped, and one it has that
+        // the node did not send falls back to the action's own suggestion.
         return parameters.defaultsFor(action)
-            .map { NodeMapping(name = it.name, expression = sent[it.name] ?: it.expression) }
+            .map { parameter ->
+                sent[parameter.name]
+                    ?.let { mappingOf(it, refusing) }
+                    ?: NodeMapping(name = parameter.name, expression = parameter.expression, mode = parameter.mode)
+            }
             .toMutableList()
+    }
+
+    /**
+     * A value is text, so text is all it may be.
+     *
+     * `{{something}}` in a value is somebody expecting a substitution that no
+     * longer happens — and the way it fails is silent: the braces are sent, into
+     * a Slack message or a channel name, and nothing reports a problem. Refused
+     * at the save, where the person who typed it is still looking, with the
+     * thing they should have used instead.
+     */
+    private fun requireNoPlaceholder(sent: NodeMappingInput) {
+        if (sent.mode == MappingMode.REFERENCE) return
+        if (PLACEHOLDER_IN_VALUE.containsMatchIn(sent.expression)) throw ValueHoldsPlaceholderException(sent.name)
+    }
+
+    private fun mappingOf(sent: NodeMappingInput, refusing: Boolean): NodeMapping {
+        if (refusing) requireNoPlaceholder(sent)
+        return NodeMapping(
+        name = sent.name,
+        expression = sent.expression,
+        mode = sent.mode,
+        // Only meaningful on a reference; kept off a value so a switch back does
+        // not leave a node key nothing points at.
+            sourceNodeKey = sent.sourceNodeKey?.takeIf { sent.mode == MappingMode.REFERENCE },
+        )
     }
 
     /**
@@ -199,12 +329,32 @@ class WorkflowGraphAPI(
         if (trigger.workspaceId != workspaceId) throw TriggerNotInCatalogueException(triggerId)
     }
 
+    /**
+     * An output name has to be something a later node can actually write.
+     *
+     * A reference names one field, so a name with a space or a dot in it could
+     * be typed here and never referred to anywhere — a setting that looks
+     * accepted and quietly does nothing. Refusing it at the save is the only
+     * moment the person who typed it is still looking.
+     */
+    private fun requireReferenceable(outputName: String) {
+        if (!REFERENCEABLE.matches(outputName)) throw OutputNameInvalidException(outputName)
+    }
+
     /** An action node runs one of the workspace's actions, and only its own workspace's. */
     private fun requireActionBelongsToWorkspace(workspaceId: Long, node: WorkflowNodeInput) {
         val actionId = node.actionId ?: return
         if (node.kind != NodeKind.ACTION) return
         val action = actions.findByIdOrNull(actionId) ?: throw ActionNotInCatalogueException(actionId)
         if (action.workspaceId != workspaceId) throw ActionNotInCatalogueException(actionId)
+    }
+
+    /** An object node makes one of the workspace's shapes, and only its own workspace's. */
+    private fun requireObjectBelongsToWorkspace(workspaceId: Long, node: WorkflowNodeInput) {
+        val objectId = node.objectId ?: return
+        if (node.kind != NodeKind.OBJECT) return
+        val shape = objects.findByIdOrNull(objectId) ?: throw ObjectNotInCatalogueException(objectId)
+        if (shape.workspaceId != workspaceId) throw ObjectNotInCatalogueException(objectId)
     }
 
     /** An agent node runs one of the workspace's agents, and only its own workspace's. */
@@ -246,6 +396,10 @@ data class WorkflowNodeInput(
     val actionId: Long? = null,
     /** The condition a condition node asks; ignored on any other kind. */
     val conditionId: Long? = null,
+    /** The saved shape an object node makes; null is a shape of its own. */
+    val objectId: Long? = null,
+    val outputName: String? = null,
+    val icon: String? = null,
     /**
      * What this node passes to its action. Null leaves it to the action's own
      * suggestions, which is what a node freshly pointed at one wants.
@@ -255,10 +409,12 @@ data class WorkflowNodeInput(
     val y: Double,
 )
 
-/** One parameter and where its value comes from: `{{input.x}}`, or a literal. */
+/** One parameter: the value it holds, or the field it reads. */
 data class NodeMappingInput(
     val name: String,
     val expression: String,
+    val mode: MappingMode = MappingMode.VALUE,
+    val sourceNodeKey: String? = null,
 )
 
 data class WorkflowEdgeInput(
@@ -281,6 +437,10 @@ data class WorkflowNodeView(
     val triggerId: Long?,
     val actionId: Long?,
     val conditionId: Long?,
+    /** The saved shape an object node makes; null is a shape of its own. */
+    val objectId: Long?,
+    val outputName: String?,
+    val icon: String?,
     val x: Double,
     val y: Double,
     /** What the node needs, read off whatever it points at. */
@@ -303,15 +463,23 @@ data class WorkflowNodeView(
         triggerId = node.triggerId,
         actionId = node.actionId,
         conditionId = node.conditionId,
+        objectId = node.objectId,
+        outputName = node.outputName,
+        icon = node.icon,
         x = node.positionX,
         y = node.positionY,
         inputs = inputs,
         outputs = outputs,
-        mappings = node.mappings.map { NodeMappingView(it.name, it.expression) },
+        mappings = node.mappings.map { NodeMappingView(it.name, it.expression, it.mode, it.sourceNodeKey) },
     )
 }
 
-data class NodeMappingView(val name: String, val expression: String)
+data class NodeMappingView(
+    val name: String,
+    val expression: String,
+    val mode: MappingMode = MappingMode.VALUE,
+    val sourceNodeKey: String? = null,
+)
 
 data class WorkflowEdgeView(
     val source: String,
@@ -333,11 +501,34 @@ data class WorkflowGraphView(
 
 class WorkflowGraphEmptyException : RuntimeException("Add at least one node before publishing")
 
+/**
+ * What a name has to look like to be referred to: a letter or underscore, then
+ * letters, digits and underscores. A field picked from a list has to be one
+ * name, and this is what makes it one.
+ */
+private val REFERENCEABLE = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
+/** Braces in a value: the substitution somebody still expects and will not get. */
+private val PLACEHOLDER_IN_VALUE = Regex("""\{\{[^}]*\}\}""")
+
+class ValueHoldsPlaceholderException(parameter: String) : RuntimeException(
+    "\"$parameter\" is a value holding {{...}}, which is sent as those characters. " +
+        "Switch it to a reference and pick the field instead.",
+)
+
+class OutputNameInvalidException(name: String) : RuntimeException(
+    "\"$name\" cannot be referred to. An output name is letters, digits and underscores, " +
+        "starting with a letter — a later node has to be able to point at it",
+)
+
 class TriggerNotInCatalogueException(id: Long) :
     RuntimeException("Trigger $id is not in this workspace's catalogue")
 
 class ActionNotInCatalogueException(id: Long) :
     RuntimeException("Action $id is not in this workspace's catalogue")
+
+class ObjectNotInCatalogueException(id: Long) :
+    RuntimeException("Object $id is not in this workspace's catalogue")
 
 class AgentNotInCatalogueException(id: Long) :
     RuntimeException("No agent with id $id in this workspace")

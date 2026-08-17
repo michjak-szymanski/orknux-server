@@ -90,6 +90,21 @@ class WorkflowExecution(
     @Column(columnDefinition = "text")
     val input: String? = null,
 
+    /**
+     * What the run is carrying now: everything produced so far, under the names
+     * the nodes gave it.
+     *
+     * Kept here rather than passed from step to step because one of the two
+     * engines is Temporal, where an activity's arguments and results are written
+     * into event history and kept for the life of the run. Handing a growing
+     * payload back and forth would record it again at every step — fine for a
+     * Slack message, ruinous for anything that moves real data, and bounded by a
+     * payload limit that has nothing to do with what a workflow ought to carry.
+     * So the payload lives in the database and Temporal carries an id.
+     */
+    @Column(columnDefinition = "text")
+    var carried: String? = null,
+
     /** Why the run stopped, when it stopped badly. */
     @Column(length = 1000)
     var error: String? = null,
@@ -150,6 +165,16 @@ class ExecutionStep(
     /** The agent this step runs, when the node is one. */
     @Column(name = "agent_id")
     val agentId: Long? = null,
+
+    /**
+     * What the node called what it produces, copied when the run started.
+     *
+     * With a name, the step's output is an object holding it, so a later step
+     * can read `{{input.<name>}}` instead of being handed prose it cannot
+     * address. Without one, the output is passed on unchanged.
+     */
+    @Column(name = "output_name", length = 60)
+    val outputName: String? = null,
 
     /**
      * What this step was told to pass, as JSON of name to expression.

@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 200 200">
+
+<defs>
+  <linearGradient id="moss" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#668A6B"/>
+    <stop offset="100%" stop-color="#4A6B52"/>
+  </linearGradient>
+</defs>
+
+<style>
+  .edge {
+    fill:none;
+    stroke:#5F8467;
+    stroke-width:8;
+    stroke-linecap:round;
+    stroke-linejoin:round;
+    /* Each edge dashes to its own length, so all three draw at one speed
+       instead of the short ones idling while the offset catches up. */
+    stroke-dasharray:var(--len);
+    stroke-dashoffset:var(--len);
+  }
+  #e1 { --len:31.3; animation: draw 3.6s ease-in-out infinite; }
+  #e2 { --len:34.2; animation: draw 3.6s .35s ease-in-out infinite; }
+  #e3 { --len:49.4; animation: draw 3.6s .7s ease-in-out infinite; }
+
+  .node {
+    fill:#5F8467;
+    opacity:0;
+    transform-box:fill-box;
+    transform-origin:center;
+  }
+  #n1 { animation: nodeIn 3.6s .12s ease-in-out infinite; }
+  #n2 { animation: nodeIn 3.6s .48s ease-in-out infinite; }
+  #n3 { animation: nodeIn 3.6s .84s ease-in-out infinite; }
+
+  #ping {
+    fill:none;
+    stroke:#D08A1A;
+    stroke-width:2.5;
+    opacity:0;
+    transform-box:fill-box;
+    transform-origin:center;
+    animation: ping 3.6s 1.25s ease-out infinite;
+  }
+
+  @keyframes draw {
+    0%,10% { stroke-dashoffset:var(--len); opacity:.2; }
+    38%,75% { stroke-dashoffset:0; opacity:1; }
+    100% { stroke-dashoffset:var(--len); opacity:.2; }
+  }
+  @keyframes nodeIn {
+    0%,8% { opacity:0; transform:scale(.55); }
+    28%,76% { opacity:1; transform:scale(1); }
+    100% { opacity:0; transform:scale(.72); }
+  }
+  @keyframes ping {
+    0%,36% { opacity:0; transform:scale(.35); }
+    47% { opacity:.9; transform:scale(.65); }
+    62% { opacity:0; transform:scale(1.35); }
+    100% { opacity:0; transform:scale(1.35); }
+  }
+
+  /* The resting state here is invisible — edges undrawn, nodes at opacity 0 —
+     so stopping the animation has to restore the finished graph, not blank it. */
+  @media (prefers-reduced-motion: reduce) {
+    .edge, .node, #ping { animation:none; }
+    .edge { stroke-dashoffset:0; opacity:1; }
+    .node { opacity:1; }
+    #ping { opacity:0; }
+  }
+</style>
+
+<path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+      fill="url(#moss)"/>
+<circle cx="100" cy="109" r="47" fill="#0D1518"/>
+
+<path id="e1" class="edge" d="M81 125 L112 129"/>
+<path id="e2" class="edge" d="M112 129 L121 96"/>
+<path id="e3" class="edge" d="M121 96 L81 125"/>
+
+<circle id="n1" class="node" cx="81" cy="125" r="11"/>
+<circle id="n2" class="node" cx="112" cy="129" r="11"/>
+<circle id="n3" class="node" cx="121" cy="96" r="11"/>
+
+<circle id="ping" cx="100" cy="109" r="12"/>
+</svg>

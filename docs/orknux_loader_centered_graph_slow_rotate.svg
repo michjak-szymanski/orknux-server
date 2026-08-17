@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 200 200">
+<defs>
+  <linearGradient id="moss" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#668A6B"/>
+    <stop offset="100%" stop-color="#4A6B52"/>
+  </linearGradient>
+</defs>
+
+<style>
+  .edge {
+    fill: none;
+    stroke: #5F8467;
+    stroke-width: 8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    /* The triad's perimeter is ~114.87, so a 57.43 dash cycle tiles it exactly
+       twice — 18+50 left a visible seam where the pattern met the path start. */
+    stroke-dasharray: 15 42.43;
+    animation: chase 1.15s linear infinite;
+  }
+
+  .node {
+    fill: #5F8467;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: pulse 1.15s ease-in-out infinite;
+  }
+
+  #n2 { animation-delay: .18s; }
+  #n3 { animation-delay: .36s; }
+
+  /* Very slow overall graph rotation */
+  #spinner {
+    transform-origin: 100px 109px;
+    animation: slowspin 10s linear infinite;
+  }
+
+  @keyframes chase {
+    to { stroke-dashoffset: -57.43; }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: .55; transform: scale(.82); }
+    50%      { opacity: 1;   transform: scale(1.08); }
+  }
+
+  @keyframes slowspin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .edge, .node, #spinner { animation: none; }
+    /* Without this the stalled loader is a dashed fragment, not the mark. */
+    .edge { stroke-dasharray: none; }
+  }
+</style>
+
+<!-- Transparent background -->
+
+<!-- Fixed Orknux nut -->
+<path
+  d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+  fill="url(#moss)"
+/>
+
+<!-- Kernel void -->
+<circle cx="100" cy="109" r="47" fill="#0D1518"/>
+
+<!--
+  Original loader graph, centered in the kernel,
+  with its own chase/pulse animation preserved,
+  plus a very slow overall rotation.
+-->
+<g id="spinner">
+  <g id="graph" transform="translate(-4.667 -7.667)">
+    <path class="edge" d="M81 125 L112 129 L121 96 Z"/>
+    <circle id="n1" class="node" cx="81" cy="125" r="11"/>
+    <circle id="n2" class="node" cx="112" cy="129" r="11"/>
+    <circle id="n3" class="node" cx="121" cy="96" r="11"/>
+  </g>
+</g>
+
+</svg>

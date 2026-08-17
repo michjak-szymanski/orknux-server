@@ -191,7 +191,7 @@ class ExecutionWorkflowTest(
         )
     }
 
-    private fun node(key: String) = GraphNode(key = key, kind = NodeKind.DATA_TASK, name = key)
+    private fun node(key: String) = GraphNode(key = key, kind = NodeKind.ACTION, name = key)
 
     private companion object {
         const val QUEUE = "execution-workflow-test"

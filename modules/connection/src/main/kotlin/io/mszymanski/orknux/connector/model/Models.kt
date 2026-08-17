@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.model
 
 import jakarta.persistence.Column
+import jakarta.persistence.Convert
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
@@ -8,6 +9,8 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import io.mszymanski.orknux.connector.security.SECRET_COLUMN_LENGTH
+import io.mszymanski.orknux.connector.security.SecretConverter
 import org.springframework.data.domain.Sort
 import org.springframework.data.jpa.repository.JpaRepository
 import java.math.BigDecimal
@@ -19,6 +22,9 @@ enum class ModelKind {
     CHAT,
     EMBEDDING,
     COMPLETION,
+
+    /** Speech in, text out: what the microphone in a chat is handed to. */
+    TRANSCRIPTION,
 }
 
 /** How often a token quota starts again. */
@@ -104,8 +110,14 @@ class ModelProvider(
     @Column(name = "auth_method", nullable = false, length = 16)
     var authMethod: ProviderAuthMethod = ProviderAuthMethod.API_KEY,
 
-    /** The API key, or the Entra client secret: one column, one place to read. */
-    @Column(length = 1000)
+    /**
+     * The API key, or the Entra client secret: one column, one place to read.
+     *
+     * Encrypted in the database. The column is wider than the value it holds
+     * because the envelope is base64 and carries an initialisation vector.
+     */
+    @Convert(converter = SecretConverter::class)
+    @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
 
     @Column(name = "api_version", length = 32)

@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
+<defs>
+  <radialGradient id="bg" cx="50%" cy="45%" r="80%">
+    <stop offset="0%" stop-color="#121b1f"/>
+    <stop offset="100%" stop-color="#0b1114"/>
+  </radialGradient>
+  <linearGradient id="moss" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#668a6b"/>
+    <stop offset="100%" stop-color="#4A6B52"/>
+  </linearGradient>
+  <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f0a01f"/>
+    <stop offset="100%" stop-color="#D08A1A"/>
+  </linearGradient>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+    <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity=".28"/>
+  </filter>
+  <style>
+    .sans{font-family:"Noto Sans","DejaVu Sans",Arial,sans-serif}
+    .mono{font-family:"Noto Sans Mono","DejaVu Sans Mono",monospace}
+    .label{font-family:"Noto Sans","DejaVu Sans",Arial,sans-serif;font-size:18px;font-weight:650;letter-spacing:1.2px;fill:#e9e8e2}
+    .small{font-family:"Noto Sans","DejaVu Sans",Arial,sans-serif;font-size:14px;letter-spacing:.7px;fill:#e9e8e2}
+    .micro{font-family:"Noto Sans","DejaVu Sans",Arial,sans-serif;font-size:11px;letter-spacing:.6px;fill:#c9cbc7}
+    .mossText{fill:#6f9877}
+    .amberText{fill:#e89a16}
+    .divider{stroke:#718087;stroke-width:1;opacity:.5}
+  </style>
+
+  <!-- Primary mark, designed in 200x200 local coordinates -->
+  <g id="mark">
+    <!-- integrated upper vertex lift: no separate horns -->
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="url(#moss)"/>
+    <circle cx="100" cy="109" r="47" fill="#0d1518"/>
+    <!-- triad rotated away from standard share icon -->
+    <path d="M81 125 L112 129 L121 96 Z" fill="none" stroke="#5f8467" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="81" cy="125" r="11" fill="#5f8467"/>
+    <circle cx="112" cy="129" r="11" fill="#5f8467"/>
+    <circle cx="121" cy="96" r="11" fill="#5f8467"/>
+  </g>
+
+  <g id="hollow">
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="url(#amber)"/>
+    <circle cx="100" cy="109" r="50" fill="#0d1518"/>
+  </g>
+
+  <g id="outline">
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="none" stroke="#eeeeea" stroke-width="7" stroke-linejoin="miter"/>
+    <circle cx="100" cy="109" r="47" fill="none" stroke="#eeeeea" stroke-width="6"/>
+  </g>
+
+  <g id="solidWhite">
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="#eeeeea"/>
+    <circle cx="100" cy="109" r="47" fill="#0d1518"/>
+    <path d="M81 125 L112 129 L121 96 Z" fill="none" stroke="#eeeeea" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="81" cy="125" r="11" fill="#eeeeea"/>
+    <circle cx="112" cy="129" r="11" fill="#eeeeea"/>
+    <circle cx="121" cy="96" r="11" fill="#eeeeea"/>
+  </g>
+</defs>
+
+<rect width="1536" height="1024" fill="url(#bg)"/>
+
+<!-- HERO -->
+<g transform="translate(60,48)">
+  <g transform="translate(0,0) scale(1.3)">
+    <use href="#mark"/>
+  </g>
+  <text x="295" y="160" class="sans" font-size="124" font-weight="850" letter-spacing="-7" fill="#f2f1ec">orknux</text>
+  <text x="304" y="207" class="sans mossText" font-size="25" font-weight="600" letter-spacing="12">ORCHESTRATION KERNEL</text>
+  <line x1="960" y1="20" x2="960" y2="228" stroke="#5d8b69" stroke-width="2"/>
+  <rect x="1015" y="52" width="170" height="170" rx="30" fill="#141d21" stroke="#2c373b" filter="url(#shadow)"/>
+  <g transform="translate(1001,37) scale(.96)"><use href="#mark"/></g>
+  <circle cx="1320" cy="137" r="84" fill="#141d21" stroke="#2c373b" filter="url(#shadow)"/>
+  <g transform="translate(1220,38) scale(1)"><use href="#mark"/></g>
+</g>
+
+<line x1="60" y1="337" x2="1476" y2="337" class="divider"/>
+
+<!-- VARIANTS -->
+<g transform="translate(60,365)">
+  <g transform="translate(0,20) scale(.75)"><use href="#mark"/></g>
+  <text x="35" y="225" class="label">PRIMARY — DEFAULT</text>
+
+  <g transform="translate(270,20) scale(.75)"><use href="#hollow"/></g>
+  <text x="292" y="225" class="label">HOLLOW NUT</text>
+  <text x="303" y="251" class="small">(STACKED / SMALL)</text>
+
+  <g transform="translate(500,20) scale(.75)"><use href="#outline"/></g>
+  <text x="548" y="225" class="label">OUTLINE</text>
+  <text x="538" y="251" class="small">(ONE-COLOR)</text>
+
+  <line x1="712" y1="0" x2="712" y2="256" class="divider"/>
+
+  <!-- clear space -->
+  <text x="760" y="18" class="label">CLEAR SPACE</text>
+  <g transform="translate(750,42)">
+    <rect x="0" y="0" width="220" height="188" fill="none" stroke="#6f7d82" opacity=".6"/>
+    <line x1="45" y1="0" x2="45" y2="188" class="divider"/>
+    <line x1="175" y1="0" x2="175" y2="188" class="divider"/>
+    <line x1="0" y1="40" x2="220" y2="40" class="divider"/>
+    <line x1="0" y1="150" x2="220" y2="150" class="divider"/>
+    <text x="16" y="27" class="small">x</text><text x="190" y="27" class="small">x</text>
+    <text x="16" y="178" class="small">x</text><text x="190" y="178" class="small">x</text>
+    <g transform="translate(36,6) scale(.74)"><use href="#mark"/></g>
+  </g>
+
+  <line x1="1015" y1="0" x2="1015" y2="256" class="divider"/>
+
+  <!-- min size -->
+  <text x="1055" y="18" class="label">MINIMUM SIZE</text>
+  <text x="1080" y="84" class="label">24px+</text>
+  <text x="1208" y="84" class="label">&lt;24px</text>
+  <text x="1343" y="84" class="label">16px</text>
+  <g transform="translate(1068,102) scale(.35)"><use href="#mark"/></g>
+  <g transform="translate(1202,102) scale(.35)"><use href="#hollow"/></g>
+  <g transform="translate(1335,102) scale(.35)"><use href="#outline"/></g>
+</g>
+
+<line x1="60" y1="643" x2="1476" y2="643" class="divider"/>
+
+<!-- LOWER GRID -->
+<g transform="translate(60,668)">
+  <!-- Palette -->
+  <text x="20" y="18" class="label">PALETTE</text>
+  <rect x="20" y="52" width="78" height="62" rx="5" fill="#4A6B52"/>
+  <rect x="155" y="52" width="78" height="62" rx="5" fill="#D08A1A"/>
+  <text x="20" y="140" class="small">IRON-MOSS</text>
+  <text x="20" y="163" class="small">#4A6B52</text>
+  <text x="155" y="140" class="small">MOLTEN AMBER</text>
+  <text x="155" y="163" class="small">#D08A1A</text>
+  <line x1="286" y1="0" x2="286" y2="207" class="divider"/>
+
+  <!-- One color -->
+  <text x="315" y="18" class="label">ONE COLOR</text>
+  <g transform="translate(318,37) scale(.47)"><use href="#solidWhite"/></g>
+  <g transform="translate(453,37) scale(.47)"><use href="#outline"/></g>
+  <text x="352" y="166" class="small">LIGHT</text>
+  <text x="332" y="190" class="small">BACKGROUND</text>
+  <text x="487" y="166" class="small">DARK</text>
+  <text x="467" y="190" class="small">BACKGROUND</text>
+  <line x1="620" y1="0" x2="620" y2="207" class="divider"/>
+
+  <!-- Application -->
+  <text x="650" y="18" class="label">APPLICATION</text>
+  <rect x="650" y="47" width="170" height="170" rx="26" fill="#141d21" stroke="#344045" filter="url(#shadow)"/>
+  <g transform="translate(640,35) scale(.64)"><use href="#mark"/></g>
+  <text x="671" y="187" class="sans" font-size="30" font-weight="800" fill="#eee">orknux</text>
+  <text x="678" y="202" class="sans mossText" font-size="7" font-weight="700" letter-spacing="2.5">ORCHESTRATION KERNEL</text>
+  <line x1="855" y1="0" x2="855" y2="207" class="divider"/>
+
+  <!-- Terminal -->
+  <text x="895" y="18" class="label">TERMINAL</text>
+  <rect x="895" y="46" width="500" height="158" rx="18" fill="#11191c" stroke="#39464b"/>
+  <circle cx="923" cy="66" r="6" fill="#ee5840"/><circle cx="945" cy="66" r="6" fill="#f0ac2a"/><circle cx="967" cy="66" r="6" fill="#65c85b"/>
+  <text x="920" y="120" class="mono mossText" font-size="23" font-weight="700">$ orknux</text>
+  <text x="1064" y="120" class="mono" font-size="23" fill="#eee">orchestration kernel</text>
+  <text x="920" y="161" class="mono mossText" font-size="23" font-weight="700">$ orknux</text>
+  <text x="1064" y="161" class="mono" font-size="23" fill="#eee">--help</text>
+  <rect x="930" y="176" width="13" height="23" fill="#5c8b67"/>
+</g>
+
+<!-- FOOTER LOCKUP -->
+<g transform="translate(352,884)">
+  <line x1="0" y1="58" x2="165" y2="58" stroke="#5c8b67" stroke-width="3"/>
+  <g transform="translate(185,-5) scale(.55)"><use href="#mark"/></g>
+  <text x="305" y="84" class="sans" font-size="74" font-weight="850" letter-spacing="-4" fill="#f2f1ec">orknux</text>
+  <text x="312" y="111" class="sans mossText" font-size="13" font-weight="700" letter-spacing="6">ORCHESTRATION KERNEL</text>
+  <line x1="620" y1="58" x2="830" y2="58" stroke="#5c8b67" stroke-width="3"/>
+</g>
+</svg>

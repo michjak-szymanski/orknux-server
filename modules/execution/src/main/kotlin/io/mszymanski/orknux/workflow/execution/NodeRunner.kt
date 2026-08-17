@@ -76,8 +76,12 @@ interface NodeRunner {
      *   what it wrote is saved with the step.
      * @param input what the node before it produced, or the run's own input for
      *   the first node. A parked node is handed the same input again.
+     * @param trigger what the run started from, unchanged however deep the step
+     *   is. [input] is replaced at every step, so by the time an agent has
+     *   answered, the event that began the run is no longer in it; a node that
+     *   needs to answer whoever asked has nowhere else to read that from.
      */
-    fun run(step: ExecutionStep, input: String?): StepResult
+    fun run(step: ExecutionStep, input: String?, trigger: String? = null): StepResult
 }
 
 /**
@@ -92,6 +96,6 @@ class UnimplementedNodeRunner : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = true
 
-    override fun run(step: ExecutionStep, input: String?): StepResult =
+    override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult =
         StepResult(StepStatus.SKIPPED, "${step.kind} nodes have no runtime yet; nothing was performed.")
 }

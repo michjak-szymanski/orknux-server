@@ -10,9 +10,27 @@ enum class NodeKind {
 
     /** Asks one of the workspace's conditions, and ends the run when it does not hold. */
     CONDITION,
-    DATA_TASK,
-    PUBLISH_TASK,
+
+    /** Makes an object out of what the run is carrying, and hands it on. */
+    OBJECT,
 }
+
+/**
+ * What fills one parameter of a node.
+ *
+ * Either something written, used as it stands, or a field the run is carrying,
+ * read when the step runs. Which one is recorded rather than inferred from the
+ * text: a value that happens to look like a field name is still a value, and a
+ * reference to a field that turns out to be missing is a reference that failed
+ * rather than a piece of text that was sent.
+ */
+data class NodeBinding(
+    /** The written value, or the name of the field to read. */
+    val expression: String,
+    val reference: Boolean = false,
+    /** Which node produces the field, on a reference. Carried for the record. */
+    val from: String? = null,
+)
 
 data class GraphNode(
     /** Stable within a workflow; what edges refer to. */
@@ -27,13 +45,20 @@ data class GraphNode(
     /** The condition a [NodeKind.CONDITION] node asks. */
     val conditionId: Long? = null,
     /**
-     * What the node passes to its action: parameter name to expression.
+     * What the node calls what it produces, so a later node can name it.
+     *
+     * Null hands the output on unchanged; a name wraps it in an object with that
+     * one key, which is what makes `{{input.<name>}}` resolvable downstream.
+     */
+    val outputName: String? = null,
+    /**
+     * What the node passes to its action: parameter name to what fills it.
      *
      * Carried here because it belongs to the node rather than to the action,
      * and a run has to keep what it was given — the editor may say something
      * else by the time this finishes.
      */
-    val mappings: Map<String, String> = emptyMap(),
+    val mappings: Map<String, NodeBinding> = emptyMap(),
     val x: Double = 0.0,
     val y: Double = 0.0,
 )

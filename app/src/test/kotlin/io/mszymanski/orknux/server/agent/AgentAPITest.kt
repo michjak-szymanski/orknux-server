@@ -39,14 +39,14 @@ class AgentAPITest(
               createAgent(input: {
                 workspaceId: $workspaceId,
                 name: "Research Agent",
-                type: REACT,
+                type: LLM,
                 description: "Conducts web search and synthesizes market data findings"
               }) { name type description enabled mcpServers }
             }
             """,
         ).execute()
             .path("createAgent.name").entity(String::class.java).isEqualTo("Research Agent")
-            .path("createAgent.type").entity(String::class.java).isEqualTo("REACT")
+            .path("createAgent.type").entity(String::class.java).isEqualTo("LLM")
             .path("createAgent.enabled").entity(Boolean::class.java).isEqualTo(true)
             .path("createAgent.mcpServers").entityList(String::class.java).hasSize(0)
 
@@ -56,7 +56,7 @@ class AgentAPITest(
     @Test
     fun `lists only the agents of the requested workspace, ordered by name`() {
         create("Writer Agent", "LLM")
-        create("Code Review Agent", "REACT")
+        create("Code Review Agent", "LLM")
         create("Frontend Helper", "LLM", workspace = otherWorkspaceId)
 
         graphQlTester.document("""query { workspaceAgents(workspaceId: $workspaceId) { content { name } totalElements } }""")
@@ -68,7 +68,7 @@ class AgentAPITest(
 
     @Test
     fun `saves the settings form, including system prompt and mcp servers`() {
-        val id = create("Research Agent", "REACT")
+        val id = create("Research Agent", "LLM")
 
         graphQlTester.document(
             """
@@ -91,7 +91,7 @@ class AgentAPITest(
 
     @Test
     fun `drops blank and repeated mcp servers, keeping order`() {
-        val id = create("Research Agent", "REACT")
+        val id = create("Research Agent", "LLM")
 
         graphQlTester.document(
             """
@@ -109,7 +109,7 @@ class AgentAPITest(
 
     @Test
     fun `clears the mcp servers with an empty list`() {
-        val id = create("Research Agent", "REACT")
+        val id = create("Research Agent", "LLM")
         graphQlTester.document(
             """mutation { updateAgent(id: $id, input: { name: "Research Agent", mcpServers: ["brave-search"] }) { mcpServers } }""",
         ).execute()
@@ -123,7 +123,7 @@ class AgentAPITest(
 
     @Test
     fun `rejects a duplicate agent name within the workspace`() {
-        create("Research Agent", "REACT")
+        create("Research Agent", "LLM")
 
         graphQlTester.document(
             """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Research Agent", type: LLM }) { id } }""",
@@ -140,8 +140,8 @@ class AgentAPITest(
 
     @Test
     fun `allows the same agent name in another workspace`() {
-        create("Research Agent", "REACT")
-        create("Research Agent", "REACT", workspace = otherWorkspaceId)
+        create("Research Agent", "LLM")
+        create("Research Agent", "LLM", workspace = otherWorkspaceId)
 
         assertThat(agents.findAll()).hasSize(2)
     }
@@ -160,7 +160,7 @@ class AgentAPITest(
 
     @Test
     fun `disables and re-enables an agent`() {
-        val id = create("Research Agent", "REACT")
+        val id = create("Research Agent", "LLM")
 
         graphQlTester.document("""mutation { setAgentEnabled(id: $id, enabled: false) { enabled } }""")
             .execute().path("setAgentEnabled.enabled").entity(Boolean::class.java).isEqualTo(false)
@@ -173,7 +173,7 @@ class AgentAPITest(
 
     @Test
     fun `deletes an agent and reports whether it existed`() {
-        val id = create("Research Agent", "REACT")
+        val id = create("Research Agent", "LLM")
 
         graphQlTester.document("""mutation { deleteAgent(id: $id) }""")
             .execute().path("deleteAgent").entity(Boolean::class.java).isEqualTo(true)
@@ -186,7 +186,7 @@ class AgentAPITest(
 
     @Test
     fun `deleting a workspace takes its agents with it`() {
-        create("Research Agent", "REACT")
+        create("Research Agent", "LLM")
 
         workspaces.deleteById(workspaceId)
 

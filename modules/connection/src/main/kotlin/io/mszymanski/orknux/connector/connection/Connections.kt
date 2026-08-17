@@ -2,6 +2,7 @@ package io.mszymanski.orknux.connector.connection
 
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
+import jakarta.persistence.Convert
 import jakarta.persistence.ElementCollection
 import jakarta.persistence.Embeddable
 import jakarta.persistence.Entity
@@ -14,6 +15,9 @@ import jakarta.persistence.Id
 import jakarta.persistence.JoinColumn
 import jakarta.persistence.OrderColumn
 import jakarta.persistence.Table
+import io.mszymanski.orknux.connector.security.SECRET_COLUMN_LENGTH
+import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretConverter
 import java.time.OffsetDateTime
 
 /** The external services a connection can point at. */
@@ -124,7 +128,9 @@ class WorkspaceConnection(
     @Column(name = "auth_type", nullable = false, length = 16)
     var authType: AuthType = AuthType.NONE,
 
-    @Column(length = 1000)
+    /** Encrypted in the database; see [SecretCipher]. */
+    @Convert(converter = SecretConverter::class)
+    @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
 
     /**
@@ -132,7 +138,8 @@ class WorkspaceConnection(
      * socket: Slack's Socket Mode wants an app-level token (`xapp-...`) as well
      * as the bot token that [secret] holds.
      */
-    @Column(name = "app_token", length = 1000)
+    @Convert(converter = SecretConverter::class)
+    @Column(name = "app_token", length = SECRET_COLUMN_LENGTH)
     var appToken: String? = null,
 
     @ElementCollection(fetch = FetchType.EAGER)
@@ -211,7 +218,9 @@ class McpServer(
     @Column(name = "auth_type", nullable = false, length = 16)
     var authType: AuthType = AuthType.NONE,
 
-    @Column(length = 1000)
+    /** Encrypted in the database; see [SecretCipher]. */
+    @Convert(converter = SecretConverter::class)
+    @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
 
     @ElementCollection(fetch = FetchType.EAGER)

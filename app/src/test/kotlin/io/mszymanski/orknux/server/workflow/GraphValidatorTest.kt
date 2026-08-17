@@ -151,7 +151,7 @@ class GraphValidatorTest(
     }
 
     @Test
-    fun `nothing can feed a trigger, and nothing can follow a publish task`() {
+    fun `nothing can feed a trigger`() {
         graphQlTester.document(
             """
             mutation {
@@ -165,20 +165,6 @@ class GraphValidatorTest(
             }
             """,
         ).execute().errors().expect { it.message?.contains("Nothing can feed") == true }.verify()
-
-        graphQlTester.document(
-            """
-            mutation {
-              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
-                nodes: [
-                  { key: "out", kind: PUBLISH_TASK, name: "Publish", x: 0, y: 0 },
-                  { key: "act", kind: ACTION, name: "Act", x: 200, y: 0 }
-                ],
-                edges: [{ source: "out", target: "act" }]
-              }) { nodes { key } }
-            }
-            """,
-        ).execute().errors().expect { it.message?.contains("Nothing can follow") == true }.verify()
     }
 
     @Test

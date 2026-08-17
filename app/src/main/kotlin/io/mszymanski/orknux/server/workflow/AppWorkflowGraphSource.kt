@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.workflow
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphNode
+import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.workflow.execution.WorkflowGraph as RunnableGraph
 import io.mszymanski.orknux.workflow.execution.WorkflowGraphSource
 import io.mszymanski.orknux.workflow.execution.WorkflowNotFoundException as RunnableWorkflowNotFound
@@ -44,9 +45,16 @@ class AppWorkflowGraphSource(
                     agentId = node.agentId,
                     actionId = node.actionId,
                     conditionId = node.conditionId,
+                    outputName = node.outputName,
                     // What this node passes, decided on the node. Seeded from the
                     // action when the node was placed, its own from then on.
-                    mappings = node.mappings.associate { it.name to it.expression },
+                    mappings = node.mappings.associate {
+                        it.name to NodeBinding(
+                            expression = it.expression,
+                            reference = it.mode == MappingMode.REFERENCE,
+                            from = it.sourceNodeKey,
+                        )
+                    },
                     x = node.positionX,
                     y = node.positionY,
                 )

@@ -8,6 +8,8 @@ import io.mszymanski.orknux.server.condition.ConditionProperty
 import io.mszymanski.orknux.server.condition.ConditionType
 import io.mszymanski.orknux.server.condition.WorkflowCondition
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.obj.PropertyKind
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.trigger.TriggerType
 import io.mszymanski.orknux.server.trigger.WorkflowTrigger
 import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
@@ -29,14 +31,15 @@ import tools.jackson.databind.ObjectMapper
  * need immediately; a copy on the node would be a second truth that goes stale.
  *
  * Two rules are refusals and the rest are warnings. A graph is drawn before it
- * is finished, so a workflow that is not yet wired up has to be saveable — but a
- * shape that could never run, like something feeding a trigger, is not.
+ * is finished, so a workflow that is not yet wired up has to be saveable — but
+ * two nodes answering to one name, or something feeding a trigger, is not.
  */
 @Service
 class GraphValidator(
     private val triggers: WorkflowTriggerRepository,
     private val actions: WorkflowActionRepository,
     private val conditions: WorkflowConditionRepository,
+    private val objects: WorkflowObjectRepository,
     private val parameters: ActionParameters,
     private val mapper: ObjectMapper,
 ) {
@@ -75,14 +78,22 @@ class GraphValidator(
             if (action == null) {
                 Ports(opaque = true, unresolved = "no action chosen")
             } else {
+                val named = node.outputName?.trim().orEmpty()
                 Ports(
                     // What the *node* still needs, which is what will actually
-                    // run: a parameter it answers with a literal is answered,
-                    // and nothing upstream has to produce it. Reading the
-                    // action here instead would validate a binding the run
-                    // never uses.
-                    inputs = parameters.requiredInputsOf(node.mappings.map { it.name to it.expression }),
-                    outputs = parameters.outputsOf(action),
+                    // run: a parameter answered with a value is answered, and
+                    // nothing upstream has to produce it. Reading the action
+                    // here instead would validate a binding the run never uses.
+                    inputs = reads(node.mappings),
+                    // A named node wraps what it produces under that name, so
+                    // that is the field a later node can read. Unnamed, the
+                    // action's own output stands — which is what it is called,
+                    // not necessarily what arrives.
+                    outputs = if (named.isEmpty()) {
+                        parameters.outputsOf(action)
+                    } else {
+                        listOf(ActionParamView(named, parameters.outputsOf(action).firstOrNull()?.type ?: ValueType.OBJECT))
+                    },
                     passThrough = parameters.passesThrough(action),
                 )
             }
@@ -98,9 +109,82 @@ class GraphValidator(
             }
         }
 
-        // Nothing runs these yet, so they claim nothing and require nothing.
-        NodeKind.AGENT, NodeKind.DATA_TASK, NodeKind.PUBLISH_TASK -> Ports(passThrough = true, opaque = true)
+        /*
+         * An agent answers with prose, so what it gives is only addressable once
+         * the node has named it. Named, it declares that one field and stops
+         * being opaque — which is what lets the editor show it and a later node
+         * refer to it. Unnamed, it hands its answer on as before and nothing
+         * downstream can say what it will contain.
+         */
+        NodeKind.AGENT -> {
+            val named = node.outputName?.trim().orEmpty()
+            if (named.isEmpty()) {
+                Ports(passThrough = true, opaque = true)
+            } else {
+                Ports(outputs = listOf(ActionParamView(named, ValueType.STRING)))
+            }
+        }
+
+        /*
+         * An object node makes what its fields say it makes.
+         *
+         * Named, that is one field of that name holding the object, which is
+         * what a later node points at. Unnamed, the fields themselves are what
+         * goes on — an object put together and then handed over as its parts,
+         * which is the shape the run was already carrying.
+         *
+         * It passes on what it was given as well: building something out of two
+         * earlier steps should not throw away everything else they produced.
+         */
+        NodeKind.OBJECT -> {
+            val named = node.outputName?.trim().orEmpty()
+            val fields = shapeOf(node)
+            Ports(
+                inputs = reads(node.mappings),
+                outputs = if (named.isEmpty()) fields else listOf(ActionParamView(named, ValueType.OBJECT)),
+                passThrough = true,
+            )
+        }
     }
+
+    /**
+     * What an object node's fields are called, and what each holds.
+     *
+     * A saved shape says; a shape of the node's own is the parameters it holds,
+     * which are text until something says otherwise.
+     */
+    private fun shapeOf(node: WorkflowNode): List<ActionParamView> {
+        val saved = node.objectId?.let { objects.findByIdOrNull(it) }
+        if (saved != null) {
+            return saved.properties.map { ActionParamView(it.name, typeOf(it.kind)) }
+        }
+        return node.mappings.map { ActionParamView(it.name, ValueType.STRING) }
+    }
+
+    /** A property's shape, as the graph's own vocabulary of types. */
+    private fun typeOf(kind: PropertyKind): ValueType = when (kind) {
+        PropertyKind.STRING -> ValueType.STRING
+        PropertyKind.NUMBER -> ValueType.NUMBER
+        PropertyKind.BOOLEAN -> ValueType.BOOLEAN
+        PropertyKind.OBJECT -> ValueType.OBJECT
+        PropertyKind.ARRAY -> ValueType.ARRAY
+    }
+
+    /**
+     * The fields a node's parameters read, which is what has to reach it.
+     *
+     * Only the references: a parameter holding a value is answered by the value.
+     * A reference to `trigger.x` reads the event that started the run, which is
+     * there however the node was reached, so nothing upstream has to produce it.
+     * Of `response.status` only `response` is asked for — the field is what an
+     * edge carries; the rest is inside it.
+     */
+    private fun reads(mappings: List<NodeMapping>): List<ActionParamView> = mappings
+        .filter { it.mode == MappingMode.REFERENCE }
+        .map { it.expression.trim().substringBefore('.') }
+        .filter { it.isNotEmpty() && it != TRIGGER }
+        .distinct()
+        .map { ActionParamView(it, ValueType.STRING) }
 
     /**
      * Everything wrong with the graph, worst first.
@@ -117,7 +201,29 @@ class GraphValidator(
         val known = edges.filter { it.sourceKey in byKey && it.targetKey in byKey }
         val problems = mutableListOf<GraphProblem>()
 
-        // --- The two shapes that could never run ---
+        /*
+         * Two nodes cannot answer to the same name.
+         *
+         * A run carries what every step produced, each under the name its node
+         * gave it. Two nodes claiming one name means the later one quietly wins
+         * and every reference to the first reads the wrong value — a workflow
+         * that runs, finishes, and is wrong. Refused rather than warned about,
+         * because there is no version of it that was intended.
+         */
+        nodes.filter { !it.outputName.isNullOrBlank() }
+            .groupBy { requireNotNull(it.outputName) }
+            .filterValues { it.size > 1 }
+            .forEach { (name, claiming) ->
+                claiming.forEach { node ->
+                    problems += GraphProblem(
+                        severity = GraphProblemSeverity.ERROR,
+                        nodeKey = node.nodeKey,
+                        message = "\"$name\" is produced by ${claiming.size} nodes; a name has to say which one",
+                    )
+                }
+            }
+
+        // --- The shape that could never run ---
         known.forEach { edge ->
             val target = byKey.getValue(edge.targetKey)
             val source = byKey.getValue(edge.sourceKey)
@@ -126,13 +232,6 @@ class GraphValidator(
                     severity = GraphProblemSeverity.ERROR,
                     nodeKey = target.nodeKey,
                     message = "Nothing can feed ${target.name}: a trigger is where a run starts.",
-                )
-            }
-            if (source.kind == NodeKind.PUBLISH_TASK) {
-                problems += GraphProblem(
-                    severity = GraphProblemSeverity.ERROR,
-                    nodeKey = source.nodeKey,
-                    message = "Nothing can follow ${source.name}: a publish task is where a run ends.",
                 )
             }
         }
@@ -259,9 +358,24 @@ class GraphValidator(
         val fromFiring = when (trigger.type) {
             TriggerType.SCHEDULED -> listOf("cron", "firedAt")
             TriggerType.INCOMING_CONNECTION -> listOf("action", "text", "channel", "user", "ts", "threadTs")
+            // A webhook's fields are whatever its contract says, below.
+            TriggerType.WEBHOOK -> emptyList()
         }.map { ActionParamView(it, ValueType.STRING) }
 
-        return (fromPayload + fromFiring).distinctBy { it.name }
+        /*
+         * What a webhook hands on is the shape it refuses anything else for.
+         *
+         * The endpoint answers 404 to a request that does not match, so by the
+         * time a run exists every one of these fields is there — which is what
+         * makes them worth offering as something to point a reference at.
+         */
+        val fromContract = trigger.objectId
+            ?.let { objects.findByIdOrNull(it) }
+            ?.properties
+            ?.map { ActionParamView(it.name, typeOf(it.kind)) }
+            .orEmpty()
+
+        return (fromPayload + fromFiring + fromContract).distinctBy { it.name }
     }
 
     /** Which fields a condition reads, so a node asking it needs those. */
@@ -296,8 +410,8 @@ class GraphValidator(
     /**
      * Whether what arrives will do for what is wanted.
      *
-     * An object is anything, and a string is what a placeholder becomes, so
-     * those go anywhere; the rest have to agree.
+     * An object is anything, and anything can be read as text, so those go
+     * anywhere; the rest have to agree.
      */
     private fun compatible(given: ValueType, wanted: ValueType): Boolean =
         given == wanted || given == ValueType.OBJECT || wanted == ValueType.OBJECT || wanted == ValueType.STRING
@@ -312,6 +426,9 @@ class GraphValidator(
 
     private companion object {
         const val MAX_DEPTH = 10
+
+        /** What a reference reads from when it does not read the run's payload. */
+        const val TRIGGER = "trigger"
     }
 }
 

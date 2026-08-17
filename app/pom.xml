@@ -194,6 +194,14 @@
                             its own test, which brings up an in-process environment.
                         -->
                         <orknux.temporal.enabled>false</orknux.temporal.enabled>
+                        <!--
+                            Credentials are encrypted with this, and the suite
+                            stores some. A fixed value rather than the deployment's:
+                            the test database is thrown away, nothing it holds
+                            outlives the run, and a real key has no business in a
+                            build file.
+                        -->
+                        <orknux.security.secret-key>b3JrbnV4LXRlc3Qta2V5LTMyLWJ5dGVzLWV4YWN0bHk=</orknux.security.secret-key>
                         <!-- No websockets out to Slack from a test run. -->
                         <orknux.slack.enabled>false</orknux.slack.enabled>
                         <!-- No sweep calls a provider while a suite is running. -->
@@ -217,6 +225,20 @@
                 <configuration>
                     <mainClass>${start-class}</mainClass>
                 </configuration>
+                <!--
+                    Without spring-boot-starter-parent nothing binds `repackage`
+                    for us, so `package` produced a plain library jar with no
+                    Main-Class: runnable through spring-boot:run and by nothing
+                    else. This is what makes `java -jar` work, which is what the
+                    container image runs.
+                -->
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

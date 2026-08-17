@@ -1,4 +1,11 @@
 spring:
+  servlet:
+    multipart:
+      # A recording, not a document. The default cap is 1MB — a few seconds of
+      # speech — and the endpoint refuses anything past 25MB itself, with a
+      # sentence rather than a stack trace.
+      max-file-size: 25MB
+      max-request-size: 26MB
   ai:
     chat:
       memory:
@@ -26,6 +33,15 @@ spring:
     username: cn=admin,dc=orknux,dc=io
     password: admin
 
+logging:
+  logback:
+    rollingpolicy:
+      # Only consulted when a file is being written. A log that grows without
+      # bound fills the disk it shares with the database.
+      max-file-size: 10MB
+      max-history: 14
+      total-size-cap: 1GB
+
 server:
   servlet:
     session:
@@ -43,11 +59,47 @@ db-scheduler:
 orknux:
   # Filled in from the build, and reported on the monitoring screen.
   version: "@project.version@"
+  chat:
+    # Whether this installation has a chat at all. False here is final: an
+    # administrator can turn the chat off from the screen, but not back on
+    # where the operator has said no.
+    enabled: true
+  attachments:
+    # Whether a chat may carry files at all. False here is final: an
+    # administrator can turn attachments off from the screen, but not back on
+    # where the operator has said no — the disk belongs to whoever runs this.
+    enabled: true
+    # Where the bytes go. FILESYSTEM is the only one today; object storage
+    # would be a second class behind the same interface, not a flag here.
+    storage: FILESYSTEM
+    # One directory per workspace is created under this. Relative resolves
+    # against the working directory, which is fine on a development machine and
+    # wrong in a container: name a volume that outlives the process.
+    location: ${ORKNUX_ATTACHMENTS_LOCATION:data/attachments}
+    max-file-size-mb: 25
+  logging:
+    # Console always. Name a file here and it is written to as well — an
+    # absolute path in a deployment, since the working directory of a container
+    # is not somewhere anyone goes looking. Empty means console only.
+    file: ${ORKNUX_LOG_FILE:}
+    # plain reads well in a terminal; json (one ECS object per line) is what a
+    # collector wants. Applies to the console and the file alike: two formats at
+    # once would mean two answers to "what did it log".
+    format: ${ORKNUX_LOG_FORMAT:plain}
   web:
     allowed-origins: http://localhost:5173
   security:
     # Sees the Admin section and every workspace.
     admin-role: ROLE_ADMINS
+    # Encrypts the credentials this server is trusted with — provider keys,
+    # Slack tokens, MCP secrets — so the database on its own is not enough to
+    # read them. 32 bytes, base64: `openssl rand -base64 32`.
+    #
+    # Deliberately no default. A key committed here would be a key every
+    # installation shares, which is the same as no key at all. Set it in the
+    # environment; lose it and the stored credentials cannot be recovered, only
+    # entered again.
+    secret-key: ${ORKNUX_SECRET_KEY:}
   ldap:
     user-search-base: ou=people
     user-search-filter: (uid={0})
@@ -96,6 +148,10 @@ orknux:
     enabled: true
     target: localhost:7233
     namespace: default
+    # Temporal's own web interface, which compose puts here. Only used to link
+    # out to it — a run's history is worth looking at and that screen already
+    # exists. Empty offers no links, which is right where it is not exposed.
+    ui-url: ${ORKNUX_TEMPORAL_UI_URL:http://localhost:8233}
     task-queue: orknux-workflow
     # A model call is slow, so a step is given minutes, and tried again a
     # couple of times, since most of what a step does is call something else.

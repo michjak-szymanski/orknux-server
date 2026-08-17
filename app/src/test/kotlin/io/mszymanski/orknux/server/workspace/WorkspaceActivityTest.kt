@@ -58,7 +58,7 @@ class WorkspaceActivityTest(
     @Test
     fun `records agent activity, including mcp server changes`() {
         val id = graphQlTester.document(
-            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Research Agent", type: REACT }) { id } }""",
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Research Agent", type: LLM }) { id } }""",
         ).execute().path("createAgent.id").entity(String::class.java).get()
 
         graphQlTester.document("""mutation { setAgentEnabled(id: $id, enabled: true) { id } }""").execute()

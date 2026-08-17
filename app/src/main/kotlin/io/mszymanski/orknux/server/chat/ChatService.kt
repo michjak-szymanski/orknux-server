@@ -4,12 +4,15 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
+import io.mszymanski.orknux.connector.model.ModelKind
+import io.mszymanski.orknux.connector.model.ModelService
 import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
 import org.springframework.ai.chat.messages.MessageType
 import org.springframework.ai.chat.messages.UserMessage
 import org.springframework.data.repository.findByIdOrNull
+import jakarta.persistence.EntityManager
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
@@ -33,13 +36,50 @@ class ChatService(
     private val sessions: ChatSessionRepository,
     private val history: ChatMemoryRepository,
     private val models: ModelChatClient,
+    private val catalogue: ModelService,
     private val agents: AgentRepository,
     private val briefing: AgentBriefing,
     private val conversation: AgentConversation,
+    private val entityManager: EntityManager,
 ) {
 
     fun sessions(workspaceId: Long, userId: String): List<ChatSession> =
         sessions.findByWorkspaceIdAndUserIdOrderByPinnedDescLastMessageAtDescCreatedAtDesc(workspaceId, userId)
+
+    /**
+     * The caller's chats in this workspace that said the given thing.
+     *
+     * Titles are searched on the screen, where every chat is already held; this
+     * is the other question — what was actually said — and it is asked of the
+     * store rather than by loading every conversation to look through it.
+     *
+     * Read straight from Spring AI's table because its repository knows one way
+     * of finding a message, by conversation. Only the ids come back: the screen
+     * has the chats and only needs to know which of them to keep.
+     */
+    fun mentioning(workspaceId: Long, userId: String, text: String): List<Long> {
+        val looking = text.trim()
+        if (looking.isEmpty()) return emptyList()
+
+        val held = sessions(workspaceId, userId).associateBy { it.conversationId }
+        if (held.isEmpty()) return emptyList()
+
+        @Suppress("UNCHECKED_CAST")
+        val found = entityManager
+            .createNativeQuery(
+                """
+                SELECT DISTINCT conversation_id FROM spring_ai_chat_memory
+                WHERE conversation_id IN (:conversations) AND content ILIKE :looking ESCAPE '!'
+                """.trimIndent(),
+            )
+            .setParameter("conversations", held.keys)
+            // Escaped, so a chat about 100% or a file_name is searched for and
+            // not turned into a wildcard by the search itself.
+            .setParameter("looking", "%" + looking.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%")
+            .resultList as List<String>
+
+        return found.mapNotNull { held[it]?.id }
+    }
 
     fun session(id: Long): ChatSession? = sessions.findByIdOrNull(id)
 
@@ -56,11 +96,31 @@ class ChatService(
                 conversationId = UUID.randomUUID().toString(),
                 title = trimmed.take(TITLE_LENGTH),
                 userId = userId,
-                modelId = modelId,
+                modelId = modelId ?: defaultModel(workspaceId, userId),
                 createdAt = OffsetDateTime.now(),
             ),
         )
     }
+
+    /**
+     * What a chat answers with when the caller named nothing.
+     *
+     * A chat with no model is a dead end: every send fails, and the reason is
+     * only visible once someone has already typed a message. So a new chat picks
+     * up the model this person last chatted with here — a chat opens where the
+     * last one left off — and failing that any model the workspace can chat
+     * with. Choosing stays a preference rather than a prerequisite.
+     *
+     * Null only when the workspace has no usable chat model at all, which is a
+     * real condition worth reporting rather than papering over.
+     */
+    private fun defaultModel(workspaceId: Long, userId: String): Long? =
+        sessions(workspaceId, userId)
+            .sortedByDescending { it.lastMessageAt ?: it.createdAt }
+            .firstNotNullOfOrNull { it.modelId }
+            ?: catalogue.models(workspaceId)
+                .firstOrNull { it.enabled && it.kind == ModelKind.CHAT }
+                ?.id
 
     @Transactional
     fun rename(id: Long, title: String): ChatSession {
@@ -176,7 +236,15 @@ class ChatService(
      * before the call, for the same reason [send] writes it first.
      */
     @Transactional
-    fun beginSend(id: Long, text: String): ChatSendStart {
+    /**
+     * @param images pictures sent with this message, as `data:` URLs.
+     *
+     * Handed to the model as part of the turn rather than described in it: a
+     * model that can see is sent the picture, and one that cannot ignores the
+     * part. They are not written to the history — that store keeps text, and a
+     * base64 image in a conversation log is a conversation log nobody can read.
+     */
+    fun beginSend(id: Long, text: String, images: List<String> = emptyList()): ChatSendStart {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val message = text.trim().ifEmpty { throw ChatMessageEmptyException() }
         val modelId = session.modelId ?: throw ChatModelNotChosenException()
@@ -189,7 +257,13 @@ class ChatService(
             modelId = modelId,
             agentId = session.agentId,
             conversationId = session.conversationId,
-            turns = briefed(session) + (thread + UserMessage(message)).map { ChatTurn(role(it), it.text.orEmpty()) },
+            turns = briefed(session) +
+                (thread + UserMessage(message)).mapIndexed { at, held ->
+                    // Only the last turn is the one being sent now, so only it
+                    // carries what was attached to it.
+                    val last = at == thread.size
+                    ChatTurn(role(held), held.text.orEmpty(), if (last) images else emptyList())
+                },
         )
     }
 

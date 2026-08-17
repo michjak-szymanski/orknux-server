@@ -25,6 +25,16 @@ import tools.jackson.databind.node.ObjectNode
 data class ChatTurn(
     val role: String,
     val content: String,
+    /**
+     * Pictures sent with this turn, as `data:` URLs.
+     *
+     * Carried beside the text rather than described in it, because a model that
+     * can see takes them as part of the message: the OpenAI shape is a content
+     * array of `text` and `image_url` parts, which llama.cpp, vLLM and OpenAI
+     * itself all read. Empty for every turn that is only words, which keeps the
+     * request the plain string shape everything understands.
+     */
+    val images: List<String> = emptyList(),
     /** Set on an assistant turn that asked for tools. */
     val asked: List<ToolCall> = emptyList(),
     /** Set on a turn answering one, naming the call it answers. */
@@ -367,6 +377,28 @@ class ModelChatClient(
                         val call = calls.addObject()
                         call.put("id", asked.id).put("type", "function")
                         call.putObject("function").put("name", asked.name).put("arguments", asked.arguments)
+                    }
+                }
+
+                /*
+                 * A turn with pictures is a list of parts rather than a string.
+                 *
+                 * `[{type: text}, {type: image_url}]` is the shape OpenAI
+                 * defined and llama.cpp, vLLM and Ollama all read; a model that
+                 * cannot see ignores the image part rather than failing, which
+                 * is why this does not need to know whether the model can.
+                 */
+                turn.images.isNotEmpty() -> {
+                    message.put("role", turn.role)
+                    val parts = message.putArray("content")
+                    if (turn.content.isNotEmpty()) {
+                        parts.addObject().put("type", "text").put("text", turn.content)
+                    }
+                    turn.images.forEach { image ->
+                        parts.addObject()
+                            .put("type", "image_url")
+                            .putObject("image_url")
+                            .put("url", image)
                     }
                 }
 

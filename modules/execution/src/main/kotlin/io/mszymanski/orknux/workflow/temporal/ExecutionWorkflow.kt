@@ -41,10 +41,17 @@ data class RunPlan @JsonCreator constructor(
     @JsonProperty("input") val input: String? = null,
 )
 
+/**
+ * Which step to run, and nothing else.
+ *
+ * Deliberately no payload: an activity's arguments and results are written into
+ * Temporal's event history and kept for the life of the run, so handing a
+ * growing payload back and forth would record it again at every step. The run
+ * carries it in the database instead, and this carries an id.
+ */
 data class RunStepCommand @JsonCreator constructor(
     @JsonProperty("executionId") val executionId: Long,
     @JsonProperty("nodeKey") val nodeKey: String,
-    @JsonProperty("input") val input: String? = null,
 )
 
 data class StepReport @JsonCreator constructor(
@@ -87,8 +94,6 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
     private val activities = Workflow.newActivityStub(ExecutionActivities::class.java)
 
     override fun run(plan: RunPlan): ExecutionStatus {
-        var handOver = plan.input
-
         for ((index, nodeKey) in plan.steps.withIndex()) {
             val unreached = plan.steps.size - index - 1
 
@@ -103,7 +108,7 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
             var report: StepReport
             while (true) {
                 report = try {
-                    activities.runStep(RunStepCommand(plan.executionId, nodeKey, handOver))
+                    activities.runStep(RunStepCommand(plan.executionId, nodeKey))
                 } catch (failure: ActivityFailure) {
                     // Every attempt is spent by the time this is thrown.
                     activities.failRun(
@@ -136,10 +141,6 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
                 }
                 Workflow.sleep(Duration.ofSeconds(pause))
             }
-
-            // A step that did nothing passes on what it was handed, so a node
-            // with no runtime yet does not cut the run in half.
-            if (report.status == StepStatus.COMPLETED) handOver = report.output
 
             // A condition that did not hold ends the run, without failing it.
             if (report.halt) {

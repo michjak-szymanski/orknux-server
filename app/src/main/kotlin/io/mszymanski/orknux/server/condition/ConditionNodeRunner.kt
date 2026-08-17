@@ -27,7 +27,7 @@ class ConditionNodeRunner(
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.CONDITION
 
-    override fun run(step: ExecutionStep, input: String?): StepResult {
+    override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult {
         val conditionId = step.conditionId
             ?: return StepResult(StepStatus.SKIPPED, "${step.name} asks no condition, so the run carried on.")
         val condition = conditions.findByIdOrNull(conditionId)

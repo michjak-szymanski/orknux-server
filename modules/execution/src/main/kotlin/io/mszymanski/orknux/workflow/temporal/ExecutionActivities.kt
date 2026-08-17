@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.workflow.temporal
 
+import io.mszymanski.orknux.workflow.execution.StepFailedException
 import io.mszymanski.orknux.workflow.execution.StepRunner
+import io.temporal.failure.ApplicationFailure
 import io.temporal.activity.ActivityInterface
 import io.temporal.activity.ActivityMethod
 import org.springframework.stereotype.Component
@@ -39,7 +41,22 @@ interface ExecutionActivities {
 class ExecutionActivitiesImpl(private val steps: StepRunner) : ExecutionActivities {
 
     override fun runStep(command: RunStepCommand): StepReport {
-        val outcome = steps.runStep(command.executionId, command.nodeKey, command.input)
+        val outcome = try {
+            steps.runStep(command.executionId, command.nodeKey)
+        } catch (failure: StepFailedException) {
+            // Retrying a channel that does not exist only reaches the same
+            // conclusion three times, a second apart, filling the log on the way.
+            // Temporal will not retry a failure marked non-retryable, so a step
+            // that knows it is final says so here.
+            if (failure.permanent) {
+                throw ApplicationFailure.newNonRetryableFailureWithCause(
+                    failure.message ?: "the step failed",
+                    failure::class.java.name,
+                    failure,
+                )
+            }
+            throw failure
+        }
         return StepReport(
             outcome.status,
             outcome.output,

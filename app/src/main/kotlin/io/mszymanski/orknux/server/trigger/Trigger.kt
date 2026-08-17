@@ -20,6 +20,22 @@ enum class TriggerType {
 
     /** The clock, on a cron expression. */
     SCHEDULED,
+
+    /** A request arriving at a URL this installation answers on. */
+    WEBHOOK,
+}
+
+/**
+ * How a webhook decides whether the caller may start anything.
+ *
+ * [NONE] is what every webhook was to begin with: knowing the path and the shape
+ * is enough. [FUNCTION] hands the request to one of the workspace's functions
+ * and believes what it answers — which is how a signature gets checked against a
+ * secret nobody has to paste into a graph.
+ */
+enum class WebhookAuthType {
+    NONE,
+    FUNCTION,
 }
 
 /** The event on a connection that starts the workflow. */
@@ -70,6 +86,34 @@ class WorkflowTrigger(
     var timezone: String? = null,
 
     /**
+     * The second half of the URL a webhook trigger answers on.
+     *
+     * Unique across the installation rather than per workspace, because the URL
+     * is: two workspaces cannot both answer at `/api/webhooks/build`.
+     */
+    @Column(name = "webhook_path", length = 120)
+    var webhookPath: String? = null,
+
+    /**
+     * The shape a webhook's request has to have.
+     *
+     * Both a contract and a filter: what does not match is answered 404 rather
+     * than started, and what does match is what the workflow can rely on being
+     * handed.
+     */
+    @Column(name = "object_id")
+    var objectId: Long? = null,
+
+    /** How a webhook proves its caller may start anything; see [WebhookAuthType]. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "auth_type", nullable = false, length = 16)
+    var authType: WebhookAuthType = WebhookAuthType.NONE,
+
+    /** The function that answers that question, when one does. */
+    @Column(name = "auth_function_id")
+    var authFunctionId: Long? = null,
+
+    /**
      * A question asked of the event before anything is started; null fires on
      * everything. Filtering here rather than inside the workflow is what keeps
      * an unwanted event out of the executions list altogether.
@@ -97,6 +141,15 @@ class WorkflowTrigger(
      */
     @Column(name = "last_fired_at")
     var lastFiredAt: OffsetDateTime? = null,
+
+    /**
+     * Which icon a node drawn from this starts with.
+     *
+     * A seed, not a rule: the node owns its icon once it has one, the same way
+     * it owns the parameters this seeded. Null draws whatever the kind draws.
+     */
+    @Column(length = 40)
+    var icon: String? = null,
 )
 
 interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
@@ -116,6 +169,9 @@ interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
 
     /** What the scheduler's tick asks: which definitions run on a clock? */
     fun findByTypeAndEnabledTrue(type: TriggerType): List<WorkflowTrigger>
+
+    /** What a request arriving at a URL is answered by, if anything. */
+    fun findByWebhookPath(webhookPath: String): WorkflowTrigger?
 }
 
 class TriggerNotFoundException(id: Long) : RuntimeException("No trigger with id $id")
@@ -135,6 +191,27 @@ class TriggerConnectionRequiredException :
 
 class TriggerScheduleRequiredException :
     RuntimeException("A scheduled trigger needs a cron expression")
+
+class TriggerWebhookPathRequiredException :
+    RuntimeException("A webhook trigger needs a path to answer on")
+
+class TriggerWebhookPathInvalidException(path: String) : RuntimeException(
+    "\"$path\" is not a path on this installation. A webhook answers here, so name somewhere " +
+        "here — \"build/finished\", not a URL of your own.",
+)
+
+class TriggerWebhookPathTakenException(path: String) :
+    RuntimeException("Another trigger already answers at /api/webhooks/$path")
+
+class TriggerWebhookAuthFunctionRequiredException :
+    RuntimeException("Function authentication needs a function to ask")
+
+class TriggerWebhookAuthFunctionNotBooleanException(name: String) : RuntimeException(
+    "$name does not answer true or false. A webhook is authenticated by a function that says yes or no.",
+)
+
+class TriggerWebhookShapeRequiredException :
+    RuntimeException("A webhook trigger needs an object saying what a request has to contain")
 
 class TriggerScheduleInvalidException(cron: String) :
     RuntimeException("\"$cron\" is not a cron expression this can schedule")

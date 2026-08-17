@@ -12,6 +12,7 @@ import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.stereotype.Controller
+import io.mszymanski.orknux.connector.model.ModelKind
 import org.springframework.transaction.annotation.Transactional
 
 @Controller
@@ -129,8 +130,37 @@ class WorkspaceAPI(
         workspace.companionModelId = chosen?.id
         auditRecorder.record(
             workspaceId,
-            WorkspaceAuditCategory.WORKSPACE,
+            WorkspaceAuditCategory.MODEL,
             if (chosen == null) "Companion model cleared" else "Companion model set to ${chosen.name}",
+        )
+        return workspace
+    }
+
+    /**
+     * Chooses the model the workspace hears with.
+     *
+     * The same rule as the companion model: whoever can see the workspace may
+     * set it, and null switches the microphone off rather than guessing at a
+     * substitute. Only a transcription model will do — a chat model handed
+     * audio answers something, and what it answers is not a transcript.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceTranscriptionModel(@Argument workspaceId: Long, @Argument modelId: Long?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        val chosen = modelId?.let { models.model(it) ?: throw ModelNotFoundForWorkspaceException(it) }
+        if (chosen != null && chosen.workspaceId != workspaceId) throw ModelNotFoundForWorkspaceException(modelId)
+        if (chosen != null && chosen.kind != ModelKind.TRANSCRIPTION) {
+            throw ModelNotTranscriptionException(chosen.name)
+        }
+
+        workspace.transcriptionModelId = chosen?.id
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (chosen == null) "Transcription model cleared" else "Transcription model set to ${chosen.name}",
         )
         return workspace
     }
@@ -188,5 +218,10 @@ class WorkspaceNameTakenException(name: String) : RuntimeException("A workspace 
 class WorkspaceNameInvalidException : RuntimeException("A workspace name is required")
 
 /** A model chosen for a workspace has to be one of that workspace's own. */
+class ModelNotTranscriptionException(name: String) : RuntimeException(
+    "$name is not a transcription model. A microphone needs one that turns speech into text; " +
+        "add one under Models with the transcription kind.",
+)
+
 class ModelNotFoundForWorkspaceException(id: Long) :
     RuntimeException("No model with id $id in this workspace")

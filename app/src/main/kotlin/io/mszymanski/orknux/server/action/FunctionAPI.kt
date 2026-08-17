@@ -2,6 +2,9 @@ package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.variable.VariableNotFoundException
+import io.mszymanski.orknux.server.variable.VariableType
+import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
@@ -35,6 +38,7 @@ class FunctionAPI(
     private val conditions: WorkflowConditionRepository,
     private val scripts: ScriptRunner,
     private val workspaces: WorkspaceRepository,
+    private val variables: WorkspaceVariableRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
@@ -71,6 +75,7 @@ class FunctionAPI(
                 source = source,
                 returnType = input.returnType ?: ValueType.OBJECT,
                 params = input.params.orEmpty().toParams(),
+                externals = input.externalVariableIds.orEmpty().toExternals(input.workspaceId),
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -102,6 +107,7 @@ class FunctionAPI(
         }
         input.returnType?.let { function.returnType = it }
         input.params?.let { function.params = it.toParams() }
+        input.externalVariableIds?.let { function.externals = it.toExternals(function.workspaceId) }
         function.lastModifiedAt = OffsetDateTime.now()
         function.lastModifiedBy = currentUser()
 
@@ -152,6 +158,15 @@ class FunctionAPI(
         source = function.source,
         returnType = function.returnType,
         params = function.params.map { FunctionParamView(it.name, it.type) },
+        externals = function.externals.mapNotNull { held ->
+            variables.findByIdOrNull(held.variableId)?.let { variable ->
+                FunctionExternalView(
+                    variableId = requireNotNull(variable.id),
+                    name = variable.name,
+                    type = variable.type,
+                )
+            }
+        },
         signature = function.signature,
         lastModifiedAt = function.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = function.lastModifiedBy,
@@ -180,6 +195,18 @@ class FunctionAPI(
             }
         """.trimIndent()
     }
+
+    /**
+     * The variables this function is to be handed, checked against the workspace
+     * that owns it: a function cannot be given another workspace's secret by id.
+     */
+    private fun List<Long>.toExternals(workspaceId: Long): MutableList<FunctionExternal> = distinct()
+        .map { variableId ->
+            val variable = variables.findByIdOrNull(variableId) ?: throw VariableNotFoundException(variableId)
+            if (variable.workspaceId != workspaceId) throw VariableNotFoundException(variableId)
+            FunctionExternal(variableId = variableId)
+        }
+        .toMutableList()
 
     private fun List<FunctionParamInput>.toParams(): MutableList<FunctionParam> = map { param ->
         val name = param.name.trim()
@@ -215,6 +242,8 @@ data class CreateFunctionInput(
     val source: String? = null,
     val returnType: ValueType? = null,
     val params: List<FunctionParamInput>? = null,
+    /** Which of the workspace's variables it is handed, in order. */
+    val externalVariableIds: List<Long>? = null,
 )
 
 data class UpdateFunctionInput(
@@ -223,9 +252,18 @@ data class UpdateFunctionInput(
     val source: String? = null,
     val returnType: ValueType? = null,
     val params: List<FunctionParamInput>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val externalVariableIds: List<Long>? = null,
 )
 
 data class FunctionParamView(val name: String, val type: ValueType)
+
+/** A variable the function is handed, as the editor shows it. */
+data class FunctionExternalView(
+    val variableId: Long,
+    val name: String,
+    val type: VariableType,
+)
 
 data class FunctionView(
     val id: Long,
@@ -235,6 +273,8 @@ data class FunctionView(
     val source: String,
     val returnType: ValueType,
     val params: List<FunctionParamView>,
+    /** The workspace's variables it is handed, after the parameters it declares. */
+    val externals: List<FunctionExternalView>,
     /** "(input: object, format: string)", ready for the list. */
     val signature: String,
     val lastModifiedAt: String,

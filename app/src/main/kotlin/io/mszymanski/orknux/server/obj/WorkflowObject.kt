@@ -63,8 +63,8 @@ class ObjectProperty(
 /**
  * A named data structure the workspace can point at.
  *
- * The reason it exists is mappings: `{{input.text}}` typed into a node is
- * unchecked and unofferable until something knows what the event carries. An
+ * The reason it exists is references: a field a node points at is unchecked and
+ * unofferable until something knows what the event carries. An
  * object is that something, and one definition serves a trigger's output, a
  * function's argument and an agent's structured answer alike.
  *

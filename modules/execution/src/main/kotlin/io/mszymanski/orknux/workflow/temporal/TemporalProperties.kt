@@ -13,6 +13,15 @@ data class TemporalProperties(
     /** host:port of the Temporal frontend. */
     val target: String = "localhost:7233",
     val namespace: String = "default",
+    /**
+     * Where Temporal's own web interface is, if it is running.
+     *
+     * Only used to build links out to it: what a run did step by step is
+     * Temporal's history, and there is no reason to rebuild that screen here.
+     * Null means no links are offered, which is right for a deployment that
+     * does not expose it.
+     */
+    val uiUrl: String? = null,
     /** Workers poll this queue; the workflow is started on it. */
     val taskQueue: String = "orknux-workflow",
     /**

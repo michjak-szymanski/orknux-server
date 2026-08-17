@@ -42,7 +42,7 @@ class TemporalExecutionEngine(
                 .setTaskQueue(properties.taskQueue)
                 // One workflow per recorded run, which also means asking twice
                 // for the same run cannot start it twice.
-                .setWorkflowId("$WORKFLOW_ID_PREFIX$executionId")
+                .setWorkflowId(temporalWorkflowId(executionId))
                 .setWorkflowExecutionTimeout(Duration.ofHours(properties.runTimeoutHours))
                 .build(),
         )
@@ -57,8 +57,12 @@ class TemporalExecutionEngine(
 
         return plan.execution
     }
-
-    private companion object {
-        const val WORKFLOW_ID_PREFIX = "orknux-execution-"
-    }
 }
+
+/**
+ * What Temporal calls the workflow that runs one recorded execution.
+ *
+ * Derived rather than stored, and shared, because two things need to agree on
+ * it: the engine that starts the run, and whatever wants to link to it.
+ */
+fun temporalWorkflowId(executionId: Long): String = "orknux-execution-$executionId"

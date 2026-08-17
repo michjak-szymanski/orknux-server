@@ -21,9 +21,9 @@ import org.springframework.transaction.annotation.Transactional
  * A workspace's action catalogue: the blocks its workflows are built from.
  *
  * What an action needs and what it produces are not stored. They are read off
- * its settings — a `{{input.name}}` in the content is an input the moment it is
- * typed, and what an action produces follows from what it does — so the two
- * cannot drift from the settings the way a second copy would.
+ * its settings — the arguments of the function it calls are what it needs, and
+ * what it produces follows from what it does — so the two cannot drift from the
+ * settings the way a second copy would.
  */
 @Controller
 class ActionAPI(
@@ -79,6 +79,7 @@ class ActionAPI(
                 timeoutSeconds = input.timeoutSeconds,
                 retryIntervalSeconds = input.retryIntervalSeconds,
                 durationSeconds = input.durationSeconds,
+                icon = input.icon?.trim()?.ifEmpty { null },
             ).also(::validate),
         )
 
@@ -117,6 +118,9 @@ class ActionAPI(
         input.timeoutSeconds?.let { action.timeoutSeconds = it }
         input.retryIntervalSeconds?.let { action.retryIntervalSeconds = it }
         input.durationSeconds?.let { action.durationSeconds = it }
+        // Sent every time the form is saved, so null is "no icon" rather than
+        // "not mentioned" — which is what lets Clear clear it.
+        action.icon = input.icon?.trim()?.ifEmpty { null }
         validate(action)
 
         val message = if (previousName == action.name) {
@@ -169,6 +173,7 @@ class ActionAPI(
             timeoutSeconds = action.timeoutSeconds,
             retryIntervalSeconds = action.retryIntervalSeconds,
             durationSeconds = action.durationSeconds,
+            icon = action.icon,
             inputParams = parameters.inputsOf(action),
             outputParams = parameters.outputsOf(action),
         )
@@ -238,6 +243,26 @@ class ActionAPI(
                 if ((action.durationSeconds ?: 0) <= 0) throw ActionSettingMissingException("a duration in seconds")
             }
         }
+
+        refuseHolders("the message", action.content)
+        refuseHolders("who it goes to", action.targetName)
+        refuseHolders("the URL", action.url)
+        refuseHolders("the headers", action.headers)
+        action.mappings.forEach { refuseHolders("the argument ${it.argument}", it.expression) }
+    }
+
+    /**
+     * Nothing here is substituted, so nothing may look as though it is.
+     *
+     * A setting is used exactly as written. `{{input.text}}` used to mean "put
+     * the incoming text here" and now means those fourteen characters, so a
+     * definition holding one would seed nodes that send it verbatim — which is
+     * how a workflow came to reply `{{llmResult}}` to somebody. A node says what
+     * varies now: leave the setting empty and the node reads the field by name,
+     * or point its parameter at any field the run is carrying.
+     */
+    private fun refuseHolders(setting: String, written: String?) {
+        if (written?.contains("{{") == true) throw ActionHoldsPlaceholderException(setting)
     }
 
     private fun List<ArgumentMappingInput>.toMappings(): MutableList<ArgumentMapping> = this
@@ -284,6 +309,8 @@ data class CreateActionInput(
     val timeoutSeconds: Int? = null,
     val retryIntervalSeconds: Int? = null,
     val durationSeconds: Int? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class UpdateActionInput(
@@ -304,6 +331,8 @@ data class UpdateActionInput(
     val timeoutSeconds: Int? = null,
     val retryIntervalSeconds: Int? = null,
     val durationSeconds: Int? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class ArgumentMappingView(val argument: String, val expression: String)
@@ -338,6 +367,8 @@ data class ActionView(
     val timeoutSeconds: Int?,
     val retryIntervalSeconds: Int?,
     val durationSeconds: Int?,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String?,
     /** Read off the settings, not stored; see `ActionAPI.inputsOf`. */
     val inputParams: List<ActionParamView>,
     val outputParams: List<ActionParamView>,

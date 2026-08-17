@@ -30,25 +30,55 @@ enum class NodeKind {
 
     /** Asks one of the workspace's conditions; the run stops when it does not hold. */
     CONDITION,
-    DATA_TASK,
-    PUBLISH_TASK,
+
+    /** Makes an object out of what the run is carrying, and hands it on. */
+    OBJECT,
 }
 
 /**
  * One parameter of a node, and where its value comes from.
  *
- * `{{input.x}}` reads what arrived along the edge; anything else is a literal,
- * which is what lets a node be given a fixed value without anything upstream
- * having to produce one.
+ * Either the value itself, used exactly as written, or the name of a field the
+ * run is carrying, read when the step runs. Which of the two it is, is the
+ * mode — not something guessed from how the text looks.
  */
 @Embeddable
 class NodeMapping(
     @Column(name = "name", nullable = false, length = 64)
     var name: String = "",
 
+    /**
+     * The value itself, or the field it is read from.
+     *
+     * Which one depends on [mode]. A written value is used as it stands; a
+     * reference names a field the run is carrying — `reply`, `message.channel` —
+     * and is read when the step runs.
+     */
     @Column(name = "expression", nullable = false, columnDefinition = "text")
     var expression: String = "",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode", nullable = false, length = 16)
+    var mode: MappingMode = MappingMode.VALUE,
+
+    /**
+     * Which node produces the referenced field, on a reference.
+     *
+     * Not used to read the value — the run carries everything under one set of
+     * names, so the field name is enough — but it is what lets the canvas draw a
+     * line from the node that made it, and what makes a reference to a node that
+     * has been deleted something we can point at rather than a name that quietly
+     * resolves to nothing.
+     */
+    @Column(name = "source_node_key", length = 64)
+    var sourceNodeKey: String? = null,
 )
+
+/** Whether a parameter holds something written or something read. */
+enum class MappingMode {
+    VALUE,
+    REFERENCE,
+}
 
 @Entity
 @Table(name = "workflow_node")
@@ -92,6 +122,30 @@ class WorkflowNode(
     var triggerId: Long? = null,
 
     /**
+     * What this node calls what it produces, so a later node can ask for it by
+     * name.
+     *
+     * An agent answers with prose, which has no fields to address. Naming the
+     * answer is what a later node points a reference at: the step's output
+     * becomes an object with this one key. Null means the answer is
+     * handed on as it always was, unwrapped, which is what a node drawn before
+     * this existed still does.
+     */
+    @Column(name = "output_name", length = 60)
+    var outputName: String? = null,
+
+    /**
+     * Which icon the canvas draws on this node.
+     *
+     * A name from the interface's own set rather than a file or a URL: a graph
+     * is read at a glance, and a node that draws whatever someone pasted is a
+     * node that can draw nothing, or something enormous. Null keeps the plain
+     * node the kind already gives.
+     */
+    @Column(name = "icon", length = 40)
+    var icon: String? = null,
+
+    /**
      * What this node passes to the thing it points at, one entry per parameter.
      *
      * Seeded from the catalogue entry when the node first points at one, and
@@ -114,6 +168,16 @@ class WorkflowNode(
     /** The condition a [NodeKind.CONDITION] node asks of the run it is in. */
     @Column(name = "condition_id")
     var conditionId: Long? = null,
+
+    /**
+     * The shape an object node makes, when it uses one the workspace has saved.
+     *
+     * Null is a shape of the node's own: its fields are whatever it holds. A
+     * saved one fixes the field names, the way an action fixes its parameters,
+     * and the node only decides what goes in them.
+     */
+    @Column(name = "object_id")
+    var objectId: Long? = null,
 
     @Column(name = "position_x", nullable = false)
     var positionX: Double,

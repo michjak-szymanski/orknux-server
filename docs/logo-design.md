@@ -1,6 +1,7 @@
 # Orknux — Logo Design
 
-Status: direction agreed, second sheet drawn (`logo2.png`), close to final.
+Status: design approved as the vector set (`orknux_brand_board.svg` and
+siblings), with four animated variants. Not yet applied to any product.
 
 ## The name
 
@@ -115,32 +116,126 @@ and the two-colour split.
 - exact palette, clear-space rule, minimum size, and a terminal treatment that
   uses the tagline well ("Orknux orchestration kernel").
 
-### Still open on the mark
+## Vector set — the design as agreed
 
-- **The tusks are horns.** Across both sheets they rise clear of the hexagon as
-  separate spikes rather than being extended vertices. This is the one place the
-  drawing overrides the brief above, and at small sizes the hollow amber variant
-  reads as a cat or devil face. Either pull them down into the silhouette, or
-  decide deliberately that the creature reading is wanted and amend this document
-  — but not leave the two in contradiction.
-- **The node triad reads as the standard "share" glyph.** Three dots joined by
-  two strokes is the Android share icon; in a UI toolbar this will be misread as
-  an action rather than a brand. Worth rotating so no node sits dead top, or
-  weighting the edges heavier than the nodes.
-- **The 16px minimum is optimistic for the primary mark.** The sheet's own 16px
-  sample shows the nodes merging. Honest rule: hollow nut below ~24px, primary
-  above.
-- **The crossed-tusk `x` is too fine to shrink.** It reads as crossed blades at
-  large sizes, which is fine, but its strokes thin to near-nothing at favicon
-  scale, where the solid marks hold. Needs a heavier small-size cut.
-- **"Angular Grotesk" is a description, not a font.** The actual typeface has to
-  be named and licensed before anything ships, or the wordmark is not
-  reproducible.
+`orknux_brand_board.svg`, `orknux_logo.svg`, `orknux_icon.svg`. **This is the
+approved design.** It settles what the sheets left contradictory:
+
+- **The tusks are integrated.** They lift out of the upper vertices with a notch
+  between them rather than protruding as separate spikes, so the silhouette stays
+  a hexagon. The creature reading survives; the mascot reading does not.
+- **The triad is a closed, rotated triangle.** No node sits dead top, so it no
+  longer collides with the Android share glyph.
+- **The size ladder is explicit**: primary at 24px+, hollow below 24px, outline
+  at 16px. The mark sheds interior detail as it shrinks instead of trying to
+  survive intact.
+- Palette, clear space, terminal and app-icon treatments are all codified.
+
+### Motion
+
+Four animated variants, all built on the same geometry:
+
+| file | motion | use |
+| --- | --- | --- |
+| `orknux_kernel_pulse_animated.svg` | triad breathes, edges brighten | idle / hero |
+| `orknux_loader_centered_graph_slow_rotate.svg` | dash chases the triad perimeter while the whole graph turns once every 10s | pending work |
+| `orknux_orchestration_route_animated.svg` | edges draw in sequence, amber ping at the kernel | a run firing |
+| `orknux_mechanical_lockup_animated.svg` | mark settles into place, wordmark slides in | intro / splash |
+
+The route animation is the one that earns its keep: it shows what the product
+does — nodes resolving in order, then a run firing — rather than decorating.
+
+Adjustments made to the set as delivered:
+
+- **The lockup's mark was rendering in the corner at the wrong size.** `#mark`
+  carried both a `transform` attribute and a CSS `transform` animation; the
+  animated CSS value replaces the attribute outright, so `translate(70 55)
+  scale(1.55)` was discarded for the whole loop. Placement now lives on an outer
+  group and only the inner group animates.
+- **`prefers-reduced-motion` added** to the pulse, route and lockup — the loader
+  already had it. The route needed more than `animation:none`: its resting state
+  is invisible, so the guard restores the finished graph rather than blanking it.
+- **Per-edge dash lengths in the route.** All three edges shared
+  `stroke-dasharray:55` while measuring 31.3, 34.2 and 49.4, so the short ones sat
+  idle before drawing. Each now dashes to its own length.
+- **Loader seam.** `18 50` did not tile the ~114.87 perimeter; `15 42.43` cycles
+  it exactly twice.
+
+The loader was then replaced by a centred, slowly rotating cut. The triad's
+centroid is (104.667, 116.667) and the kernel void is at (100, 109), so its
+`translate(-4.667, -7.667)` lands the graph exactly on centre, and the farthest
+node sits 26.3 units out — 11.9 more at peak pulse — comfortably inside the
+47-unit hole, so the rotation never clips. It also correctly keeps the static
+`translate` and the animated `rotate` on separate elements, which is the trap
+the lockup fell into. The dash-tiling and reduced-motion fixes above were
+re-applied to it, having not carried over from the file it replaced.
+
+### Still open
+
+- **The wordmark is not reproducible.** `orknux_logo.svg` sets live `<text>` in
+  `"Noto Sans","DejaVu Sans",Arial,sans-serif`. Without Noto Sans installed the
+  letterforms silently change. Convert the wordmark to paths, or name and license
+  a real face — and note the brief asked for an *angular* grotesk, where Noto and
+  Arial are neutral humanist ones, so that choice is currently defaulted rather
+  than made.
+- **No transparent-ground logo.** `orknux_logo.svg` bakes in an opaque `#0D1518`
+  rect, so it shows a dark slab on any other surface.
+- **No dark-ink variant.** The board's ONE COLOR panel labels a near-white
+  (`#eeeeea`) mark as "light background", where it would be invisible. Both
+  one-color variants are light-on-dark. The nut hole is also a hardcoded
+  `#0D1518` disc rather than a knockout, which is what prevents a true
+  single-color version.
+- **`orknux_icon.svg` exports the primary mark only**, at 512px. The hollow and
+  outline variants exist inside the board but not as standalone files, so the
+  favicon sizes the ladder calls for cannot be produced from what is there.
+- **`orkx` has no mark.** The crossed-tusk `x` was in `logo2.png` but did not
+  make it into the vector set.
 
 ## Open
 
-- Iron-moss vs. molten amber as *the* primary not finally decided; the sheets
-  treat green as primary and amber as the variant, which is the right way round.
+- Iron-moss is the primary and molten amber the accent — settled by the vector
+  set, which uses moss for the mark and reserves amber for the hollow variant and
+  the "run fired" ping.
+- The **wordmark typeface** is the one design decision still genuinely open, and
+  it blocks `orknux-logo.svg` being reproducible. Everything else below is
+  applied.
+
+## Production cuts
+
+`docs/brand/` holds the files meant for use, derived from the board:
+
+| file | what it is |
+| --- | --- |
+| `orknux-mark.svg` | primary, 24px and up, transparent void |
+| `orknux-mark-hollow.svg` | small cut, below 24px |
+| `orknux-mark-mono.svg` | one colour via `currentColor` — works on either ground |
+| `orknux-logo.svg` | horizontal lockup, transparent ground |
+| `orkx-mark.svg` | the crossed tusks, drawn as filled tapers so they hold at 16px |
+
+Three things these fix relative to the board: the kernel void is a mask knockout
+rather than a disc painted in the background colour, so a mark can sit on any
+surface; the one-colour cut inherits `currentColor` instead of being near-white
+only, which is what the board's "light background" variant claimed to be and was
+not; and `orkx` has a mark at all.
+
+## Applied
+
+**UI** (`orknux-ui`)
+
+- `public/favicon.svg` and the `<link rel="icon">` that was missing entirely.
+- The top-bar and sign-in marks, which were both a generic `file-code` icon
+  standing in for a logo.
+- `components/Loader.tsx` — the rotating-graph loader as a component, adopted at
+  all 23 loading sites across 19 pages. The surrounding `<p>` is kept at each
+  site so the pages' own padding and borders survive. It carries a `role` of
+  status, announces politely rather than interrupting, and stops under
+  `prefers-reduced-motion` with the mark left whole.
+
+**Website** (`orknux-website`)
+
+- `static/favicon.svg` only, replacing the violet three-node placeholder. The
+  inline wordmark in `templates/fragments/site.html` is still that placeholder —
+  another agent owns this repo, so it was left alone.
 - Unrelated to the mark, but noted here because it came out of the same test:
   verbal transmission will produce `orcnux` spellings. Worth checking whether
   `orcnux.com` / `.io` are free, as redirects.

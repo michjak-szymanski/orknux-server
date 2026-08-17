@@ -40,7 +40,7 @@ Flyway migrates the schema on start; JPA runs with `ddl-auto: validate`, so the
 migrations are the only thing that changes the database. One process means one
 database and one migration history, in `app/src/main/resources/db/migration`.
 
-Sign in with a directory user from `docker/ldap/bootstrap.ldif`:
+Sign in with a directory user from `docker/ldap/bootstrap.ldif`: 
 
 | user    | password   | groups                          |
 |---------|------------|---------------------------------|

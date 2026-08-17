@@ -197,6 +197,8 @@ data class ExecutionDetailView(
     val finishedAt: String?,
     val durationSeconds: Int?,
     val error: String?,
+    /** What the run was started on, so it can be run again on the same thing. */
+    val input: String? = null,
     /** The node that ended the run early, and what it said; null for a full run. */
     val stoppedAtNodeKey: String? = null,
     val stoppedReason: String? = null,
@@ -214,6 +216,7 @@ data class ExecutionDetailView(
         finishedAt = execution.finishedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         durationSeconds = execution.finishedAt?.let { seconds(execution.startedAt, it) },
         error = execution.error,
+        input = execution.input,
         stoppedAtNodeKey = execution.stoppedAtNodeKey,
         stoppedReason = execution.stoppedReason,
         steps = steps.map(::ExecutionStepView),

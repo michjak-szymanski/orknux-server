@@ -16,6 +16,10 @@ type Query {
     auditUsers: [String!]!
     "The health of the service and what it depends on. Administrators only."
     components: [Component!]!
+    "The switches that belong to the installation rather than to a workspace."
+    installationSettings: InstallationSettings!
+    "What was attached to one chat, oldest first."
+    chatAttachments(chatId: ID!): [ChatAttachment!]!
     "The admin default connections, ordered by name. Administrators only."
     connections(page: Int = 0, size: Int = 20): ConnectionPage!
     connection(id: ID!): Connection
@@ -56,6 +60,8 @@ type Query {
     supportedTriggerActions: [TriggerAction!]!
     "What a trigger has done, newest first — including the firings no run came of."
     triggerFirings(triggerId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
+    "What every trigger in one workspace has done, newest first."
+    workspaceTriggerFirings(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
     "Agents configured by a workspace, ordered by name."
     workspaceAgents(workspaceId: ID!, page: Int = 0, size: Int = 20): AgentPage!
     "The JavaScript tools a workspace's agents may call, ordered by name."
@@ -63,6 +69,8 @@ type Query {
     tool(id: ID!): Tool
     "The chats the caller holds in this workspace: pinned first, then most recent."
     chatSessions(workspaceId: ID!): [ChatSession!]!
+    "Which of the caller's chats said this; for searching inside them rather than by name."
+    chatsMentioning(workspaceId: ID!, text: String!): [ID!]!
     chatSession(id: ID!): ChatSession
     "Everything said in one chat, oldest first, as Spring AI's store kept it."
     chatMessages(id: ID!): [ChatMessage!]!
@@ -92,6 +100,21 @@ type Query {
     memoryAuthors(catalogId: ID!): [String!]!
     "The workspace's objects: the shapes its workflows pass around."
     workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20): ObjectPage!
+    "The workspace's catalogs, by name, each with what it holds."
+    variableCatalogs(workspaceId: ID!): [VariableCatalog!]!
+    """
+    The workspace's variables: named values its functions are handed. A catalogId
+    narrows it to one catalog; a blank search is no filter rather than a search for
+    nothing. Values are never returned.
+    """
+    workspaceVariables(
+        workspaceId: ID!,
+        catalogId: ID,
+        search: String,
+        page: Int = 0,
+        size: Int = 20
+    ): VariablePage!
+    variable(id: ID!): Variable
     workflowObject(id: ID!): WorkflowObject
     agent(id: ID!): Agent
     "Everything that happened inside one workspace, newest first."
@@ -111,6 +134,8 @@ type Query {
     workflowGraph(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
     "What a node would pass if pointed at this action: the seed the editor shows."
     actionParameterDefaults(workspaceId: ID!, actionId: ID!): [NodeMapping!]!
+    "What the graph on screen needs, gives and is wrong about, without saving it."
+    workflowGraphPreview(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
     "What one run did: the graph as it ran, per-node outcome, and its log."
     execution(id: ID!): ExecutionDetail
     "Runs of a workspace's workflows, newest first."
@@ -127,6 +152,15 @@ type Query {
 }
 
 type Mutation {
+    "Turns attachments on or off for the whole installation. Administrators only."
+    setAttachmentsEnabled(enabled: Boolean!): InstallationSettings!
+    "Turns the chat on or off for the whole installation. Administrators only."
+    setChatEnabled(enabled: Boolean!): InstallationSettings!
+    """
+    Says which chat uploaded files belong to. Sent when the message is, since a
+    first message is what makes the chat.
+    """
+    attachToChat(chatId: ID!, attachmentIds: [ID!]!): [ChatAttachment!]!
     createWorkspace(input: CreateWorkspaceInput!): Workspace!
     "Saves the workspace settings form: name, description and directory group."
     updateWorkspace(id: ID!, input: UpdateWorkspaceInput!): Workspace!
@@ -141,6 +175,21 @@ type Mutation {
     "Replaces the whole graph and puts the workflow back into draft."
     saveWorkflowGraph(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
     publishWorkflow(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
+    "Creates a catalog: a folder for the workspace's variables."
+    createVariableCatalog(workspaceId: ID!, name: String!): VariableCatalog!
+    renameVariableCatalog(id: ID!, name: String!): VariableCatalog!
+    "Removes an empty catalog; what is in it is removed one variable at a time."
+    deleteVariableCatalog(id: ID!): Boolean!
+    "Creates a variable. The value is stored encrypted and never read back."
+    createVariable(input: CreateVariableInput!): Variable!
+    "Saves the variable form. A null value leaves what is stored alone."
+    updateVariable(id: ID!, input: UpdateVariableInput!): Variable!
+    """
+    Answers with what a secret holds, and records that somebody asked. A value
+    comes back with the list; a secret only ever comes back through here.
+    """
+    revealVariable(id: ID!): String
+    deleteVariable(id: ID!): Boolean!
     createAgent(input: CreateAgentInput!): Agent!
     "Saves the agent settings form."
     updateAgent(id: ID!, input: UpdateAgentInput!): Agent!
@@ -155,6 +204,8 @@ type Mutation {
     deleteTool(id: ID!): Boolean!
     "Chooses the model for the workspace's own small jobs. Null clears it."
     setWorkspaceCompanionModel(workspaceId: ID!, modelId: ID): Workspace!
+    "Chooses the model the workspace hears with; null takes the microphone away."
+    setWorkspaceTranscriptionModel(workspaceId: ID!, modelId: ID): Workspace!
 
     createObject(input: CreateObjectInput!): WorkflowObject!
     "Backs the object editor: the properties on the left, the details on the right."
@@ -203,6 +254,12 @@ type Mutation {
     deleteConnection(id: ID!): Boolean!
     "Adds a connection that belongs to this workspace alone."
     createWorkspaceConnection(input: CreateWorkspaceConnectionInput!): WorkspaceConnection!
+    """
+    Makes an admin default out of a connection one workspace set up: its name,
+    kind and URL. Credentials stay with the workspace, as they do for every
+    default. Administrators only.
+    """
+    exportWorkspaceConnectionAsDefault(id: ID!, addToExistingWorkspaces: Boolean): Connection!
     "Saves the connection settings form; inherited fields are left to the default."
     updateWorkspaceConnection(id: ID!, input: UpdateWorkspaceConnectionInput!): WorkspaceConnection!
     "Clears the workspace's credentials; a workspace-owned connection is removed outright."
@@ -271,6 +328,11 @@ type Workspace {
     was said. Null means those jobs do not happen.
     """
     companionModelId: ID
+    """
+    The model the microphone in a chat speaks to. Null means it is not offered,
+    which is right where there is nothing to transcribe with.
+    """
+    transcriptionModelId: ID
 }
 
 input CreateWorkspaceInput {
@@ -316,8 +378,8 @@ enum NodeKind {
     ACTION
     "Asks one of the workspace's conditions; the run stops when it does not hold."
     CONDITION
-    DATA_TASK
-    PUBLISH_TASK
+    "Makes an object out of what the run is carrying, and hands it on."
+    OBJECT
 }
 
 type WorkflowNode {
@@ -334,6 +396,15 @@ type WorkflowNode {
     actionId: ID
     "The condition a CONDITION node asks, if it names one."
     conditionId: ID
+    "The saved shape an OBJECT node makes; null is a shape of the node's own."
+    objectId: ID
+    """
+    What this node calls what it produces, so a later node can point a
+    reference at it. Null hands the output on unchanged.
+    """
+    outputName: String
+    "Which icon the canvas draws on this node; a name from the interface's own set."
+    icon: String
     x: Float!
     y: Float!
     "What the node needs, read off whatever it points at."
@@ -348,11 +419,20 @@ type WorkflowNode {
     mappings: [NodeMapping!]!
 }
 
-"One parameter of a node, and where its value comes from."
+"Whether a parameter holds something written or something read from the run."
+enum MappingMode {
+    VALUE
+    REFERENCE
+}
+
+"One parameter of a node, and what fills it."
 type NodeMapping {
     name: String!
-    "`{{input.x}}` takes it from upstream; anything else is a literal."
+    "The written value, or the field a reference reads — `reply`, `trigger.channel`."
     expression: String!
+    mode: MappingMode!
+    "Which node produces the referenced field; what the canvas draws a line from."
+    sourceNodeKey: String
 }
 
 type WorkflowEdge {
@@ -397,6 +477,12 @@ input WorkflowNodeInput {
     actionId: ID
     "The condition a CONDITION node asks; ignored on any other kind."
     conditionId: ID
+    "The saved shape an OBJECT node makes; null is a shape of the node's own."
+    objectId: ID
+    "What this node calls what it produces; a later node points a reference at it."
+    outputName: String
+    "Which icon the canvas draws on this node; a name from the interface's own set."
+    icon: String
     """
     What this node passes to its action. Omitted leaves it to the action's own
     suggestions, which is what a node freshly pointed at one wants. Names the
@@ -410,6 +496,8 @@ input WorkflowNodeInput {
 input NodeMappingInput {
     name: String!
     expression: String!
+    mode: MappingMode = VALUE
+    sourceNodeKey: String
 }
 
 input WorkflowEdgeInput {
@@ -489,8 +577,8 @@ type WorkspaceWorkflowPage {
     totalPages: Int!
 }
 
+"There is one kind of agent; every agent may call tools, and which ones is configured per agent."
 enum AgentType {
-    REACT
     LLM
 }
 
@@ -514,6 +602,8 @@ type Agent {
     skillCatalogs: [String!]!
     "Which of the workspace's tools it may call."
     tools: [String!]!
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 type AgentPage {
@@ -730,6 +820,8 @@ input CreateAgentInput {
     type: AgentType!
     description: String
     systemPrompt: String
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 input UpdateAgentInput {
@@ -747,6 +839,8 @@ input UpdateAgentInput {
     skillCatalogs: [String!]
     "Which tools it may call; null leaves the grant alone."
     tools: [String!]
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 enum WorkspaceOperationType {
@@ -762,6 +856,12 @@ enum WorkspaceAuditCategory {
     INTEGRATION
     "LLM providers, the models reached through them, and their quotas."
     MODEL
+    "Memory catalogs, and what the workspace has written down in them."
+    MEMORY
+    "The shapes a workspace's workflows pass around."
+    OBJECT
+    "What happens inside a chat: files attached to a message, and the like."
+    CHAT
 }
 
 type WorkspaceAuditEntry {
@@ -968,6 +1068,8 @@ enum ModelKind {
     CHAT
     EMBEDDING
     COMPLETION
+    "Speech in, text out: what the microphone in a chat is handed to."
+    TRANSCRIPTION
 }
 
 "How often a token quota starts again; NEVER makes it a total rather than a rate."
@@ -1216,6 +1318,127 @@ type ExecutionDetail {
     steps: [ExecutionStep!]!
     edges: [WorkflowEdge!]!
     logs: [ExecutionLogLine!]!
+    "Temporal's own screen for this run; null when there is nowhere to send anybody."
+    temporalUrl: String
+}
+
+"What a variable holds. Scalars only: a shape belongs in the object catalogue."
+enum VariableType {
+    STRING
+    NUMBER
+    BOOLEAN
+}
+
+"""
+Whether a variable is something to keep out of sight. Both are encrypted at
+rest; what differs is the screen.
+"""
+enum VariableKind {
+    "Read with the list: a channel name, a threshold, a URL."
+    VALUE
+    "Shown only when somebody asks, and the asking is recorded."
+    SECRET
+}
+
+"A folder of variables."
+type VariableCatalog {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    "What the count badge shows, so an empty catalog reads as empty."
+    variableCount: Int!
+    createdAt: String!
+    createdBy: String!
+}
+
+"A named value a workspace keeps. The value itself never leaves the server."
+type Variable {
+    id: ID!
+    workspaceId: ID!
+    catalogId: ID!
+    catalogName: String!
+    name: String!
+    "What it is for, since the name has to be an identifier."
+    description: String
+    type: VariableType!
+    kind: VariableKind!
+    "What it holds, on a value. Null on a secret, whatever is stored."
+    value: String
+    "Whether anything is stored, which is all a secret says about itself."
+    valueSet: Boolean!
+    createdAt: String!
+    "Who put it there; the person who knows what it is for."
+    createdBy: String!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type VariablePage {
+    content: [Variable!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
+input CreateVariableInput {
+    workspaceId: ID!
+    "Which catalog holds it; every variable is in one."
+    catalogId: ID!
+    name: String!
+    description: String
+    type: VariableType!
+    "Whether it may be read with the list, or only on request."
+    kind: VariableKind! = SECRET
+    value: String
+}
+
+input UpdateVariableInput {
+    "Moves it to another catalog; null leaves it where it is."
+    catalogId: ID
+    name: String
+    description: String
+    type: VariableType
+    "Whether it may be read with the list, or only on request."
+    kind: VariableKind
+    "Null leaves the stored value alone."
+    value: String
+}
+
+"How a webhook decides whether its caller may start anything."
+enum WebhookAuthType {
+    "Knowing the path and the shape is enough."
+    NONE
+    "One of the workspace's functions is asked, and answers yes or no."
+    FUNCTION
+}
+
+"A file somebody attached to a chat. The bytes are wherever the storage put them."
+type ChatAttachment {
+    id: ID!
+    filename: String!
+    contentType: String!
+    sizeBytes: Float!
+    uploadedBy: String!
+}
+
+"""
+What this installation allows, as the configuration file and the screen agree
+it. The file is the floor: what it forbids cannot be switched back on here.
+"""
+type InstallationSettings {
+    attachmentsEnabled: Boolean!
+    "False when the configuration file has said no, and the switch is not offered."
+    attachmentsConfigurable: Boolean!
+    "Where the bytes go; FILESYSTEM is the only one today."
+    attachmentStorage: String!
+    "The directory they are written under, shown so it can be checked."
+    attachmentLocation: String!
+    attachmentMaxFileSizeMb: Int!
+    "Whether this installation has a chat at all."
+    chatEnabled: Boolean!
+    "False when the configuration file has said no, and the switch is not offered."
+    chatConfigurable: Boolean!
 }
 
 "What a component reports about itself."
@@ -1249,6 +1472,8 @@ type Dependency {
     reachable: Boolean!
     "What the check saw, ready to show."
     detail: String!
+    "Its own interface, for the ones that have one."
+    url: String
 }
 
 "What starts a workflow."
@@ -1257,6 +1482,8 @@ enum TriggerType {
     INCOMING_CONNECTION
     "The clock, on a cron expression."
     SCHEDULED
+    "A request arriving at a URL this installation answers on."
+    WEBHOOK
 }
 
 "The event on a connection that starts the workflow."
@@ -1270,6 +1497,17 @@ enum TriggerAction {
 
 "One entry in a workspace's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
 type Trigger {
+    "How a webhook decides whether its caller may start anything."
+    authType: WebhookAuthType!
+    "The function that answers that, when one does."
+    authFunctionId: ID
+    authFunctionName: String
+    "Where a webhook answers, relative to this installation: `build/finished`."
+    webhookPath: String
+    "The shape a webhook's request has to have; anything else is answered 404."
+    objectId: ID
+    "What that shape is called, for the list."
+    objectName: String
     id: ID!
     workspaceId: ID!
     name: String!
@@ -1291,6 +1529,8 @@ type Trigger {
     source: String!
     "What the event is, ready to show: \"Mention\", or the cron expression."
     event: String!
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 """
@@ -1299,6 +1539,9 @@ came of: those appear nowhere else, which is what makes a working trigger and a
 silent one look alike.
 """
 type TriggerFiring {
+    "Which trigger did it; null where the list is one trigger's own."
+    triggerId: ID
+    triggerName: String
     id: ID!
     "ISO-8601."
     at: String!
@@ -1319,6 +1562,8 @@ enum FiringOutcome {
     UNDECIDED
     "Something went wrong starting a run."
     FAILED
+    "A webhook call that could not prove it was allowed to make one."
+    UNAUTHENTICATED
 }
 
 type TriggerFiringPage {
@@ -1338,6 +1583,14 @@ type TriggerPage {
 }
 
 input CreateTriggerInput {
+    "How a webhook decides whether its caller may start anything."
+    authType: WebhookAuthType
+    "The function that answers that; null when nothing does."
+    authFunctionId: ID
+    "Where a webhook answers, relative to this installation: `build/finished`."
+    webhookPath: String
+    "The shape a webhook's request has to have; anything else is answered 404."
+    objectId: ID
     workspaceId: ID!
     name: String!
     type: TriggerType!
@@ -1351,9 +1604,19 @@ input CreateTriggerInput {
     payload: String
     "Asked of the event before anything starts; null asks nothing."
     conditionId: ID
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 input UpdateTriggerInput {
+    "How a webhook decides whether its caller may start anything."
+    authType: WebhookAuthType
+    "The function that answers that; null when nothing does."
+    authFunctionId: ID
+    "Where a webhook answers, relative to this installation: `build/finished`."
+    webhookPath: String
+    "The shape a webhook's request has to have; anything else is answered 404."
+    objectId: ID
     name: String!
     connectionId: ID
     action: TriggerAction
@@ -1362,6 +1625,8 @@ input UpdateTriggerInput {
     payload: String
     "Asked of the event before anything starts; null asks nothing."
     conditionId: ID
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 "The shape of a value crossing between a workflow and a script."
@@ -1375,8 +1640,17 @@ enum ValueType {
     NONE
 }
 
+"A variable a function is handed, after the parameters it declares."
+type FunctionExternal {
+    variableId: ID!
+    name: String!
+    type: VariableType!
+}
+
 "A named piece of JavaScript a workspace wrote, run in a sandbox with no host, files or network."
 type Function {
+    "The workspace's variables it is handed, after the parameters it declares."
+    externals: [FunctionExternal!]!
     id: ID!
     workspaceId: ID!
     name: String!
@@ -1418,6 +1692,8 @@ input FunctionParamInput {
 }
 
 input CreateFunctionInput {
+    "Which of the workspace's variables it is handed, in order."
+    externalVariableIds: [ID!]
     workspaceId: ID!
     name: String!
     description: String
@@ -1428,6 +1704,8 @@ input CreateFunctionInput {
 }
 
 input UpdateFunctionInput {
+    "Which of the workspace's variables it is handed, in order."
+    externalVariableIds: [ID!]
     name: String
     description: String
     source: String
@@ -1510,6 +1788,8 @@ type Action {
     inputParams: [ActionParam!]!
     "What it hands on, which follows from what it does."
     outputParams: [ActionParam!]!
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 type ActionPage {
@@ -1545,6 +1825,8 @@ input CreateActionInput {
     timeoutSeconds: Int
     retryIntervalSeconds: Int
     durationSeconds: Int
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 input UpdateActionInput {
@@ -1565,6 +1847,8 @@ input UpdateActionInput {
     timeoutSeconds: Int
     retryIntervalSeconds: Int
     durationSeconds: Int
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 "What a condition asks about."
@@ -1620,6 +1904,8 @@ type Condition {
     memberNames: [String!]!
     "What it asks, in words; read off the definition rather than stored."
     description: String!
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 type ConditionPage {
@@ -1640,6 +1926,8 @@ input CreateConditionInput {
     functionId: ID
     values: [String!]
     members: [ID!]
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 input UpdateConditionInput {
@@ -1651,6 +1939,8 @@ input UpdateConditionInput {
     functionId: ID
     values: [String!]
     members: [ID!]
+    "Which icon a node drawn from this starts with; null draws the kind's own."
+    icon: String
 }
 
 """

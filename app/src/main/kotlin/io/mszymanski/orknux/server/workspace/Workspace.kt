@@ -34,4 +34,14 @@ class Workspace(
      */
     @Column(name = "companion_model_id")
     var companionModelId: Long? = null,
+
+    /**
+     * The model that turns speech into text, for the microphone in a chat.
+     *
+     * A workspace setting because it is about this installation's hardware —
+     * where Whisper is running — rather than about any one conversation. Null
+     * means the microphone is not offered: better than a button that fails.
+     */
+    @Column(name = "transcription_model_id")
+    var transcriptionModelId: Long? = null,
 )

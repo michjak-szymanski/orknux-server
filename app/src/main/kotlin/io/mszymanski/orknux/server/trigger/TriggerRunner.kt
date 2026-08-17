@@ -13,6 +13,7 @@ import io.mszymanski.orknux.workflow.execution.StartExecutionInput
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ObjectNode
 
@@ -44,7 +45,27 @@ class TriggerRunner(
      *   the schedule for a scheduled one.
      * @return how many runs were started.
      */
-    fun fire(trigger: WorkflowTrigger, context: Map<String, String?>): Int {
+    /**
+     * The same firing, for something that arrived as JSON rather than as a
+     * handful of strings.
+     *
+     * A webhook's body is the thing the workflow was written against, so it is
+     * carried in with its shape intact: a nested object stays an object, and a
+     * reference to `order.total` finds a number rather than the text of one.
+     */
+    fun fire(trigger: WorkflowTrigger, body: JsonNode): Int = fire(trigger) { input ->
+        if (body.isObject) {
+            body.properties().forEach { (name, value) -> input.set(name, value) }
+        }
+    }
+
+    fun fire(trigger: WorkflowTrigger, context: Map<String, String?>): Int = fire(trigger) { input ->
+        // What arrived describes this firing, so it wins.
+        context.forEach { (name, value) -> if (value != null) input.put(name, value) }
+    }
+
+    /** What both ways of firing have in common, once the input is decided. */
+    private fun fire(trigger: WorkflowTrigger, fill: (ObjectNode) -> Unit): Int {
         val triggerId = requireNotNull(trigger.id)
         val workflowIds = instances.findByTriggerId(triggerId)
             .map { it.workflowId }
@@ -57,7 +78,7 @@ class TriggerRunner(
             return 0
         }
 
-        val payload = inputFor(trigger, context)
+        val payload = inputFor(trigger, fill)
         val verdict = admits(trigger, payload)
         if (verdict != null) {
             record(trigger, verdict.outcome, verdict.detail)
@@ -119,6 +140,14 @@ class TriggerRunner(
     }
 
     /**
+     * One line in the trigger's log, written by something outside this class.
+     *
+     * The endpoint answers a machine, so a request it turned down leaves no
+     * trace anywhere a person looks. This is that trace.
+     */
+    fun note(trigger: WorkflowTrigger, outcome: FiringOutcome, detail: String) = record(trigger, outcome, detail)
+
+    /**
      * One line in the trigger's log.
      *
      * Never allowed to be the reason a firing fails: a run that started matters
@@ -144,15 +173,14 @@ class TriggerRunner(
      * so a function can be handed something to work on rather than a flat set of
      * strings about the trigger.
      */
-    private fun inputFor(trigger: WorkflowTrigger, context: Map<String, String?>): String {
+    private fun inputFor(trigger: WorkflowTrigger, fill: (ObjectNode) -> Unit): String {
         val input = trigger.payload
             ?.let { runCatching { mapper.readTree(it) }.getOrNull() }
             ?.takeIf { it.isObject }
             ?.let { (it as ObjectNode).deepCopy() }
             ?: mapper.createObjectNode()
 
-        // What arrived describes this firing, so it wins.
-        context.forEach { (name, value) -> if (value != null) input.put(name, value) }
+        fill(input)
         return mapper.writeValueAsString(input)
     }
 
@@ -163,7 +191,7 @@ class TriggerRunner(
                 workflowId = workflowId,
                 trigger = when (trigger.type) {
                     TriggerType.SCHEDULED -> ExecutionTrigger.SCHEDULE
-                    TriggerType.INCOMING_CONNECTION -> ExecutionTrigger.WEBHOOK
+                    TriggerType.INCOMING_CONNECTION, TriggerType.WEBHOOK -> ExecutionTrigger.WEBHOOK
                 },
                 payload = payload,
             ),

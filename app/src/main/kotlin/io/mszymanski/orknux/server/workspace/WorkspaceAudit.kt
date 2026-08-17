@@ -24,6 +24,9 @@ enum class WorkspaceAuditCategory {
 
     /** The shapes a workspace's workflows pass around. */
     OBJECT,
+
+    /** What happens inside a chat: files attached to a message, and the like. */
+    CHAT,
 }
 
 @Entity

@@ -318,10 +318,30 @@ class ModelService(
             requestsChange = change(totals.requests.toDouble(), before.requests.toDouble()),
             tokensChange = change(totals.tokens.toDouble(), before.tokens.toDouble()),
             latencyChange = change(totals.averageLatencyMillis, before.averageLatencyMillis),
-            series = current.map { ModelUsageDayView(it.day, it.requests, it.inputTokens + it.outputTokens) },
+            // Every day in the window, including the ones nothing happened on.
+            // Only the days with a row used to be sent, so a model used once was
+            // a series of one point — and a line through one point draws nothing,
+            // which is why a real request looked like no chart at all.
+            series = daily(from, today, current),
             periodStart = periodStart,
             periodTokens = inPeriod.tokens,
         )
+    }
+
+    /** One entry per day between the two, zero where nothing was recorded. */
+    private fun daily(from: LocalDate, to: LocalDate, recorded: List<ModelUsageDay>): List<ModelUsageDayView> {
+        val byDay = recorded.associateBy { it.day }
+        return generateSequence(from) { it.plusDays(1) }
+            .takeWhile { !it.isAfter(to) }
+            .map { day ->
+                val held = byDay[day]
+                ModelUsageDayView(
+                    day = day,
+                    requests = held?.requests ?: 0,
+                    tokens = held?.let { it.inputTokens + it.outputTokens } ?: 0,
+                )
+            }
+            .toList()
     }
 
     /**
@@ -561,6 +581,10 @@ data class ModelUsageView(
     val periodStart: LocalDate,
     val periodTokens: Long,
 ) {
-    /** True when nothing has been recorded, which the screen says rather than showing zeros as a result. */
-    val empty: Boolean get() = series.isEmpty()
+    /**
+     * True when nothing has been recorded, which the screen says rather than
+     * showing zeros as a result. Asked of the totals rather than the series:
+     * the series has an entry per day whether or not anything happened on it.
+     */
+    val empty: Boolean get() = requests == 0 && totalTokens == 0L
 }

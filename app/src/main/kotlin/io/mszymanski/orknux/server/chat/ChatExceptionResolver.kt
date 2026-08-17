@@ -20,6 +20,7 @@ class ChatExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ChatModelNotChosenException,
             is ChatModelUnusableException,
             is ChatAgentUnusableException,
+            is ChatDisabledException,
             -> ErrorType.BAD_REQUEST
 
             is ChatSessionNotFoundException -> ErrorType.NOT_FOUND

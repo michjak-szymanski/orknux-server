@@ -62,6 +62,7 @@ class ExecutionPlanner(
                     actionId = node.actionId,
                     conditionId = node.conditionId,
                     agentId = node.agentId,
+                    outputName = node.outputName,
                     // The run's own copy of what to pass; see ExecutionStep.
                     mappings = node.mappings.takeIf { it.isNotEmpty() }?.let(mapper::writeValueAsString),
                     x = node.x,

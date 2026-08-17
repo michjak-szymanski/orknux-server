@@ -7,6 +7,8 @@ import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.server.attachment.ChatAttachments
+import io.mszymanski.orknux.server.attachment.InstallationSettings
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.MediaType
@@ -27,6 +29,14 @@ import tools.jackson.databind.ObjectMapper
  */
 data class ChatStreamRequest @JsonCreator constructor(
     @JsonProperty("text") val text: String,
+    /**
+     * What was attached to this message, by id.
+     *
+     * Sent with the message rather than linked afterwards, because the model is
+     * called during the send: a picture that arrives after the answer is a
+     * picture the answer could not have seen.
+     */
+    @JsonProperty("attachmentIds") val attachmentIds: List<Long> = emptyList(),
 )
 
 /**
@@ -50,6 +60,8 @@ class ChatStreamAPI(
     private val conversation: AgentConversation,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
+    private val attachments: ChatAttachments,
+    private val settings: InstallationSettings,
     private val mapper: ObjectMapper,
 ) {
 
@@ -66,10 +78,13 @@ class ChatStreamAPI(
      */
     @PostMapping("/api/chats/{id}/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun stream(@PathVariable id: Long, @RequestBody request: ChatStreamRequest): StreamingResponseBody {
+        if (!settings.chatEnabled()) throw ChatDisabledException()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        val start = chats.beginSend(id, request.text)
+        // Tied to the chat here, and read for anything the model can look at.
+        val sent = attachments.attach(session, request.attachmentIds)
+        val start = chats.beginSend(id, request.text, attachments.imagesOf(sent))
 
         return StreamingResponseBody { out ->
             fun send(event: String, payload: Any) {

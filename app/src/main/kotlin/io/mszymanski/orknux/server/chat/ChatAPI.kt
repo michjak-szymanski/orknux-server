@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.chat
 
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.attachment.InstallationSettings
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -29,12 +30,24 @@ class ChatAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val agents: AgentRepository,
+    private val settings: InstallationSettings,
 ) {
 
     @QueryMapping
     fun chatSessions(@Argument workspaceId: Long): List<ChatSessionView> {
         requireWorkspaceAccess(workspaceId)
         return chats.sessions(workspaceId, currentUser()).map(::describe)
+    }
+
+    /**
+     * Which of the caller's chats said this, for the search that looks inside
+     * them. Off by default on the screen: most searches are for a chat by name,
+     * and looking through everything ever said is a different question.
+     */
+    @QueryMapping
+    fun chatsMentioning(@Argument workspaceId: Long, @Argument text: String): List<Long> {
+        requireWorkspaceAccess(workspaceId)
+        return chats.mentioning(workspaceId, currentUser(), text)
     }
 
     @QueryMapping
@@ -53,6 +66,7 @@ class ChatAPI(
 
     @MutationMapping
     fun startChat(@Argument input: StartChatInput): ChatSessionView {
+        requireChat()
         requireWorkspaceAccess(input.workspaceId)
         return describe(
             chats.start(
@@ -128,6 +142,7 @@ class ChatAPI(
     /** Sends, and answers. What comes back is the answer and what it cost in time. */
     @MutationMapping
     fun sendChatMessage(@Argument id: Long, @Argument text: String): ChatAnswerView {
+        requireChat()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
@@ -156,6 +171,17 @@ class ChatAPI(
             createdAt = session.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
             lastMessageAt = session.lastMessageAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         )
+    }
+
+    /**
+     * Refuses while the chat is switched off.
+     *
+     * Only the writes ask: turning the chat off stops new conversations, it
+     * does not make the ones already had unreadable, and an administrator
+     * switching it back on should find them where they were.
+     */
+    private fun requireChat() {
+        if (!settings.chatEnabled()) throw ChatDisabledException()
     }
 
     private fun currentUser(): String =

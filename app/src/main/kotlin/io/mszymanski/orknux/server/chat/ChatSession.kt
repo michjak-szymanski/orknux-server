@@ -91,6 +91,8 @@ class ChatTitleInvalidException : RuntimeException("A chat needs a title")
 
 class ChatMessageEmptyException : RuntimeException("There is nothing to send")
 
+class ChatDisabledException : RuntimeException("Chat is turned off for this installation")
+
 class ChatModelNotChosenException :
     RuntimeException("This chat has no model to answer with; choose one first")
 

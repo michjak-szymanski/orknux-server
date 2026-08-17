@@ -26,6 +26,15 @@ enum class FiringOutcome {
     CONDITION_DID_NOT_HOLD,
     UNDECIDED,
     FAILED,
+
+    /**
+     * A webhook call that could not prove it was allowed to make one.
+     *
+     * Recorded rather than dropped: a webhook whose caller has the wrong secret
+     * looks exactly like a webhook nobody is calling, and the difference is the
+     * whole of what somebody debugging it needs to know.
+     */
+    UNAUTHENTICATED,
 }
 
 /**
@@ -65,6 +74,9 @@ class TriggerFiring(
 interface TriggerFiringRepository : JpaRepository<TriggerFiring, Long> {
 
     fun findByTriggerIdOrderByAtDesc(triggerId: Long, pageable: Pageable): Page<TriggerFiring>
+
+    /** Everything that has fired in one workspace, newest first. */
+    fun findByWorkspaceIdOrderByAtDesc(workspaceId: Long, pageable: Pageable): Page<TriggerFiring>
 
     /** The one line the list shows against each trigger. */
     fun findFirstByTriggerIdOrderByAtDesc(triggerId: Long): TriggerFiring?

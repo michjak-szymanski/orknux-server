@@ -71,6 +71,7 @@ class ConditionAPI(
                 functionId = input.functionId,
                 values = input.values.orEmpty().clean(),
                 members = input.members.orEmpty().toMutableList(),
+                icon = input.icon?.trim()?.ifEmpty { null },
             ).also { validate(it, itsOwnId = null) },
         )
 
@@ -99,6 +100,9 @@ class ConditionAPI(
         input.functionId?.let { condition.functionId = it }
         input.values?.let { condition.values = it.clean() }
         input.members?.let { condition.members = it.toMutableList() }
+        // Sent whenever the form saves, so null is "no icon" rather than "not
+        // mentioned" — which is what lets Clear clear it.
+        condition.icon = input.icon?.trim()?.ifEmpty { null }
         // A composite has no property to ask about, and a simple one has no members.
         if (condition.composite) {
             condition.property = null
@@ -158,6 +162,7 @@ class ConditionAPI(
             functionName = function?.name,
             values = condition.values.toList(),
             members = condition.members.toList(),
+            icon = condition.icon,
             memberNames = names,
             description = sentence(condition, function?.name, names),
         )
@@ -334,6 +339,8 @@ data class CreateConditionInput(
     val functionId: Long? = null,
     val values: List<String>? = null,
     val members: List<Long>? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class UpdateConditionInput(
@@ -345,6 +352,8 @@ data class UpdateConditionInput(
     val functionId: Long? = null,
     val values: List<String>? = null,
     val members: List<Long>? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class ConditionView(
@@ -361,6 +370,8 @@ data class ConditionView(
     val values: List<String>,
     val members: List<Long>,
     val memberNames: List<String>,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String?,
     /** What it asks, in words; read off the definition rather than stored. */
     val description: String,
 )

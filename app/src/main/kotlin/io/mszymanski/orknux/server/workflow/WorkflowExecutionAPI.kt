@@ -5,6 +5,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.server.monitoring.TemporalLinks
 import io.mszymanski.orknux.workflow.execution.ExecutionDetailView
 import io.mszymanski.orknux.workflow.execution.ExecutionLogLineView
 import io.mszymanski.orknux.workflow.execution.ExecutionPage
@@ -30,6 +31,7 @@ class WorkflowExecutionAPI(
     private val edges: WorkflowEdgeRepository,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
+    private val temporal: TemporalLinks,
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
 
@@ -60,7 +62,7 @@ class WorkflowExecutionAPI(
     fun execution(@Argument id: Long): RunDetailView? {
         val run = runs.execution(id) ?: return null
         requireWorkspaceAccess(run.workspaceId)
-        return RunDetailView(run, edgesOf(run.workflowId))
+        return RunDetailView(run, edgesOf(run.workflowId), temporal.forExecution(run.id))
     }
 
     /**
@@ -90,10 +92,21 @@ class WorkflowExecutionAPI(
             WorkspaceAuditCategory.WORKFLOW,
             "Workflow ${started.workflowName} run started",
         )
-        return RunDetailView(started, edgesOf(started.workflowId))
+        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
     }
 
-    /** Runs the workflow again, with the graph as it stands now. */
+    /**
+     * Runs the workflow again on the same event, with the graph as it stands now.
+     *
+     * The payload is carried over deliberately. Without it a re-run started from
+     * nothing: every reference to the event read blank, so a workflow that answers
+     * whoever asked had nobody to answer, and the run looked broken in a way the
+     * original was not. Re-running is for trying a changed graph against the
+     * thing that happened, which needs the thing that happened.
+     *
+     * Recorded as [ExecutionTrigger.MANUAL] all the same: a person pressed this,
+     * and the run list should not claim Slack sent the message twice.
+     */
     @MutationMapping
     fun rerunExecution(@Argument id: Long): RunDetailView {
         val previous = runs.execution(id) ?: throw ExecutionNotFoundException(id)
@@ -104,9 +117,10 @@ class WorkflowExecutionAPI(
                 workspaceId = previous.workspaceId,
                 workflowId = previous.workflowId,
                 trigger = ExecutionTrigger.MANUAL,
+                payload = previous.input,
             ),
         )
-        return RunDetailView(started, edgesOf(started.workflowId))
+        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
     }
 
     /**
@@ -145,8 +159,20 @@ data class RunDetailView(
     val steps: List<ExecutionStepView>,
     val edges: List<WorkflowEdgeView>,
     val logs: List<ExecutionLogLineView>,
+    /**
+     * Where Temporal's own screen for this run is, when there is one.
+     *
+     * What is here is what each node did; what is there is every attempt behind
+     * it. Null when Temporal is off, or running without an interface to send
+     * anybody to.
+     */
+    val temporalUrl: String? = null,
 ) {
-    constructor(run: ExecutionDetailView, edges: List<WorkflowEdgeView>) : this(
+    constructor(
+        run: ExecutionDetailView,
+        edges: List<WorkflowEdgeView>,
+        temporalUrl: String?,
+    ) : this(
         id = run.id,
         workspaceId = run.workspaceId,
         workflowId = run.workflowId,
@@ -162,6 +188,7 @@ data class RunDetailView(
         steps = run.steps,
         edges = edges,
         logs = run.logs,
+        temporalUrl = temporalUrl,
     )
 }
 

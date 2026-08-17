@@ -29,6 +29,14 @@ class SecurityConfig {
             logout { disable() }
             authorizeHttpRequests {
                 authorize(HttpMethod.POST, LOGIN_PATH, permitAll)
+                /*
+                 * A webhook is called by whatever is out there — a build server,
+                 * a form, another product — and none of them can sign in here.
+                 * What answers is a path nothing else knows and a shape it has
+                 * to match; anything else is a 404. Proving who the caller is
+                 * comes later, and will be the trigger's own business.
+                 */
+                authorize(HttpMethod.POST, "$WEBHOOK_PATH/**", permitAll)
                 authorize(anyRequest, authenticated)
             }
             // Answer unauthenticated calls with 401 instead of redirecting to a login page.
@@ -54,3 +62,6 @@ class SecurityConfig {
 }
 
 const val LOGIN_PATH = "/api/session"
+
+/** Where a webhook trigger answers; open, because its callers cannot sign in. */
+const val WEBHOOK_PATH = "/api/webhooks"

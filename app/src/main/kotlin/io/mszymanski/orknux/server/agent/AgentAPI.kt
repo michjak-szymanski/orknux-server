@@ -58,6 +58,7 @@ class AgentAPI(
                 type = input.type,
                 description = input.description?.trim()?.ifEmpty { null },
                 systemPrompt = input.systemPrompt?.trim()?.ifEmpty { null },
+                icon = input.icon?.trim()?.ifEmpty { null },
             ),
         )
         auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.AGENT, "Agent $name created")
@@ -88,6 +89,9 @@ class AgentAPI(
         agent.name = name
         agent.description = input.description?.trim()?.ifEmpty { null }
         agent.systemPrompt = input.systemPrompt?.trim()?.ifEmpty { null }
+        // Sent whenever the form saves, so null is "no icon" rather than "not
+        // mentioned" — which is what lets Clear clear it.
+        agent.icon = input.icon?.trim()?.ifEmpty { null }
         if (input.type != null) agent.type = input.type
         // A model from another workspace is not this agent's to use.
         val previousModel = agent.modelId
@@ -248,6 +252,8 @@ data class CreateAgentInput(
     val type: AgentType,
     val description: String? = null,
     val systemPrompt: String? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class UpdateAgentInput(
@@ -265,6 +271,8 @@ data class UpdateAgentInput(
     val skillCatalogs: List<String>? = null,
     /** Which of the workspace's tools it may call; null leaves the grant alone. */
     val tools: List<String>? = null,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String? = null,
 )
 
 data class AgentView(
@@ -282,6 +290,8 @@ data class AgentView(
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
+    /** Which icon a node drawn from this starts with; null draws the kind's own. */
+    val icon: String?,
 ) {
     constructor(agent: Agent, modelName: String? = null) : this(
         id = requireNotNull(agent.id),
@@ -297,6 +307,7 @@ data class AgentView(
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),
+        icon = agent.icon,
     )
 }
 

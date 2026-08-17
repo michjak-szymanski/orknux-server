@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.condition
 
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
@@ -26,6 +27,7 @@ class ConditionEvaluator(
     private val conditions: WorkflowConditionRepository,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val externals: VariableArguments,
     private val mapper: ObjectMapper,
     private val clock: Clock = Clock.systemDefaultZone(),
 ) {
@@ -62,7 +64,11 @@ class ConditionEvaluator(
         val function = condition.functionId?.let { functions.findByIdOrNull(it) }
             ?: throw ConditionNotDecidableException("${condition.name} names a function that has been deleted")
 
-        val call = scripts.call(function.source, function.name, listOf(input ?: "null"), contextFor(condition))
+        // What the run is carrying, then the workspace's own values: a condition
+        // checking something against a stored secret is the same shape as an
+        // action doing it.
+        val arguments = listOf(input ?: "null") + externals.of(function)
+        val call = scripts.call(function.source, function.name, arguments, contextFor(condition))
         return when (val result = call) {
             is ScriptResult.Returned -> when (result.json) {
                 "true" -> true

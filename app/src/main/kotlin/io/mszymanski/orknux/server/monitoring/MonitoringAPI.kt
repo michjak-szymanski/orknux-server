@@ -37,6 +37,7 @@ class MonitoringAPI(
     /** Everything that can say whether it is up; Temporal is the one today. */
     private val services: List<ServiceHealth>,
     @Value("\${orknux.version:unknown}") private val version: String,
+    private val temporal: TemporalLinks,
     private val access: WorkspaceAccess,
 ) {
 
@@ -76,6 +77,8 @@ class MonitoringAPI(
             description = "Durable execution, for workflow runs",
             reachable = reachability.reachable,
             detail = reachability.detail,
+            // Somewhere to go and look, when it is running somewhere anybody can.
+            url = temporal.home(),
         )
     }
 
@@ -94,6 +97,8 @@ data class DependencyView(
     val reachable: Boolean,
     /** What the check saw, ready to show. */
     val detail: String,
+    /** Its own interface, for the ones that have one; null offers no link. */
+    val url: String? = null,
 )
 
 data class ComponentView(

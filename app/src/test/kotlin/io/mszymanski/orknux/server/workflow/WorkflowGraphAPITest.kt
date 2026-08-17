@@ -51,7 +51,7 @@ class WorkflowGraphAPITest(
             """mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "Data Processing Pipeline" }) { workflowId } }""",
         ).execute().path("createWorkflow.workflowId").entity(String::class.java).get().toLong()
         agentId = graphQlTester.document(
-            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Research Agent", type: REACT })
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Research Agent", type: LLM })
                { id } }""",
         ).execute().path("createAgent.id").entity(Long::class.java).get()
         audit.deleteAll()
@@ -231,7 +231,7 @@ class WorkflowGraphAPITest(
                     key: "research", kind: AGENT, name: "Research Agent", description: "Generates reasoning",
                     agentId: $agentId, x: 320, y: 120
                   },
-                  { key: "report", kind: PUBLISH_TASK, name: "Generate Report", description: "Performs script", x: 600, y: 120 }
+                  { key: "report", kind: ACTION, name: "Generate Report", description: "Performs script", x: 600, y: 120 }
                 ],
                 edges: [
                   { source: "trigger", target: "research" },

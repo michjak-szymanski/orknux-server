@@ -139,6 +139,17 @@ class SlackListener(
                 slackWorkspaceId?.let { put("slackWorkspaceId", it) }
             },
         )
+        // Worth an INFO line: "did Slack deliver anything" is the first question
+        // asked when a trigger does not fire, and answering it should not need
+        // DEBUG on a third-party package. The text is left out — a mention is
+        // someone's message, and this is not the place it gets stored.
+        log.info(
+            "Slack mention received on connection {} (workspace {}, channel {})",
+            connectionId,
+            workspaceId,
+            mention.channel,
+        )
+
         dispatcher.execute {
             try {
                 events.publishEvent(event)

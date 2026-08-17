@@ -1,11 +1,16 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
+import io.mszymanski.orknux.connector.connection.Delivery
+import io.mszymanski.orknux.connector.connection.OutgoingMessages
+import io.mszymanski.orknux.server.variable.VariableArguments
+import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.server.condition.ConditionNotDecidableException
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
+import io.mszymanski.orknux.workflow.execution.PermanentFailure
 import io.mszymanski.orknux.workflow.execution.StepResult
 import io.mszymanski.orknux.workflow.execution.StepStatus
 import io.mszymanski.orknux.workflow.script.ScriptResult
@@ -46,22 +51,27 @@ class ActionNodeRunner(
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val mapper: ObjectMapper,
+    private val expressions: NodeExpressions,
+    private val messages: OutgoingMessages,
+    private val externals: VariableArguments,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.ACTION
 
-    override fun run(step: ExecutionStep, input: String?): StepResult {
+    override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult {
         val actionId = step.actionId
             ?: return StepResult(StepStatus.SKIPPED, "${step.name} names no action, so there was nothing to run.")
         val action = actions.findByIdOrNull(actionId)
             ?: return StepResult(StepStatus.SKIPPED, "The action ${step.name} ran has been deleted.")
 
         return when (action.subtype) {
-            ActionSubtype.FUNCTION -> callFunction(action, step, input)
+            ActionSubtype.FUNCTION -> callFunction(action, step, input, trigger)
             ActionSubtype.INLINE_CONDITION -> waitFor(step, action, input) { holds(action, input) }
             ActionSubtype.CONDITION -> waitForSavedCondition(step, action, input)
             ActionSubtype.TIME -> waitForTime(step, action, input)
-            ActionSubtype.OUTGOING_CONNECTION, ActionSubtype.HTTP_REQUEST ->
+            ActionSubtype.OUTGOING_CONNECTION -> send(action, step, input, trigger)
+
+            ActionSubtype.HTTP_REQUEST ->
                 StepResult(
                     StepStatus.SKIPPED,
                     "${label(action.subtype)} actions have no runtime yet; nothing was sent.",
@@ -70,29 +80,91 @@ class ActionNodeRunner(
     }
 
     /**
-     * Calls the workspace's function with the arguments the action maps to it.
+     * Sends what the node says, through the connection the action points at.
      *
-     * Everything crossing into the script is JSON: an argument is a placeholder
-     * resolved against what the previous node produced, or the literal text as
-     * written. What comes back is the JSON the script returned, which is what
-     * the next node is handed.
+     * The node's own parameters decide where it goes and what it says, so two
+     * nodes running the same action can answer two different people. Nothing
+     * here touches a credential: [OutgoingMessages] holds the connection and
+     * reports what happened.
      */
-    private fun callFunction(action: WorkflowAction, step: ExecutionStep, input: String?): StepResult {
+    private fun send(action: WorkflowAction, step: ExecutionStep, input: String?, trigger: String?): StepResult {
+        val connectionId = action.connectionId
+            ?: return StepResult(StepStatus.SKIPPED, "${action.name} names no connection to send through.")
+
+        val given = expressions.parse(input)
+        val started = expressions.parse(trigger)
+        val byName = expressions.mappingsOf(step)
+        fun resolved(name: String) = byName[name]?.let { expressions.textOf(it, given, started) }?.trim().orEmpty()
+
+        val target = resolved(ActionParameters.TARGET).ifEmpty { action.targetName.orEmpty() }
+        val content = resolved(ActionParameters.CONTENT).ifEmpty { action.content.orEmpty() }
+
+        // Neither is a failure worth stopping a run over: a node still being
+        // drawn has blanks, and saying what is missing beats a Slack error.
+        if (target.isEmpty()) return StepResult(StepStatus.SKIPPED, "${step.name} has nobody to send to.")
+        if (content.isEmpty()) return StepResult(StepStatus.SKIPPED, "${step.name} has nothing to say.")
+
+        // Replying in a thread needs the message being replied to. Blank sends
+        // to the channel instead, which is what a plain send has always meant.
+        val threadTs = resolved(ActionParameters.THREAD_TS).takeIf { it.isNotEmpty() }
+
+        return when (val delivery = messages.send(connectionId, target, content, threadTs)) {
+            is Delivery.Sent -> StepResult(
+                StepStatus.COMPLETED,
+                expressions.namedJson(
+                    step.outputName,
+                    mapper.writeValueAsString(mapOf("channel" to delivery.channel, "ts" to delivery.ts)),
+                ),
+            )
+
+            is Delivery.NotPossible -> StepResult(StepStatus.SKIPPED, "${step.name} sent nothing: ${delivery.reason}.")
+
+            // Somebody meant this to send, and it did not.
+            // What it tried, not only what went wrong. `channel_not_found` says
+            // nothing about the fact that `target` was wired to the message text
+            // rather than to a channel — and that is the mistake it usually is.
+            is Delivery.Refused -> throw ActionFailedException(
+                "${step.name} could not send to \"${target.take(TARGET_IN_ERROR)}\": ${delivery.reason}",
+                // Slack answering is an answer: a channel that does not exist
+                // will not exist on the third attempt either.
+                permanent = true,
+            )
+        }
+    }
+
+    /**
+     * Calls the workspace's function with the arguments the node passes it.
+     *
+     * Everything crossing into the script is JSON: an argument is either the
+     * value the node holds, quoted as the string it is, or the field it refers
+     * to, taken from what the run is carrying with its own shape intact. What
+     * comes back is the JSON the script returned, which is what the next node
+     * is handed.
+     */
+    private fun callFunction(action: WorkflowAction, step: ExecutionStep, input: String?, trigger: String?): StepResult {
         val function = action.functionId?.let { functions.findByIdOrNull(it) }
             ?: return StepResult(StepStatus.SKIPPED, "The function ${action.name} calls has been deleted.")
 
-        val given = parse(input)
+        val given = expressions.parse(input)
+        val started = expressions.parse(trigger)
         // The node's mappings, carried onto the step when the run started. The
         // action's own are only ever a seed for a node, so reading them here
         // would run a binding nobody chose.
-        val byName = mappingsOf(step).mapValues { (_, expression) -> resolve(expression, given) }
+        val byName = expressions.mappingsOf(step).mapValues { (_, binding) -> expressions.jsonOf(binding, given, started) }
         // The order the function takes them, not the order they were mapped.
-        val arguments = function.params.map { byName[it.name] ?: "null" }
+        // What the node passes, then what the workspace does: an external
+        // parameter is not the caller's to fill, so it is appended rather than
+        // looked for among the mappings.
+        val arguments = function.params.map { byName[it.name] ?: "null" } + externals.of(function)
 
         return when (val result = scripts.call(function.source, function.name, arguments, contextFor(action))) {
             is ScriptResult.Returned -> StepResult(
                 StepStatus.COMPLETED,
-                result.json ?: "null",
+                // Under the name the node gave it, if it gave one. Unnamed, the
+                // return value is handed on as it is — which is what every node
+                // did before names existed, and why the `result` port the action
+                // declares was not something a later node could actually read.
+                expressions.namedJson(step.outputName, result.json ?: "null"),
             )
 
             is ScriptResult.Failed -> throw ActionFailedException("${function.name} ${result.reason}")
@@ -217,38 +289,23 @@ class ActionNodeRunner(
         }
     }
 
-    /**
-     * `{{input.x}}` becomes what the previous node produced under `x`, as JSON.
-     * Anything else is taken literally, so a mapping can be a constant.
-     */
-    private fun resolve(expression: String, input: JsonNode?): String {
-        val whole = WHOLE_PLACEHOLDER.matchEntire(expression.trim())
-        if (whole != null) {
-            val value = input?.get(whole.groupValues[1])
-            return value?.toString() ?: "null"
-        }
-
-        val filled = PLACEHOLDER.replace(expression) { match ->
-            val value = input?.get(match.groupValues[1])
-            if (value == null || value.isNull) "" else if (value.isTextual) value.stringValue() else value.toString()
-        }
-        return mapper.writeValueAsString(filled)
-    }
-
-    private fun parse(input: String?): JsonNode? = input
-        ?.takeIf { it.isNotBlank() }
-        ?.let { runCatching { mapper.readTree(it) }.getOrNull() }
-
     private companion object {
         val log = LoggerFactory.getLogger(ActionNodeRunner::class.java)
 
         /** How often a wait asks again, when the action does not say. */
         const val RETRY_SECONDS = 30
 
-        val PLACEHOLDER = Regex("""\{\{\s*input\.([A-Za-z_][A-Za-z0-9_]*)\s*}}""")
-        val WHOLE_PLACEHOLDER = Regex("""\{\{\s*input\.([A-Za-z_][A-Za-z0-9_]*)\s*}}""")
+        /** Enough of the target to recognise what was wired into it, not a message. */
+        const val TARGET_IN_ERROR = 60
     }
 }
 
-/** Raised when an action could not do its work; the step fails with this message. */
-class ActionFailedException(message: String) : RuntimeException(message)
+/**
+ * Raised when an action could not do its work; the step fails with this message.
+ *
+ *  permanent set when trying again could not give a different answer — a
+ *   channel that does not exist, a credential the service rejected. Retrying
+ *   those only takes longer to reach the same conclusion.
+ */
+class ActionFailedException(message: String, override val permanent: Boolean = false) :
+    RuntimeException(message), PermanentFailure

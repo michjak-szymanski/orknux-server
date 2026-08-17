@@ -232,7 +232,7 @@ class ObjectAPI(
         else -> property.kind.name.lowercase()
     }
 
-    /** A name a mapping can be written with: `{{input.oddly named}}` cannot. */
+    /** A name a reference can point at: "oddly named" cannot. */
     private fun requireUsableName(name: String) {
         if (name.isEmpty()) throw ObjectNameInvalidException()
         if (!NAME.matches(name)) throw ObjectNameInvalidException(name)

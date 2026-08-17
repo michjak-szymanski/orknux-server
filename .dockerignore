@@ -1,0 +1,13 @@
+# Everything the build does not read. Without this the whole working tree is
+# sent to the daemon as context, which on a repository with build output and an
+# IDE directory is most of it.
+
+.git
+.github
+.idea
+**/target
+docs
+*.md
+!README.md
+cp.txt
+compose.yaml

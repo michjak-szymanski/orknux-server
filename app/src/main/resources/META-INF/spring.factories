@@ -1,0 +1,4 @@
+# Registered here rather than as a bean: it has to run before the logging system
+# is configured, which happens before there is a context to hold beans.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+io.mszymanski.orknux.server.logging.LoggingOptions

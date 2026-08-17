@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="Orknux — orchestration kernel">
+  <!--
+    Horizontal lockup on a transparent ground, so it can sit on any surface.
+    The shipped orknux_logo.svg bakes in a #0D1518 rect and shows a dark slab
+    anywhere else.
+
+    The wordmark colour follows `currentColor`; the tagline keeps its moss.
+
+    KNOWN GAP: the wordmark is live text in a font stack, so it renders in
+    whatever the viewer has installed — Noto Sans, else DejaVu, else Arial. Until
+    a typeface is chosen and the text converted to paths, this file is not
+    reproducible across machines and should not go to a printer or a third party.
+  -->
+  <defs>
+    <linearGradient id="orknuxLogoMoss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#668A6B"/>
+      <stop offset="100%" stop-color="#4A6B52"/>
+    </linearGradient>
+    <mask id="orknuxLogoVoid">
+      <rect x="0" y="0" width="200" height="200" fill="#fff"/>
+      <circle cx="100" cy="109" r="47" fill="#000"/>
+    </mask>
+  </defs>
+
+  <g transform="translate(45,25) scale(1.55)">
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="url(#orknuxLogoMoss)" mask="url(#orknuxLogoVoid)"/>
+    <path d="M81 125 L112 129 L121 96 Z"
+          fill="none" stroke="#5F8467" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="81" cy="125" r="11" fill="#5F8467"/>
+    <circle cx="112" cy="129" r="11" fill="#5F8467"/>
+    <circle cx="121" cy="96" r="11" fill="#5F8467"/>
+  </g>
+
+  <text x="385" y="205" font-family="Noto Sans,DejaVu Sans,Arial,sans-serif"
+        font-size="150" font-weight="850" letter-spacing="-8" fill="currentColor">orknux</text>
+  <text x="394" y="258" font-family="Noto Sans,DejaVu Sans,Arial,sans-serif"
+        font-size="25" font-weight="650" letter-spacing="12" fill="#6F9877">ORCHESTRATION KERNEL</text>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" fill="currentColor" role="img" aria-label="Orknux">
+  <!--
+    One-colour cut. Everything inherits `currentColor`, so the same file serves
+    both grounds: it is ink on a light background and near-white on a dark one,
+    following whatever colour its container sets. This replaces the board's pair
+    of light-only variants, neither of which survived a light background.
+
+    Solid silhouette with a knocked-out void, which is what stamps and holds at
+    16px. For the drawn-in triad use orknux-mark.svg at 24px and above.
+  -->
+  <defs>
+    <mask id="orknuxVoidMono">
+      <rect width="200" height="200" fill="#fff"/>
+      <circle cx="100" cy="109" r="47" fill="#000"/>
+    </mask>
+  </defs>
+
+  <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+        mask="url(#orknuxVoidMono)"/>
+</svg>

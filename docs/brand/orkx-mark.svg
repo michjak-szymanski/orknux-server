@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200" role="img" aria-label="orkx">
+  <!--
+    The orkx mark: two crossed tusks. It is a tusk, a crossing — the
+    orchestration junction — and a multiplication sign, all in one figure.
+
+    Drawn as filled tapered shapes rather than strokes. logo2's version was
+    stroked and thinned to nothing at favicon scale; solid tusks carry their
+    weight down to 16px, which is where a CLI icon actually lives.
+  -->
+  <defs>
+    <linearGradient id="orkxMoss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#668A6B"/>
+      <stop offset="100%" stop-color="#4A6B52"/>
+    </linearGradient>
+  </defs>
+
+  <!-- lower-left base, tip to upper-right -->
+  <path d="M30 146 L52 170 Q110 128 168 40 Q96 112 30 146 Z" fill="url(#orkxMoss)"/>
+  <!-- lower-right base, tip to upper-left -->
+  <path d="M170 146 L148 170 Q90 128 32 40 Q104 112 170 146 Z" fill="url(#orkxMoss)"/>
+</svg>

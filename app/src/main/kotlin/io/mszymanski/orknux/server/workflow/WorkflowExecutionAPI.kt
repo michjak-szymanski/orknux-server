@@ -13,6 +13,7 @@ import io.mszymanski.orknux.workflow.execution.ExecutionService
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
 import io.mszymanski.orknux.workflow.execution.ExecutionStepView
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
+import io.mszymanski.orknux.workflow.execution.GraphVersion
 import io.mszymanski.orknux.workflow.execution.StartExecutionInput
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
@@ -118,6 +119,18 @@ class WorkflowExecutionAPI(
                 workflowId = previous.workflowId,
                 trigger = ExecutionTrigger.MANUAL,
                 payload = previous.input,
+                /*
+                 * The graph the original ran, not whatever is being edited now.
+                 *
+                 * The rerun is recorded as manual because a person pressed it,
+                 * and manual means the draft - so without this, re-running what
+                 * a webhook did would run a graph that webhook never touched.
+                 */
+                version = if (previous.trigger == ExecutionTrigger.MANUAL) {
+                    GraphVersion.DRAFT
+                } else {
+                    GraphVersion.PUBLISHED
+                },
             ),
         )
         return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))

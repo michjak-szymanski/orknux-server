@@ -62,6 +62,7 @@ class ExecutionService(
                 workflowId = input.workflowId,
                 trigger = input.trigger,
                 input = input.payload,
+                version = input.version,
             ),
         )
 
@@ -82,6 +83,16 @@ data class StartExecutionInput(
     val trigger: ExecutionTrigger = ExecutionTrigger.API,
     /** Named `payload` in Kotlin because `input` is the argument holding it. */
     val payload: String? = null,
+    /**
+     * Which copy of the workflow to run, where what started it does not decide.
+     *
+     * Re-running is the case. A rerun is recorded as manual - a person pressed
+     * it, and the run list should not claim Slack sent the message twice - but
+     * that would then run the draft, so re-running a webhook's run would run a
+     * graph that webhook never touched. Null keeps the rule: manual means the
+     * draft, everything else means what was published.
+     */
+    val version: GraphVersion? = null,
 )
 
 data class ExecutionView(

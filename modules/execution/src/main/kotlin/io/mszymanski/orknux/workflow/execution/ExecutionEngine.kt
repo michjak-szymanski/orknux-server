@@ -24,5 +24,7 @@ interface ExecutionEngine {
         workflowId: Long,
         trigger: ExecutionTrigger,
         input: String? = null,
+        /** Which copy to run, where what started it does not decide. See [StartExecutionInput]. */
+        version: GraphVersion? = null,
     ): WorkflowExecution
 }

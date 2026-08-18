@@ -96,6 +96,25 @@ class PublishedGraphTest(
             .isEqualTo("Half-written change")
     }
 
+    /**
+     * Re-running repeats what ran.
+     *
+     * A rerun is recorded as manual, because a person pressed it - and manual
+     * means the draft, so without saying which copy to use, re-running what a
+     * webhook did would run a graph that webhook never touched.
+     */
+    @Test
+    fun `a rerun asks for the copy the original ran`() {
+        draw("Answer politely")
+        publish()
+        draw("Half-written change")
+
+        assertThat(source.graph(workspaceId, workflowId, GraphVersion.PUBLISHED).nodes.single().name)
+            .isEqualTo("Answer politely")
+        assertThat(source.graph(workspaceId, workflowId, GraphVersion.DRAFT).nodes.single().name)
+            .isEqualTo("Half-written change")
+    }
+
     @Test
     fun `a workflow nobody has published has nothing to run`() {
         draw("Not ready")

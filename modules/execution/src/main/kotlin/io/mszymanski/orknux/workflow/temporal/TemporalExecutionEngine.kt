@@ -3,6 +3,7 @@ package io.mszymanski.orknux.workflow.temporal
 import io.mszymanski.orknux.workflow.execution.ExecutionEngine
 import io.mszymanski.orknux.workflow.execution.ExecutionPlanner
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
+import io.mszymanski.orknux.workflow.execution.GraphVersion
 import io.mszymanski.orknux.workflow.execution.WorkflowExecution
 import io.temporal.client.WorkflowClient
 import io.temporal.client.WorkflowOptions
@@ -32,8 +33,9 @@ class TemporalExecutionEngine(
         workflowId: Long,
         trigger: ExecutionTrigger,
         input: String?,
+        version: GraphVersion?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input)
+        val plan = planner.plan(workspaceId, workflowId, trigger, input, version)
         val executionId = requireNotNull(plan.execution.id)
 
         val workflow = client.newWorkflowStub(

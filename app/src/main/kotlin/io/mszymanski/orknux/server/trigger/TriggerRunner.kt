@@ -10,6 +10,7 @@ import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionService
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
 import io.mszymanski.orknux.workflow.execution.StartExecutionInput
+import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -85,16 +86,22 @@ class TriggerRunner(
             return 0
         }
 
-        val started = workflowIds.count { start(trigger, it, payload) }
+        val refusals = mutableListOf<String>()
+        val started = workflowIds.count { start(trigger, it, payload, refusals) }
         if (started == workflowIds.size) {
             record(trigger, FiringOutcome.STARTED, "Started $started of ${workflowIds.size}", started)
         } else {
-            // Partly started is not started: the log says which, because the
-            // executions list only shows the ones that made it.
+            /*
+             * Partly started is not started, and the record says why rather
+             * than only how many. "Started 0 of 1" is what somebody reads when
+             * a trigger fires at a workflow nobody has published, and it tells
+             * them nothing they can act on - the reason exists, it was simply
+             * being swallowed here.
+             */
             record(
                 trigger,
                 FiringOutcome.FAILED,
-                "Started $started of ${workflowIds.size}; the rest could not be started",
+                "Started $started of ${workflowIds.size}: ${refusals.joinToString("; ")}",
                 started,
             )
         }
@@ -184,7 +191,12 @@ class TriggerRunner(
         return mapper.writeValueAsString(input)
     }
 
-    private fun start(trigger: WorkflowTrigger, workflowId: Long, payload: String): Boolean = try {
+    private fun start(
+        trigger: WorkflowTrigger,
+        workflowId: Long,
+        payload: String,
+        refusals: MutableList<String>,
+    ): Boolean = try {
         val started = runs.startExecution(
             StartExecutionInput(
                 workspaceId = trigger.workspaceId,
@@ -203,9 +215,19 @@ class TriggerRunner(
             actor = "trigger:${trigger.name}",
         )
         true
+    } catch (notPublished: WorkflowNotPublishedException) {
+        /*
+         * Not an error worth a stack trace: a graph that has never been
+         * published is a graph somebody is still drawing, and a trigger firing
+         * at one is a thing to be told about plainly.
+         */
+        log.info("Trigger {} found workflow {} unpublished; nothing started", trigger.name, workflowId)
+        refusals += notPublished.message ?: "a workflow that has never been published"
+        false
     } catch (failure: Exception) {
         // One workflow failing is no reason for the others to miss the trigger.
         log.error("Trigger {} could not start workflow {}", trigger.name, workflowId, failure)
+        refusals += failure.message ?: failure::class.simpleName.orEmpty()
         false
     }
 

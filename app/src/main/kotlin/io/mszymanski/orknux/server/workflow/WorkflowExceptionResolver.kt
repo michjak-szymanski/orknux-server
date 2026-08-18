@@ -20,6 +20,7 @@ import io.mszymanski.orknux.server.action.FunctionCodeIncompleteException
 import io.mszymanski.orknux.server.action.FunctionObjectRequiredException
 import io.mszymanski.orknux.server.security.RoleBuiltInException
 import io.mszymanski.orknux.server.security.RoleInUseException
+import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
 import io.mszymanski.orknux.server.security.RoleNameInvalidException
 import io.mszymanski.orknux.server.security.RoleNameTakenException
 import io.mszymanski.orknux.server.security.RoleNotFoundException
@@ -152,6 +153,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is PasswordWrongException,
             is PasswordNotSettableException,
             is RoleBuiltInException,
+            is WorkflowNotPublishedException,
             is RoleInUseException,
             is FunctionInUseException,
             is ConditionNotInCatalogueException,

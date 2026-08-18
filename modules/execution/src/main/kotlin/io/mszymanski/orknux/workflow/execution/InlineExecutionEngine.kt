@@ -36,8 +36,9 @@ class InlineExecutionEngine(
         workflowId: Long,
         trigger: ExecutionTrigger,
         input: String?,
+        version: GraphVersion?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input)
+        val plan = planner.plan(workspaceId, workflowId, trigger, input, version)
         val executionId = requireNotNull(plan.execution.id)
 
         /*

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
@@ -22,6 +23,7 @@ import java.time.format.DateTimeFormatter
 class RoleAPI(
     private val roles: RoleRepository,
     private val access: WorkspaceAccess,
+    private val workspaces: WorkspaceRepository,
 ) {
 
     @QueryMapping
@@ -84,6 +86,17 @@ class RoleAPI(
         access.requireAdmin()
         val role = roles.findByIdOrNull(id) ?: return false
         if (role.builtin) throw RoleBuiltInException(role.name)
+
+        /*
+         * A role a workspace depends on is not one to remove quietly.
+         *
+         * The link is a join table with a cascade, so deleting the role took
+         * the row with it and whoever held that role lost those workspaces -
+         * silently, and without anybody deciding it. The refusal was written
+         * and mapped already; nothing threw it.
+         */
+        val depending = workspaces.findAll().filter { held -> held.roles.any { it.id == role.id } }
+        if (depending.isNotEmpty()) throw RoleInUseException(role.name, depending.map { it.name })
 
         roles.delete(role)
         return true

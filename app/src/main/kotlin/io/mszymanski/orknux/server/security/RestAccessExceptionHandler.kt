@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.attachment.AttachmentTooLargeException
+import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -41,4 +43,27 @@ class RestAccessExceptionHandler {
     fun forbidden(failure: AdminRequiredException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(mapOf("error" to (failure.message ?: "That requires the administrator role")))
+
+    /**
+     * Attachments turned off, and files too big for this installation.
+     *
+     * Both are answers rather than faults, and both used to arrive as a 500 with
+     * "Internal Server Error" on the wire - which reads as the server having
+     * broken when what happened is that somebody was told no. The GraphQL side
+     * has said these in a sentence since they existed; this is the upload's
+     * half, and the upload is where they are actually raised.
+     *
+     * Bad request rather than forbidden for the switch, to match what the
+     * GraphQL resolver answers for the same exception: one refusal should not
+     * have two statuses depending on which door it came through.
+     */
+    @ExceptionHandler(AttachmentsDisabledException::class)
+    fun attachmentsOff(failure: AttachmentsDisabledException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(mapOf("error" to (failure.message ?: "Attachments are turned off for this installation")))
+
+    @ExceptionHandler(AttachmentTooLargeException::class)
+    fun tooLarge(failure: AttachmentTooLargeException): ResponseEntity<Map<String, String>> =
+        ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+            .body(mapOf("error" to (failure.message ?: "That file is larger than this installation allows")))
 }

@@ -7,9 +7,6 @@ import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.core.io.InputStreamResource
 import org.springframework.data.repository.findByIdOrNull
-import org.springframework.http.HttpHeaders
-import org.springframework.http.HttpStatus
-import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.transaction.annotation.Transactional
@@ -19,8 +16,6 @@ import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.multipart.MultipartFile
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
 
 /**
  * Uploading files to a chat, and reading them back.
@@ -40,6 +35,7 @@ class AttachmentAPI(
     private val settings: InstallationSettings,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val downloads: AttachmentDownloads,
 ) {
 
     /** Several at once, because a file picker hands over several at once. */
@@ -81,10 +77,10 @@ class AttachmentAPI(
     /**
      * Hands the file back.
      *
-     * A picture is served as itself so a chat can show it; everything else is a
-     * download. The difference matters: a page that renders whatever was
-     * uploaded is a page that will one day render somebody's HTML — and an SVG
-     * is HTML with a drawing in it, which is why it is not on the list.
+     * What may be shown rather than downloaded, and the headers that go with
+     * it, are [AttachmentDownloads]' business: an issue's files are served the
+     * same way, and one list of what is safe to render is the only number of
+     * lists that stays right.
      */
     @GetMapping("/api/attachments/{id}")
     fun download(@PathVariable id: Long): ResponseEntity<InputStreamResource> {
@@ -93,19 +89,12 @@ class AttachmentAPI(
             ?: throw WorkspaceNotFoundException(attachment.workspaceId)
         access.requireVisible(workspace)
 
-        val name = URLEncoder.encode(attachment.filename, StandardCharsets.UTF_8).replace("+", "%20")
-        val shown = attachment.contentType.lowercase() in SHOWABLE
-        return ResponseEntity.ok()
-            .contentType(if (shown) MediaType.parseMediaType(attachment.contentType) else MediaType.APPLICATION_OCTET_STREAM)
-            .header(
-                HttpHeaders.CONTENT_DISPOSITION,
-                if (shown) "inline; filename*=UTF-8''$name" else "attachment; filename*=UTF-8''$name",
-            )
-            .header(HttpHeaders.CONTENT_LENGTH, attachment.sizeBytes.toString())
-            // Nothing on this page runs, whatever the type turns out to be.
-            .header("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox")
-            .header("X-Content-Type-Options", "nosniff")
-            .body(InputStreamResource(store.open(attachment.location)))
+        return downloads.serve(
+            filename = attachment.filename,
+            contentType = attachment.contentType,
+            sizeBytes = attachment.sizeBytes,
+            location = attachment.location,
+        )
     }
 
     private fun describe(attachment: ChatAttachment) = mapOf(
@@ -121,15 +110,6 @@ class AttachmentAPI(
     private companion object {
         /** Long enough for a real name, short enough for the column. */
         const val MAX_NAME = 255
-
-        /**
-         * What may be shown rather than downloaded.
-         *
-         * Raster pictures only. SVG is deliberately absent: it is a document
-         * that can carry script, and "it is an image" is exactly the reasoning
-         * that makes that a problem.
-         */
-        val SHOWABLE = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
     }
 }
 

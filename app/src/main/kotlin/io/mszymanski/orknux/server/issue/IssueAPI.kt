@@ -2,6 +2,9 @@ package io.mszymanski.orknux.server.issue
 
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.attachment.AttachmentStore
+import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
+import io.mszymanski.orknux.server.attachment.InstallationSettings
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.user.AppUserRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -55,6 +58,9 @@ class IssueAPI(
     private val audit: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
     private val newsDesk: IssueNewsDesk,
+    private val attachments: IssueAttachmentRepository,
+    private val store: AttachmentStore,
+    private val installation: InstallationSettings,
 ) {
 
     /*
@@ -261,6 +267,14 @@ class IssueAPI(
     fun deleteIssue(@Argument id: Long): Boolean {
         val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
         requireWorkspaceAccess(held.workspaceId)
+        /*
+         * The rows go with the issue because the database says so; the bytes do
+         * not, and nothing would ever come looking for them again. An issue
+         * tracker that leaves its screenshots behind fills somebody's disk with
+         * files that belong to issues nobody can name.
+         */
+        attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(held.id))
+            .forEach { store.remove(it.location) }
         issues.delete(held)
         audit.record(held.workspaceId, WorkspaceAuditCategory.WORKSPACE, "Issue #${held.number} deleted")
         return true
@@ -268,7 +282,11 @@ class IssueAPI(
 
     @MutationMapping
     @Transactional
-    fun commentOnIssue(@Argument id: Long, @Argument content: String): IssueView {
+    fun commentOnIssue(
+        @Argument id: Long,
+        @Argument content: String,
+        @Argument attachmentIds: List<Long>?,
+    ): IssueView {
         val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
         requireWorkspaceAccess(held.workspaceId)
 
@@ -278,7 +296,22 @@ class IssueAPI(
         held.comments.add(IssueComment(author = currentUser(), content = said))
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
-        val saved = issues.save(held)
+        /*
+         * Flushed rather than saved, because the files need the comment's id
+         * and a comment that has not been written yet does not have one: the
+         * insert would otherwise happen at the end of the transaction, which is
+         * after the point where this needs the answer.
+         */
+        val saved = issues.saveAndFlush(held)
+        /*
+         * The comment as the persistence context now holds it, rather than the
+         * object added a line ago: saving merges, and a merge copies a new
+         * child into a managed instance of its own - which is the one that was
+         * given the id, leaving the original still holding null. The newest
+         * comment is the highest id, the column being an identity.
+         */
+        val posted = requireNotNull(saved.comments.maxByOrNull { requireNotNull(it.id) })
+        tie(saved, attachmentIds.orEmpty(), commentId = posted.id)
         newsDesk.commented(saved, currentUser(), said)
         return describe(saved)
     }
@@ -307,7 +340,18 @@ class IssueAPI(
     private fun cleanLabels(labels: List<String>?): MutableSet<String> =
         labels.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
 
-    private fun describe(issue: Issue) = IssueView(
+    private fun describe(issue: Issue): IssueView {
+        /*
+         * The issue's files and its comments' files in one read, sorted out
+         * here rather than asked for a comment at a time: an issue with fifteen
+         * comments is ordinary, and reading it should not be fifteen round
+         * trips to discover that fourteen of them brought nothing.
+         */
+        val files = attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(issue.id))
+        return describe(issue, files)
+    }
+
+    private fun describe(issue: Issue, files: List<IssueAttachment>) = IssueView(
         id = requireNotNull(issue.id),
         workspaceId = issue.workspaceId,
         number = issue.number,
@@ -317,20 +361,22 @@ class IssueAPI(
         reporter = issue.reporter,
         assignee = nameFor(issue),
         labels = issue.labels.sorted(),
-        comments = issue.comments.map {
+        attachments = files.filter { it.commentId == null }.map(::describeFile),
+        comments = issue.comments.map { comment ->
             IssueCommentView(
-                id = requireNotNull(it.id),
-                author = it.author,
-                content = it.content,
-                createdAt = it.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-                editedAt = it.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                id = requireNotNull(comment.id),
+                author = comment.author,
+                content = comment.content,
+                createdAt = comment.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                editedAt = comment.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                attachments = files.filter { it.commentId == comment.id }.map(::describeFile),
                 /*
                  * Whether the person reading this may change it. Answered here
                  * rather than compared in the browser, so the button and the
                  * refusal agree - and so a second window signed in as somebody
                  * else does not offer an edit that would be refused.
                  */
-                mine = it.author == currentUser(),
+                mine = comment.author == currentUser(),
             )
         },
         createdAt = issue.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -361,6 +407,105 @@ class IssueAPI(
         } ?: AssigneeView(kind, id, "No longer here", kind.name.lowercase())
     }
 
+    private fun describeFile(attachment: IssueAttachment) = IssueAttachmentView(
+        id = requireNotNull(attachment.id),
+        filename = attachment.filename,
+        contentType = attachment.contentType,
+        sizeBytes = attachment.sizeBytes,
+        uploadedBy = attachment.uploadedBy,
+        uploadedAt = attachment.uploadedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        /*
+         * Whether the person reading this may take it off again, answered here
+         * for the reason a comment's `mine` is: the button and the refusal have
+         * to agree, and comparing names in the browser is how they stop
+         * agreeing.
+         */
+        mine = attachment.uploadedBy == currentUser(),
+    )
+
+    /**
+     * Says which issue - or which of its comments - these files belong to.
+     *
+     * Only files of the issue's own workspace, and only ones not already spoken
+     * for: an id from somewhere else is dropped rather than argued with, the
+     * way a chat drops one, since whoever sent it is already looking at the
+     * next screen. Uploading is what takes the time, and this is what settles
+     * where it went.
+     */
+    private fun tie(issue: Issue, attachmentIds: List<Long>, commentId: Long?): List<IssueAttachment> {
+        if (attachmentIds.isEmpty()) return emptyList()
+        // Checked again here, not only at the upload: an administrator can turn
+        // attachments off between the two, and the half that writes the row is
+        // the half worth stopping.
+        if (!installation.attachmentsEnabled()) throw AttachmentsDisabledException()
+
+        return attachmentIds.mapNotNull { attachments.findByIdOrNull(it) }
+            .filter { it.workspaceId == issue.workspaceId && it.issueId == null }
+            .onEach {
+                it.issueId = issue.id
+                it.commentId = commentId
+            }
+    }
+
+    /**
+     * Puts uploaded files on an issue.
+     *
+     * Separate from the upload because the two happen at different moments: the
+     * bytes go up while the report is still being written, and which issue they
+     * belong to is only settled when it is filed - a new issue has no id until
+     * then.
+     */
+    @MutationMapping
+    @Transactional
+    fun attachToIssue(@Argument id: Long, @Argument attachmentIds: List<Long>): IssueView {
+        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
+        requireWorkspaceAccess(held.workspaceId)
+
+        val tied = tie(held, attachmentIds, commentId = null)
+        if (tied.isNotEmpty()) {
+            val what = if (tied.size == 1) tied.first().filename else "${tied.size} files"
+            audit.record(
+                held.workspaceId,
+                WorkspaceAuditCategory.WORKSPACE,
+                "Issue #${held.number}: attached $what",
+            )
+        }
+        return describe(held)
+    }
+
+    /**
+     * Taking a file off again.
+     *
+     * Only whoever attached it, exactly as only whoever wrote a comment may
+     * change it, and for the same reason: what somebody else put on an issue is
+     * part of the record. Not administrators either - one who needs a file gone
+     * can delete the issue, which is a thing that leaves a mark.
+     *
+     * The bytes go with the row. A file nobody can reach any more is still a
+     * file taking up the disk of whoever runs this.
+     */
+    @MutationMapping
+    @Transactional
+    fun removeIssueAttachment(@Argument id: Long): Boolean {
+        val held = attachments.findByIdOrNull(id) ?: throw IssueAttachmentNotFoundException(id)
+        requireWorkspaceAccess(held.workspaceId)
+        if (held.uploadedBy != currentUser()) throw IssueAttachmentNotYoursException()
+
+        attachments.delete(held)
+        store.remove(held.location)
+
+        held.issueId?.let { on ->
+            issues.findByIdOrNull(on)?.let {
+                audit.record(
+                    it.workspaceId,
+                    WorkspaceAuditCategory.WORKSPACE,
+                    "Issue #${it.number}: removed ${held.filename}",
+                )
+            }
+        }
+        return true
+    }
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 
@@ -387,6 +532,8 @@ data class IssueView(
     val reporter: String,
     val assignee: AssigneeView?,
     val labels: List<String>,
+    /** What was attached to the issue itself; a comment's files are on the comment. */
+    val attachments: List<IssueAttachmentView>,
     val comments: List<IssueCommentView>,
     val createdAt: String,
     val lastModifiedAt: String,
@@ -400,7 +547,20 @@ data class IssueCommentView(
     val createdAt: String,
     /** Null until somebody changes it. */
     val editedAt: String?,
+    val attachments: List<IssueAttachmentView>,
     /** Whether the person reading this wrote it. */
+    val mine: Boolean,
+)
+
+/** A file on an issue, as the page shows it. */
+data class IssueAttachmentView(
+    val id: Long,
+    val filename: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    val uploadedBy: String,
+    val uploadedAt: String,
+    /** Whether the person reading this attached it, and so may remove it. */
     val mine: Boolean,
 )
 

@@ -1,0 +1,86 @@
+# Changelog
+
+What changed in each release, in the words somebody upgrading would want.
+
+Written for the person deciding whether to upgrade and what to watch for
+afterwards - not a list of commits, which git already keeps, and not a list of
+issue numbers, which say nothing on their own. Anything that changes what an
+existing installation does is under **Changed** and says so plainly, because
+that is the section people actually need.
+
+One file for both halves of the product: the server and the interface are
+released together, under one version, and a reader who has to hold two
+changelogs side by side to work out what a release contains is a reader we
+have failed.
+
+## 0.3.0
+
+### Added
+
+- **An issue tracker in every workspace.** A list with Open, In progress and
+  Closed, one search across titles, descriptions and labels together, labels
+  that filter by being clicked, sorting by number, title or last change, and a
+  page size you choose. The filters live in the address, so a filtered list is
+  a link somebody can send. An issue carries a description, labels, a reporter,
+  an assignee that may be a person, an agent or a model, comments with markdown
+  and `@` mentions, and files - including a screenshot pasted straight in.
+- **A notification bell**, beside the account menu. It reports an issue you
+  filed changing state, comments on issues that concern you, and your name
+  written in one, across every workspace you can see.
+- **Mail.** An SMTP connection holds the server details, with its password
+  encrypted like every other credential, and a Send Email action takes a
+  recipient, subject, body, cc and reply-to.
+- **The tracker over MCP**: an assistant can list, read, open, comment on,
+  label and close issues, and wait on a feed of what has happened.
+- **Internal users with passwords, and `orkx_` access tokens** for reaching the
+  API and the MCP endpoint as a named person.
+- **A workflow editor that can be undone.** Undo and redo, rebindable
+  keystrokes, definition pickers you type into, components created in a panel
+  beside the canvas rather than a modal over it, nodes that can be turned so a
+  graph runs down the screen, and a save shortcut.
+- **Voice mode says what it is doing** - listening, thinking or speaking - and
+  can be interrupted mid-answer.
+
+### Changed
+
+- **Publishing means something now, and this is the one to read twice.**
+  Publishing a workflow takes a copy, and a trigger, a schedule or the API runs
+  that copy. Editing and saving change the draft only; Run in the editor uses
+  the draft, because that is the graph in front of you. A workflow that has
+  never been published has nothing to run and says so.
+  **On upgrade**: a workflow already marked published is copied on its first
+  run, so nothing stops working. A workflow that was never published, and was
+  running because nothing checked, will stop - publish it once.
+- **Re-running a run repeats the graph that ran**, rather than whatever is
+  being edited now.
+- A link into the interface no longer opens in a new tab; a modified click
+  still does, because these are real links now.
+
+### Fixed
+
+- Deleting a role a workspace depended on removed it silently, taking access
+  with it. It is refused, and names the workspaces in the way.
+- The admin settings page was offered to anybody signed in. Administrators
+  only, as every other admin page already was.
+- "No errors", "Formatting valid" and "Schema compile healthy" were the values
+  those editors opened with, before anything had been checked, and they
+  survived every edit afterwards. They start as "not checked yet" and return
+  there whenever the content changes.
+- An oversized upload, or one to an installation with attachments switched off,
+  answered 500 and the words "Internal Server Error". Both now say what
+  happened.
+- The workflow editor's mapping labels could not be dragged - the node beneath
+  took the press - and a label that did move left its line behind.
+- An agent node's output was named `reply` by a placeholder and by nothing
+  else, so the node declared nothing and nothing downstream could point at it.
+- Long pages grew instead of scrolling, pushing the attribution bar off the
+  bottom.
+- Sorting a list of issues by title failed outright, because the query joined
+  the labels and Postgres will not order a distinct select by an expression
+  outside its select list.
+
+## 0.2.0 and earlier
+
+Not written down. The changelog starts here, which is the honest place to start
+it: reconstructing releases from their commits afterwards produces something
+that reads like a changelog and is nobody's account of what happened.

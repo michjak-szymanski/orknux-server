@@ -187,6 +187,27 @@ is reported to the module rather than cascaded.
 - Comments say why, not what. KDoc on public types and anything with a rule
   behind it.
 
+## Releasing
+
+`CHANGELOG.md` is written **before** the tag, not after it. A changelog
+assembled from commit subjects once the release is out reads like a changelog
+and is nobody's account of what happened: the person who knew why a change
+mattered has moved on, and what survives is a list of what was touched.
+
+The order is: land the work, write the entry, bump the version, tag. The tag is
+what CI turns into images, so anything after it is in the next release whether
+or not it belongs there.
+
+Three headings, and no others: **Added** for what is new, **Changed** for what
+an existing installation will do differently - the section people actually need
+- and **Fixed** for what was wrong. Anything under Changed that requires an
+action on upgrade says so in the entry itself; somebody reading it should never
+have to go and find out.
+
+One file, in the server repository, covering both halves. They are released
+together under one version, and a reader holding two changelogs side by side to
+work out what a release contains is a reader we have failed.
+
 ## Tests
 
 Every API change comes with `GraphQlTester` coverage in the matching package,

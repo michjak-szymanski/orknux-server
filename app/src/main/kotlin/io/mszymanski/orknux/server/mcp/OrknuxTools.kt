@@ -205,7 +205,21 @@ class OrknuxTools(
                     ToolParameterSpec("assignee", "Only issues assigned to this name - a person, agent or model.", required = false),
                     ToolParameterSpec("status", "OPEN or CLOSED; both when absent.", required = false),
                     ToolParameterSpec("search", "Words to look for in the title, the description or the labels.", required = false),
+                    ToolParameterSpec(
+                        "labels",
+                        "Only issues carrying all of these labels, comma separated - `p1` for the urgent ones.",
+                        required = false,
+                    ),
                 ),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_issue_labels",
+                description =
+                    "The labels this workspace uses and how many issues carry each. A label only works as a " +
+                        "filter if you know it is there.",
+                parameters = emptyList(),
             ),
         )
         add(
@@ -246,6 +260,8 @@ class OrknuxTools(
                         ToolParameterSpec("title", "A new title.", required = false),
                         ToolParameterSpec("description", "A new description; markdown is rendered.", required = false),
                         ToolParameterSpec("labels", "The labels it should have, comma separated. Replaces them all.", required = false),
+                        ToolParameterSpec("add_labels", "Labels to add, comma separated, leaving the rest alone.", required = false),
+                        ToolParameterSpec("remove_labels", "Labels to take off, comma separated.", required = false),
                     ),
                 ),
             )
@@ -399,6 +415,7 @@ class OrknuxTools(
             "orknux_news" -> newsTools.news(scope, arguments)
             "orknux_issues" -> issueTools.list(scope, arguments)
             "orknux_issue" -> issueTools.one(scope, arguments)
+            "orknux_issue_labels" -> issueTools.labels(scope)
             "orknux_comment_on_issue" -> issueTools.comment(scope, arguments)
             "orknux_set_issue_status" -> issueTools.setStatus(scope, arguments)
             "orknux_update_issue" -> issueTools.update(scope, arguments)

@@ -81,6 +81,15 @@ class IssueTools(
         }
         val assignee = text(arguments, "assignee")?.lowercase()
         val search = text(arguments, "search").orEmpty()
+        /*
+         * Every one of them, not any: "p1, slack" asks for the urgent Slack
+         * issues, not for everything urgent and everything about Slack.
+         */
+        val wantedLabels = text(arguments, "labels")
+            ?.split(',')
+            ?.map { it.trim().lowercase() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
         val newestFirst = PageRequest.of(0, MANY, Sort.by("number").descending())
 
         val page = if (wanted == null) {
@@ -90,7 +99,8 @@ class IssueTools(
         }
 
         val found = page.content.filter { held ->
-            assignee == null || nameOf(held)?.lowercase()?.contains(assignee) == true
+            (assignee == null || nameOf(held)?.lowercase()?.contains(assignee) == true) &&
+                wantedLabels.all { wanted -> held.labels.any { it.equals(wanted, ignoreCase = true) } }
         }
 
         return mapper.writeValueAsString(
@@ -107,6 +117,26 @@ class IssueTools(
                     )
                 },
             ),
+        )
+    }
+
+    /**
+     * The labels this workspace uses, with how many issues carry each.
+     *
+     * Worth its own tool rather than a note in the list: a label only works as
+     * a filter if you know it exists, and "p1" is not something anybody can
+     * guess from the outside.
+     */
+    @Transactional(readOnly = true)
+    fun labels(scope: OrknuxScope): String {
+        val all = issues.search(scope.workspaceId, "", PageRequest.of(0, MANY)).content
+        val counted = all.flatMap { it.labels }
+            .groupingBy { it }
+            .eachCount()
+            .toList()
+            .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
+        return mapper.writeValueAsString(
+            mapOf("labels" to counted.map { (label, count) -> mapOf("label" to label, "issues" to count) }),
         )
     }
 
@@ -188,6 +218,24 @@ class IssueTools(
         }
         text(arguments, "labels")?.let { given ->
             held.labels = given.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+        }
+        /*
+         * Adding one and taking one away, beside replacing them all.
+         *
+         * Replacing was the only way, which meant reading the labels, adding
+         * yours to them and writing all of them back - three steps in which
+         * somebody else's label can be lost, and it will be the one that
+         * mattered.
+         */
+        text(arguments, "add_labels")?.let { given ->
+            given.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { wanted ->
+                if (held.labels.none { it.equals(wanted, ignoreCase = true) }) held.labels.add(wanted)
+            }
+        }
+        text(arguments, "remove_labels")?.let { given ->
+            given.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach { unwanted ->
+                held.labels.removeIf { it.equals(unwanted, ignoreCase = true) }
+            }
         }
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()

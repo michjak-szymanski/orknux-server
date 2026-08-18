@@ -70,12 +70,19 @@ class IssueAPI(
         return IssuePageView(found.totalElements.toInt(), found.content.map(::describe))
     }
 
+    /**
+     * One issue, by the number people say.
+     *
+     * Not by its row id. "#4" is what the page shows, what somebody types in a
+     * message and what the address should carry - an address holding the id
+     * instead showed `/issues/17` above a page titled `#15`, and two of us
+     * spent a while believing the wrong issue had been answered.
+     */
     @QueryMapping
     @Transactional(readOnly = true)
-    fun workspaceIssue(@Argument id: Long): IssueView? {
-        val held = issues.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(held.workspaceId)
-        return describe(held)
+    fun workspaceIssue(@Argument workspaceId: Long, @Argument number: Int): IssueView? {
+        requireWorkspaceAccess(workspaceId)
+        return issues.findByWorkspaceIdAndNumber(workspaceId, number)?.let(::describe)
     }
 
     /** Every label in use here, so the filter offers what exists rather than a box. */

@@ -16,7 +16,8 @@ type Query {
     user(id: ID!): AppUser
     "One workspace's issues, newest first."
     workspaceIssues(workspaceId: ID!, status: IssueStatus, search: String, page: Int, size: Int): IssuePage!
-    workspaceIssue(id: ID!): Issue
+    "One issue, by the number people say - not by its row id."
+    workspaceIssue(workspaceId: ID!, number: Int!): Issue
     "Every label in use in this workspace, so a filter can offer what exists."
     workspaceIssueLabels(workspaceId: ID!): [String!]!
     "What an issue can be assigned to here: people, agents and models together."

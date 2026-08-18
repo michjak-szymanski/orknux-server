@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
+import org.springframework.data.repository.findByIdOrNull
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionService
@@ -104,6 +105,7 @@ class OrknuxTools(
     @param:Lazy private val runs: ExecutionService,
     private val agents: AgentRepository,
     private val functions: WorkflowFunctionRepository,
+    private val issueTools: IssueTools,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
 ) {
@@ -134,6 +136,9 @@ class OrknuxTools(
     private fun agentLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/agents/$id/settings")
 
     private fun functionLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/functions/$id")
+
+    /** By number, because that is what the address carries and what people say. */
+    private fun issueLink(workspaceId: Long, number: Int) = link("/workspace/$workspaceId/issues/$number")
 
     /** What to offer, which depends on whether this caller may start anything. */
     fun specs(scope: OrknuxScope): List<ToolSpec> = buildList {
@@ -183,6 +188,68 @@ class OrknuxTools(
          * long enough that fetching every function's to answer a question about
          * one would fill the conversation with the others.
          */
+        /*
+         * The tracker, which is where the work is decided.
+         *
+         * An assistant that can read what it has been asked to do - and say
+         * what it did about it, in the same place the person will look - is
+         * working the way everybody else on the team works. Without these it is
+         * told about an issue in a chat window that nobody else can see.
+         */
+        add(
+            ToolSpec(
+                name = "orknux_issues",
+                description = "Issues in this workspace. Filter by who they are assigned to, by state, or by words.",
+                parameters = listOf(
+                    ToolParameterSpec("assignee", "Only issues assigned to this name - a person, agent or model.", required = false),
+                    ToolParameterSpec("status", "OPEN or CLOSED; both when absent.", required = false),
+                    ToolParameterSpec("search", "Words to look for in the title, the description or the labels.", required = false),
+                ),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_issue",
+                description = "One issue in full, with its description and every comment.",
+                parameters = listOf(ToolParameterSpec("issue", "Its number in this workspace, like 4.", required = true)),
+            ),
+        )
+
+        if (scope.mayWrite) {
+            add(
+                ToolSpec(
+                    name = "orknux_comment_on_issue",
+                    description = "Says something on an issue, under your own name. Everybody who reads it sees it.",
+                    parameters = listOf(
+                        ToolParameterSpec("issue", "Its number in this workspace.", required = true),
+                        ToolParameterSpec("content", "What to say. Markdown is rendered.", required = true),
+                    ),
+                ),
+            )
+            add(
+                ToolSpec(
+                    name = "orknux_set_issue_status",
+                    description = "Opens or closes an issue.",
+                    parameters = listOf(
+                        ToolParameterSpec("issue", "Its number in this workspace.", required = true),
+                        ToolParameterSpec("status", "OPEN or CLOSED.", required = true),
+                    ),
+                ),
+            )
+            add(
+                ToolSpec(
+                    name = "orknux_update_issue",
+                    description = "Changes an issue's title, description or labels. What is left out is left alone.",
+                    parameters = listOf(
+                        ToolParameterSpec("issue", "Its number in this workspace.", required = true),
+                        ToolParameterSpec("title", "A new title.", required = false),
+                        ToolParameterSpec("description", "A new description; markdown is rendered.", required = false),
+                        ToolParameterSpec("labels", "The labels it should have, comma separated. Replaces them all.", required = false),
+                    ),
+                ),
+            )
+        }
+
         add(
             ToolSpec(
                 name = "orknux_functions",
@@ -292,6 +359,17 @@ class OrknuxTools(
             "orknux_agents" -> agentList(scope)
             "orknux_functions" -> functionList(scope)
             "orknux_function" -> function(scope, arguments)
+            /*
+             * The tracker lives in its own service: writing on an issue
+             * touches its comments, which are lazy, so those calls need a
+             * transaction around them - and a transaction cannot be
+             * started by one private method calling another in here.
+             */
+            "orknux_issues" -> issueTools.list(scope, arguments)
+            "orknux_issue" -> issueTools.one(scope, arguments)
+            "orknux_comment_on_issue" -> issueTools.comment(scope, arguments)
+            "orknux_set_issue_status" -> issueTools.setStatus(scope, arguments)
+            "orknux_update_issue" -> issueTools.update(scope, arguments)
             "orknux_suggest_function_code" -> suggest(scope, arguments)
             "orknux_run_workflow" -> runWorkflow(scope, arguments)
             "orknux_rerun_execution" -> rerun(scope, arguments)

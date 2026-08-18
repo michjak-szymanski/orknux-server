@@ -20,8 +20,12 @@ import org.springframework.security.test.context.support.WithMockUser
 import java.time.OffsetDateTime
 
 /**
- * Visibility comes from directory group membership: the configured admin role
- * sees everything, everyone else needs to be in the group named on the workspace.
+ * Visibility comes from roles: the configured admin authority sees everything,
+ * everyone else needs to hold a role the workspace is assigned.
+ *
+ * The roles here are granted by name — a caller holding `ROLE_BACKEND` holds the
+ * role called `backend` — which is the path that keeps installations working when
+ * they upgrade into roles without writing any mapping.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester
@@ -31,6 +35,7 @@ class WorkspaceVisibilityTest(
     @Autowired val audit: WorkspaceAuditRepository,
     @Autowired val workflows: WorkflowRepository,
     @Autowired val assignments: WorkspaceWorkflowRepository,
+    @Autowired val roles: RoleRepository,
 ) {
 
     private var backendId: Long = 0
@@ -42,11 +47,17 @@ class WorkspaceVisibilityTest(
         workflows.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
+        // Everything but the built-in role, which is this installation's and not
+        // any test's to remove.
+        roles.deleteAll(roles.findAll().filterNot { it.builtin })
+
+        val backend = roles.save(Role(name = "backend"))
+        val frontend = roles.save(Role(name = "frontend"))
         backendId = requireNotNull(
-            workspaces.save(Workspace(name = "backend", ldapGroup = "cn=backend,ou=workspaces,dc=orknux,dc=io")).id,
+            workspaces.save(Workspace(name = "backend", roles = mutableSetOf(backend))).id,
         )
         frontendId = requireNotNull(
-            workspaces.save(Workspace(name = "frontend", ldapGroup = "cn=frontend,ou=workspaces,dc=orknux,dc=io")).id,
+            workspaces.save(Workspace(name = "frontend", roles = mutableSetOf(frontend))).id,
         )
     }
 
@@ -61,7 +72,7 @@ class WorkspaceVisibilityTest(
 
     @Test
     @WithMockUser(username = "bob", roles = ["BACKEND"])
-    fun `a member sees only the workspaces whose group they belong to`() {
+    fun `a member sees only the workspaces whose role they hold`() {
         graphQlTester.document("""query { workspaces { content { name } totalElements totalPages } }""")
             .execute()
             .path("workspaces.content[*].name").entityList(String::class.java).containsExactly("backend")
@@ -71,7 +82,7 @@ class WorkspaceVisibilityTest(
 
     @Test
     @WithMockUser(username = "nobody", roles = ["USERS"])
-    fun `someone in no workspace group sees nothing`() {
+    fun `someone holding no workspace role sees nothing`() {
         graphQlTester.document("""query { workspaces { content { name } totalElements } }""")
             .execute()
             .path("workspaces.content").entityList(String::class.java).hasSize(0)
@@ -80,7 +91,7 @@ class WorkspaceVisibilityTest(
 
     @Test
     @WithMockUser(username = "bob", roles = ["BACKEND"])
-    fun `a workspace with no directory group is administrators-only`() {
+    fun `a workspace with no roles is administrators-only`() {
         val orphan = workspaces.save(Workspace(name = "secret"))
 
         graphQlTester.document("""query { workspace(id: ${orphan.id}) { name } }""")

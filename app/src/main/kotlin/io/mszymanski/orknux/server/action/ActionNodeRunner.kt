@@ -2,6 +2,8 @@ package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
 import io.mszymanski.orknux.connector.connection.Delivery
+import io.mszymanski.orknux.connector.connection.HttpAnswer
+import io.mszymanski.orknux.connector.connection.OutgoingHttp
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.workflow.NodeExpressions
@@ -54,6 +56,7 @@ class ActionNodeRunner(
     private val expressions: NodeExpressions,
     private val messages: OutgoingMessages,
     private val externals: VariableArguments,
+    private val http: OutgoingHttp,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.ACTION
@@ -71,11 +74,7 @@ class ActionNodeRunner(
             ActionSubtype.TIME -> waitForTime(step, action, input)
             ActionSubtype.OUTGOING_CONNECTION -> send(action, step, input, trigger)
 
-            ActionSubtype.HTTP_REQUEST ->
-                StepResult(
-                    StepStatus.SKIPPED,
-                    "${label(action.subtype)} actions have no runtime yet; nothing was sent.",
-                )
+            ActionSubtype.HTTP_REQUEST -> request(action, step, input, trigger)
         }
     }
 
@@ -130,6 +129,110 @@ class ActionNodeRunner(
                 permanent = true,
             )
         }
+    }
+
+    /**
+     * Calls whatever the node points at, and hands the answer on.
+     *
+     * The URL and the body are the node's to vary, the same way a send's target and
+     * content are: two nodes running one action can call two addresses. Method and
+     * headers stay the definition's — they say what kind of call this is, which is a
+     * property of the action rather than of one use of it.
+     *
+     * What comes back is a map: status, whether it was in the 200s, and the body —
+     * parsed when it is JSON, so a later node reads fields off it rather than a
+     * string it has to parse itself.
+     */
+    private fun request(action: WorkflowAction, step: ExecutionStep, input: String?, trigger: String?): StepResult {
+        val given = expressions.parse(input)
+        val started = expressions.parse(trigger)
+        val byName = expressions.mappingsOf(step)
+        fun resolved(name: String) = byName[name]?.let { expressions.textOf(it, given, started) }?.trim().orEmpty()
+
+        val url = resolved(ActionParameters.URL).ifEmpty { action.url.orEmpty() }
+        if (url.isEmpty()) return StepResult(StepStatus.SKIPPED, "${step.name} has no URL to call.")
+
+        val body = resolved(ActionParameters.BODY).ifEmpty { action.content.orEmpty() }
+        val method = action.method?.trim()?.ifEmpty { null } ?: "GET"
+
+        return when (val answer = http.call(url, method, headersOf(action), body)) {
+            is HttpAnswer.Answered -> answered(action, step, answer, method, url)
+
+            /*
+             * The call was not made and would not be worth making again — a URL that
+             * is not one, or a host this must not reach. Permanent, so the run stops
+             * here instead of trying twice more at something that has to be edited.
+             */
+            is HttpAnswer.Refused -> throw ActionFailedException(
+                "${step.name} did not call \"${url.take(URL_IN_ERROR)}\": ${answer.reason}",
+                permanent = true,
+            )
+
+            // Nothing came back. That is the kind of thing that works on the retry.
+            is HttpAnswer.Unreachable -> throw ActionFailedException(
+                "${step.name} could not reach \"${url.take(URL_IN_ERROR)}\": ${answer.reason}",
+                permanent = false,
+            )
+        }
+    }
+
+    /**
+     * What to make of an answer.
+     *
+     * A 2xx is the step's result. Anything else is a failure, and which kind matters:
+     * a 4xx is the request being wrong — the same request will be just as wrong in
+     * thirty seconds — while a 5xx is the other end having a bad moment, which is
+     * exactly what retrying is for.
+     */
+    private fun answered(
+        action: WorkflowAction,
+        step: ExecutionStep,
+        answer: HttpAnswer.Answered,
+        method: String,
+        url: String,
+    ): StepResult {
+        val summary = "$method ${url.take(URL_IN_ERROR)} answered ${answer.status}"
+
+        return when (answer.status) {
+            in 200..299 -> StepResult(
+                StepStatus.COMPLETED,
+                expressions.namedJson(step.outputName, mapper.writeValueAsString(shapeOf(answer))),
+            )
+
+            in 400..499 -> throw ActionFailedException("${step.name}: $summary. ${detail(answer)}", permanent = true)
+            else -> throw ActionFailedException("${step.name}: $summary. ${detail(answer)}", permanent = false)
+        }
+    }
+
+    /** The answer as the rest of the run sees it. */
+    private fun shapeOf(answer: HttpAnswer.Answered): Map<String, Any?> = mapOf(
+        "status" to answer.status,
+        "ok" to (answer.status in 200..299),
+        /*
+         * Parsed where it is JSON, and left as text where it is not. A workflow that
+         * asked for JSON should be able to point at a field; one that fetched a CSV
+         * should still get its CSV rather than an error about it not being JSON.
+         */
+        "body" to jsonOrText(answer),
+    )
+
+    private fun jsonOrText(answer: HttpAnswer.Answered): Any? {
+        val looksJson = answer.contentType?.contains("json", ignoreCase = true) == true
+        if (!looksJson) return answer.body
+        return runCatching { mapper.readTree(answer.body) }.getOrDefault(answer.body)
+    }
+
+    /** Enough of a failing body to see what was wrong, without pasting a web page into a log. */
+    private fun detail(answer: HttpAnswer.Answered): String =
+        answer.body.trim().replace(WHITESPACE, " ").take(BODY_IN_ERROR).ifEmpty { "It said nothing." }
+
+    /** The headers the action defines, as they were typed. Unreadable JSON sends none. */
+    private fun headersOf(action: WorkflowAction): Map<String, String> {
+        val written = action.headers?.trim()?.ifEmpty { null } ?: return emptyMap()
+        return runCatching {
+            val tree = mapper.readTree(written)
+            tree.properties().associate { (name, value) -> name to value.asString() }
+        }.getOrDefault(emptyMap())
     }
 
     /**
@@ -297,6 +400,14 @@ class ActionNodeRunner(
 
         /** Enough of the target to recognise what was wired into it, not a message. */
         const val TARGET_IN_ERROR = 60
+
+        /** Enough of a URL to recognise it in a failure, without a query string filling the log. */
+        const val URL_IN_ERROR = 80
+
+        /** Enough of a failing body to see what was wrong, without pasting a web page into it. */
+        const val BODY_IN_ERROR = 200
+
+        val WHITESPACE = Regex("""\s+""")
     }
 }
 

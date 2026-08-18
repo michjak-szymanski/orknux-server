@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360" width="1200" height="360" role="img" aria-label="Orknux — orchestration kernel">
+  <!--
+    The lockup with the short name showing through it.
+
+    orknux minus "nu" is orkx: the product name and the CLI name differ by exactly
+    two letters. So the wordmark sets those two quietly and leaves o-r-k-x carrying
+    the weight — one word that reads "orknux" when you read it and "orkx" when you
+    glance at it.
+
+    Two letters, not one. Dropping the n alone leaves "orkux", which is nothing. But
+    the n is still the letter to design, because n and u are the same form turned
+    over: draw one and the other is it, rotated. That is the play, and it is
+    specified in docs/logo-design.md under "The nu, and the orkx inside orknux".
+
+    Here the pair is separated by weight and colour only. The rotation device needs
+    the glyphs to be paths we own, and the typeface is still the one open decision —
+    see the KNOWN GAP below, which this file inherits unchanged.
+
+    KNOWN GAP: the wordmark is live text in a font stack, so it renders in whatever
+    the viewer has installed — Noto Sans, else DejaVu, else Arial. Until a typeface
+    is chosen and the text converted to paths, this file is not reproducible across
+    machines and should not go to a printer or a third party.
+  -->
+  <defs>
+    <linearGradient id="orknuxOrkxMoss" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#668A6B"/>
+      <stop offset="100%" stop-color="#4A6B52"/>
+    </linearGradient>
+    <mask id="orknuxOrkxVoid">
+      <rect x="0" y="0" width="200" height="200" fill="#fff"/>
+      <circle cx="100" cy="109" r="47" fill="#000"/>
+    </mask>
+  </defs>
+
+  <g transform="translate(45,25) scale(1.55)">
+    <path d="M42 29 L67 50 L133 50 L158 29 L154 64 L181 113 L151 167 L49 167 L19 113 L46 64 Z"
+          fill="url(#orknuxOrkxMoss)" mask="url(#orknuxOrkxVoid)"/>
+    <path d="M81 125 L112 129 L121 96 Z"
+          fill="none" stroke="#5F8467" stroke-width="8" stroke-linejoin="round"/>
+    <circle cx="81" cy="125" r="11" fill="#5F8467"/>
+    <circle cx="112" cy="129" r="11" fill="#5F8467"/>
+    <circle cx="121" cy="96" r="11" fill="#5F8467"/>
+  </g>
+
+  <!--
+    One <text>, three <tspan>: the letters stay on one baseline with one tracking,
+    which is what keeps it a word rather than three chunks butted together.
+
+    The pair recedes by OPACITY ALONE — same ink, same weight, same size.
+
+    A weight step was tried first and drawn: dropping the pair to 400 changes its
+    metrics and sidebearings, and the wordmark visibly falls apart into "ork nu x".
+    Whatever else the device does, it must not stop the word being one word.
+
+    Opacity keeps every advance width exactly as the face drew it, and it survives
+    the one-colour cut, which a second colour would not: one ink at two strengths is
+    still one ink.
+  -->
+  <text x="385" y="205" font-family="Noto Sans,DejaVu Sans,Arial,sans-serif"
+        font-size="150" font-weight="850" letter-spacing="-8" fill="currentColor">
+    <tspan>ork</tspan><tspan opacity="0.42">nu</tspan><tspan>x</tspan>
+  </text>
+  <text x="394" y="258" font-family="Noto Sans,DejaVu Sans,Arial,sans-serif"
+        font-size="25" font-weight="650" letter-spacing="12" fill="#6F9877">ORCHESTRATION KERNEL</text>
+</svg>

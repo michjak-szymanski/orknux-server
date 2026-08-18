@@ -2,8 +2,104 @@ package io.mszymanski.orknux.server.security
 
 import org.springframework.boot.context.properties.ConfigurationProperties
 
+/** How people sign in to this installation. */
+enum class AuthMethod {
+
+    /** Username and password, checked against the directory. */
+    LDAP,
+
+    /**
+     * An OpenID Connect provider, two ways at once.
+     *
+     * A browser is sent to the provider and comes back with a code, which this
+     * server exchanges and turns into the same session cookie LDAP sign-in issues —
+     * so nothing past the front door knows the difference. A programmatic caller
+     * instead presents the provider's own token as a bearer, which is validated per
+     * request. Both are the same provider, the same claims and the same roles.
+     */
+    OIDC,
+}
+
 @ConfigurationProperties(prefix = "orknux.security")
 data class SecurityProperties(
-    /** Holders see the Admin section and every workspace, whatever their other roles. */
+    /**
+     * Which of the two is in use. One at a time, deliberately.
+     *
+     * Both at once would mean an installation with an LDAP password for every
+     * account its OIDC provider governs — a second way in, that the provider's
+     * policies do not reach and its administrators do not know about.
+     */
+    val authMethod: AuthMethod = AuthMethod.LDAP,
+
+    /**
+     * Holders administer, whatever else they hold.
+     *
+     * Kept alongside the roles rather than replaced by them: an installation that
+     * has always granted this authority should not need a mapping written before
+     * anybody can reach the Admin section — least of all the person who would have
+     * to write it.
+     */
     val adminRole: String = "ROLE_ADMINS",
+
+    /**
+     * Which of the identity provider's names grants which of this installation's roles.
+     *
+     * The key is what the provider says — an LDAP group DN or its common name, or the
+     * value of an OIDC claim. The value is the name of a role, as the Roles screen
+     * spells it. Both sides are matched without regard to case.
+     *
+     * Empty is a working configuration, not an unfinished one: a role with no mapping
+     * is granted to whoever holds an authority derived from its own name, which is
+     * what LDAP produced before roles existed.
+     */
+    val roleMapping: Map<String, String> = emptyMap(),
+
+    /** What this installation calls its OIDC provider, where that is in use. */
+    val oidc: OidcProperties = OidcProperties(),
+)
+
+data class OidcProperties(
+    /**
+     * The claim carrying group or role membership.
+     *
+     * There is no standard one. Keycloak puts them in `groups` with the right mapper,
+     * Entra uses `groups` or `roles`, Okta usually `groups`. Whatever it is called,
+     * each value in it is treated the way an LDAP group is: looked up in the role
+     * mapping, or matched against a role's own name.
+     */
+    val rolesClaim: String = "groups",
+
+    /**
+     * The claim to show as the person's name.
+     *
+     * `preferred_username` where the provider sets it, because that is what somebody
+     * recognises as themselves; the subject is a stable identifier and an unreadable
+     * one, so it is the fallback rather than the default.
+     */
+    val usernameClaim: String = "preferred_username",
+
+    /** What the sign-in button says. The provider's name, as the people signing in know it. */
+    val displayName: String = "single sign-on",
+
+    /**
+     * The provider, by its issuer.
+     *
+     * Enough on its own: the discovery document at this address says where the
+     * endpoints are and which keys sign the tokens, so none of that is configured
+     * separately and none of it goes stale when the provider rotates something.
+     */
+    val issuer: String = "",
+
+    val clientId: String = "",
+
+    /**
+     * The client secret, where the provider issued one.
+     *
+     * Empty for a public client, which is the right shape when nothing but a browser
+     * ever performs the exchange — the code flow with PKCE does not need one.
+     */
+    val clientSecret: String = "",
+
+    /** What to ask the provider for. `openid` is required; the rest is what is read. */
+    val scopes: List<String> = listOf("openid", "profile", "email", "groups"),
 )

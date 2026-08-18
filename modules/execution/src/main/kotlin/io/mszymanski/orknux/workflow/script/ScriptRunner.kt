@@ -114,6 +114,47 @@ class ScriptRunner(private val properties: ScriptProperties) {
     }
 
     /**
+     * How many arguments the script's default export accepts.
+     *
+     * Asked so a function can be refused before it is stored when the code and the
+     * declared parameters disagree. Arguments are passed positionally — the declared
+     * ones, then the workspace's variables — so the count is the whole of the
+     * contract; what the code calls them is its own business.
+     *
+     * Counted from the function's own text rather than from `length`, because
+     * `length` stops at the first parameter with a default: `(a, b = 2)` reports one
+     * and accepts two, and refusing that would be refusing correct code.
+     */
+    fun arity(source: String): ScriptArity = try {
+        newContext().use { polyglot ->
+            val cancel = watchdog.schedule(
+                { runCatching { polyglot.close(true) } },
+                properties.timeoutMillis,
+                TimeUnit.MILLISECONDS,
+            )
+            try {
+                val exported = polyglot.eval(module(source)).getMember("default")
+                    ?: return@use ScriptArity.Unreadable("it has no default export to call")
+                if (!exported.canExecute()) return@use ScriptArity.Unreadable("its default export is not a function")
+
+                polyglot.getBindings("js").putMember(SUBJECT, exported)
+                polyglot.eval("js", ARITY)
+                val counted = polyglot.getBindings("js").getMember(ARITY_RESULT)
+                if (counted == null || !counted.isNumber) {
+                    return@use ScriptArity.Unreadable("its parameters could not be read")
+                }
+                ScriptArity.Counted(counted.asInt())
+            } finally {
+                cancel.cancel(false)
+            }
+        }
+    } catch (failure: PolyglotException) {
+        ScriptArity.Unreadable(failure.message ?: "the script could not be read")
+    } catch (failure: IllegalStateException) {
+        ScriptArity.Unreadable(failure.message ?: "the script could not be read")
+    }
+
+    /**
      * The sandbox itself. Every `allow…` here is a decision to say no; the
      * builder's defaults are already restrictive, and they are repeated so that
      * loosening one is a visible edit rather than an upgrade's side effect.
@@ -198,6 +239,59 @@ class ScriptRunner(private val properties: ScriptProperties) {
     private companion object {
         val log = LoggerFactory.getLogger(ScriptRunner::class.java)
 
+        const val SUBJECT = "__orknuxSubject"
+        const val ARITY_RESULT = "__orknuxArity"
+
+        /**
+         * Counts the parameters the subject declares.
+         *
+         * Reads the function's own text, so a default value or a destructured
+         * parameter counts once, as the caller sees it. Only commas at the top level
+         * of the parameter list separate parameters — the ones inside a default
+         * value, an object pattern or a string do not — which is why this scans
+         * rather than splits.
+         */
+        val ARITY = """
+            (function () {
+              var fn = globalThis.$SUBJECT;
+              var text = String(fn);
+              var open = text.indexOf('(');
+              var arrow = text.indexOf('=>');
+
+              // `x => x`: one parameter, and no brackets to look inside.
+              if (open === -1 || (arrow !== -1 && arrow < open)) {
+                globalThis.$ARITY_RESULT = 1;
+                return;
+              }
+
+              var depth = 0;
+              var commas = 0;
+              var anything = false;
+              var quote = null;
+
+              for (var at = open; at < text.length; at++) {
+                var ch = text[at];
+
+                if (quote !== null) {
+                  if (ch === '\\') at++;
+                  else if (ch === quote) quote = null;
+                  continue;
+                }
+                if (ch === '"' || ch === "'" || ch === '`') { quote = ch; continue; }
+
+                if (ch === '(' || ch === '[' || ch === '{') { depth++; if (depth === 1) continue; }
+                else if (ch === ')' || ch === ']' || ch === '}') { depth--; if (depth === 0) break; }
+
+                if (depth === 1) {
+                  if (ch === ',') commas++;
+                  else if (ch !== ' ' && ch !== '\n' && ch !== '\r' && ch !== '\t') anything = true;
+                }
+              }
+
+              globalThis.$ARITY_RESULT = anything ? commas + 1 : 0;
+            })();
+        """.trimIndent()
+
         const val CALLEE = "__orknuxCallee"
         const val CONTEXT = "__orknuxContext"
         const val ARGUMENTS = "__orknuxArguments"
@@ -243,6 +337,15 @@ sealed interface ScriptResult {
 
     /** The script threw, ran too long, or never got as far as running. */
     data class Failed(val reason: String, override val durationMillis: Long) : ScriptResult
+}
+
+/** How many arguments a script's default export takes, or why that is not knowable. */
+sealed interface ScriptArity {
+
+    data class Counted(val parameters: Int) : ScriptArity
+
+    /** No default export, not a function, or it could not be read. */
+    data class Unreadable(val reason: String) : ScriptArity
 }
 
 data class ScriptValidation(

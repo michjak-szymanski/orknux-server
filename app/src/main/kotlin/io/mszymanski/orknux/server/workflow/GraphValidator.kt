@@ -92,7 +92,7 @@ class GraphValidator(
                     outputs = if (named.isEmpty()) {
                         parameters.outputsOf(action)
                     } else {
-                        listOf(ActionParamView(named, parameters.outputsOf(action).firstOrNull()?.type ?: ValueType.OBJECT))
+                        listOf(ActionParamView(named, parameters.outputsOf(action).firstOrNull()?.type ?: ValueType.MAP))
                     },
                     passThrough = parameters.passesThrough(action),
                 )
@@ -348,7 +348,9 @@ class GraphValidator(
                         value.isNumber -> ValueType.NUMBER
                         value.isBoolean -> ValueType.BOOLEAN
                         value.isArray -> ValueType.ARRAY
-                        value.isObject -> ValueType.OBJECT
+                        // Object-shaped, but nothing here says which definition
+                        // it matches, and guessing would be worse than saying so.
+                        value.isObject -> ValueType.MAP
                         else -> ValueType.STRING
                     },
                 )
@@ -410,11 +412,23 @@ class GraphValidator(
     /**
      * Whether what arrives will do for what is wanted.
      *
-     * An object is anything, and anything can be read as text, so those go
-     * anywhere; the rest have to agree.
+     * A map is anything and takes anything, and anything can be read as text, so
+     * those go anywhere; the rest have to agree.
+     *
+     * The wildcard used to be OBJECT, back when OBJECT was what you said when you
+     * had not said anything. Now that it names a definite shape, an object is as
+     * particular as a number: what is loose is MAP, and MAP is what is waved
+     * through. An object flowing into an object is still allowed on the name alone
+     * — checking that the two definitions agree field by field is a stricter rule
+     * than the graph has ever applied, and one worth introducing on its own.
      */
     private fun compatible(given: ValueType, wanted: ValueType): Boolean =
-        given == wanted || given == ValueType.OBJECT || wanted == ValueType.OBJECT || wanted == ValueType.STRING
+        given == wanted ||
+            given == ValueType.MAP ||
+            wanted == ValueType.MAP ||
+            wanted == ValueType.STRING ||
+            // Two objects agree by being objects; which ones is not checked here.
+            (given == ValueType.OBJECT && wanted == ValueType.OBJECT)
 
     /** What has reached a node: the fields, and whether anything is unknown. */
     private data class Reachable(

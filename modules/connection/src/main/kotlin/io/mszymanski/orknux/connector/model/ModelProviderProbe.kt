@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.connection.CheckResult
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import io.mszymanski.orknux.connector.connection.HttpHeader
+import io.mszymanski.orknux.connector.security.SecretCipher
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
 import java.net.URLEncoder
@@ -31,6 +32,8 @@ class ModelProviderProbe(
     private val probe: ConnectionProbe,
     private val properties: ConnectionProperties,
     private val mapper: ObjectMapper,
+    /** Only to recognise a credential that never came out of its envelope. */
+    private val cipher: SecretCipher,
 ) {
 
     /**
@@ -160,6 +163,20 @@ class ModelProviderProbe(
     fun credentials(provider: ModelProvider): Credential {
         if (!provider.configured()) {
             return Credential.Failed("There are no credentials to call this provider with")
+        }
+
+        /*
+         * Stored, but not with the key this installation has now.
+         *
+         * Sending it as it stands would put the envelope in the header and come
+         * back a 401, which reads as a wrong credential rather than an
+         * unreadable one — and those two want opposite things done about them.
+         */
+        if (cipher.isEncrypted(provider.secret)) {
+            return Credential.Failed(
+                "This provider's credential cannot be read with the current secret key. " +
+                    "Enter it again, or restore the key it was saved with.",
+            )
         }
 
         return when (provider.authMethod) {

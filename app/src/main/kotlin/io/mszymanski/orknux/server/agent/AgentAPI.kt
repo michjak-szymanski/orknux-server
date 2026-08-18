@@ -82,6 +82,7 @@ class AgentAPI(
         val previousDescription = agent.description
         val previousPrompt = agent.systemPrompt
         val previousServers = agent.mcpServers.toList()
+        val previousOrknux = agent.orknuxAccess
         val previousCatalogs = agent.memoryCatalogs.toList()
         val previousSkillCatalogs = agent.skillCatalogs.toList()
         val previousTools = agent.tools.toList()
@@ -106,6 +107,7 @@ class AgentAPI(
             // Keep the given order, dropping blanks and repeats.
             agent.mcpServers = input.mcpServers.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
         }
+        if (input.orknuxAccess != null) agent.orknuxAccess = input.orknuxAccess
         if (input.memoryCatalogs != null) {
             agent.memoryCatalogs =
                 input.memoryCatalogs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
@@ -118,7 +120,7 @@ class AgentAPI(
             agent.tools = input.tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
         }
 
-        recordChanges(agent, previousName, previousDescription, previousPrompt, previousServers)
+        recordChanges(agent, previousName, previousDescription, previousPrompt, previousServers, previousOrknux)
         if (agent.modelId != previousModel) {
             val named = agent.modelId?.let { models.model(it)?.name }
             auditRecorder.record(
@@ -214,6 +216,7 @@ class AgentAPI(
         previousDescription: String?,
         previousPrompt: String?,
         previousServers: List<String>,
+        previousOrknux: Boolean,
     ) {
         if (agent.name != previousName) {
             auditRecorder.record(agent.workspaceId, WorkspaceAuditCategory.AGENT, "Agent $previousName renamed to ${agent.name}")
@@ -236,6 +239,19 @@ class AgentAPI(
                 agent.workspaceId,
                 WorkspaceAuditCategory.AGENT,
                 "MCP Server $server removed from ${agent.name}",
+            )
+        }
+        // Worth a line of its own: this is the grant that lets an agent start
+        // workflows, which is the widest thing an agent can be given here.
+        if (agent.orknuxAccess != previousOrknux) {
+            auditRecorder.record(
+                agent.workspaceId,
+                WorkspaceAuditCategory.AGENT,
+                if (agent.orknuxAccess) {
+                    "Orknux access granted to ${agent.name}"
+                } else {
+                    "Orknux access withdrawn from ${agent.name}"
+                },
             )
         }
     }
@@ -261,10 +277,12 @@ data class UpdateAgentInput(
     val description: String? = null,
     val systemPrompt: String? = null,
     val type: AgentType? = null,
-    /** Null leaves the current list alone; an empty list clears it. */
     /** Null clears the model, the way the form sends an unchosen select. */
     val modelId: Long? = null,
+    /** Null leaves the current list alone; an empty list clears it. */
     val mcpServers: List<String>? = null,
+    /** Whether it may ask orknux about orknux; null leaves the grant alone. */
+    val orknuxAccess: Boolean? = null,
     /** Same rule: null leaves it alone, an empty list clears it. */
     val memoryCatalogs: List<String>? = null,
     /** Which skill catalogs it may draw on; null leaves the grant alone. */
@@ -287,6 +305,8 @@ data class AgentView(
     /** Null when the model it named has been removed. */
     val modelName: String?,
     val mcpServers: List<String>,
+    /** Whether it may ask orknux about orknux. */
+    val orknuxAccess: Boolean,
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
@@ -304,6 +324,7 @@ data class AgentView(
         modelId = agent.modelId,
         modelName = modelName,
         mcpServers = agent.mcpServers.toList(),
+        orknuxAccess = agent.orknuxAccess,
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),

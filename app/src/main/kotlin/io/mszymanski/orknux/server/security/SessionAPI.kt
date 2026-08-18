@@ -31,6 +31,7 @@ import org.springframework.security.authentication.AuthenticationManager
 class SessionAPI(
     private val authenticationManager: AuthenticationManager,
     private val properties: SecurityProperties,
+    private val resolver: RoleResolver,
 ) {
 
     private val securityContextRepository = HttpSessionSecurityContextRepository()
@@ -41,6 +42,18 @@ class SessionAPI(
         request: HttpServletRequest,
         response: HttpServletResponse,
     ): SessionUser {
+        /*
+         * There is no password to check where the provider holds them. Refused
+         * rather than quietly failing against a directory this installation does not
+         * use, because the answer is not "wrong password" — it is "not this way".
+         */
+        if (properties.authMethod != AuthMethod.LDAP) {
+            throw ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "This installation signs in with ${properties.oidc.displayName}, not with a password.",
+            )
+        }
+
         val authentication = try {
             authenticationManager.authenticate(
                 UsernamePasswordAuthenticationToken(credentials.username, credentials.password),
@@ -62,9 +75,17 @@ class SessionAPI(
     @GetMapping
     fun current(authentication: Authentication): SessionUser = sessionUser(authentication)
 
+    /**
+     * Who this is, and whether they administer.
+     *
+     * Asked of the resolver rather than by looking for one configured authority, so
+     * that a role carrying the administrator scope counts — which is the whole point
+     * of roles having scopes. The configured authority still counts on its own,
+     * inside the resolver, so nothing that worked before stops working.
+     */
     private fun sessionUser(authentication: Authentication): SessionUser {
         val user = SessionUser(authentication)
-        return user.copy(admin = properties.adminRole in user.roles)
+        return user.copy(admin = resolver.administers(user.roles.toSet()))
     }
 
     @DeleteMapping

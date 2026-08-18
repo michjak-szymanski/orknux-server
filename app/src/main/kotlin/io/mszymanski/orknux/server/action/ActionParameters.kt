@@ -54,11 +54,15 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
             ActionParamView("channel", ValueType.STRING),
             ActionParamView("ts", ValueType.STRING),
         )
-        ActionSubtype.HTTP_REQUEST -> listOf(ActionParamView("response", ValueType.OBJECT))
+        // Whatever the service answered with. Nothing here defines that shape, so
+        // it is a map: a later node can read fields off it, unchecked, as before.
+        ActionSubtype.HTTP_REQUEST -> listOf(ActionParamView("response", ValueType.MAP))
         ActionSubtype.FUNCTION -> listOf(
             ActionParamView(
                 "result",
-                action.functionId?.let { functions.findByIdOrNull(it) }?.returnType ?: ValueType.OBJECT,
+                // The function's declared return type, or a map when there is no
+                // function to ask — an unanswered question, not a defined shape.
+                action.functionId?.let { functions.findByIdOrNull(it) }?.returnType ?: ValueType.MAP,
             ),
         )
 
@@ -116,9 +120,16 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
             },
         )
 
-        // Nothing runs an HTTP request yet, so there is nothing a node could
-        // usefully be asked for.
-        ActionSubtype.HTTP_REQUEST -> emptyList()
+        /*
+         * What one node may call, and what it may say — the same argument as a
+         * send's target and content. Method and headers stay the definition's: they
+         * say what kind of call this is, which belongs to the action rather than to
+         * one use of it.
+         */
+        ActionSubtype.HTTP_REQUEST -> listOf(
+            seed(URL, ValueType.STRING, action.url),
+            seed(BODY, ValueType.STRING, action.content),
+        )
 
         ActionSubtype.INLINE_CONDITION ->
             references(action.conditionExpression).map { defaultReference(it, ValueType.BOOLEAN) }
@@ -202,6 +213,10 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
 
         /** The message a reply threads onto; blank posts to the channel instead. */
         const val THREAD_TS = "threadTs"
+
+        /** What an HTTP node calls, and what it sends. */
+        const val URL = "url"
+        const val BODY = "body"
 
         /**
          * A name and nothing else, dots included. Whole-string on purpose: this

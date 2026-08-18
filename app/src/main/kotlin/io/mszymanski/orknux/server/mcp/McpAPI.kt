@@ -1,0 +1,173 @@
+package io.mszymanski.orknux.server.mcp
+
+import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.slf4j.LoggerFactory
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.http.HttpStatus
+import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RestController
+import tools.jackson.databind.JsonNode
+import tools.jackson.databind.ObjectMapper
+
+/**
+ * Orknux as an MCP server, for agents that live outside it.
+ *
+ * The same tools the quick chat and a granted agent use — [OrknuxTools] — behind
+ * the protocol an outside client speaks. One surface, three doors, and this is
+ * the door for something running on somebody's laptop.
+ *
+ * **One server per workspace**, addressed as `/mcp/{workspaceId}`. The
+ * alternative is a single endpoint with a workspace argument on every tool,
+ * which makes every call carry a parameter the caller already decided once, and
+ * makes it possible to get wrong per call. A client configures the workspace in
+ * its URL and the tools are then exactly the tools.
+ *
+ * **Authentication is the application's own**, which is the whole of what
+ * "respects the auth rules" means here: the request goes through the same
+ * security chain as everything else, so it needs a session — `POST /api/session`
+ * for a directory installation, or a bearer token where OIDC is configured —
+ * and then [WorkspaceAccess] decides whether this caller may see this workspace
+ * at all. Nothing here grants anything the caller could not already do through
+ * the API by hand; it only makes it reachable by an agent.
+ *
+ * Writing is allowed for the same reason. A person with a session can start a
+ * workflow from the interface, so a tool that refused would be protecting
+ * nothing while pretending to.
+ *
+ * JSON-RPC 2.0 over plain HTTP POST. No SSE and no session resumption: this
+ * server has no long-lived state to resume and never sends an unsolicited
+ * message, so a request and its answer is the whole of the transport.
+ */
+@RestController
+class McpAPI(
+    private val workspaces: WorkspaceRepository,
+    private val tools: OrknuxTools,
+    private val access: WorkspaceAccess,
+    private val mapper: ObjectMapper,
+) {
+
+    @PostMapping("/mcp/{workspaceId}", produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun rpc(@PathVariable workspaceId: Long, @RequestBody body: JsonNode): ResponseEntity<Any> {
+        val method = body.path("method").stringValue().orEmpty()
+        val requestId = body.path("id").takeUnless { it.isMissingNode || it.isNull }
+
+        /*
+         * A workspace this caller may not have is answered in the protocol
+         * rather than as an HTTP fault.
+         *
+         * A JSON-RPC client is reading JSON-RPC. Handing it a Spring error page
+         * — or worse, the 401 the error dispatch used to produce — tells an
+         * agent to go and authenticate when the real answer is that the
+         * workspace in its URL is wrong. Nothing distinguishes "not there" from
+         * "not yours", the way it does not anywhere else here.
+         */
+        val workspace = workspaces.findByIdOrNull(workspaceId)?.takeIf { access.canSee(it) }
+            ?: return ResponseEntity.ok(
+                error(requestId, INVALID_PARAMS, "There is no workspace $workspaceId that you can see"),
+            )
+
+        val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = true)
+        val id = requestId
+
+        /*
+         * A notification has no id and takes no answer — `initialized` is the
+         * one every client sends. Answering it with a result is a protocol
+         * error on our side, so it gets an empty 202 instead.
+         */
+        if (id == null) {
+            log.debug("MCP notification {} for workspace {}", method, workspaceId)
+            return ResponseEntity.accepted().build()
+        }
+
+        return when (method) {
+            "initialize" -> ok(id, initialize())
+            "tools/list" -> ok(id, mapOf("tools" to tools.specs(scope).map(::described)))
+            "tools/call" -> ok(id, call(scope, body.path("params")))
+            "ping" -> ok(id, emptyMap<String, Any>())
+            else -> ResponseEntity.ok(error(id, METHOD_NOT_FOUND, "This server does not do $method"))
+        }
+    }
+
+    private fun error(id: JsonNode?, code: Int, says: String): Map<String, Any?> =
+        mapOf("jsonrpc" to "2.0", "id" to id, "error" to mapOf("code" to code, "message" to says))
+
+    private fun initialize(): Map<String, Any> = mapOf(
+        // Answered with the version this was written against. A client asking
+        // for a newer one is told what it is talking to and decides for itself.
+        "protocolVersion" to PROTOCOL,
+        "capabilities" to mapOf("tools" to mapOf("listChanged" to false)),
+        "serverInfo" to mapOf("name" to "orknux", "version" to VERSION),
+        "instructions" to
+            "Orknux, a workflow and agent platform. These tools read and operate one workspace: its " +
+            "workflows, its runs and its agents. Everything that has a page comes back with a `url`; " +
+            "use it when you refer to something, and never invent one.",
+    )
+
+    /**
+     * One call, run and wrapped as MCP expects.
+     *
+     * A tool that failed answers `isError` with the reason as text rather than a
+     * JSON-RPC error: the protocol reserves those for the call not happening at
+     * all, and a model needs to read what went wrong to try something else.
+     */
+    private fun call(scope: OrknuxScope, params: JsonNode): Map<String, Any> {
+        val name = params.path("name").stringValue().orEmpty()
+        if (!tools.handles(name)) {
+            return content("There is no tool called $name", failed = true)
+        }
+
+        val arguments = params.path("arguments").takeUnless { it.isMissingNode || it.isNull }
+        val answer = tools.run(scope, name, arguments?.let(mapper::writeValueAsString) ?: "{}")
+
+        // The surface reports its own refusals as `{"error": ...}`; those are
+        // the tool's answer, not a transport failure, but the client should
+        // still see them as an error rather than as a result to act on.
+        val refused = runCatching { mapper.readTree(answer).has("error") }.getOrDefault(false)
+        return content(answer, failed = refused)
+    }
+
+    private fun content(text: String, failed: Boolean): Map<String, Any> = mapOf(
+        "content" to listOf(mapOf("type" to "text", "text" to text)),
+        "isError" to failed,
+    )
+
+    /**
+     * A tool as MCP wants it: a name, a description, and a JSON Schema.
+     *
+     * Everything is a string, which is what [ToolSpec] carries and what these
+     * tools actually take — an id is as happily read from `"19"` as from `19`,
+     * and a schema claiming otherwise would make clients refuse calls that work.
+     */
+    private fun described(spec: ToolSpec): Map<String, Any> = mapOf(
+        "name" to spec.name,
+        "description" to spec.description,
+        "inputSchema" to mapOf(
+            "type" to "object",
+            "properties" to spec.parameters.associate { parameter ->
+                parameter.name to mapOf("type" to "string", "description" to parameter.description)
+            },
+            "required" to spec.parameters.filter { it.required }.map { it.name },
+        ),
+    )
+
+    private fun ok(id: JsonNode, result: Any): ResponseEntity<Any> =
+        ResponseEntity.status(HttpStatus.OK).body(mapOf("jsonrpc" to "2.0", "id" to id, "result" to result))
+
+    private companion object {
+        val log = LoggerFactory.getLogger(McpAPI::class.java)
+
+        /** The revision of the protocol these shapes were written against. */
+        const val PROTOCOL = "2025-06-18"
+        const val VERSION = "1.0"
+
+        const val METHOD_NOT_FOUND = -32601
+        const val INVALID_PARAMS = -32602
+    }
+}

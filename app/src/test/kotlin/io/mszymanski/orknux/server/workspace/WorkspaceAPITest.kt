@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.workspace
 
+import io.mszymanski.orknux.server.security.Role
+import io.mszymanski.orknux.server.security.RoleRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -16,6 +18,7 @@ class WorkspaceAPITest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val repository: WorkspaceRepository,
     @Autowired val auditRepository: WorkspaceAuditRepository,
+    @Autowired val roles: RoleRepository,
 ) {
 
     @BeforeEach
@@ -210,8 +213,9 @@ class WorkspaceAPITest(
     }
 
     @Test
-    fun `saves description and directory group from the settings form`() {
+    fun `saves description and the roles that open it from the settings form`() {
         val workspace = repository.save(Workspace(name = "backend"))
+        val backend = roles.save(Role(name = "backend"))
 
         graphQlTester.document(
             """
@@ -219,32 +223,34 @@ class WorkspaceAPITest(
               updateWorkspace(id: ${workspace.id}, input: {
                 name: "backend",
                 description: "Core API, services, and data pipelines.",
-                ldapGroup: "cn=backend,ou=workspaces,dc=orknux,dc=io"
-              }) { name description ldapGroup }
+                roleIds: [${backend.id}]
+              }) { name description roles { name } }
             }
             """,
         ).execute()
             .path("updateWorkspace.description").entity(String::class.java)
             .isEqualTo("Core API, services, and data pipelines.")
-            .path("updateWorkspace.ldapGroup").entity(String::class.java)
-            .isEqualTo("cn=backend,ou=workspaces,dc=orknux,dc=io")
+            .path("updateWorkspace.roles[*].name").entityList(String::class.java).containsExactly("backend")
 
         val saved = repository.findAll().single()
-        assertThat(saved.ldapGroup).isEqualTo("cn=backend,ou=workspaces,dc=orknux,dc=io")
-        // No rename, but the settings changes are still worth recording.
+        assertThat(saved.roles.map { it.name }).containsExactly("backend")
+        // No rename, but the settings changes are still worth recording — and the
+        // roles are named in the entry, because who can see a workspace is worth
+        // being able to read out of the log a year later.
         assertThat(auditRepository.findAll().map { it.message })
-            .containsExactlyInAnyOrder("Workspace LDAP group updated", "Workspace description updated")
+            .containsExactlyInAnyOrder("Workspace roles set to backend", "Workspace description updated")
     }
 
     @Test
-    fun `clears the directory group when the field is emptied`() {
-        val workspace = repository.save(Workspace(name = "backend", ldapGroup = "cn=backend,ou=workspaces,dc=orknux,dc=io"))
+    fun `clears the roles when the last one is taken off`() {
+        val backend = roles.save(Role(name = "backend"))
+        val workspace = repository.save(Workspace(name = "backend", roles = mutableSetOf(backend)))
 
         graphQlTester.document(
-            """mutation { updateWorkspace(id: ${workspace.id}, input: { name: "backend", ldapGroup: "  " }) { ldapGroup } }""",
-        ).execute().path("updateWorkspace.ldapGroup").valueIsNull()
+            """mutation { updateWorkspace(id: ${workspace.id}, input: { name: "backend", roleIds: [] }) { roles { name } } }""",
+        ).execute().path("updateWorkspace.roles").entityList(String::class.java).hasSize(0)
 
-        assertThat(repository.findAll().single().ldapGroup).isNull()
+        assertThat(repository.findAll().single().roles).isEmpty()
     }
 
     @Test

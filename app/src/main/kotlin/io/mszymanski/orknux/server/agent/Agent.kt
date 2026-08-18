@@ -66,6 +66,21 @@ class Agent(
     @Column(name = "model_id")
     var modelId: Long? = null,
 
+    /**
+     * Whether this agent may ask orknux about orknux.
+     *
+     * The built-in server, which is not one of [mcpServers] and never appears
+     * among them: those are addresses somebody registered, and this one is the
+     * application the agent is already running inside. A boolean rather than a
+     * name in that list, because there is no server to name.
+     *
+     * Granted, it can also start workflows — which is the point, and worth
+     * knowing before granting it: an agent that starts a workflow which asks an
+     * agent is a loop nothing here breaks.
+     */
+    @Column(name = "orknux_access", nullable = false)
+    var orknuxAccess: Boolean = false,
+
     /** MCP servers this agent may connect to, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "agent_mcp_server", joinColumns = [JoinColumn(name = "agent_id")])

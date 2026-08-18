@@ -7,6 +7,8 @@ import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.McpToolCaller
 import io.mszymanski.orknux.server.agent.SkillTool
 import io.mszymanski.orknux.server.agent.WorkspaceToolCaller
+import io.mszymanski.orknux.server.mcp.OrknuxScope
+import io.mszymanski.orknux.server.mcp.OrknuxTools
 import io.mszymanski.orknux.server.memory.MemoryTool
 import io.mszymanski.orknux.server.memory.ToolDescriptor
 import org.slf4j.LoggerFactory
@@ -31,12 +33,27 @@ class AgentTools(
     private val memories: MemoryTool,
     private val workspaceTools: WorkspaceToolCaller,
     private val mcpTools: McpToolCaller,
+    private val orknux: OrknuxTools,
     private val mapper: ObjectMapper,
 ) {
+
+    /**
+     * What an agent may reach of orknux: its own workspace, and no wider.
+     *
+     * Writing is allowed because starting a workflow is most of what an agent
+     * granted this is for. The grant is the decision; there is no session here
+     * to ask for a second one.
+     */
+    private fun scopeFor(agent: Agent) = OrknuxScope(workspaceId = agent.workspaceId, mayWrite = true)
 
     fun specsFor(agent: Agent): List<ToolSpec> = buildList {
         if (agent.skillCatalogs.isNotEmpty()) addAll(skills.descriptors().map(::spec))
         if (agent.memoryCatalogs.isNotEmpty()) add(spec(memories.descriptor()))
+
+        // orknux itself, for an agent granted it. Scoped to the agent's own
+        // workspace: the grant is the authorisation, and the workspace is the
+        // boundary — there is no session here to ask about anything wider.
+        if (agent.orknuxAccess) addAll(orknux.specs(scopeFor(agent)))
 
         // The workspace's own code, under its own names. A tool named like a
         // built-in is skipped rather than shadowing it: two tools answering to
@@ -77,7 +94,20 @@ class AgentTools(
      * it, and any of those beats the whole exchange dying because a lookup did.
      */
     fun run(agent: Agent, call: ToolCall): String = try {
-        when (call.name) {
+        /*
+         * orknux's own, and only for an agent granted them.
+         *
+         * Checked before the rest by the prefix the surface owns, so a model
+         * that guessed the name of a tool it was never offered is refused here
+         * rather than reaching the workspace through a name it made up.
+         */
+        if (orknux.handles(call.name)) {
+            if (agent.orknuxAccess) {
+                orknux.run(scopeFor(agent), call.name, call.arguments)
+            } else {
+                mapper.writeValueAsString(mapOf("error" to "This agent has not been given access to orknux"))
+            }
+        } else when (call.name) {
             "skill_list" -> mapper.writeValueAsString(mapOf("skills" to skills.list(agent)))
 
             "skill_load" -> {

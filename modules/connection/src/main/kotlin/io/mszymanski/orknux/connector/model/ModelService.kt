@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.CheckOutcome
+import io.mszymanski.orknux.connector.security.SecretCipher
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Sort
@@ -31,6 +32,8 @@ class ModelService(
     private val usage: ModelUsageRepository,
     private val probe: ModelProviderProbe,
     private val events: ApplicationEventPublisher,
+    /** Only to recognise a credential that never came out of its envelope. */
+    private val cipher: SecretCipher,
     /** Defaulted rather than a bean, the way `ConditionEvaluator` takes one. */
     private val clock: Clock = Clock.systemDefaultZone(),
 ) {
@@ -202,6 +205,7 @@ class ModelService(
                 requestsPerMinute = input.requestsPerMinute,
                 inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal(),
                 outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal(),
+                voice = input.voice?.trim()?.ifEmpty { null },
             ),
         )
         return LlmModelView(model, provider)
@@ -233,6 +237,7 @@ class ModelService(
         model.maxOutput = input.maxOutput
         model.inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal()
         model.outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal()
+        model.voice = input.voice?.trim()?.ifEmpty { null }
         return LlmModelView(model, provider)
     }
 
@@ -271,12 +276,18 @@ class ModelService(
         return true
     }
 
-    /** Hands the stored key back, for the provider form's "Reveal" action. */
+    /**
+     * Hands the stored key back, for the provider form's "Reveal" action.
+     *
+     * One that could not be decrypted comes back as null rather than as its
+     * envelope: `orkx1:…` in a reveal box looks like the credential somebody
+     * saved, and copying it somewhere would be copying nothing usable.
+     */
     @Transactional
     fun revealProviderSecret(id: Long): String? {
         val provider = providers.findByIdOrNull(id) ?: throw ModelProviderNotFoundException(id)
         log.info("Credentials for model provider {} (workspace {}) revealed", provider.name, provider.workspaceId)
-        return provider.secret
+        return provider.secret?.takeUnless { cipher.isEncrypted(it) }
     }
 
     /**
@@ -446,6 +457,8 @@ data class CreateModelInput(
     val requestsPerMinute: Int? = null,
     val inputCostPerMillion: Double? = null,
     val outputCostPerMillion: Double? = null,
+    /** Only meaningful for a SPEECH model; the names belong to the provider. */
+    val voice: String? = null,
 )
 
 /** The model's own details, all of them, as the form that edits them sends them. */
@@ -457,6 +470,8 @@ data class UpdateModelInput(
     val maxOutput: Int? = null,
     val inputCostPerMillion: Double? = null,
     val outputCostPerMillion: Double? = null,
+    /** Only meaningful for a SPEECH model; the names belong to the provider. */
+    val voice: String? = null,
 )
 
 /** The Quotas and Limits card, which saves its fields together. Null is no limit. */
@@ -521,6 +536,8 @@ data class LlmModelView(
     val requestsPerMinute: Int?,
     val inputCostPerMillion: Double?,
     val outputCostPerMillion: Double?,
+    /** Which voice a SPEECH model reads in; null sends none. */
+    val voice: String?,
 ) {
     constructor(model: LlmModel, provider: ModelProvider) : this(
         id = requireNotNull(model.id),
@@ -538,6 +555,7 @@ data class LlmModelView(
         requestsPerMinute = model.requestsPerMinute,
         inputCostPerMillion = model.inputCostPerMillion?.toDouble(),
         outputCostPerMillion = model.outputCostPerMillion?.toDouble(),
+        voice = model.voice,
     )
 }
 

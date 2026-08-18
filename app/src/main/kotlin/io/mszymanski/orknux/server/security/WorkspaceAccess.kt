@@ -7,14 +7,16 @@ import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 
 /**
- * Decides which workspaces the caller may see. A workspace names the directory group whose
- * members may see it; membership arrives as an authority derived from the group's
- * common name by the LDAP authorities populator, so `cn=backend,ou=workspaces,...`
- * corresponds to `ROLE_BACKEND`. Only the administrator role is configuration.
+ * Decides which workspaces the caller may see.
+ *
+ * A workspace is opened by the roles assigned to it, and the caller's roles come from
+ * whatever the identity provider said about them, translated once by [RoleResolver].
+ * Nothing here knows what a directory group is, which is the point: the same check
+ * works whichever provider signed somebody in.
  */
 @Service
 class WorkspaceAccess(
-    private val properties: SecurityProperties,
+    private val resolver: RoleResolver,
 ) {
 
     fun roles(): Set<String> {
@@ -25,16 +27,23 @@ class WorkspaceAccess(
         return authentication.authorities.mapNotNull(GrantedAuthority::getAuthority).toSet()
     }
 
-    fun isAdmin(): Boolean = properties.adminRole in roles()
+    fun isAdmin(): Boolean = resolver.administers(roles())
 
+    /** The roles this caller holds here, whatever the provider called them. */
+    fun heldRoles(): Set<Role> = resolver.rolesFor(roles())
 
-    /** The authority that membership of this group grants. */
-    fun authorityFor(ldapGroup: String): String = ROLE_PREFIX + commonName(ldapGroup).uppercase()
-
+    /**
+     * Whether the caller may see this workspace.
+     *
+     * A workspace with no roles is administrators only. That is the same answer the
+     * empty group gave before, and it is the safe direction to fail in: a workspace
+     * whose audience nobody has decided is not one to show to everybody.
+     */
     fun canSee(workspace: Workspace): Boolean {
         if (isAdmin()) return true
-        val group = workspace.ldapGroup?.trim()?.takeIf { it.isNotEmpty() } ?: return false
-        return authorityFor(group) in roles()
+        if (workspace.roles.isEmpty()) return false
+        val held = heldRoles().mapNotNull { it.id }.toSet()
+        return workspace.roles.any { it.id in held }
     }
 
     fun requireVisible(workspace: Workspace) {
@@ -45,17 +54,6 @@ class WorkspaceAccess(
         if (!isAdmin()) throw AdminRequiredException()
     }
 
-    /** "cn=backend,ou=workspaces,dc=orknux,dc=io" -> "backend"; a bare name is left alone. */
-    private fun commonName(ldapGroup: String): String {
-        val relative = ldapGroup.split(',').firstOrNull()?.trim().orEmpty()
-        val name = if (relative.startsWith("cn=", ignoreCase = true)) relative.substring(3) else relative
-        return name.trim().replace(NON_ROLE_CHARACTERS, "_")
-    }
-
-    private companion object {
-        const val ROLE_PREFIX = "ROLE_"
-        val NON_ROLE_CHARACTERS = Regex("[^A-Za-z0-9]+")
-    }
 }
 
 class WorkspaceForbiddenException(name: String) : RuntimeException("You do not have access to workspace \"$name\"")

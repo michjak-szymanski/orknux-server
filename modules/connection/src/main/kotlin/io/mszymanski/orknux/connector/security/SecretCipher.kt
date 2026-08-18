@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.security
 
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.security.SecureRandom
@@ -55,8 +56,17 @@ class SecretCipher(
         SecretKeySpec(decoded, "AES")
     }
 
-    /** Null and blank stay as they are: absent is not a secret worth an envelope. */
+    /**
+     * Null and blank stay as they are: absent is not a secret worth an envelope.
+     *
+     * A value already in the envelope is returned untouched rather than wrapped
+     * again. That makes this idempotent, which is what lets a credential nobody
+     * can read survive being loaded and written back: it goes to the column as
+     * the same bytes it came from, still recoverable by whoever has the key it
+     * was written with.
+     */
     fun encrypt(plaintext: String?): String? {
+        if (isEncrypted(plaintext)) return plaintext
         if (plaintext.isNullOrBlank()) return plaintext
 
         val iv = ByteArray(IV_BYTES).also(random::nextBytes)
@@ -75,26 +85,78 @@ class SecretCipher(
      * this existed are plaintext, and refusing to read them would take an
      * installation's integrations offline at the moment it upgrades. They are
      * rewritten encrypted by [SecretMigration].
+     *
+     * One that will not open comes back as it was stored — still in its
+     * envelope, so [isEncrypted] says so and nothing mistakes it for a usable
+     * credential. It does not throw, and that is the whole point: a single
+     * credential written with a key this installation no longer has used to
+     * take down every screen that listed the thing it belonged to, including
+     * the screen somebody would go to in order to enter it again. The one
+     * unreadable value is a fact about that value, not about the page.
+     *
+     * What went wrong is not lost — the doctor reads these columns directly and
+     * reports exactly which cannot be opened.
      */
     fun decrypt(stored: String?): String? {
         if (stored.isNullOrBlank() || !stored.startsWith(PREFIX)) return stored
 
-        val parts = stored.removePrefix(PREFIX).split(':')
-        require(parts.size == 2) { "A stored secret is not in the expected form" }
+        return try {
+            val parts = stored.removePrefix(PREFIX).split(':')
+            require(parts.size == 2) { "A stored secret is not in the expected form" }
 
-        val decoder = Base64.getDecoder()
-        val iv = decoder.decode(parts[0])
-        val encrypted = decoder.decode(parts[1])
+            val decoder = Base64.getDecoder()
+            val iv = decoder.decode(parts[0])
+            val encrypted = decoder.decode(parts[1])
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
-        return String(cipher.doFinal(encrypted), Charsets.UTF_8)
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
+            String(cipher.doFinal(encrypted), Charsets.UTF_8)
+        } catch (failure: Exception) {
+            // Nothing of the value itself is logged, readable or not.
+            log.warn("A stored secret could not be read with the configured key: {}", failure.javaClass.simpleName)
+            stored
+        }
     }
 
     /** Whether a stored value has already been through this. */
     fun isEncrypted(stored: String?): Boolean = stored != null && stored.startsWith(PREFIX)
 
+    /**
+     * Whether the key is usable, without using it.
+     *
+     * The key is checked lazily, on first encrypt or decrypt, which is the right
+     * moment for a value nobody may ever need — but it means an installation with no
+     * key starts perfectly and then fails the first time somebody saves a credential.
+     * That cost forty minutes to find in a stack trace once, and nothing on any
+     * screen said a word about it.
+     *
+     * So the same checks are available as an answer rather than as an exception, for
+     * whatever wants to ask before anything breaks.
+     */
+    fun keyStatus(): KeyStatus {
+        if (configuredKey.isBlank()) return KeyStatus.Missing
+
+        val decoded = runCatching { Base64.getDecoder().decode(configuredKey.trim()) }
+            .getOrElse { return KeyStatus.NotBase64 }
+
+        return if (decoded.size == KEY_BYTES) KeyStatus.Usable else KeyStatus.WrongLength(decoded.size)
+    }
+
+    /** What is wrong with the configured key, if anything. */
+    sealed interface KeyStatus {
+
+        data object Usable : KeyStatus
+
+        data object Missing : KeyStatus
+
+        data object NotBase64 : KeyStatus
+
+        data class WrongLength(val bytes: Int) : KeyStatus
+    }
+
     private companion object {
+        val log = LoggerFactory.getLogger(SecretCipher::class.java)
+
         const val PREFIX = "orkx1:"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val KEY_BYTES = 32

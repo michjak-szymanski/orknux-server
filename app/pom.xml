@@ -95,6 +95,37 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
+        <!--
+            OIDC, both ways in: the browser flow that ends in this server's own
+            session cookie, and bearer tokens validated per request for callers that
+            hold one already. Which of the two an installation uses — or whether it
+            uses LDAP instead — is orknux.security.auth-method; the beans are only
+            created for OIDC, but the code has to be on the classpath either way.
+        -->
+        <!--
+            Sessions in the database rather than in this process's memory.
+
+            Without it a sign-in lasts exactly as long as the JVM does: every
+            restart — a deployment, a config change, a crash — signs everybody out,
+            which is a strange thing for a server that already has a database
+            attached. It is also what makes more than one instance possible later,
+            since a session then belongs to the installation rather than to whichever
+            node happened to answer.
+        -->
+        <dependency>
+            <groupId>org.springframework.session</groupId>
+            <artifactId>spring-session-jdbc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-graphql-test</artifactId>

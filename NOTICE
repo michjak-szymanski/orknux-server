@@ -1,0 +1,58 @@
+Orknux
+Copyright (C) 2026 Michał Szymański
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program. If not, see <https://www.gnu.org/licenses/>.
+
+
+ADDITIONAL TERMS UNDER SECTION 7
+--------------------------------
+
+As permitted by section 7(b) of the GNU Affero General Public License, the
+following additional term applies to this program and to any work based on it:
+
+    You must preserve the attribution this program shows in its own interface —
+    the product name "Orknux", the copyright notice above, the name of the
+    licence, and the link to the source — and it must stay visible to the people
+    using the program, in the place the original displays it or one of equal
+    prominence.
+
+    You may change the surrounding design, and you may add your own name and
+    branding beside it. You may not remove it, hide it, or make it materially
+    less visible than the original does.
+
+This is an attribution requirement and nothing more. It does not restrict what
+you may do with the software, what you may charge for it, or who may run it.
+
+Section 7 permits a recipient to remove additional terms from material they have
+received. That permission does not reach this one: 7(b) is the category the
+licence allows to be made non-removable, being the preservation of legal notices
+and author attribution.
+
+
+WHAT THIS MEANS IN PRACTICE
+---------------------------
+
+You may run Orknux, including for a business, and including as a service you
+charge other people for. You may modify it. You may host it yourself, for your
+own organisation or for your customers.
+
+If you convey a modified version, or let people use a modified version over a
+network, you must offer those people the complete source of that version under
+this same licence. That is section 13, and it is the reason for choosing the
+Affero licence over the ordinary GPL: a hosted fork is the case it covers.
+
+The name "Orknux" and the Orknux marks are not licensed by this document.
+Trademark law governs those separately, whatever a licence says about code.
+
+A commercial licence — which lifts the attribution requirement above and the
+source obligations of the AGPL — is available from the copyright holder.

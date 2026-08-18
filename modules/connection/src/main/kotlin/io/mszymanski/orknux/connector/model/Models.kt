@@ -25,6 +25,9 @@ enum class ModelKind {
 
     /** Speech in, text out: what the microphone in a chat is handed to. */
     TRANSCRIPTION,
+
+    /** Text in, speech out: what reads an answer aloud. */
+    SPEECH,
 }
 
 /** How often a token quota starts again. */
@@ -221,6 +224,16 @@ class LlmModel(
 
     @Column(name = "output_cost_per_million", precision = 12, scale = 4)
     var outputCostPerMillion: BigDecimal? = null,
+
+    /**
+     * Which voice a [ModelKind.SPEECH] model reads in; null sends none.
+     *
+     * The names belong to the provider — OpenAI knows `alloy`, a local server
+     * knows its own — so this is text rather than a list of options this would
+     * have to keep correct for every provider that exists.
+     */
+    @Column(length = 80)
+    var voice: String? = null,
 )
 
 /**

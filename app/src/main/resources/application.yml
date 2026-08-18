@@ -1,11 +1,24 @@
+# Every value an operator would want to change reads from the environment, with the
+# development default beside it: `${ORKNUX_SOMETHING:default}`.
+#
+# Spring would let any property be overridden by a variable derived from its path,
+# but a derived name is one nobody can look up and one that changes when a property
+# moves. These are named, stable, and all prefixed the same way, so `env | grep
+# ORKNUX_` is the whole of an installation's configuration.
+#
+# What is deliberately not settable: the schema validation mode, Flyway's own
+# locations, and Spring AI's schema initialisation. Those are invariants this
+# application is built around rather than choices — changing one does not configure
+# the server, it breaks it.
+
 spring:
   servlet:
     multipart:
       # A recording, not a document. The default cap is 1MB — a few seconds of
       # speech — and the endpoint refuses anything past 25MB itself, with a
       # sentence rather than a stack trace.
-      max-file-size: 25MB
-      max-request-size: 26MB
+      max-file-size: ${ORKNUX_UPLOAD_MAX_FILE_SIZE:25MB}
+      max-request-size: ${ORKNUX_UPLOAD_MAX_REQUEST_SIZE:26MB}
   ai:
     chat:
       memory:
@@ -17,44 +30,57 @@ spring:
   application:
     name: orknux-server
   datasource:
-    url: jdbc:postgresql://localhost:5432/orknux
-    username: orknux
-    password: orknux
+    url: ${ORKNUX_DB_URL:jdbc:postgresql://localhost:5432/orknux}
+    username: ${ORKNUX_DB_USERNAME:orknux}
+    password: ${ORKNUX_DB_PASSWORD:orknux}
   jpa:
     hibernate:
       ddl-auto: validate
     open-in-view: false
   flyway:
-    enabled: true
+    # Off only where something else owns the schema; the application expects it
+    # to be at the version this build ships.
+    enabled: ${ORKNUX_DB_MIGRATE:true}
     locations: classpath:db/migration
   ldap:
-    urls: ldap://localhost:389
-    base: dc=orknux,dc=io
-    username: cn=admin,dc=orknux,dc=io
-    password: admin
+    urls: ${ORKNUX_LDAP_URLS:ldap://localhost:389}
+    base: ${ORKNUX_LDAP_BASE:dc=orknux,dc=io}
+    username: ${ORKNUX_LDAP_BIND_DN:cn=admin,dc=orknux,dc=io}
+    password: ${ORKNUX_LDAP_BIND_PASSWORD:admin}
 
 logging:
   logback:
     rollingpolicy:
       # Only consulted when a file is being written. A log that grows without
       # bound fills the disk it shares with the database.
-      max-file-size: 10MB
-      max-history: 14
-      total-size-cap: 1GB
+      max-file-size: ${ORKNUX_LOG_MAX_FILE_SIZE:10MB}
+      max-history: ${ORKNUX_LOG_MAX_HISTORY:14}
+      total-size-cap: ${ORKNUX_LOG_TOTAL_SIZE_CAP:1GB}
 
 server:
+  port: ${ORKNUX_PORT:8080}
   servlet:
     session:
+      # How long a session survives without being used. Boot's default is 30
+      # minutes, which is a length of time somebody can spend reading a page — and
+      # being signed out for having read carefully is a poor lesson to teach.
+      #
+      # A fortnight is chosen for a self-hosted tool behind an identity provider:
+      # the provider is where a leaver is disabled, and this is not the lock keeping
+      # anybody out. Shorten it where that is not true.
+      timeout: ${ORKNUX_SESSION_TIMEOUT:14d}
       cookie:
-        same-site: lax
-        http-only: true
+        # Strict where the interface is served from this origin and nothing links
+        # into it; lax is what lets a link from elsewhere arrive signed in.
+        same-site: ${ORKNUX_SESSION_COOKIE_SAME_SITE:lax}
+        http-only: ${ORKNUX_SESSION_COOKIE_HTTP_ONLY:true}
 
 db-scheduler:
   # The clock behind scheduled triggers. It keeps its state in the database, so
   # one instance fires a schedule however many are running.
-  enabled: true
-  threads: 4
-  polling-interval: 10s
+  enabled: ${ORKNUX_SCHEDULER_ENABLED:true}
+  threads: ${ORKNUX_SCHEDULER_THREADS:4}
+  polling-interval: ${ORKNUX_SCHEDULER_POLLING_INTERVAL:10s}
 
 orknux:
   # Filled in from the build, and reported on the monitoring screen.
@@ -63,12 +89,12 @@ orknux:
     # Whether this installation has a chat at all. False here is final: an
     # administrator can turn the chat off from the screen, but not back on
     # where the operator has said no.
-    enabled: true
+    enabled: ${ORKNUX_CHAT_ENABLED:true}
   attachments:
     # Whether a chat may carry files at all. False here is final: an
     # administrator can turn attachments off from the screen, but not back on
     # where the operator has said no — the disk belongs to whoever runs this.
-    enabled: true
+    enabled: ${ORKNUX_ATTACHMENTS_ENABLED:true}
     # Where the bytes go. FILESYSTEM is the only one today; object storage
     # would be a second class behind the same interface, not a flag here.
     storage: FILESYSTEM
@@ -76,7 +102,7 @@ orknux:
     # against the working directory, which is fine on a development machine and
     # wrong in a container: name a volume that outlives the process.
     location: ${ORKNUX_ATTACHMENTS_LOCATION:data/attachments}
-    max-file-size-mb: 25
+    max-file-size-mb: ${ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB:25}
   logging:
     # Console always. Name a file here and it is written to as well — an
     # absolute path in a deployment, since the working directory of a container
@@ -87,10 +113,61 @@ orknux:
     # once would mean two answers to "what did it log".
     format: ${ORKNUX_LOG_FORMAT:plain}
   web:
-    allowed-origins: http://localhost:5173
+    # Where the interface is served from, when it is not this server. Comma
+    # separated; empty allows none, which is right once they share an origin.
+    allowed-origins: ${ORKNUX_ALLOWED_ORIGINS:http://localhost:5173}
   security:
     # Sees the Admin section and every workspace.
-    admin-role: ROLE_ADMINS
+    # LDAP or OIDC. One at a time, deliberately: both would mean an LDAP password
+    # for every account the OIDC provider governs — a second way in that its
+    # policies do not reach and its administrators do not know about.
+    #
+    # OIDC covers two flows at once. A browser is sent to the provider and comes
+    # back with a code, which this server exchanges for the same session cookie
+    # password sign-in issues; a script presents the provider's token as a bearer
+    # instead, validated per request. Same provider, same claims, same roles.
+    auth-method: ${ORKNUX_AUTH_METHOD:LDAP}
+    admin-role: ${ORKNUX_ADMIN_ROLE:ROLE_ADMINS}
+    oidc:
+      # The claim carrying group or role membership. There is no standard one:
+      # Keycloak and Okta usually say groups, Entra says groups or roles. Each value
+      # in it is treated the way an LDAP group is — looked up in role-mapping below,
+      # or matched against a role's own name.
+      roles-claim: ${ORKNUX_OIDC_ROLES_CLAIM:groups}
+      # What to show as somebody's name; the subject is the fallback, being stable
+      # and unreadable.
+      username-claim: ${ORKNUX_OIDC_USERNAME_CLAIM:preferred_username}
+      # What the sign-in button says, in the words the people signing in use.
+      display-name: ${ORKNUX_OIDC_DISPLAY_NAME:single sign-on}
+      # The provider. The issuer alone is enough: its own discovery document says
+      # where the authorization, token and userinfo endpoints are and which keys
+      # sign its tokens, so none of that is written here to go stale.
+      #
+      # Read only when auth-method is OIDC. Under LDAP these stay empty and nothing
+      # looks at them — which is why they live here rather than under spring.security,
+      # where an empty registration would fail the whole application at startup.
+      issuer: ${ORKNUX_OIDC_ISSUER:}
+      client-id: ${ORKNUX_OIDC_CLIENT_ID:}
+      client-secret: ${ORKNUX_OIDC_CLIENT_SECRET:}
+      scopes: ${ORKNUX_OIDC_SCOPES:openid,profile,email,groups}
+    # Which of the identity provider's names grants which of this installation's
+    # roles. The key is what the provider says — an LDAP group DN or its common
+    # name, or the value of an OIDC claim; the value is a role's name as the Roles
+    # screen spells it. Both sides are matched without regard to case.
+    #
+    # Empty is a working configuration rather than an unfinished one: a role with no
+    # mapping is granted to whoever holds an authority derived from its own name,
+    # which is what LDAP produced before roles existed. So an installation upgrading
+    # into roles keeps working with nothing written here.
+    #
+    # YAML only, deliberately. These keys are group DNs and claim values — full of
+    # dots, equals signs and commas — and the environment-variable spelling of one
+    # is not something anybody should have to work out.
+    #
+    #   role-mapping:
+    #     "cn=backend,ou=groups,dc=orknux,dc=io": Backend
+    #     "platform-admins": Administrators
+    role-mapping: {}
     # Encrypts the credentials this server is trusted with — provider keys,
     # Slack tokens, MCP secrets — so the database on its own is not enough to
     # read them. 32 bytes, base64: `openssl rand -base64 32`.
@@ -101,73 +178,77 @@ orknux:
     # entered again.
     secret-key: ${ORKNUX_SECRET_KEY:}
   ldap:
-    user-search-base: ou=people
-    user-search-filter: (uid={0})
+    user-search-base: ${ORKNUX_LDAP_USER_SEARCH_BASE:ou=people}
+    user-search-filter: ${ORKNUX_LDAP_USER_SEARCH_FILTER:(uid={0})}
     # Workspace groups have to live under this base for membership to be picked up;
     # point it at the OU that holds them (an empty value disables group search).
-    group-search-base: ou=groups
-    group-search-filter: (member={0})
+    group-search-base: ${ORKNUX_LDAP_GROUP_SEARCH_BASE:ou=groups}
+    group-search-filter: ${ORKNUX_LDAP_GROUP_SEARCH_FILTER:(member={0})}
   connection:
     # A connection check calls the configured URL; these bound what that may do.
-    probe-timeout-seconds: 5
+    probe-timeout-seconds: ${ORKNUX_CONNECTION_PROBE_TIMEOUT_SECONDS:5}
+    # How long a workflow's own HTTP request may take. Longer than a probe's: that
+    # only asks whether anything is listening, while this is doing work at the other
+    # end. Bounded anyway — a step that never returns holds the run that made it.
+    request-timeout-seconds: ${ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS:30}
     # Link-local addresses reach cloud instance metadata. Private and loopback
     # addresses stay reachable, since internal services are the point.
-    allow-link-local: false
+    allow-link-local: ${ORKNUX_CONNECTION_ALLOW_LINK_LOCAL:false}
     check:
       # The same argument as the model providers: a status on the screen should
       # be one that was true recently, not whenever somebody last pressed a
       # button — and "Not checked" should not outlive the save that caused it.
-      enabled: true
-      interval: 5m
-      initial-delay: 30s
+      enabled: ${ORKNUX_CONNECTION_CHECK_ENABLED:true}
+      interval: ${ORKNUX_CONNECTION_CHECK_INTERVAL:5m}
+      initial-delay: ${ORKNUX_CONNECTION_CHECK_INITIAL_DELAY:30s}
   slack:
     # Opens one Socket Mode websocket per Slack connection that holds an
     # app-level token, and turns arriving mentions into workflow runs.
-    enabled: true
+    enabled: ${ORKNUX_SLACK_ENABLED:true}
     # How often the open sockets are compared with the stored connections, so a
     # token pasted into the settings form starts listening without a restart.
-    reconcile-seconds: 30
+    reconcile-seconds: ${ORKNUX_SLACK_RECONCILE_SECONDS:30}
     # How long a connection Slack refused is left alone; changing the token
     # clears the wait, so a corrected credential is not held back by it.
-    retry-failed-seconds: 300
+    retry-failed-seconds: ${ORKNUX_SLACK_RETRY_FAILED_SECONDS:300}
   script:
     # A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
     # files, no network and no threads. These bound what it can spend.
-    timeout-millis: 5000
-    statement-limit: 5000000
+    timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:5000}
+    statement-limit: ${ORKNUX_SCRIPT_STATEMENT_LIMIT:5000000}
   execution:
     inline:
       # Only the inline engine. It waits out a parked step on the thread
       # carrying the run, so a run may spend this long waiting in total before
       # the step fails and says what would have carried it. A Temporal wait is a
       # timer, holds nothing, and is bounded by run-timeout-hours instead.
-      max-wait: 5m
+      max-wait: ${ORKNUX_INLINE_MAX_WAIT:5m}
   temporal:
     # False runs workflows on the calling thread, with no retries and no
     # resumption. The tests do that; a deployment should not.
-    enabled: true
-    target: localhost:7233
-    namespace: default
+    enabled: ${ORKNUX_TEMPORAL_ENABLED:true}
+    target: ${ORKNUX_TEMPORAL_TARGET:localhost:7233}
+    namespace: ${ORKNUX_TEMPORAL_NAMESPACE:default}
     # Temporal's own web interface, which compose puts here. Only used to link
     # out to it — a run's history is worth looking at and that screen already
     # exists. Empty offers no links, which is right where it is not exposed.
     ui-url: ${ORKNUX_TEMPORAL_UI_URL:http://localhost:8233}
-    task-queue: orknux-workflow
+    task-queue: ${ORKNUX_TEMPORAL_TASK_QUEUE:orknux-workflow}
     # A model call is slow, so a step is given minutes, and tried again a
     # couple of times, since most of what a step does is call something else.
     # This bounds the work a step does, not what it waits for: a wait parks the
     # step and answers, so it is the run timeout that bounds a long wait.
-    step-timeout-seconds: 300
-    step-attempts: 3
-    run-timeout-hours: 24
+    step-timeout-seconds: ${ORKNUX_TEMPORAL_STEP_TIMEOUT_SECONDS:300}
+    step-attempts: ${ORKNUX_TEMPORAL_STEP_ATTEMPTS:3}
+    run-timeout-hours: ${ORKNUX_TEMPORAL_RUN_TIMEOUT_HOURS:24}
   model:
     check:
       # Every configured provider is asked whether it still answers, so a status
       # on the screen is one that was true recently rather than whenever somebody
       # last pressed the button.
-      enabled: true
-      interval: 5m
-      initial-delay: 30s
+      enabled: ${ORKNUX_MODEL_CHECK_ENABLED:true}
+      interval: ${ORKNUX_MODEL_CHECK_INTERVAL:5m}
+      initial-delay: ${ORKNUX_MODEL_CHECK_INITIAL_DELAY:30s}
     # How long a model has to answer a chat message. Generous: a large local
     # model on a laptop is slow, and giving up on it is worse than waiting.
-    timeout: 2m
+    timeout: ${ORKNUX_MODEL_TIMEOUT:2m}

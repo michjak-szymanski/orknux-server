@@ -1,4 +1,12 @@
 type Query {
+    """
+    Whether this installation is configured correctly, which is a different question
+    from whether it can reach things. Administrators only.
+    """
+    doctor: [DoctorCheck!]!
+    "The roles this installation defines. Administrators only, reading included."
+    roles: [Role!]!
+    role(id: ID!): Role
     workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
     workspace(id: ID!): Workspace
     "Audit entries, newest first. Without a workspaceId every visible workspace is included."
@@ -18,6 +26,8 @@ type Query {
     components: [Component!]!
     "The switches that belong to the installation rather than to a workspace."
     installationSettings: InstallationSettings!
+    "The plugins loaded into this installation, by name. Administrators only."
+    plugins: [Plugin!]!
     "What was attached to one chat, oldest first."
     chatAttachments(chatId: ID!): [ChatAttachment!]!
     "The admin default connections, ordered by name. Administrators only."
@@ -152,6 +162,13 @@ type Query {
 }
 
 type Mutation {
+    """
+    Takes a plugin out of the installation. Administrators only.
+
+    Loading one is not here: a plugin arrives as a file, so it is uploaded to
+    `POST /api/plugins` rather than described as a mutation.
+    """
+    unloadPlugin(id: ID!): Boolean!
     "Turns attachments on or off for the whole installation. Administrators only."
     setAttachmentsEnabled(enabled: Boolean!): InstallationSettings!
     "Turns the chat on or off for the whole installation. Administrators only."
@@ -161,8 +178,13 @@ type Mutation {
     first message is what makes the chat.
     """
     attachToChat(chatId: ID!, attachmentIds: [ID!]!): [ChatAttachment!]!
+    createRole(input: RoleInput!): Role!
+    "Refused for the built-in administrator role."
+    updateRole(id: ID!, input: RoleInput!): Role!
+    "Refused for the built-in administrator role, and while a workspace still uses it."
+    deleteRole(id: ID!): Boolean!
     createWorkspace(input: CreateWorkspaceInput!): Workspace!
-    "Saves the workspace settings form: name, description and directory group."
+    "Saves the workspace settings form: name, description and the roles that open it."
     updateWorkspace(id: ID!, input: UpdateWorkspaceInput!): Workspace!
     deleteWorkspace(id: ID!): Boolean!
     "Creates the workflow definition and assigns it to the workspace."
@@ -206,6 +228,12 @@ type Mutation {
     setWorkspaceCompanionModel(workspaceId: ID!, modelId: ID): Workspace!
     "Chooses the model the workspace hears with; null takes the microphone away."
     setWorkspaceTranscriptionModel(workspaceId: ID!, modelId: ID): Workspace!
+    "Chooses the model the workspace speaks with; null takes the speaker away."
+    setWorkspaceSpeechModel(workspaceId: ID!, modelId: ID): Workspace!
+    "Chooses the model behind the quick chat; null takes the button away."
+    setWorkspaceQuickChatModel(workspaceId: ID!, modelId: ID): Workspace!
+    "Whether the quick chat may start things, or only look them up."
+    setWorkspaceQuickChatWrites(workspaceId: ID!, allowed: Boolean!): Workspace!
 
     createObject(input: CreateObjectInput!): WorkflowObject!
     "Backs the object editor: the properties on the left, the details on the right."
@@ -321,8 +349,8 @@ type Workspace {
     id: ID!
     name: String!
     description: String
-    "Directory group whose members may see this workspace, e.g. cn=backend,ou=workspaces,dc=orknux,dc=io."
-    ldapGroup: String
+    "The roles that open this workspace. Empty means administrators only."
+    roles: [Role!]!
     """
     The model used for the workspace's own small jobs — naming a chat from what
     was said. Null means those jobs do not happen.
@@ -333,6 +361,21 @@ type Workspace {
     which is right where there is nothing to transcribe with.
     """
     transcriptionModelId: ID
+    """
+    The model that reads an answer aloud. Null means the speaker under one is
+    not offered, which is right where there is nothing to read it with.
+    """
+    speechModelId: ID
+    """
+    The model behind the quick chat beside the page. Null means the button is
+    not offered.
+    """
+    quickChatModelId: ID
+    """
+    Whether the quick chat may start things, or only look them up. False by
+    default, including for a workspace that has already chosen a model.
+    """
+    quickChatMayWrite: Boolean!
 }
 
 input CreateWorkspaceInput {
@@ -343,7 +386,8 @@ input CreateWorkspaceInput {
 input UpdateWorkspaceInput {
     name: String!
     description: String
-    ldapGroup: String
+    "The roles that open this workspace. Null leaves them alone; empty means administrators only."
+    roleIds: [ID!]
 }
 
 "A slice of workspaces, ordered by name."
@@ -596,6 +640,11 @@ type Agent {
     modelName: String
     "MCP servers this agent may connect to."
     mcpServers: [String!]!
+    """
+    Whether it may ask orknux about orknux — the built-in server, which is not
+    one of the workspace's own and never appears among them.
+    """
+    orknuxAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -833,6 +882,8 @@ input UpdateAgentInput {
     modelId: ID
     "Null leaves the list alone; an empty list clears it."
     mcpServers: [String!]
+    "Whether it may ask orknux about orknux; null leaves the grant alone."
+    orknuxAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."
@@ -1070,6 +1121,8 @@ enum ModelKind {
     COMPLETION
     "Speech in, text out: what the microphone in a chat is handed to."
     TRANSCRIPTION
+    "Text in, speech out: what reads an answer aloud."
+    SPEECH
 }
 
 "How often a token quota starts again; NEVER makes it a total rather than a rate."
@@ -1140,6 +1193,8 @@ type Model {
     "What the provider charges per million tokens; null when it is not recorded."
     inputCostPerMillion: Float
     outputCostPerMillion: Float
+    "Which voice a SPEECH model reads in; null sends none and takes the provider's."
+    voice: String
 }
 
 "One day of the usage chart."
@@ -1229,6 +1284,8 @@ input CreateModelInput {
     requestsPerMinute: Int
     inputCostPerMillion: Float
     outputCostPerMillion: Float
+    "Which voice a SPEECH model reads in; the names are the provider's own."
+    voice: String
 }
 
 input UpdateModelInput {
@@ -1239,6 +1296,8 @@ input UpdateModelInput {
     maxOutput: Int
     inputCostPerMillion: Float
     outputCostPerMillion: Float
+    "Which voice a SPEECH model reads in; the names are the provider's own."
+    voice: String
 }
 
 "The Quotas and Limits card. Null is no limit, which is what an emptied box means."
@@ -1411,6 +1470,68 @@ enum WebhookAuthType {
     NONE
     "One of the workspace's functions is asked, and answers yes or no."
     FUNCTION
+}
+
+"""
+A plugin loaded into this installation.
+
+The source is not here. A list of what is loaded does not need the text of it,
+and a plugin is large enough that sending every one to draw a table would be
+waste.
+
+Nothing on this type describes what a plugin *does* — no entry point, no
+capabilities, no grants. That is work still to come, and guessing at it here
+would put fields in the schema that mean nothing yet.
+"""
+type Plugin {
+    id: ID!
+    """
+    What the plugin calls itself.
+
+    Its identity rather than the file's — loading this id again replaces what is
+    loaded — and the prefix on every function it declares, so `isTeammate` arrives
+    as `teammates_isTeammate`.
+    """
+    key: String!
+    "Taken from the filename it was uploaded as, without the extension."
+    name: String!
+    filename: String!
+    sizeBytes: Float!
+    "The plugin API the plugin said it uses. Only versions this server knows are stored."
+    apiVersion: Int!
+    """
+    The functions this plugin says it offers, as it declared them.
+
+    The declaration, not the registration. These become callable once they are
+    materialised as organisation-level functions; until then this is what the
+    plugin claims it brings.
+    """
+    declaredFunctions: [PluginFunctionDeclaration!]!
+    "Of the source text, so an unchanged re-upload is recognisable."
+    sha256: String!
+    "ISO-8601 offset date-time."
+    uploadedAt: String!
+    uploadedBy: String!
+}
+
+"""
+One function a plugin says it offers.
+
+Types are reported as the server's own names rather than the plugin's spelling of
+them: a declaration is only kept if every type in it resolved.
+"""
+type PluginFunctionDeclaration {
+    name: String!
+    description: String
+    params: [PluginFunctionParam!]!
+    returnType: String!
+    "\"(email: string): boolean\", ready for the list."
+    signature: String!
+}
+
+type PluginFunctionParam {
+    name: String!
+    type: String!
 }
 
 "A file somebody attached to a chat. The bytes are wherever the storage put them."
@@ -1634,7 +1755,10 @@ enum ValueType {
     STRING
     NUMBER
     BOOLEAN
+    "One of the workspace's objects, named by the objectId beside it."
     OBJECT
+    "Keys and values with no defined shape. What OBJECT meant before objects could be named."
+    MAP
     ARRAY
     "Nothing at all: a function that acts rather than answers."
     NONE
@@ -1647,16 +1771,54 @@ type FunctionExternal {
     type: VariableType!
 }
 
+"Where a function came from, and therefore whether a workspace may change it."
+enum FunctionScope {
+    "Written in a workspace, editable there."
+    WORKSPACE
+    """
+    Declared by a plugin and available in every workspace. Usable from actions,
+    triggers and conditions; not editable, because the plugin defines it.
+
+    Named for where it came from rather than how far it reaches: a picker should
+    say which plugin brought a function, not that it is "organisation-wide".
+    """
+    PLUGIN
+}
+
+"""
+The plugin a function came from.
+
+Enough to name it and link to it. Reported on the function because listing
+plugins is an administrator's query, while picking a function is not — so a
+picker can say "from Teammates" without being allowed to see what is loaded.
+"""
+type FunctionPlugin {
+    id: ID!
+    name: String!
+}
+
 "A named piece of JavaScript a workspace wrote, run in a sandbox with no host, files or network."
 type Function {
     "The workspace's variables it is handed, after the parameters it declares."
     externals: [FunctionExternal!]!
     id: ID!
-    workspaceId: ID!
+    "Null for a plugin's function: it belongs to no single workspace."
+    workspaceId: ID
+    scope: FunctionScope!
+    "False for anything a plugin declared. The editor hides its controls on this."
+    editable: Boolean!
+    "Which plugin brought it, for anything a plugin declared. Null for a workspace's own."
+    plugin: FunctionPlugin
     name: String!
     description: String
+    "The JavaScript that runs, compiled from the TypeScript below."
     source: String!
+    "What it was written in. Null for a plugin's function, which was not written here."
+    typescript: String
     returnType: ValueType!
+    "Which object it returns, when the return type is OBJECT."
+    returnObjectId: ID
+    returnObjectName: String
     params: [FunctionParam!]!
     "\"(input: object, format: string)\", ready for the list."
     signature: String!
@@ -1668,6 +1830,10 @@ type Function {
 type FunctionParam {
     name: String!
     type: ValueType!
+    "Which object, when the type is OBJECT. Null otherwise."
+    objectId: ID
+    "What that object is called, resolved for the editor's annotations."
+    objectName: String
 }
 
 type FunctionPage {
@@ -1689,6 +1855,8 @@ type FunctionValidation {
 input FunctionParamInput {
     name: String!
     type: ValueType!
+    "Required when the type is OBJECT, and ignored otherwise."
+    objectId: ID
 }
 
 input CreateFunctionInput {
@@ -1697,9 +1865,13 @@ input CreateFunctionInput {
     workspaceId: ID!
     name: String!
     description: String
-    "Left out for a new function, which starts from a stub that runs."
+    "The compiled JavaScript. Left out for a new function, which starts from a stub that runs."
     source: String
+    "The TypeScript the source was compiled from. The two are sent together or not at all."
+    typescript: String
     returnType: ValueType
+    "Required when the return type is OBJECT, and ignored otherwise."
+    returnObjectId: ID
     params: [FunctionParamInput!]
 }
 
@@ -1708,8 +1880,13 @@ input UpdateFunctionInput {
     externalVariableIds: [ID!]
     name: String
     description: String
+    "The compiled JavaScript. Sent together with the TypeScript it came from."
     source: String
+    "The TypeScript the source was compiled from. Neither moves without the other."
+    typescript: String
     returnType: ValueType
+    "Required when the return type is OBJECT, and ignored otherwise."
+    returnObjectId: ID
     params: [FunctionParamInput!]
 }
 
@@ -2014,4 +2191,53 @@ type ObjectPage {
     size: Int!
     totalElements: Int!
     totalPages: Int!
+}
+
+"What a role lets somebody do, beyond the workspaces it is assigned to."
+enum RoleScope {
+    "Sees the Admin section and every workspace, whatever else is assigned."
+    ADMIN
+    "Signs in, and sees the workspaces this role is assigned to."
+    USER
+}
+
+"""
+A role this installation defines.
+
+Not a group from a directory: a provider's group or an OIDC claim is mapped onto
+one of these, so everything past the front door deals only in roles.
+"""
+type Role {
+    id: ID!
+    name: String!
+    description: String
+    scopes: [RoleScope!]!
+    "True for the administrator role, which cannot be edited or removed."
+    builtin: Boolean!
+    "ISO-8601 offset date-time."
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+input RoleInput {
+    name: String!
+    description: String
+    "Empty or absent means an ordinary role: USER."
+    scopes: [RoleScope!]
+}
+
+"What a configuration check concluded."
+enum DoctorVerdict {
+    OK
+    "Works, but is probably not what was meant."
+    WARN
+    "Something is going to fail, and it is worth fixing before it does."
+    FAIL
+}
+
+type DoctorCheck {
+    name: String!
+    verdict: DoctorVerdict!
+    "One sentence: what is true, and what to do where something is not."
+    detail: String!
 }

@@ -9,11 +9,20 @@ import io.mszymanski.orknux.server.action.ActionNotFoundException
 import io.mszymanski.orknux.server.action.ActionHoldsPlaceholderException
 import io.mszymanski.orknux.server.action.ActionSettingMissingException
 import io.mszymanski.orknux.server.action.ActionSubtypeMismatchException
+import io.mszymanski.orknux.server.action.FunctionExternallyManagedException
+import io.mszymanski.orknux.server.action.FunctionSignatureMismatchException
 import io.mszymanski.orknux.server.action.FunctionInUseException
 import io.mszymanski.orknux.server.action.FunctionNameInvalidException
 import io.mszymanski.orknux.server.action.FunctionNameTakenException
 import io.mszymanski.orknux.server.action.FunctionNotFoundException
 import io.mszymanski.orknux.server.action.FunctionParamInvalidException
+import io.mszymanski.orknux.server.action.FunctionCodeIncompleteException
+import io.mszymanski.orknux.server.action.FunctionObjectRequiredException
+import io.mszymanski.orknux.server.security.RoleBuiltInException
+import io.mszymanski.orknux.server.security.RoleInUseException
+import io.mszymanski.orknux.server.security.RoleNameInvalidException
+import io.mszymanski.orknux.server.security.RoleNameTakenException
+import io.mszymanski.orknux.server.security.RoleNotFoundException
 import io.mszymanski.orknux.server.action.FunctionSourceInvalidException
 import io.mszymanski.orknux.server.condition.ConditionCheckMismatchException
 import io.mszymanski.orknux.server.condition.ConditionCycleException
@@ -105,10 +114,18 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ActionHoldsPlaceholderException,
             is ActionSubtypeMismatchException,
             is ActionFailedException,
+            is FunctionSignatureMismatchException,
+            is FunctionExternallyManagedException,
             is FunctionNameTakenException,
             is FunctionNameInvalidException,
             is FunctionParamInvalidException,
             is FunctionSourceInvalidException,
+            is FunctionCodeIncompleteException,
+            is FunctionObjectRequiredException,
+            is RoleNameTakenException,
+            is RoleNameInvalidException,
+            is RoleBuiltInException,
+            is RoleInUseException,
             is FunctionInUseException,
             is ConditionNotInCatalogueException,
             is GraphInvalidException,
@@ -128,6 +145,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is VariableNotFoundException, is VariableCatalogNotFoundException -> ErrorType.NOT_FOUND
             is TriggerNotFoundException -> ErrorType.NOT_FOUND
             is ActionNotFoundException, is FunctionNotFoundException -> ErrorType.NOT_FOUND
+            is RoleNotFoundException -> ErrorType.NOT_FOUND
             is ConditionNotFoundException -> ErrorType.NOT_FOUND
             is WorkflowNotFoundException -> ErrorType.NOT_FOUND
             else -> return null

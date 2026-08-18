@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.security
 
+import jakarta.servlet.DispatcherType
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
@@ -9,6 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity
 import org.springframework.security.config.annotation.web.invoke
 import org.springframework.security.web.SecurityFilterChain
 import org.springframework.security.web.authentication.HttpStatusEntryPoint
+import org.springframework.security.web.util.matcher.DispatcherTypeRequestMatcher
 import org.springframework.web.cors.CorsConfiguration
 import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
@@ -18,7 +20,7 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 class SecurityConfig {
 
     @Bean
-    fun securityFilterChain(http: HttpSecurity): SecurityFilterChain {
+    fun securityFilterChain(http: HttpSecurity, properties: SecurityProperties): SecurityFilterChain {
         http {
             cors { }
             // The API is cookie-session based; a CSRF token flow still needs adding
@@ -28,7 +30,31 @@ class SecurityConfig {
             formLogin { disable() }
             logout { disable() }
             authorizeHttpRequests {
+                /*
+                 * The error page, which is a second dispatch of a request that
+                 * already passed this chain.
+                 *
+                 * Without this, anything thrown by a REST endpoint is forwarded
+                 * to `/error`, that forward is treated as a fresh unauthenticated
+                 * request, and the caller is answered 401 with an empty body. So
+                 * asking for a workspace that does not exist said "sign in", a
+                 * failed upload said "sign in", and every real fault arrived
+                 * wearing the one costume guaranteed to send somebody looking in
+                 * the wrong place. GraphQL was unaffected, which is why it went
+                 * unnoticed: it answers its own errors with 200.
+                 *
+                 * Permitting the dispatch does not expose anything — the request
+                 * that produced the error was authorised on its way in, and the
+                 * error page carries a status and a message, not data.
+                 */
+                authorize(DispatcherTypeRequestMatcher(DispatcherType.ERROR), permitAll)
                 authorize(HttpMethod.POST, LOGIN_PATH, permitAll)
+                /*
+                 * How to sign in is not itself a secret, and the sign-in screen has
+                 * to ask before anybody can: with OIDC there is no password box to
+                 * draw, only a button pointing at the provider.
+                 */
+                authorize(HttpMethod.GET, AUTH_METHOD_PATH, permitAll)
                 /*
                  * A webhook is called by whatever is out there — a build server,
                  * a form, another product — and none of them can sign in here.
@@ -44,6 +70,28 @@ class SecurityConfig {
                 authenticationEntryPoint = HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)
             }
         }
+
+        /*
+         * Both OIDC flows, together, and only where OIDC is what this installation
+         * uses.
+         *
+         * The browser flow ends in the same session cookie password sign-in issues,
+         * so everything past the front door — the GraphQL API, the audit log, the
+         * workspace checks — is unchanged and does not know which one happened. The
+         * bearer flow is for callers that hold a token already and have nowhere to
+         * keep a cookie; it validates per request and starts no session.
+         *
+         * PKCE is not configured here because Spring Security sends it by default
+         * for public clients and for confidential ones where the provider advertises
+         * it. Turning it on explicitly would be describing what already happens.
+         */
+        if (properties.authMethod == AuthMethod.OIDC) {
+            http {
+                oauth2Login { }
+                oauth2ResourceServer { jwt { } }
+            }
+        }
+
         return http.build()
     }
 
@@ -62,6 +110,9 @@ class SecurityConfig {
 }
 
 const val LOGIN_PATH = "/api/session"
+
+/** Open: what the sign-in screen has to know before anybody has signed in. */
+const val AUTH_METHOD_PATH = "/api/auth/method"
 
 /** Where a webhook trigger answers; open, because its callers cannot sign in. */
 const val WEBHOOK_PATH = "/api/webhooks"

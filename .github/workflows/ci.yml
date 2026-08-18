@@ -51,10 +51,36 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Does the artefact actually run?
+  #
+  # The build proves the code compiles and the suite proves it behaves. Neither
+  # starts the image — the Dockerfile skips tests deliberately — so a container
+  # that could not boot was built, tagged and pushed exactly like one that
+  # could, and the first person to run it was whoever pulled it.
+  #
+  # This runs on every push and every pull request, unlike publish: knowing the
+  # image is broken is worth as much on a branch as on main. It found a bean
+  # cycle the second time it was run.
+  image:
+    name: Verify image
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image and start it
+        run: ./scripts/verify-image.sh
+
   publish:
     name: Publish image
     runs-on: ubuntu-latest
-    needs: build
+    # Both: the suite has to pass and the image has to start before anything is
+    # published. Nothing reaches the registry unstarted.
+    needs: [build, image]
     # Never from a pull request: a fork's pull request must not be able to reach
     # the registry credentials, and an unmerged change has nothing to publish.
     if: github.event_name == 'push'

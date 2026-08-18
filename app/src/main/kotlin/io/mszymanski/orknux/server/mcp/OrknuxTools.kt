@@ -1,0 +1,494 @@
+package io.mszymanski.orknux.server.mcp
+
+import io.mszymanski.orknux.connector.model.ToolParameterSpec
+import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.security.WebProperties
+import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
+import io.mszymanski.orknux.workflow.execution.ExecutionService
+import io.mszymanski.orknux.workflow.execution.ExecutionStatus
+import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
+import io.mszymanski.orknux.workflow.execution.StartExecutionInput
+import org.springframework.context.annotation.Lazy
+import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
+import org.springframework.stereotype.Service
+import tools.jackson.databind.ObjectMapper
+
+/**
+ * Who is asking, and what they are allowed to ask for.
+ *
+ * Everything here is scoped to exactly one workspace, and the scope is passed in
+ * rather than read from the security context — because there is not always a
+ * person there. An agent running inside a workflow has no session at all; what
+ * authorises it is the grant on the agent, and what bounds it is the workspace
+ * it belongs to. A person asking through the quick chat or over MCP has both,
+ * and their own access is checked before a scope is built for them.
+ *
+ * That is the whole of the rule: nothing in here decides who may do what. It is
+ * told, by whichever door the caller came through.
+ */
+data class OrknuxScope(
+    val workspaceId: Long,
+    /**
+     * Whether anything that *changes* something may be called.
+     *
+     * Reading what a workflow did and running it, or turning it off, are
+     * different orders of consequence — a run can message a customer, and a
+     * workflow switched off stops answering its trigger — so they are separated
+     * here rather than trusted to the model's judgement about what it was
+     * asked.
+     *
+     * It does not stretch to deleting anything. Nothing here removes a
+     * workflow, a run or a credential, whatever this says.
+     */
+    val mayWrite: Boolean = false,
+)
+
+/**
+ * What orknux can be asked about itself.
+ *
+ * One surface, three doors: an agent granted it in its settings, the quick chat
+ * beside the interface, and the MCP endpoint an outside agent connects to. They
+ * differ in how the caller is identified and in nothing else, so the tools are
+ * defined once here rather than three times behind three protocols.
+ *
+ * Every answer is JSON, because every caller is a model.
+ */
+@Service
+class OrknuxTools(
+    private val assignments: WorkspaceWorkflowRepository,
+    /**
+     * Resolved when a tool is called rather than when this is built.
+     *
+     * There is a real cycle here, and it is the domain's rather than an
+     * accident of wiring: an agent may start a workflow, and a workflow may run
+     * an agent. Following it through the beans —
+     * `ExecutionService → InlineExecutionEngine → StepRunner → AgentNodeRunner →
+     * AgentConversation → AgentTools → OrknuxTools` — arrives back here, and
+     * Spring refuses to build a context containing that.
+     *
+     * It only closes with the inline engine, since the Temporal one starts runs
+     * through a worker instead of calling the step runner directly. That is why
+     * it was invisible on a machine with Temporal up, and why the first thing
+     * that noticed was a container started without it.
+     *
+     * Lazy is not a workaround here so much as the accurate statement: nothing
+     * in this class needs the engine to exist until somebody asks it to start
+     * something.
+     */
+    @param:Lazy private val runs: ExecutionService,
+    private val agents: AgentRepository,
+    private val web: WebProperties,
+    private val mapper: ObjectMapper,
+) {
+
+    /**
+     * Where a thing can be opened, sent back with the thing itself.
+     *
+     * A model that says "run 20 completed" has told somebody a fact and left
+     * them to go and find it; one that links to run 20 has finished the job. So
+     * every answer that names something with a page of its own carries the
+     * address of that page, and the briefing asks for it to be used.
+     *
+     * Absolute, from the origin the interface is served on. A relative path
+     * works in the panel, which is already on that origin, and is useless to
+     * anything reaching this over MCP from somewhere else — and those are the
+     * same tools. Where no origin is configured the path is all there is to
+     * give, which is still better than nothing.
+     */
+    private fun link(path: String): String {
+        val base = web.allowedOrigins.firstOrNull()?.trimEnd('/').orEmpty()
+        return base + path
+    }
+
+    private fun runLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/executions/$id")
+
+    private fun workflowLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/workflows/$id/editor")
+
+    private fun agentLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/agents/$id/settings")
+
+    /** What to offer, which depends on whether this caller may start anything. */
+    fun specs(scope: OrknuxScope): List<ToolSpec> = buildList {
+        add(
+            ToolSpec(
+                name = "orknux_workflows",
+                description = "The workflows in this workspace, whether each is enabled, and where it last got to.",
+                parameters = emptyList(),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_executions",
+                description = "Recent runs in this workspace, newest first.",
+                parameters = listOf(
+                    ToolParameterSpec(
+                        "status",
+                        "Only runs in this state: RUNNING, COMPLETED, FAILED, STOPPED.",
+                        required = false,
+                    ),
+                    ToolParameterSpec("limit", "How many to return; 20 by default, 100 at most.", required = false),
+                ),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_execution",
+                description = "One run in full: every step, what it produced, and what failed.",
+                parameters = listOf(ToolParameterSpec("id", "The run's id.", required = true)),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_agents",
+                description = "The agents configured in this workspace.",
+                parameters = emptyList(),
+            ),
+        )
+
+        // Offered only where they can actually be called. A tool a model is
+        // shown and then refused is a round trip spent learning what the grant
+        // already said.
+        if (scope.mayWrite) {
+            add(
+                ToolSpec(
+                    name = "orknux_run_workflow",
+                    description =
+                        "Starts a workflow. This really runs it — if the workflow messages somebody, it messages them.",
+                    parameters = listOf(
+                        ToolParameterSpec("workflow", "The workflow's name, or its id.", required = true),
+                        ToolParameterSpec(
+                            "input",
+                            "JSON handed to the first node, as a trigger would have supplied it.",
+                            required = false,
+                        ),
+                    ),
+                ),
+            )
+            add(
+                ToolSpec(
+                    name = "orknux_rerun_execution",
+                    description =
+                        "Runs a past run again, on the same input it was given. It acts on the same event: " +
+                            "if that run answered somebody, it answers them again.",
+                    parameters = listOf(ToolParameterSpec("id", "The run to repeat.", required = true)),
+                ),
+            )
+            add(
+                ToolSpec(
+                    name = "orknux_set_workflow_enabled",
+                    description = "Turns a workflow on or off. A workflow that is off does not run when its trigger fires.",
+                    parameters = listOf(
+                        ToolParameterSpec("workflow", "The workflow's name, or its id.", required = true),
+                        ToolParameterSpec("enabled", "true to turn it on, false to turn it off.", required = true),
+                    ),
+                ),
+            )
+            add(
+                ToolSpec(
+                    name = "orknux_set_agent_enabled",
+                    description = "Turns an agent on or off. An agent that is off cannot be asked anything.",
+                    parameters = listOf(
+                        ToolParameterSpec("agent", "The agent's name, or its id.", required = true),
+                        ToolParameterSpec("enabled", "true to turn it on, false to turn it off.", required = true),
+                    ),
+                ),
+            )
+        }
+    }
+
+    /** Whether this is one of ours, so a caller knows where to send it. */
+    fun handles(name: String): Boolean = name.startsWith(PREFIX)
+
+    /**
+     * Runs one call and answers as JSON.
+     *
+     * Never throws: a model that asked for something impossible is told so and
+     * can try something else, which beats ending the conversation.
+     */
+    fun run(scope: OrknuxScope, name: String, arguments: String): String = try {
+        when (name) {
+            "orknux_workflows" -> workflows(scope)
+            "orknux_executions" -> executions(scope, arguments)
+            "orknux_execution" -> execution(scope, arguments)
+            "orknux_agents" -> agentList(scope)
+            "orknux_run_workflow" -> runWorkflow(scope, arguments)
+            "orknux_rerun_execution" -> rerun(scope, arguments)
+            "orknux_set_workflow_enabled" -> setWorkflowEnabled(scope, arguments)
+            "orknux_set_agent_enabled" -> setAgentEnabled(scope, arguments)
+            else -> refuse("There is no tool called $name")
+        }
+    } catch (failure: Exception) {
+        refuse(failure.message ?: "That could not be done")
+    }
+
+    private fun workflows(scope: OrknuxScope): String {
+        val held = assignments.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("workflow.name")))
+        return mapper.writeValueAsString(
+            mapOf(
+                "workflows" to held.content.map { assignment ->
+                    val definition = assignment.workflow
+                    val last = definition.id?.let { runs.lastExecution(scope.workspaceId, it) }
+                    mapOf(
+                        "id" to definition.id,
+                        "name" to definition.name,
+                        "enabled" to assignment.enabled,
+                        "url" to workflowLink(scope.workspaceId, definition.id),
+                        "lastRun" to last?.let {
+                            mapOf(
+                                "id" to it.id,
+                                "status" to it.status,
+                                "at" to it.startedAt,
+                                "url" to runLink(scope.workspaceId, it.id),
+                            )
+                        },
+                    )
+                },
+            ),
+        )
+    }
+
+    private fun executions(scope: OrknuxScope, arguments: String): String {
+        val asked = number(arguments, "limit")?.toInt() ?: DEFAULT_RUNS
+        val page = runs.executions(
+            workspaceId = scope.workspaceId,
+            workflowId = null,
+            status = text(arguments, "status")?.let { wanted ->
+                ExecutionStatus.entries.firstOrNull { it.name.equals(wanted, ignoreCase = true) }
+                    ?: return refuse("There is no run status called $wanted")
+            },
+            days = null,
+            search = null,
+            page = 0,
+            size = asked.coerceIn(1, MANY),
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "total" to page.totalElements,
+                "executions" to page.content.map {
+                    mapOf(
+                        "id" to it.id,
+                        "workflow" to it.workflowName,
+                        "status" to it.status,
+                        "trigger" to it.trigger,
+                        "startedAt" to it.startedAt,
+                        "durationSeconds" to it.durationSeconds,
+                        "error" to it.error,
+                        "url" to runLink(scope.workspaceId, it.id),
+                    )
+                },
+            ),
+        )
+    }
+
+    private fun execution(scope: OrknuxScope, arguments: String): String {
+        val id = number(arguments, "id") ?: return refuse("Which run? Give its id.")
+        val found = runs.execution(id)
+            // A run in another workspace is answered exactly as one that does not
+            // exist. Saying "that is not yours" confirms it is somebody's.
+            ?.takeIf { it.workspaceId == scope.workspaceId }
+            ?: return refuse("There is no run $id here")
+
+        return mapper.writeValueAsString(
+            mapOf(
+                "id" to found.id,
+                "workflow" to found.workflowName,
+                "url" to runLink(scope.workspaceId, found.id),
+                "workflowUrl" to workflowLink(scope.workspaceId, found.workflowId),
+                "status" to found.status,
+                "startedAt" to found.startedAt,
+                "durationSeconds" to found.durationSeconds,
+                "error" to found.error,
+                "stoppedReason" to found.stoppedReason,
+                "steps" to found.steps.map {
+                    mapOf(
+                        "name" to it.name,
+                        "kind" to it.kind,
+                        "status" to it.status,
+                        "durationSeconds" to it.durationSeconds,
+                        "output" to it.output?.take(FIELD),
+                        "error" to it.error?.take(FIELD),
+                    )
+                },
+            ),
+        )
+    }
+
+    private fun agentList(scope: OrknuxScope): String {
+        val held = agents.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("name")))
+        return mapper.writeValueAsString(
+            mapOf(
+                "agents" to held.content.map {
+                    mapOf(
+                        "id" to it.id,
+                        "name" to it.name,
+                        "description" to it.description,
+                        "enabled" to it.enabled,
+                        "hasModel" to (it.modelId != null),
+                        "url" to agentLink(scope.workspaceId, it.id),
+                    )
+                },
+            ),
+        )
+    }
+
+    private fun runWorkflow(scope: OrknuxScope, arguments: String): String {
+        if (!scope.mayWrite) return refuse("This conversation may read what workflows did, but not start one")
+
+        val asked = text(arguments, "workflow") ?: return refuse("Which workflow? Give its name or id.")
+        val held = assignments.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("workflow.name")))
+            .content
+
+        /*
+         * By name or by id, and a name that matches two is refused rather than
+         * guessed at. Starting the wrong workflow is not an error anybody can
+         * take back.
+         */
+        val matches = held.filter { assignment ->
+            assignment.workflow.name.equals(asked, ignoreCase = true) || assignment.workflow.id?.toString() == asked
+        }
+        val chosen = when {
+            matches.isEmpty() -> return refuse("There is no workflow called $asked here")
+            matches.size > 1 -> return refuse("More than one workflow is called $asked; use its id")
+            else -> matches.single()
+        }
+
+        val started = runs.startExecution(
+            StartExecutionInput(
+                workspaceId = scope.workspaceId,
+                workflowId = requireNotNull(chosen.workflow.id),
+                trigger = ExecutionTrigger.API,
+                payload = text(arguments, "input"),
+            ),
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "started" to started.id,
+                "workflow" to started.workflowName,
+                "status" to started.status,
+                "url" to runLink(scope.workspaceId, started.id),
+                "note" to "Ask orknux_execution about this id to see where it got to.",
+            ),
+        )
+    }
+
+    /** Runs a past run again, on the input it was given. */
+    private fun rerun(scope: OrknuxScope, arguments: String): String {
+        if (!scope.mayWrite) return readOnly()
+
+        val id = number(arguments, "id") ?: return refuse("Which run? Give its id.")
+        val original = runs.execution(id)?.takeIf { it.workspaceId == scope.workspaceId }
+            ?: return refuse("There is no run $id here")
+
+        val started = runs.startExecution(
+            StartExecutionInput(
+                workspaceId = scope.workspaceId,
+                workflowId = original.workflowId,
+                trigger = ExecutionTrigger.API,
+                // The original input, so it acts on the same event rather than
+                // on nothing — which is what makes this a repeat at all.
+                payload = original.input,
+            ),
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "started" to started.id,
+                "workflow" to started.workflowName,
+                "repeated" to id,
+                "url" to runLink(scope.workspaceId, started.id),
+            ),
+        )
+    }
+
+    /*
+     * Saved rather than left to dirty checking, and deliberately not
+     * `@Transactional`.
+     *
+     * These are reached from `run` on this same object, so a proxy-based
+     * annotation would not apply to them at all — the call never leaves the
+     * bean. That failed quietly in exactly the worst way: no transaction, no
+     * flush, and a model reporting that it had turned a workflow off while the
+     * row was untouched. An explicit save is what actually happens here.
+     */
+    private fun setWorkflowEnabled(scope: OrknuxScope, arguments: String): String {
+        if (!scope.mayWrite) return readOnly()
+
+        val asked = text(arguments, "workflow") ?: return refuse("Which workflow? Give its name or id.")
+        val wanted = flag(arguments, "enabled") ?: return refuse("On or off? Say enabled true or false.")
+
+        val matches = assignments
+            .findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("workflow.name")))
+            .content
+            .filter { it.workflow.name.equals(asked, ignoreCase = true) || it.workflow.id?.toString() == asked }
+        val chosen = when {
+            matches.isEmpty() -> return refuse("There is no workflow called $asked here")
+            matches.size > 1 -> return refuse("More than one workflow is called $asked; use its id")
+            else -> matches.single()
+        }
+
+        chosen.enabled = wanted
+        assignments.save(chosen)
+        return mapper.writeValueAsString(
+            mapOf(
+                "workflow" to chosen.workflow.name,
+                "enabled" to wanted,
+                "url" to workflowLink(scope.workspaceId, chosen.workflow.id),
+            ),
+        )
+    }
+
+    private fun setAgentEnabled(scope: OrknuxScope, arguments: String): String {
+        if (!scope.mayWrite) return readOnly()
+
+        val asked = text(arguments, "agent") ?: return refuse("Which agent? Give its name or id.")
+        val wanted = flag(arguments, "enabled") ?: return refuse("On or off? Say enabled true or false.")
+
+        val chosen = agents.findByWorkspaceIdAndName(scope.workspaceId, asked)
+            ?: agents.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("name")))
+                .content
+                .firstOrNull { it.id?.toString() == asked }
+            ?: return refuse("There is no agent called $asked here")
+
+        chosen.enabled = wanted
+        agents.save(chosen)
+        return mapper.writeValueAsString(
+            mapOf("agent" to chosen.name, "enabled" to wanted, "url" to agentLink(scope.workspaceId, chosen.id)),
+        )
+    }
+
+    private fun readOnly(): String = refuse("This conversation may read what is here, but not change it")
+
+    private fun refuse(says: String): String = mapper.writeValueAsString(mapOf("error" to says))
+
+    /** Arguments arrive as a JSON object in a string, whichever shape asked. */
+    private fun text(arguments: String, name: String): String? = runCatching {
+        mapper.readTree(arguments).path(name).stringValue()?.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
+    /** The same, for a boolean a model may well have sent as "true". */
+    private fun flag(arguments: String, name: String): Boolean? = runCatching {
+        val node = mapper.readTree(arguments).path(name)
+        when {
+            node.isBoolean -> node.booleanValue()
+            node.isString -> node.stringValue()?.trim()?.lowercase()?.toBooleanStrictOrNull()
+            else -> null
+        }
+    }.getOrNull()
+
+    /** The same, for a number a model may well have sent as a string. */
+    private fun number(arguments: String, name: String): Long? = runCatching {
+        val node = mapper.readTree(arguments).path(name)
+        if (node.isNumber) node.asLong() else node.stringValue()?.trim()?.toLongOrNull()
+    }.getOrNull()
+
+    private companion object {
+        const val PREFIX = "orknux_"
+
+        /** One page, big enough that a workspace's whole catalogue fits in it. */
+        const val MANY = 100
+        const val DEFAULT_RUNS = 20
+
+        /** A step's output can be a megabyte; a model reading it needs the shape. */
+        const val FIELD = 2_000
+    }
+}

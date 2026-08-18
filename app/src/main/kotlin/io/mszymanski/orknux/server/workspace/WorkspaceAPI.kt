@@ -2,6 +2,8 @@ package io.mszymanski.orknux.server.workspace
 
 import io.mszymanski.orknux.connector.connection.WorkspaceLifecycleService
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.security.RoleNotFoundException
+import io.mszymanski.orknux.server.security.RoleRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.PageImpl
@@ -18,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional
 @Controller
 class WorkspaceAPI(
     private val repository: WorkspaceRepository,
+    private val roles: RoleRepository,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
     private val connections: WorkspaceLifecycleService,
@@ -87,11 +90,20 @@ class WorkspaceAPI(
         }
 
         val previousDescription = workspace.description
-        val previousGroup = workspace.ldapGroup
+        val previousRoles = workspace.roles.mapNotNull { it.id }.toSet()
 
         workspace.name = newName
         workspace.description = input.description?.trim()?.ifEmpty { null }
-        workspace.ldapGroup = input.ldapGroup?.trim()?.ifEmpty { null }
+        /*
+         * Null leaves the assignment alone; a list replaces it, empty included —
+         * taking every role off a workspace is a decision somebody may make, and it
+         * means administrators only.
+         */
+        input.roleIds?.let { wanted ->
+            workspace.roles = wanted.distinct()
+                .map { roleId -> roles.findByIdOrNull(roleId) ?: throw RoleNotFoundException(roleId) }
+                .toMutableSet()
+        }
 
         if (newName != previousName) {
             auditRecorder.record(
@@ -101,8 +113,20 @@ class WorkspaceAPI(
                 newWorkspaceName = newName,
             )
         }
-        if (workspace.ldapGroup != previousGroup) {
-            auditRecorder.record(id, WorkspaceAuditCategory.WORKSPACE, "Workspace LDAP group updated")
+        val nowRoles = workspace.roles.mapNotNull { it.id }.toSet()
+        if (nowRoles != previousRoles) {
+            // Named, not counted: who can see a workspace is worth being able to
+            // read out of the log a year later.
+            val named = workspace.roles.map { it.name }.sorted()
+            auditRecorder.record(
+                id,
+                WorkspaceAuditCategory.WORKSPACE,
+                if (named.isEmpty()) {
+                    "Workspace roles cleared: administrators only"
+                } else {
+                    "Workspace roles set to ${named.joinToString(", ")}"
+                },
+            )
         }
         if (workspace.description != previousDescription) {
             auditRecorder.record(id, WorkspaceAuditCategory.WORKSPACE, "Workspace description updated")
@@ -165,6 +189,82 @@ class WorkspaceAPI(
         return workspace
     }
 
+    /**
+     * Chooses the model the workspace speaks with.
+     *
+     * The mirror of the one above, and refused the same way: only a speech model
+     * will do, since a chat model handed an answer would talk *about* it rather
+     * than read it. Null takes the speaker away.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceSpeechModel(@Argument workspaceId: Long, @Argument modelId: Long?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        val chosen = modelId?.let { models.model(it) ?: throw ModelNotFoundForWorkspaceException(it) }
+        if (chosen != null && chosen.workspaceId != workspaceId) throw ModelNotFoundForWorkspaceException(modelId)
+        if (chosen != null && chosen.kind != ModelKind.SPEECH) {
+            throw ModelNotSpeechException(chosen.name)
+        }
+
+        workspace.speechModelId = chosen?.id
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (chosen == null) "Speech model cleared" else "Speech model set to ${chosen.name}",
+        )
+        return workspace
+    }
+
+    /**
+     * Chooses the model behind the quick chat.
+     *
+     * A chat model, unlike the two above: this one is asked questions and calls
+     * orknux's own tools to answer them, so a model that only listens or only
+     * reads aloud would have nothing to do here. Null takes the button away.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceQuickChatModel(@Argument workspaceId: Long, @Argument modelId: Long?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        val chosen = modelId?.let { models.model(it) ?: throw ModelNotFoundForWorkspaceException(it) }
+        if (chosen != null && chosen.workspaceId != workspaceId) throw ModelNotFoundForWorkspaceException(modelId)
+        if (chosen != null && chosen.kind != ModelKind.CHAT) throw ModelNotChatException(chosen.name)
+
+        workspace.quickChatModelId = chosen?.id
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (chosen == null) "Quick chat model cleared" else "Quick chat model set to ${chosen.name}",
+        )
+        return workspace
+    }
+
+    /**
+     * Whether the quick chat may change things, or only look at them.
+     *
+     * Recorded either way: this is the setting that decides whether a panel
+     * somebody opened to ask a question can act on the workspace, and "who
+     * turned that on" is a question worth being able to answer afterwards.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceQuickChatWrites(@Argument workspaceId: Long, @Argument allowed: Boolean): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        workspace.quickChatMayWrite = allowed
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (allowed) "Quick chat allowed to make changes" else "Quick chat limited to reading",
+        )
+        return workspace
+    }
+
     @MutationMapping
     @Transactional
     fun deleteWorkspace(@Argument id: Long): Boolean {
@@ -191,8 +291,8 @@ data class CreateWorkspaceInput(
 data class UpdateWorkspaceInput(
     val name: String,
     val description: String? = null,
-    /** Directory group whose members may see the workspace, e.g. cn=backend,ou=workspaces,dc=orknux,dc=io. */
-    val ldapGroup: String? = null,
+    /** The roles that open this workspace. Null leaves them alone; empty means administrators only. */
+    val roleIds: List<Long>? = null,
 )
 
 data class WorkspacePage(
@@ -221,6 +321,16 @@ class WorkspaceNameInvalidException : RuntimeException("A workspace name is requ
 class ModelNotTranscriptionException(name: String) : RuntimeException(
     "$name is not a transcription model. A microphone needs one that turns speech into text; " +
         "add one under Models with the transcription kind.",
+)
+
+class ModelNotChatException(name: String) : RuntimeException(
+    "$name is not a chat model. The quick chat asks questions and calls tools to answer them, " +
+        "which is something only a chat model does.",
+)
+
+class ModelNotSpeechException(name: String) : RuntimeException(
+    "$name is not a speech model. Reading an answer aloud needs one that turns text into speech; " +
+        "add one under Models with the speech kind.",
 )
 
 class ModelNotFoundForWorkspaceException(id: Long) :

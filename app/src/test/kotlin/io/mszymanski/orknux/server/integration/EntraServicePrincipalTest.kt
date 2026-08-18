@@ -8,6 +8,7 @@ import io.mszymanski.orknux.connector.model.ModelProvider
 import io.mszymanski.orknux.connector.model.ModelProviderProbe
 import io.mszymanski.orknux.connector.model.ProviderAuthMethod
 import io.mszymanski.orknux.connector.model.ProviderType
+import io.mszymanski.orknux.connector.security.SecretCipher
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -120,7 +121,10 @@ class EntraServicePrincipalTest {
 
     private fun probe(): ModelProviderProbe {
         val properties = ConnectionProperties(entraAuthority = url(entra))
-        return ModelProviderProbe(ConnectionProbe(properties), properties, ObjectMapper())
+        // A real cipher with a real key: these providers hold plaintext secrets
+        // set in the test, so nothing here is ever in an envelope — the cipher
+        // is only asked whether one is.
+        return ModelProviderProbe(ConnectionProbe(properties), properties, ObjectMapper(), SecretCipher(TEST_KEY))
     }
 
     /**
@@ -139,4 +143,9 @@ class EntraServicePrincipalTest {
     )
 
     private fun url(server: HttpServer) = "http://${server.address.hostString}:${server.address.port}"
+
+    private companion object {
+        /** Any valid AES-256 key; nothing here is encrypted with it. */
+        const val TEST_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
 }

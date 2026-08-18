@@ -22,6 +22,16 @@ data class ConnectionProperties(
     val allowLinkLocal: Boolean = false,
 
     /**
+     * How long a workflow's own HTTP request may take.
+     *
+     * Longer than a probe's, which only asks whether anything is listening: a
+     * request a workflow makes is doing work at the other end, and five seconds is
+     * a short time to build a report in. Bounded all the same, because a step that
+     * never returns holds the run that made it.
+     */
+    val requestTimeoutSeconds: Long = 30,
+
+    /**
      * Where a service principal's token comes from.
      *
      * Configurable because the global cloud is not the only one — the US

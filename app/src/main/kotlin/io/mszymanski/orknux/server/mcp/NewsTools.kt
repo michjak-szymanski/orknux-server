@@ -110,6 +110,7 @@ class NewsTools(
             IssueNewsKind.STATUS ->
                 if (item.says == "CLOSED") "closed" else "reopened"
             IssueNewsKind.COMMENT -> "commented"
+            IssueNewsKind.MENTIONED -> "mentioned you"
         },
         "issue" to item.issueNumber,
         "title" to item.issueTitle,
@@ -117,7 +118,7 @@ class NewsTools(
         "at" to item.at.toString(),
         // The comment itself, so the answer to "what happened" does not need a
         // second call to be worth reading.
-        "said" to item.says.takeIf { item.kind == IssueNewsKind.COMMENT },
+        "said" to item.says.takeIf { item.kind == IssueNewsKind.COMMENT || item.kind == IssueNewsKind.MENTIONED },
         "url" to link(item.workspaceId, item.issueNumber),
     )
 

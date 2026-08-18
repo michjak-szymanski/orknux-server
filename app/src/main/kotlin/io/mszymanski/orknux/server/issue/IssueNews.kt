@@ -25,6 +25,9 @@ enum class IssueNewsKind {
 
     /** Somebody said something on it. */
     COMMENT,
+
+    /** Somebody wrote your name in a comment. */
+    MENTIONED,
 }
 
 /**

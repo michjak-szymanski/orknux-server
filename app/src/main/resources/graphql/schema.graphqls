@@ -30,6 +30,11 @@ type Query {
     workspaceIssue(workspaceId: ID!, number: Int!): Issue
     "Every label in use in this workspace, so a filter can offer what exists."
     workspaceIssueLabels(workspaceId: ID!): [String!]!
+
+    "What has happened that concerns you, newest first, across every workspace you can see."
+    myNotifications(limit: Int): [Notification!]!
+    "How many are waiting, which is all the bell needs to know."
+    myNotificationCount: Int!
     "What an issue can be assigned to here: people, agents and models together."
     issueAssignees(workspaceId: ID!, search: String): [Assignee!]!
     workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
@@ -203,7 +208,9 @@ type Mutation {
     first message is what makes the chat.
     """
     attachToChat(chatId: ID!, attachmentIds: [ID!]!): [ChatAttachment!]!
-    "Creates an INTERNAL user: an identity managed here. Administrators only."
+    "Says the notifications waiting have been seen, and answers how many that was."
+    readMyNotifications: Int!
+
     createIssue(input: IssueInput!): Issue!
     updateIssue(id: ID!, input: IssueInput!): Issue!
     deleteIssue(id: ID!): Boolean!
@@ -228,6 +235,7 @@ type Mutation {
     "Mints a token. Yours when id is absent; anybody's, for an administrator."
     createUserToken(id: ID, name: String!): NewUserToken!
     deleteUserToken(id: ID!): Boolean!
+    "Creates an INTERNAL user: an identity managed here. Administrators only."
     createUser(input: UserInput!): AppUser!
     "Edits an INTERNAL user's display name and roles. Administrators only."
     updateUser(id: ID!, input: UserInput!): AppUser!
@@ -2393,6 +2401,29 @@ type AppUser {
 type RoleRef {
     id: ID!
     name: String!
+}
+
+"What kind of thing happened on an issue."
+enum NotificationKind {
+    ASSIGNED
+    STATUS
+    COMMENT
+    MENTIONED
+}
+
+"One thing that happened, as the bell shows it."
+type Notification {
+    id: ID!
+    workspaceId: ID!
+    issueNumber: Int!
+    issueTitle: String!
+    kind: NotificationKind!
+    "Whoever did it."
+    actor: String!
+    "What was said, or the status it moved to."
+    says: String
+    "ISO-8601 offset date-time."
+    at: String!
 }
 
 enum IssueStatus {

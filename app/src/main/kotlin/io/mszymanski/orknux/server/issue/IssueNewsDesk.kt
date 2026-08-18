@@ -64,6 +64,44 @@ class IssueNewsDesk(
     @Transactional
     fun commented(issue: Issue, actor: String, said: String) {
         write(issue, IssueNewsKind.COMMENT, actor, says = said, to = watchers(issue))
+        // A name written into a comment is addressed to that person whether or
+        // not they have anything to do with the issue, which is the whole point
+        // of writing it - so it is its own event, and it reaches somebody the
+        // watcher list never would.
+        write(issue, IssueNewsKind.MENTIONED, actor, says = said, to = mentioned(said))
+    }
+
+    /**
+     * Whoever was named in a comment.
+     *
+     * Mentions are stored as the text somebody typed - `@Support responder` -
+     * rather than as a marker holding an id, so finding them means matching
+     * names against what exists. Longest first, or `@Ann` would match inside
+     * `@Anna` and tell the wrong person.
+     */
+    private fun mentioned(said: String): List<NewsReader> {
+        if (!said.contains('@')) return emptyList()
+        val found = mutableListOf<NewsReader>()
+
+        val people = users.findAll().sortedByDescending { it.displayName.length }
+        for (person in people) {
+            val name = person.displayName
+            if (said.contains("@$name", ignoreCase = true)) found += NewsReader(AssigneeKind.USER, person.username)
+        }
+        return found
+    }
+
+    /**
+     * What is waiting, without saying it has been seen.
+     *
+     * The bell needs both: a number it can show, and a separate moment when
+     * somebody looks. Reading that marked read would make the number clear
+     * itself the instant it was asked for, which is a number nobody ever sees.
+     */
+    @Transactional(readOnly = true)
+    fun waiting(workspaceId: Long, reader: NewsReader): List<IssueNewsItem> {
+        val mark = reads.forReader(workspaceId, reader.kind, reader.name)
+        return news.since(workspaceId, reader.kind, reader.name, mark?.lastId ?: 0)
     }
 
     /**

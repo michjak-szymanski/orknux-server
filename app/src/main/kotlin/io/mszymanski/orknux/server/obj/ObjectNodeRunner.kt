@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.obj
 
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
+import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
 import io.mszymanski.orknux.workflow.execution.StepResult
@@ -26,7 +27,7 @@ import tools.jackson.databind.node.ObjectNode
  * called.
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(KIND_RUNNER_ORDER)
 class ObjectNodeRunner(
     private val expressions: NodeExpressions,
     private val mapper: ObjectMapper,

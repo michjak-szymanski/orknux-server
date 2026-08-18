@@ -85,6 +85,19 @@ interface NodeRunner {
 }
 
 /**
+ * Where a runner that implements a kind sits.
+ *
+ * Deliberately not [Ordered.HIGHEST_PRECEDENCE]: nothing can be placed above
+ * that, so a test that has to steer the engine — or an installation replacing
+ * one kind's runtime — would be tied with the runner it means to pre-empt, and
+ * a tie is settled by whatever order the beans happened to be registered in.
+ * That is how three interpreter tests came to see every node skipped.
+ *
+ * Far ahead of [UnimplementedNodeRunner], which is the floor.
+ */
+const val KIND_RUNNER_ORDER: Int = Ordered.HIGHEST_PRECEDENCE + 100
+
+/**
  * Claims every kind, last, so a graph can be run before any kind has a runtime.
  * It performs nothing and says so: the step is skipped rather than completed,
  * because a run that reports success without doing the work is worse than one

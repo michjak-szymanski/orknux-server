@@ -83,7 +83,11 @@ jobs:
     needs: [build, image]
     # Never from a pull request: a fork's pull request must not be able to reach
     # the registry credentials, and an unmerged change has nothing to publish.
-    if: github.event_name == 'push'
+    #
+    # And not at all where those credentials have not been set — a fork, or this
+    # repository before somebody adds them. Skipped is the honest result: a red
+    # run says the build is broken, and a missing variable is not that.
+    if: github.event_name == 'push' && vars.DOCKERHUB_USERNAME != ''
 
     permissions:
       contents: read

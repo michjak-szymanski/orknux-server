@@ -25,6 +25,14 @@ class WorkspaceAPITest(
     fun clearWorkspaces() {
         auditRepository.deleteAll()
         repository.deleteAll()
+        /*
+         * Roles outlive workspaces — they belong to the installation, not to any
+         * one workspace — so a test that makes one leaves it for the next, and
+         * more than one of these wants to be called `backend`. Without this the
+         * second of them dies on ux_security_role_name rather than on anything
+         * it was testing.
+         */
+        roles.deleteAll()
     }
 
     @Test

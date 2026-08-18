@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.condition
 
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
+import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
 import io.mszymanski.orknux.workflow.execution.StepResult
@@ -19,7 +20,7 @@ import org.springframework.stereotype.Component
  * the workflow asked a question and acted on the answer.
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(KIND_RUNNER_ORDER)
 class ConditionNodeRunner(
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,

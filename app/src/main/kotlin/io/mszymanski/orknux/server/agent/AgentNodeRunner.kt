@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
+import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
 import io.mszymanski.orknux.workflow.execution.LogLevel
@@ -14,6 +15,7 @@ import io.mszymanski.orknux.workflow.execution.StepFailedException
 import io.mszymanski.orknux.workflow.execution.StepResult
 import io.mszymanski.orknux.workflow.execution.StepStatus
 import org.springframework.data.repository.findByIdOrNull
+import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
 
 /**
@@ -30,6 +32,11 @@ import org.springframework.stereotype.Component
  * be handed a function's return value.
  */
 @Component
+// Ordered like its siblings. Without this it sat where an unannotated bean sits
+// — the same place as UnimplementedNodeRunner — so which of the two claimed an
+// AGENT node was down to the order the beans happened to be registered in, and
+// losing that race means the node is skipped and the run reports success.
+@Order(KIND_RUNNER_ORDER)
 class AgentNodeRunner(
     private val agents: AgentRepository,
     private val briefing: AgentBriefing,

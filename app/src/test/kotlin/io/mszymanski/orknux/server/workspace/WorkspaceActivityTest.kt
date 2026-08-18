@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.workspace
 
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.security.Role
+import io.mszymanski.orknux.server.security.RoleRepository
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workflow.WorkflowRepository
 import org.assertj.core.api.Assertions.assertThat
@@ -24,6 +26,7 @@ class WorkspaceActivityTest(
     @Autowired val agents: AgentRepository,
     @Autowired val workflows: WorkflowRepository,
     @Autowired val assignments: WorkspaceWorkflowRepository,
+    @Autowired val roles: RoleRepository,
 ) {
 
     private var workspaceId: Long = 0
@@ -35,6 +38,7 @@ class WorkspaceActivityTest(
         agents.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
+        roles.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
     }
 
@@ -86,14 +90,38 @@ class WorkspaceActivityTest(
         )
     }
 
+    /**
+     * Who may open a workspace is a role now, not a directory group, and the
+     * change is recorded by name: counting them would say a workspace's access
+     * changed without saying what it changed to.
+     */
     @Test
-    fun `records a directory group change on the workspace`() {
+    fun `records a change to the roles that open the workspace`() {
+        val backend = roles.save(Role(name = "backend"))
+
         graphQlTester.document(
-            """mutation { updateWorkspace(id: $workspaceId, input: { name: "backend", ldapGroup: "cn=backend,ou=workspaces,dc=orknux,dc=io" }) { id } }""",
+            """mutation { updateWorkspace(id: $workspaceId, input: { name: "backend", roleIds: [${backend.id}] }) { id } }""",
         ).execute()
 
-        assertThat(audit.findAll().map { it.message }).containsExactly("Workspace LDAP group updated")
+        assertThat(audit.findAll().map { it.message }).containsExactly("Workspace roles set to backend")
         assertThat(audit.findAll().single().category).isEqualTo(WorkspaceAuditCategory.WORKSPACE)
+    }
+
+    /** And taking the last one off says what that means, rather than "[]". */
+    @Test
+    fun `records the roles being cleared`() {
+        val backend = roles.save(Role(name = "backend"))
+        graphQlTester.document(
+            """mutation { updateWorkspace(id: $workspaceId, input: { name: "backend", roleIds: [${backend.id}] }) { id } }""",
+        ).execute()
+        audit.deleteAll()
+
+        graphQlTester.document(
+            """mutation { updateWorkspace(id: $workspaceId, input: { name: "backend", roleIds: [] }) { id } }""",
+        ).execute()
+
+        assertThat(audit.findAll().map { it.message })
+            .containsExactly("Workspace roles cleared: administrators only")
     }
 
     @Test

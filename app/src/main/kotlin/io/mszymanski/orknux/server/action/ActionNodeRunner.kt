@@ -10,6 +10,7 @@ import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.server.condition.ConditionNotDecidableException
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
+import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
 import io.mszymanski.orknux.workflow.execution.PermanentFailure
@@ -45,7 +46,7 @@ import java.time.OffsetDateTime
  * because that is the seam the execution module leaves for exactly this.
  */
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+@Order(KIND_RUNNER_ORDER)
 class ActionNodeRunner(
     private val actions: WorkflowActionRepository,
     private val functions: WorkflowFunctionRepository,

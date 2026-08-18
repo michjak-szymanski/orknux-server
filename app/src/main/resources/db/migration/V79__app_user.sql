@@ -35,7 +35,12 @@ CREATE TABLE app_user_role (
 
 -- Everyone the audit log has ever seen act, so the list is not empty on the
 -- day it appears. They signed in to do what the log records, so EXTERNAL.
+-- Not everything in that column is a person: triggers act as "trigger:...",
+-- and "system" acts as itself. People have plain names.
 INSERT INTO app_user (username, display_name, type)
 SELECT DISTINCT user_id, user_id, 'EXTERNAL'
 FROM workspace_audit
-WHERE user_id IS NOT NULL AND user_id <> '';
+WHERE user_id IS NOT NULL
+  AND user_id <> ''
+  AND user_id NOT LIKE '%:%'
+  AND lower(user_id) <> 'system';

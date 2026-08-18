@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.mcp
 
 import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
@@ -79,6 +80,7 @@ class OrknuxTools(
      */
     @param:Lazy private val runs: ExecutionService,
     private val agents: AgentRepository,
+    private val functions: WorkflowFunctionRepository,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
 ) {
@@ -107,6 +109,8 @@ class OrknuxTools(
     private fun workflowLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/workflows/$id/editor")
 
     private fun agentLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/agents/$id/settings")
+
+    private fun functionLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/functions/$id")
 
     /** What to offer, which depends on whether this caller may start anything. */
     fun specs(scope: OrknuxScope): List<ToolSpec> = buildList {
@@ -143,6 +147,33 @@ class OrknuxTools(
                 name = "orknux_agents",
                 description = "The agents configured in this workspace.",
                 parameters = emptyList(),
+            ),
+        )
+
+        /*
+         * The code, which is the thing most often being asked about.
+         *
+         * Somebody with a function open and a question about it was told there
+         * was no way to see inside one - which was true, and left the model
+         * discussing code it could not read. Two tools rather than one: the list
+         * is what a model needs to find the right function, and the source is
+         * long enough that fetching every function's to answer a question about
+         * one would fill the conversation with the others.
+         */
+        add(
+            ToolSpec(
+                name = "orknux_functions",
+                description = "The functions in this workspace: what each is called, takes and gives back.",
+                parameters = emptyList(),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_function",
+                description = "One function in full, including the code it is written in.",
+                parameters = listOf(
+                    ToolParameterSpec("function", "The function's name, or its id.", required = true),
+                ),
             ),
         )
 
@@ -212,6 +243,8 @@ class OrknuxTools(
             "orknux_executions" -> executions(scope, arguments)
             "orknux_execution" -> execution(scope, arguments)
             "orknux_agents" -> agentList(scope)
+            "orknux_functions" -> functionList(scope)
+            "orknux_function" -> function(scope, arguments)
             "orknux_run_workflow" -> runWorkflow(scope, arguments)
             "orknux_rerun_execution" -> rerun(scope, arguments)
             "orknux_set_workflow_enabled" -> setWorkflowEnabled(scope, arguments)
@@ -328,6 +361,72 @@ class OrknuxTools(
                         "url" to agentLink(scope.workspaceId, it.id),
                     )
                 },
+            ),
+        )
+    }
+
+    private fun functionList(scope: OrknuxScope): String {
+        val held = functions.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("name")))
+        return mapper.writeValueAsString(
+            mapOf(
+                "functions" to held.content.map {
+                    mapOf(
+                        "id" to it.id,
+                        "name" to it.name,
+                        "description" to it.description,
+                        "signature" to it.signature,
+                        "returns" to it.returnType.name,
+                        /*
+                         * Whether this workspace may change it. A plugin's
+                         * function is read here and edited where it was
+                         * declared, and a model that suggests a rewrite of one
+                         * is suggesting something nobody can apply.
+                         */
+                        "editable" to it.editable,
+                        "url" to functionLink(scope.workspaceId, it.id),
+                    )
+                },
+            ),
+        )
+    }
+
+    /**
+     * One function, code and all.
+     *
+     * The TypeScript is what is sent when there is any: it is what somebody
+     * opens, and what a suggestion has to be written against. A plugin's
+     * function has none, and then the JavaScript that runs is the only source
+     * there is - marked as such, so a model does not offer annotations for a
+     * column that cannot hold them.
+     */
+    private fun function(scope: OrknuxScope, arguments: String): String {
+        val asked = text(arguments, "function") ?: return refuse("Which function? Give its name or id.")
+        val held = functions.findByWorkspaceId(scope.workspaceId)
+        val matches = held.filter { it.name.equals(asked, ignoreCase = true) || it.id?.toString() == asked }
+        val chosen = when {
+            matches.isEmpty() -> return refuse("There is no function called $asked here")
+            matches.size > 1 -> return refuse("More than one function is called $asked; use its id")
+            else -> matches.single()
+        }
+
+        return mapper.writeValueAsString(
+            mapOf(
+                "id" to chosen.id,
+                "name" to chosen.name,
+                "description" to chosen.description,
+                "signature" to chosen.signature,
+                "returns" to chosen.returnType.name,
+                "editable" to chosen.editable,
+                "language" to if (chosen.typescript != null) "typescript" else "javascript",
+                "code" to (chosen.typescript ?: chosen.source),
+                "parameters" to chosen.params.map { mapOf("name" to it.name, "type" to it.type.name) },
+                /*
+                 * Named, not valued. An external is a workspace value and often
+                 * a secret; what a model needs to write the code is that the
+                 * function is handed one, and in which position.
+                 */
+                "externals" to chosen.externals.map { it.variableId },
+                "url" to functionLink(scope.workspaceId, chosen.id),
             ),
         )
     }

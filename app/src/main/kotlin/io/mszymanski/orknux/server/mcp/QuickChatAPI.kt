@@ -96,8 +96,23 @@ class QuickChat(
          * it — which is the whole thing this panel was meant to save.
          */
         append(
-            "Whenever you mention a run, a workflow or an agent, link to it using the `url` the tool " +
-                "gave you, as a markdown link like [run 20](url). Never invent a link. ",
+            "Whenever you mention a run, a workflow, an agent or a function, link to it using the `url` " +
+                "the tool gave you, as a markdown link like [run 20](url). Never invent a link. ",
+        )
+        /*
+         * The code, and what may be done with it.
+         *
+         * Reading a function before discussing it is the difference between
+         * helping with the code and describing what a function of that name
+         * might contain. Saying that a suggestion cannot be saved is the honest
+         * half: nothing here writes a function, because what runs is compiled
+         * from TypeScript by the editor in the browser and there is no compiler
+         * on this side to keep the two halves the same.
+         */
+        append(
+            "When a question is about a function's code, read it with `orknux_function` before answering " +
+                "rather than describing what it might contain. You can suggest a rewrite in your reply, " +
+                "as code; you cannot save one, so say that it has to be pasted into the editor. ",
         )
         /*
          * Said as well as enforced. The scope already withholds the tool, so a

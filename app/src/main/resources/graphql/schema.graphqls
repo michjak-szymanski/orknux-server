@@ -7,6 +7,9 @@ type Query {
     "The roles this installation defines. Administrators only, reading included."
     roles: [Role!]!
     role(id: ID!): Role
+    "Everybody this installation knows, by name. Administrators only."
+    users(search: String): [AppUser!]!
+    user(id: ID!): AppUser
     workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
     workspace(id: ID!): Workspace
     "Audit entries, newest first. Without a workspaceId every visible workspace is included."
@@ -178,6 +181,10 @@ type Mutation {
     first message is what makes the chat.
     """
     attachToChat(chatId: ID!, attachmentIds: [ID!]!): [ChatAttachment!]!
+    "Creates an INTERNAL user: an identity managed here. Administrators only."
+    createUser(input: UserInput!): AppUser!
+    "Edits an INTERNAL user's display name and roles. Administrators only."
+    updateUser(id: ID!, input: UserInput!): AppUser!
     createRole(input: RoleInput!): Role!
     "Refused for the built-in administrator role."
     updateRole(id: ID!, input: RoleInput!): Role!
@@ -2236,6 +2243,40 @@ input RoleInput {
     description: String
     "Empty or absent means an ordinary role: USER."
     scopes: [RoleScope!]
+}
+
+"Where a user is true: at the identity provider, or here."
+enum UserType {
+    "Made and managed in this application. An identity, not a login."
+    INTERNAL
+    "Vouched for by LDAP or OIDC; recorded when they sign in."
+    EXTERNAL
+}
+
+type AppUser {
+    id: ID!
+    username: String!
+    displayName: String!
+    type: UserType!
+    roles: [RoleRef!]!
+    "False for anybody the identity provider defines."
+    editable: Boolean!
+    "ISO-8601 offset date-time."
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+"A role as a user's row names it."
+type RoleRef {
+    id: ID!
+    name: String!
+}
+
+input UserInput {
+    "Only read when creating; a username is who somebody is, not a field to edit."
+    username: String
+    displayName: String
+    roleIds: [ID!]
 }
 
 "What a configuration check concluded."

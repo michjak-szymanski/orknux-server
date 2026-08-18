@@ -3,6 +3,8 @@
 [![CI](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml/badge.svg)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
 [![Tests](https://img.shields.io/github/actions/workflow/status/michjak-szymanski/orknux-server/ci.yml?branch=main&label=tests)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/github/license/michjak-szymanski/orknux-server?label=licence)](LICENSE)
+[![Docker](https://img.shields.io/docker/v/orknux/orknux-server?label=docker&sort=semver)](https://hub.docker.com/r/orknux/orknux-server)
+[![Image size](https://img.shields.io/docker/image-size/orknux/orknux-server/latest?label=image)](https://hub.docker.com/r/orknux/orknux-server)
 
 Orknux — pronounced *ZAV-rick* — is fully open source, workspace based, agent
 orchestration platform.
@@ -33,11 +35,14 @@ end, and talks only to this service.
 ## Running
 
 ```
-docker compose up -d              # postgres, openldap and temporal
-./mvnw spring-boot:run -pl app    # http://localhost:8080
+docker compose up -d                 # postgres, openldap and temporal
+./mvnw spring-boot:run -pl app -am   # http://localhost:8080
 ```
 
-The first build has to be online, and `-pl app` builds the modules it needs.
+The first build has to be online. `-am` is what builds the modules alongside
+the app: without it they are resolved from the local repository instead, so a
+change in one of them is invisible until something installs it — and the build
+fails on a symbol that is plainly there in the source.
 Temporal's own UI is on http://localhost:8233, for looking at a run that went
 wrong.
 

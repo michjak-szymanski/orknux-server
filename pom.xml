@@ -92,6 +92,26 @@
         <sourceDirectory>${project.basedir}/src/main/kotlin</sourceDirectory>
         <testSourceDirectory>${project.basedir}/src/test/kotlin</testSourceDirectory>
         <plugins>
+            <!--
+                Declared here so that `spring-boot:run -pl app -am` works.
+
+                Running the app alone resolves its siblings from the local
+                repository, so a change in a module is invisible until something
+                installs it — the build fails on a symbol that is right there in
+                the source. `-am` fixes that by building them in the same
+                reactor, but it also invokes the goal on every project in it, and
+                a module with no main class fails.
+
+                So the goal is a no-op everywhere except the app, which turns it
+                back on. No executions: nothing is bound to a phase by this.
+            -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>

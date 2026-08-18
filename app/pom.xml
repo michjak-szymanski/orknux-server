@@ -255,6 +255,8 @@
                 <version>${spring-boot.version}</version>
                 <configuration>
                     <mainClass>${start-class}</mainClass>
+                    <!-- The parent skips this goal for every module; this is the one that runs. -->
+                    <skip>false</skip>
                 </configuration>
                 <!--
                     Without spring-boot-starter-parent nothing binds `repackage`

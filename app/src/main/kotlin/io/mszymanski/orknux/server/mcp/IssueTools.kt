@@ -161,6 +161,49 @@ class IssueTools(
     }
 
     /**
+     * Opening one.
+     *
+     * The tools could read, comment, relabel and close, and not file - so an
+     * assistant that found something had to describe it in a conversation and
+     * hope somebody wrote it down. Which is the failure the tracker exists to
+     * prevent, one layer up.
+     *
+     * Filed under whoever is asking, and assigned to nobody by default:
+     * deciding who should look at a thing is somebody else's judgement, and an
+     * assistant that assigned its own findings to a person would be handing
+     * out work.
+     */
+    @Transactional
+    fun open(scope: OrknuxScope, arguments: String): String {
+        if (!scope.mayWrite) return refuse("This conversation may read issues, but not open them")
+        val title = text(arguments, "title") ?: return refuse("What should the issue be called?")
+
+        val made = issues.save(
+            Issue(
+                workspaceId = scope.workspaceId,
+                number = issues.lastNumber(scope.workspaceId) + 1,
+                title = title.trim(),
+                description = text(arguments, "description")?.trim(),
+                reporter = currentUser(),
+                labels = text(arguments, "labels")
+                    ?.split(',')
+                    ?.map { it.trim() }
+                    ?.filter { it.isNotEmpty() }
+                    ?.toMutableSet()
+                    ?: mutableSetOf(),
+                lastModifiedBy = currentUser(),
+            ),
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "issue" to made.number,
+                "title" to made.title,
+                "url" to issueLink(scope.workspaceId, made.number),
+            ),
+        )
+    }
+
+    /**
      * Saying something on an issue, under whoever is asking.
      *
      * A token carries its owner, so a comment written through this is signed

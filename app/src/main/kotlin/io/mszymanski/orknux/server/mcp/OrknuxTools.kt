@@ -233,6 +233,19 @@ class OrknuxTools(
         if (scope.mayWrite) {
             add(
                 ToolSpec(
+                    name = "orknux_open_issue",
+                    description =
+                        "Files a new issue in this workspace, under your own name. Use it for anything worth " +
+                            "somebody else seeing: what you found, what you could not do, what should be decided.",
+                    parameters = listOf(
+                        ToolParameterSpec("title", "One line saying what it is.", required = true),
+                        ToolParameterSpec("description", "The detail; markdown is rendered.", required = false),
+                        ToolParameterSpec("labels", "Labels to file it under, comma separated.", required = false),
+                    ),
+                ),
+            )
+            add(
+                ToolSpec(
                     name = "orknux_comment_on_issue",
                     description = "Says something on an issue, under your own name. Everybody who reads it sees it.",
                     parameters = listOf(
@@ -416,6 +429,7 @@ class OrknuxTools(
             "orknux_issues" -> issueTools.list(scope, arguments)
             "orknux_issue" -> issueTools.one(scope, arguments)
             "orknux_issue_labels" -> issueTools.labels(scope)
+            "orknux_open_issue" -> issueTools.open(scope, arguments)
             "orknux_comment_on_issue" -> issueTools.comment(scope, arguments)
             "orknux_set_issue_status" -> issueTools.setStatus(scope, arguments)
             "orknux_update_issue" -> issueTools.update(scope, arguments)

@@ -64,6 +64,33 @@ class IssueLabelToolsTest(
         assertThat(both).doesNotContain("Tidy the docs")
     }
 
+    /**
+     * Filing one, which the tools could not do.
+     *
+     * An assistant that finds something and can only describe it in a
+     * conversation is one whose findings depend on somebody else writing
+     * them down - which is the failure the tracker exists to prevent.
+     */
+    @Test
+    fun `an issue can be opened, numbered after the last`() {
+        val answer = tools.open(scope, """{"title": "The webhook answers 500", "labels": "p1, slack"}""")
+
+        assertThat(answer).contains("\"issue\":4")
+        val made = issues.findByWorkspaceIdAndNumber(workspaceId, 4)
+        assertThat(made?.title).isEqualTo("The webhook answers 500")
+        assertThat(made?.reporter).isEqualTo("alice")
+        assertThat(made?.labels).containsExactlyInAnyOrder("p1", "slack")
+        // Nobody, deliberately: handing work to a person is not an
+        // assistant's judgement to make.
+        assertThat(made?.assignee).isNull()
+    }
+
+    @Test
+    fun `an issue with no title is refused rather than filed blank`() {
+        assertThat(tools.open(scope, """{"description": "no title here"}""")).contains("error")
+        assertThat(issues.findByWorkspaceIdAndNumber(workspaceId, 4)).isNull()
+    }
+
     @Test
     fun `the labels in use are counted, commonest first`() {
         val answer = tools.labels(scope)

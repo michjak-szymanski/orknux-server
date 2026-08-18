@@ -194,6 +194,8 @@ type Mutation {
     deleteIssue(id: ID!): Boolean!
     "Adds a comment, and answers with the issue it was added to."
     commentOnIssue(id: ID!, content: String!): Issue!
+    "Changes a comment. Only whoever wrote it may."
+    editIssueComment(id: ID!, content: String!): Issue!
     createUser(input: UserInput!): AppUser!
     "Edits an INTERNAL user's display name and roles. Administrators only."
     updateUser(id: ID!, input: UserInput!): AppUser!
@@ -2311,6 +2313,10 @@ type IssueComment {
     content: String!
     "ISO-8601 offset date-time."
     createdAt: String!
+    "When it was last changed, or null if it never was."
+    editedAt: String
+    "Whether the person reading this wrote it, and so may change it."
+    mine: Boolean!
 }
 
 type Issue {

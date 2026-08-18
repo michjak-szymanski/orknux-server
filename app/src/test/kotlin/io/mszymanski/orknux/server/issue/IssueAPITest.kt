@@ -125,6 +125,47 @@ class IssueAPITest(
     }
 
     @Test
+    fun `a comment can be changed by whoever wrote it, and says that it was`() {
+        val id = file("The reply is late")
+        val comment = graphQlTester.document(
+            """mutation { commentOnIssue(id: $id, content: "Looking") { comments { id editedAt mine } } }""",
+        ).execute()
+            .path("commentOnIssue.comments[0].mine").entity(Boolean::class.java).isEqualTo(true)
+            .path("commentOnIssue.comments[0].editedAt").valueIsNull()
+            .path("commentOnIssue.comments[0].id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { editIssueComment(id: $comment, content: "Looking, and fixed") { comments { content editedAt } } }""",
+        ).execute()
+            .path("editIssueComment.comments[0].content").entity(String::class.java).isEqualTo("Looking, and fixed")
+            // Marked, so a reader is told it changed.
+            .path("editIssueComment.comments[0].editedAt").hasValue()
+    }
+
+    @Test
+    fun `somebody else's comment is not yours to change`() {
+        // Bob's from the start, which is what a second person is - written
+        // through the repository because the API only ever writes as whoever
+        // is signed in, and that is the whole point of this test.
+        val held = issues.save(
+            Issue(
+                workspaceId = workspaceId,
+                number = 1,
+                title = "The reply is late",
+                reporter = "bob",
+                comments = mutableListOf(IssueComment(author = "bob", content = "Mine, not yours")),
+            ),
+        )
+        val comment = requireNotNull(held.comments.first().id)
+
+        graphQlTester.document(
+            """mutation { editIssueComment(id: $comment, content: "Not mine") { id } }""",
+        ).execute()
+            .errors().expect { it.message?.contains("whoever wrote it") == true }
+            .verify()
+    }
+
+    @Test
     fun `an assignee that is not in this workspace is refused`() {
         val id = file("The reply is late")
 

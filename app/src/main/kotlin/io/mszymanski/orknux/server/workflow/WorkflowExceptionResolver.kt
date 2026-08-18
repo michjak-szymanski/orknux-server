@@ -25,6 +25,8 @@ import io.mszymanski.orknux.server.security.RoleNameTakenException
 import io.mszymanski.orknux.server.security.RoleNotFoundException
 import io.mszymanski.orknux.server.issue.IssueAssigneeInvalidException
 import io.mszymanski.orknux.server.issue.IssueCommentEmptyException
+import io.mszymanski.orknux.server.issue.IssueCommentNotFoundException
+import io.mszymanski.orknux.server.issue.IssueCommentNotYoursException
 import io.mszymanski.orknux.server.issue.IssueNotFoundException
 import io.mszymanski.orknux.server.issue.IssueTitleInvalidException
 import io.mszymanski.orknux.server.user.UserExternallyManagedException
@@ -136,6 +138,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is UserNameInvalidException,
             is IssueTitleInvalidException,
             is IssueCommentEmptyException,
+            is IssueCommentNotYoursException,
             is IssueAssigneeInvalidException,
             is UserExternallyManagedException,
             is RoleBuiltInException,
@@ -161,7 +164,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ActionNotFoundException, is FunctionNotFoundException -> ErrorType.NOT_FOUND
             is RoleNotFoundException -> ErrorType.NOT_FOUND
             is UserNotFoundException -> ErrorType.NOT_FOUND
-            is IssueNotFoundException -> ErrorType.NOT_FOUND
+            is IssueNotFoundException, is IssueCommentNotFoundException -> ErrorType.NOT_FOUND
             is ConditionNotFoundException -> ErrorType.NOT_FOUND
             is WorkflowNotFoundException -> ErrorType.NOT_FOUND
             else -> return null

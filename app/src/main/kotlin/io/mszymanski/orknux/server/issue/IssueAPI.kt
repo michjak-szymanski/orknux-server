@@ -170,6 +170,32 @@ class IssueAPI(
         return describe(issues.save(held))
     }
 
+    /**
+     * Changing what you wrote.
+     *
+     * Only the author, and deliberately not administrators either: what
+     * somebody else wrote is what they wrote, and a record that anybody
+     * reading it could rewrite is not a record. The edit is marked, so a
+     * comment that has changed says so.
+     */
+    @MutationMapping
+    @Transactional
+    fun editIssueComment(@Argument id: Long, @Argument content: String): IssueView {
+        val issue = issues.findAll().firstOrNull { held -> held.comments.any { it.id == id } }
+            ?: throw IssueCommentNotFoundException(id)
+        requireWorkspaceAccess(issue.workspaceId)
+
+        val comment = issue.comments.first { it.id == id }
+        if (comment.author != currentUser()) throw IssueCommentNotYoursException()
+
+        val said = content.trim()
+        if (said.isEmpty()) throw IssueCommentEmptyException()
+
+        comment.content = said
+        comment.editedAt = OffsetDateTime.now()
+        return describe(issues.save(issue))
+    }
+
     @MutationMapping
     @Transactional
     fun deleteIssue(@Argument id: Long): Boolean {
@@ -235,6 +261,14 @@ class IssueAPI(
                 author = it.author,
                 content = it.content,
                 createdAt = it.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                editedAt = it.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                /*
+                 * Whether the person reading this may change it. Answered here
+                 * rather than compared in the browser, so the button and the
+                 * refusal agree - and so a second window signed in as somebody
+                 * else does not offer an edit that would be refused.
+                 */
+                mine = it.author == currentUser(),
             )
         },
         createdAt = issue.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -302,6 +336,10 @@ data class IssueCommentView(
     val author: String,
     val content: String,
     val createdAt: String,
+    /** Null until somebody changes it. */
+    val editedAt: String?,
+    /** Whether the person reading this wrote it. */
+    val mine: Boolean,
 )
 
 /** Something an issue can be assigned to, as the box shows it. */

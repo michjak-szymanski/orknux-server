@@ -135,6 +135,10 @@ class IssueComment(
 
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
+
+    /** When it was last changed, or null if it never was. */
+    @Column(name = "edited_at")
+    var editedAt: OffsetDateTime? = null,
 )
 
 interface IssueRepository : JpaRepository<Issue, Long> {
@@ -223,6 +227,18 @@ class IssueNotFoundException(id: Long) : RuntimeException("No issue with id $id"
 class IssueTitleInvalidException : RuntimeException("An issue needs a title")
 
 class IssueCommentEmptyException : RuntimeException("A comment needs something in it")
+
+class IssueCommentNotFoundException(id: Long) : RuntimeException("No comment with id $id")
+
+/**
+ * Somebody tried to edit a comment that is not theirs.
+ *
+ * Said plainly because it is not a permission that can be granted: what
+ * somebody else wrote is what they wrote, and an issue whose history could be
+ * rewritten by anybody reading it is not a record of anything.
+ */
+class IssueCommentNotYoursException :
+    RuntimeException("A comment can only be edited by whoever wrote it")
 
 class IssueAssigneeInvalidException(what: String) :
     RuntimeException("$what is not something in this workspace to assign an issue to")

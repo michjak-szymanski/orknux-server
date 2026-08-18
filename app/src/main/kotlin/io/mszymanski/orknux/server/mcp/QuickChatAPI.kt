@@ -67,12 +67,24 @@ class QuickChat(
         conversation += said
 
         var spent = 0L
-        repeat(MAX_ROUNDS) {
-            when (val answer = models.complete(modelId, conversation, offered)) {
+        var calls = 0
+        repeat(MAX_ROUNDS) { round ->
+            /*
+             * The last round is asked without tools, so it has to answer.
+             *
+             * A model looking things up one at a time can spend every round on
+             * that and never say anything - and what came back was a refusal
+             * about the panel rather than an answer, after it had read
+             * everything it needed. Taking the tools away on the last round
+             * turns "I ran out of looking" into "here is what I found".
+             */
+            val last = round == MAX_ROUNDS - 1
+            when (val answer = models.complete(modelId, conversation, if (last) emptyList() else offered)) {
                 is ChatCompletion.Failed -> return Answer(answer)
                 is ChatCompletion.Answered -> return Answer(answer.copy(millis = spent + answer.millis), offering)
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
+                    calls += answer.calls.size
                     conversation += answer.turn
                     answer.calls.forEach { call ->
                         log.debug("Quick chat called {}", call.name)
@@ -95,8 +107,13 @@ class QuickChat(
             }
         }
 
-        log.warn("Quick chat was still looking things up after {} rounds", MAX_ROUNDS)
-        return Answer(ChatCompletion.Failed("That took more looking up than this panel is for. Try the Chat page."))
+        /*
+         * Only reachable by a model that asked for a tool when it was offered
+         * none, which is a provider not honouring the request rather than a
+         * conversation that went on too long.
+         */
+        log.warn("Quick chat asked for tools on its last round after {} calls", calls)
+        return Answer(ChatCompletion.Failed("That could not be answered here. Try the Chat page."))
     }
 
     /**
@@ -182,7 +199,15 @@ class QuickChat(
     }
 
     private companion object {
-        const val MAX_ROUNDS = 6
+        /**
+         * How many times the model may be asked before it has to answer.
+         *
+         * Each tool call it makes costs one. Reading a function is two on its
+         * own - find it, then read it - and a model that looks things up one at
+         * a time rather than in parallel spends them quickly. The last of these
+         * is the one asked without tools.
+         */
+        const val MAX_ROUNDS = 8
         val log = LoggerFactory.getLogger(QuickChat::class.java)
     }
 }

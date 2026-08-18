@@ -207,10 +207,20 @@ type Mutation {
     createIssue(input: IssueInput!): Issue!
     updateIssue(id: ID!, input: IssueInput!): Issue!
     deleteIssue(id: ID!): Boolean!
-    "Adds a comment, and answers with the issue it was added to."
-    commentOnIssue(id: ID!, content: String!): Issue!
+    """
+    Adds a comment, and answers with the issue it was added to. Any files given
+    were uploaded beforehand and are put on the comment here.
+    """
+    commentOnIssue(id: ID!, content: String!, attachmentIds: [ID!]): Issue!
     "Changes a comment. Only whoever wrote it may."
     editIssueComment(id: ID!, content: String!): Issue!
+    """
+    Puts uploaded files on an issue. Sent after it is filed, since a new issue
+    has no id while it is still being written.
+    """
+    attachToIssue(id: ID!, attachmentIds: [ID!]!): Issue!
+    "Takes a file off an issue. Only whoever attached it may, administrators included."
+    removeIssueAttachment(id: ID!): Boolean!
     "Gives an internal user a password. Administrators only."
     setUserPassword(id: ID!, password: String!): AppUser!
     "Changes your own, which needs the current one."
@@ -458,6 +468,14 @@ enum WorkflowStatus {
     PUBLISHED
 }
 
+"Which side of a node its input and output sit on. Layout only; it changes nothing about what runs."
+enum NodeOrientation {
+    LEFT_TO_RIGHT
+    TOP_TO_BOTTOM
+    RIGHT_TO_LEFT
+    BOTTOM_TO_TOP
+}
+
 enum NodeKind {
     TRIGGER
     AGENT
@@ -492,6 +510,8 @@ type WorkflowNode {
     outputName: String
     "Which icon the canvas draws on this node; a name from the interface's own set."
     icon: String
+    "Which way round the node faces on the canvas; null is left to right."
+    orientation: NodeOrientation
     "What a condition node's two ways out are called; null means Yes and No."
     yesLabel: String
     noLabel: String
@@ -581,6 +601,8 @@ input WorkflowNodeInput {
     outputName: String
     "Which icon the canvas draws on this node; a name from the interface's own set."
     icon: String
+    "Which way round the node faces on the canvas; null is left to right."
+    orientation: NodeOrientation
     "What a condition node's two ways out are called; null means Yes and No."
     yesLabel: String
     noLabel: String
@@ -1018,8 +1040,19 @@ enum ConnectionType {
     GITHUB
     JIRA
     TEAMS
+    "A mail server to send through. Its url is a host name, not a URL."
+    SMTP
     "Anything that is just an HTTP endpoint, until it earns a type of its own."
     WEBHOOK
+}
+
+"How the session with a mail server is secured."
+enum MailSecurity {
+    NONE
+    "Port 587: plain to begin with, encrypted before the credentials are sent."
+    STARTTLS
+    "Port 465: TLS before anything else, the way HTTPS is."
+    TLS
 }
 
 "How requests to the service are authenticated."
@@ -1084,6 +1117,13 @@ type WorkspaceConnection {
     secretSet: Boolean!
     "Whether an app-level token is stored, which is what lets orknux listen for events."
     appTokenSet: Boolean!
+    "Where a mail connection sends: the port it will use, which is the default when none was chosen."
+    smtpPort: Int
+    "Who a mail connection logs in as; null sends without authenticating."
+    smtpUsername: String
+    "The address a mail connection sends from."
+    smtpFrom: String
+    smtpSecurity: MailSecurity!
     "What the last check found; CONNECTED only once the service has answered."
     status: ConnectionStatus!
     "What the last check reported."
@@ -1111,6 +1151,12 @@ input CreateWorkspaceConnectionInput {
     secret: String
     "Slack's Socket Mode app-level token, for the type that opens a websocket."
     appToken: String
+    "Where the mail server listens; null takes the port the security implies."
+    smtpPort: Int
+    "Who to log in as; null sends without authenticating, and the password arrives as secret."
+    smtpUsername: String
+    smtpFrom: String
+    smtpSecurity: MailSecurity
     headers: [HttpHeaderInput!]
 }
 
@@ -1125,6 +1171,10 @@ input UpdateWorkspaceConnectionInput {
     secret: String
     "Slack's Socket Mode app-level token, with the same null and empty meaning."
     appToken: String
+    smtpPort: Int
+    smtpUsername: String
+    smtpFrom: String
+    smtpSecurity: MailSecurity
     headers: [HttpHeaderInput!]
 }
 
@@ -1969,6 +2019,8 @@ enum ActionType {
 "How it does it; each subtype belongs to one type."
 enum ActionSubtype {
     OUTGOING_CONNECTION
+    "Sends a mail through one of the workspace's SMTP connections."
+    SEND_EMAIL
     HTTP_REQUEST
     FUNCTION
     "Waits until an expression written into the action holds."
@@ -2019,6 +2071,12 @@ type Action {
     content: String
     target: MessageTarget
     targetName: String
+    "A mail's recipients and copy list, comma-separated."
+    emailTo: String
+    emailCc: String
+    emailSubject: String
+    "Where answers go, when that is not the connection's from-address."
+    emailReplyTo: String
     url: String
     method: String
     headers: String
@@ -2062,6 +2120,12 @@ input CreateActionInput {
     content: String
     target: MessageTarget
     targetName: String
+    "A mail's recipients and copy list, comma-separated."
+    emailTo: String
+    emailCc: String
+    emailSubject: String
+    "Where answers go, when that is not the connection's from-address."
+    emailReplyTo: String
     url: String
     method: String
     headers: String
@@ -2084,6 +2148,12 @@ input UpdateActionInput {
     content: String
     target: MessageTarget
     targetName: String
+    "A mail's recipients and copy list, comma-separated."
+    emailTo: String
+    emailCc: String
+    emailSubject: String
+    "Where answers go, when that is not the connection's from-address."
+    emailReplyTo: String
     url: String
     method: String
     headers: String
@@ -2358,6 +2428,22 @@ type Assignee {
     hint: String!
 }
 
+"""
+A file on an issue or on one of its comments. The bytes are wherever the
+installation's attachment storage put them, under the workspace that owns them.
+"""
+type IssueAttachment {
+    id: ID!
+    filename: String!
+    contentType: String!
+    sizeBytes: Float!
+    uploadedBy: String!
+    "ISO-8601 offset date-time."
+    uploadedAt: String!
+    "Whether the person reading this attached it, and so may remove it."
+    mine: Boolean!
+}
+
 type IssueComment {
     id: ID!
     author: String!
@@ -2366,6 +2452,8 @@ type IssueComment {
     createdAt: String!
     "When it was last changed, or null if it never was."
     editedAt: String
+    "What came with the comment."
+    attachments: [IssueAttachment!]!
     "Whether the person reading this wrote it, and so may change it."
     mine: Boolean!
 }
@@ -2382,6 +2470,8 @@ type Issue {
     "Null when nobody is looking at it."
     assignee: Assignee
     labels: [String!]!
+    "What is attached to the issue itself; a comment's files are on the comment."
+    attachments: [IssueAttachment!]!
     comments: [IssueComment!]!
     "ISO-8601 offset date-time."
     createdAt: String!

@@ -21,6 +21,20 @@ enum class WorkflowStatus {
     PUBLISHED,
 }
 
+/**
+ * Which side of a node its input and output sit on.
+ *
+ * Named for where the work goes rather than for an angle: "left to right" is
+ * what somebody means, and a number of degrees would have to be translated
+ * back into that at every reading.
+ */
+enum class NodeOrientation {
+    LEFT_TO_RIGHT,
+    TOP_TO_BOTTOM,
+    RIGHT_TO_LEFT,
+    BOTTOM_TO_TOP,
+}
+
 enum class NodeKind {
     TRIGGER,
     AGENT,
@@ -133,6 +147,17 @@ class WorkflowNode(
      */
     @Column(name = "output_name", length = 60)
     var outputName: String? = null,
+
+    /**
+     * Which way round the node faces on the canvas.
+     *
+     * Layout rather than meaning: it moves where the handles sit and nothing
+     * else, so a graph can run down a screen instead of off the side of it.
+     * Null is the way it always was, left to right.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    var orientation: NodeOrientation? = null,
 
     /**
      * Which icon the canvas draws on this node.

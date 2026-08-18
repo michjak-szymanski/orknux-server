@@ -143,6 +143,7 @@ class WorkflowGraphAPI(
                 // name is one of the shapes a save refuses; without it here the
                 // rule would only ever be evaluated against a blank.
                 outputName = node.outputName?.trim()?.ifEmpty { null },
+                orientation = node.orientation,
                 positionX = node.x,
                 positionY = node.y,
             )
@@ -253,6 +254,7 @@ class WorkflowGraphAPI(
             }
             ?.also { if (refusing) requireReferenceable(it) },
         icon = node.icon?.trim()?.ifEmpty { null },
+        orientation = node.orientation,
         positionX = node.x,
         positionY = node.y,
         // Only a condition has two ways out to name.
@@ -431,6 +433,7 @@ data class WorkflowNodeInput(
     val objectId: Long? = null,
     val outputName: String? = null,
     val icon: String? = null,
+    val orientation: NodeOrientation? = null,
     /**
      * What this node passes to its action. Null leaves it to the action's own
      * suggestions, which is what a node freshly pointed at one wants.
@@ -477,6 +480,8 @@ data class WorkflowNodeView(
     val objectId: Long?,
     val outputName: String?,
     val icon: String?,
+    /** Which way round it faces on the canvas; null is left to right. */
+    val orientation: NodeOrientation?,
     /** What a condition node's two ways out are called; null means Yes and No. */
     val yesLabel: String?,
     val noLabel: String?,
@@ -505,6 +510,7 @@ data class WorkflowNodeView(
         objectId = node.objectId,
         outputName = node.outputName,
         icon = node.icon,
+        orientation = node.orientation,
         yesLabel = node.yesLabel,
         noLabel = node.noLabel,
         x = node.positionX,

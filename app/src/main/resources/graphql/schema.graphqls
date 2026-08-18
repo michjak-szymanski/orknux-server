@@ -10,6 +10,13 @@ type Query {
     "Everybody this installation knows, by name. Administrators only."
     users(search: String): [AppUser!]!
     user(id: ID!): AppUser
+    "One workspace's issues, newest first."
+    workspaceIssues(workspaceId: ID!, status: IssueStatus, search: String, page: Int, size: Int): IssuePage!
+    workspaceIssue(id: ID!): Issue
+    "Every label in use in this workspace, so a filter can offer what exists."
+    workspaceIssueLabels(workspaceId: ID!): [String!]!
+    "What an issue can be assigned to here: people, agents and models together."
+    issueAssignees(workspaceId: ID!, search: String): [Assignee!]!
     workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
     workspace(id: ID!): Workspace
     "Audit entries, newest first. Without a workspaceId every visible workspace is included."
@@ -182,6 +189,11 @@ type Mutation {
     """
     attachToChat(chatId: ID!, attachmentIds: [ID!]!): [ChatAttachment!]!
     "Creates an INTERNAL user: an identity managed here. Administrators only."
+    createIssue(input: IssueInput!): Issue!
+    updateIssue(id: ID!, input: IssueInput!): Issue!
+    deleteIssue(id: ID!): Boolean!
+    "Adds a comment, and answers with the issue it was added to."
+    commentOnIssue(id: ID!, content: String!): Issue!
     createUser(input: UserInput!): AppUser!
     "Edits an INTERNAL user's display name and roles. Administrators only."
     updateUser(id: ID!, input: UserInput!): AppUser!
@@ -2270,6 +2282,72 @@ type AppUser {
 type RoleRef {
     id: ID!
     name: String!
+}
+
+enum IssueStatus {
+    OPEN
+    CLOSED
+}
+
+"What kind of thing an issue is assigned to."
+enum AssigneeKind {
+    USER
+    AGENT
+    MODEL
+}
+
+"Something an issue can be assigned to, as the box shows it."
+type Assignee {
+    kind: AssigneeKind!
+    id: ID!
+    name: String!
+    "The second line: a username, a provider, or what kind of thing it is."
+    hint: String!
+}
+
+type IssueComment {
+    id: ID!
+    author: String!
+    content: String!
+    "ISO-8601 offset date-time."
+    createdAt: String!
+}
+
+type Issue {
+    id: ID!
+    workspaceId: ID!
+    "Its number in this workspace: what \"#3\" means."
+    number: Int!
+    title: String!
+    description: String
+    status: IssueStatus!
+    reporter: String!
+    "Null when nobody is looking at it."
+    assignee: Assignee
+    labels: [String!]!
+    comments: [IssueComment!]!
+    "ISO-8601 offset date-time."
+    createdAt: String!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+type IssuePage {
+    totalElements: Int!
+    content: [Issue!]!
+}
+
+input IssueInput {
+    "Required when creating; ignored afterwards."
+    workspaceId: ID
+    title: String
+    "Empty clears it; absent leaves it alone."
+    description: String
+    status: IssueStatus
+    labels: [String!]
+    "Both together, or neither: absent leaves the assignee alone."
+    assigneeKind: AssigneeKind
+    assigneeId: ID
 }
 
 input UserInput {

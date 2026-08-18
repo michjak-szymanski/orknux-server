@@ -44,6 +44,29 @@ data class OrknuxScope(
      * workflow, a run or a credential, whatever this says.
      */
     val mayWrite: Boolean = false,
+    /**
+     * Whether there is somebody at a screen to be shown something.
+     *
+     * Suggesting a change is not the same kind of act as reading or running:
+     * it produces nothing on its own and waits for a person to accept it. An
+     * agent inside a workflow has nobody to ask, so it is not offered the tool
+     * - being told it can propose a change that nothing will ever show is
+     * worse than not having it.
+     */
+    val watched: Boolean = false,
+)
+
+/**
+ * A change offered for a function's code: shown, never saved here.
+ *
+ * Carried out of the tool loop rather than written down, because what happens
+ * to it is a person's decision and the conversation is where they make it.
+ */
+data class FunctionSuggestion(
+    val functionId: Long,
+    val name: String,
+    val note: String?,
+    val code: String,
 )
 
 /**
@@ -167,6 +190,30 @@ class OrknuxTools(
                 parameters = emptyList(),
             ),
         )
+        /*
+         * Offering a rewrite, where there is somebody to offer it to.
+         *
+         * It writes nothing. What comes back to the model is that the change
+         * has been put in front of somebody, and the next thing it hears is
+         * whether they took it - which is the whole of the loop this makes.
+         */
+        if (scope.watched) {
+            add(
+                ToolSpec(
+                    name = "orknux_suggest_function_code",
+                    description =
+                        "Offers a rewrite of a function's code, shown beside what is there now for them to accept " +
+                            "or reject. It does not save anything: they decide, and you are told which they chose. " +
+                            "Send the whole function, not a fragment.",
+                    parameters = listOf(
+                        ToolParameterSpec("function", "The function's name, or its id.", required = true),
+                        ToolParameterSpec("code", "The complete new source, in the language the function is in.", required = true),
+                        ToolParameterSpec("note", "One line on what this changes and why.", required = false),
+                    ),
+                ),
+            )
+        }
+
         add(
             ToolSpec(
                 name = "orknux_function",
@@ -245,6 +292,7 @@ class OrknuxTools(
             "orknux_agents" -> agentList(scope)
             "orknux_functions" -> functionList(scope)
             "orknux_function" -> function(scope, arguments)
+            "orknux_suggest_function_code" -> suggest(scope, arguments)
             "orknux_run_workflow" -> runWorkflow(scope, arguments)
             "orknux_rerun_execution" -> rerun(scope, arguments)
             "orknux_set_workflow_enabled" -> setWorkflowEnabled(scope, arguments)
@@ -428,6 +476,53 @@ class OrknuxTools(
                 "externals" to chosen.externals.map { it.variableId },
                 "url" to functionLink(scope.workspaceId, chosen.id),
             ),
+        )
+    }
+
+    /**
+     * What the model is told when it offers a change.
+     *
+     * Checked here rather than at the far end: a function that is not in this
+     * workspace, or that a plugin declared and nobody may edit, is a suggestion
+     * that could never be taken - and the model finding that out now can say so
+     * instead of showing somebody a change they cannot accept.
+     */
+    private fun suggest(scope: OrknuxScope, arguments: String): String {
+        val offered = suggestionIn(scope, arguments) ?: return refuse(
+            "Which function, and what code? Both are needed.",
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "shown" to true,
+                "function" to offered.name,
+                "waiting" to "They will accept or reject it. You will be told which.",
+                "url" to functionLink(scope.workspaceId, offered.functionId),
+            ),
+        )
+    }
+
+    /**
+     * The suggestion a call is making, or null if it is not making one.
+     *
+     * Read by the caller as well as run, because what a suggestion is *for* is
+     * outside these tools: it has to reach the screen the person is looking at,
+     * and only the door they came through knows where that is.
+     */
+    fun suggestionIn(scope: OrknuxScope, arguments: String): FunctionSuggestion? {
+        val asked = text(arguments, "function") ?: return null
+        val code = text(arguments, "code")?.takeIf { it.isNotBlank() } ?: return null
+
+        val held = functions.findByWorkspaceId(scope.workspaceId)
+        val chosen = held.singleOrNull { it.name.equals(asked, ignoreCase = true) || it.id?.toString() == asked }
+            ?: return null
+        // A plugin's function changes where it was declared, not here.
+        if (!chosen.editable) return null
+
+        return FunctionSuggestion(
+            functionId = requireNotNull(chosen.id),
+            name = chosen.name,
+            note = text(arguments, "note"),
+            code = code,
         )
     }
 

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import tools.jackson.databind.ObjectMapper
 
 /**
  * What a model can find out about a workspace's code.
@@ -29,6 +30,7 @@ class OrknuxFunctionToolsTest(
     @Autowired val functions: WorkflowFunctionRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val mapper: ObjectMapper,
 ) {
 
     private var workspaceId: Long = 0
@@ -79,6 +81,49 @@ class OrknuxFunctionToolsTest(
         // The annotated half: what the editor holds, and what a suggestion has
         // to be written against.
         assertThat(answer).contains("email: string")
+    }
+
+    @Test
+    fun `suggesting a change is only offered where somebody can accept it`() {
+        val watched = tools.specs(OrknuxScope(workspaceId = workspaceId, mayWrite = true, watched = true))
+        val unwatched = tools.specs(OrknuxScope(workspaceId = workspaceId, mayWrite = true))
+
+        assertThat(watched.map { it.name }).contains("orknux_suggest_function_code")
+        // An agent inside a workflow has nobody to ask.
+        assertThat(unwatched.map { it.name }).doesNotContain("orknux_suggest_function_code")
+    }
+
+    @Test
+    fun `a suggestion names the function and carries the code, and saves nothing`() {
+        val held = store(workspaceId, "isTeammate")
+        val proposed = "export default async function isTeammate(email: string) { return false; }"
+
+        val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = true, watched = true)
+        val arguments = mapper.writeValueAsString(
+            mapOf("function" to "isTeammate", "code" to proposed, "note" to "Refuses everybody."),
+        )
+
+        val offered = tools.suggestionIn(scope, arguments)
+        assertThat(offered?.functionId).isEqualTo(held.id)
+        assertThat(offered?.code).isEqualTo(proposed)
+        assertThat(offered?.note).isEqualTo("Refuses everybody.")
+
+        val told = tools.run(scope, "orknux_suggest_function_code", arguments)
+        assertThat(told).contains("shown").contains("isTeammate")
+
+        // The point of the whole thing: the function is untouched until
+        // somebody accepts it.
+        assertThat(functions.findById(requireNotNull(held.id)).get().typescript).isEqualTo(held.typescript)
+    }
+
+    @Test
+    fun `a suggestion for a function in another workspace is not a suggestion`() {
+        store(elsewhereId, "isBillable")
+        val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = true, watched = true)
+        val arguments = mapper.writeValueAsString(mapOf("function" to "isBillable", "code" to "export default 1;"))
+
+        assertThat(tools.suggestionIn(scope, arguments)).isNull()
+        assertThat(tools.run(scope, "orknux_suggest_function_code", arguments)).contains("Which function")
     }
 
     @Test

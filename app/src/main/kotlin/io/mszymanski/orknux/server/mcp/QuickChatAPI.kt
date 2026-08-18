@@ -38,14 +38,30 @@ class QuickChat(
     private val orknux: OrknuxTools,
 ) {
 
+    /**
+     * What one round of the panel produced: the answer, and anything it is
+     * offering to change.
+     *
+     * The suggestion travels beside the answer rather than inside it, because
+     * it is not prose: the panel draws it against what the function says now
+     * and puts an accept and a reject under it.
+     */
+    data class Answer(val completion: ChatCompletion, val suggestion: FunctionSuggestion? = null)
+
     fun answer(
         modelId: Long,
         workspaceId: Long,
         mayWrite: Boolean,
         page: PageContext?,
         said: List<ChatTurn>,
-    ): ChatCompletion {
-        val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = mayWrite)
+    ): Answer {
+        /*
+         * Somebody is at a screen here, which is what makes offering a change
+         * worth anything - and they may only be offered one where this panel is
+         * allowed to change things, since accepting it saves the function.
+         */
+        val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = mayWrite, watched = mayWrite)
+        var offering: FunctionSuggestion? = null
         val offered = orknux.specs(scope)
         val conversation = mutableListOf(ChatTurn(role = "system", content = briefing(page, mayWrite)))
         conversation += said
@@ -53,13 +69,22 @@ class QuickChat(
         var spent = 0L
         repeat(MAX_ROUNDS) {
             when (val answer = models.complete(modelId, conversation, offered)) {
-                is ChatCompletion.Failed -> return answer
-                is ChatCompletion.Answered -> return answer.copy(millis = spent + answer.millis)
+                is ChatCompletion.Failed -> return Answer(answer)
+                is ChatCompletion.Answered -> return Answer(answer.copy(millis = spent + answer.millis), offering)
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
                     conversation += answer.turn
                     answer.calls.forEach { call ->
                         log.debug("Quick chat called {}", call.name)
+                        /*
+                         * Kept as it goes past. The last one wins: a model that
+                         * offers two rewrites in one turn has changed its mind,
+                         * and showing both would ask somebody to choose between
+                         * versions nobody described.
+                         */
+                        if (call.name == "orknux_suggest_function_code") {
+                            orknux.suggestionIn(scope, call.arguments)?.let { offering = it }
+                        }
                         conversation += ChatTurn(
                             role = "user",
                             content = orknux.run(scope, call.name, call.arguments),
@@ -71,7 +96,7 @@ class QuickChat(
         }
 
         log.warn("Quick chat was still looking things up after {} rounds", MAX_ROUNDS)
-        return ChatCompletion.Failed("That took more looking up than this panel is for. Try the Chat page.")
+        return Answer(ChatCompletion.Failed("That took more looking up than this panel is for. Try the Chat page."))
     }
 
     /**
@@ -111,8 +136,26 @@ class QuickChat(
          */
         append(
             "When a question is about a function's code, read it with `orknux_function` before answering " +
-                "rather than describing what it might contain. You can suggest a rewrite in your reply, " +
-                "as code; you cannot save one, so say that it has to be pasted into the editor. ",
+                "rather than describing what it might contain. ",
+        )
+        /*
+         * How to offer a change, and what happens to it.
+         *
+         * Said plainly because the alternative is a model that pastes a whole
+         * function into the conversation and asks somebody to copy it - which
+         * is what this replaced. The tool puts the change beside what is there
+         * now, with an accept and a reject; the next thing in the conversation
+         * is which of those they chose, and it is a fact rather than a guess.
+         */
+        append(
+            if (mayWrite) {
+                "To change one, call `orknux_suggest_function_code` with the complete new source: they are shown " +
+                    "it against what is there now and either accept it or reject it. Do not paste a whole " +
+                    "function into your reply and ask them to copy it - offer it with the tool and say in one " +
+                    "line what it changes. Nothing is saved unless they accept. "
+            } else {
+                "You cannot change a function here; describe what you would do instead. "
+            },
         )
         /*
          * Said as well as enforced. The scope already withholds the tool, so a
@@ -174,10 +217,27 @@ class QuickChatAPI(
             .map { ChatTurn(role = if (it.role == "assistant") "assistant" else "user", content = it.content) }
         if (turns.isEmpty()) return refuse(HttpStatus.BAD_REQUEST, "There is nothing to answer.")
 
-        return when (
-            val answer = quickChat.answer(modelId, workspaceId, workspace.quickChatMayWrite, asked.page, turns)
-        ) {
-            is ChatCompletion.Answered -> ResponseEntity.ok(mapOf("answer" to answer.content, "millis" to answer.millis))
+        val said = quickChat.answer(modelId, workspaceId, workspace.quickChatMayWrite, asked.page, turns)
+        return when (val answer = said.completion) {
+            is ChatCompletion.Answered -> ResponseEntity.ok(
+                buildMap {
+                    put("answer", answer.content)
+                    put("millis", answer.millis)
+                    // Only when there is one: an absent field is easier for the
+                    // panel to read than a null it has to keep testing.
+                    said.suggestion?.let {
+                        put(
+                            "suggestion",
+                            mapOf(
+                                "functionId" to it.functionId.toString(),
+                                "function" to it.name,
+                                "note" to it.note,
+                                "code" to it.code,
+                            ),
+                        )
+                    }
+                },
+            )
             is ChatCompletion.Failed -> refuse(HttpStatus.BAD_GATEWAY, answer.reason)
             // The loop above ends on one of the two above; a tool call reaching
             // here would mean it did not, and saying so beats answering blank.

@@ -54,6 +54,17 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
             ActionParamView("channel", ValueType.STRING),
             ActionParamView("ts", ValueType.STRING),
         )
+        /*
+         * What a mail hands on: the address the server gave it, which is what a
+         * mail log is searched by afterwards, and the list it went to. Not the
+         * body - the next node wrote it, and handing it back would only carry it
+         * through the run's history a second time.
+         */
+        ActionSubtype.SEND_EMAIL -> listOf(
+            ActionParamView("messageId", ValueType.STRING),
+            ActionParamView("recipients", ValueType.ARRAY),
+        )
+
         // Whatever the service answered with. Nothing here defines that shape, so
         // it is a map: a later node can read fields off it, unchecked, as before.
         ActionSubtype.HTTP_REQUEST -> listOf(ActionParamView("response", ValueType.MAP))
@@ -118,6 +129,21 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
             } else {
                 ActionParamDefault(THREAD_TS, ValueType.STRING, "")
             },
+        )
+
+        /*
+         * Everything about one mail that is worth varying per node, which is all
+         * of it: two nodes sharing a "Notify by mail" action are usually telling
+         * different people about different things. Seeded from the definition, so
+         * an action written with a fixed recipient and subject sends exactly that
+         * from a node nobody edited.
+         */
+        ActionSubtype.SEND_EMAIL -> listOf(
+            seed(TO, ValueType.STRING, action.emailTo),
+            seed(SUBJECT, ValueType.STRING, action.emailSubject),
+            seed(BODY, ValueType.STRING, action.content),
+            seed(CC, ValueType.STRING, action.emailCc),
+            seed(REPLY_TO, ValueType.STRING, action.emailReplyTo),
         )
 
         /*
@@ -216,7 +242,17 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
 
         /** What an HTTP node calls, and what it sends. */
         const val URL = "url"
+
+        /** What an HTTP request sends, and what a mail says. */
         const val BODY = "body"
+
+        /** A mail's recipients and copy list, comma-separated, and its subject. */
+        const val TO = "to"
+        const val CC = "cc"
+        const val SUBJECT = "subject"
+
+        /** Where an answer to the mail should go. */
+        const val REPLY_TO = "replyTo"
 
         /**
          * A name and nothing else, dots included. Whole-string on purpose: this

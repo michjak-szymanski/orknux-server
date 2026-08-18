@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -69,6 +70,10 @@ class ActionAPI(
                 content = input.content?.trim()?.ifEmpty { null },
                 target = input.target,
                 targetName = input.targetName?.trim()?.ifEmpty { null },
+                emailTo = input.emailTo?.trim()?.ifEmpty { null },
+                emailCc = input.emailCc?.trim()?.ifEmpty { null },
+                emailSubject = input.emailSubject?.trim()?.ifEmpty { null },
+                emailReplyTo = input.emailReplyTo?.trim()?.ifEmpty { null },
                 url = input.url?.trim()?.ifEmpty { null },
                 method = input.method?.trim()?.uppercase()?.ifEmpty { null },
                 headers = input.headers?.trim()?.ifEmpty { null },
@@ -108,6 +113,10 @@ class ActionAPI(
         input.content?.let { action.content = it.trim().ifEmpty { null } }
         input.target?.let { action.target = it }
         input.targetName?.let { action.targetName = it.trim().ifEmpty { null } }
+        input.emailTo?.let { action.emailTo = it.trim().ifEmpty { null } }
+        input.emailCc?.let { action.emailCc = it.trim().ifEmpty { null } }
+        input.emailSubject?.let { action.emailSubject = it.trim().ifEmpty { null } }
+        input.emailReplyTo?.let { action.emailReplyTo = it.trim().ifEmpty { null } }
         input.url?.let { action.url = it.trim().ifEmpty { null } }
         input.method?.let { action.method = it.trim().uppercase().ifEmpty { null } }
         input.headers?.let { action.headers = it.trim().ifEmpty { null } }
@@ -161,6 +170,10 @@ class ActionAPI(
             content = action.content,
             target = action.target,
             targetName = action.targetName,
+            emailTo = action.emailTo,
+            emailCc = action.emailCc,
+            emailSubject = action.emailSubject,
+            emailReplyTo = action.emailReplyTo,
             url = action.url,
             method = action.method,
             headers = action.headers,
@@ -188,6 +201,7 @@ class ActionAPI(
         val allowed = when (action.type) {
             ActionType.EXECUTE -> setOf(
                 ActionSubtype.OUTGOING_CONNECTION,
+                ActionSubtype.SEND_EMAIL,
                 ActionSubtype.HTTP_REQUEST,
                 ActionSubtype.FUNCTION,
             )
@@ -208,6 +222,23 @@ class ActionAPI(
                     throw ActionSettingMissingException("a connection this workspace holds")
                 }
                 if (action.connectionAction == null) throw ActionSettingMissingException("an action to perform")
+            }
+
+            /*
+             * A mail needs somewhere to go out through, and that somewhere has to
+             * be a mail server: pointing this at a Slack connection would save
+             * cleanly and then skip every time it ran, which is a worse way to
+             * find out than being told here.
+             */
+            ActionSubtype.SEND_EMAIL -> {
+                val connectionId = action.connectionId ?: throw ActionSettingMissingException("a mail connection")
+                val connection = connections.workspaceConnection(connectionId)
+                if (connection == null || connection.workspaceId != action.workspaceId) {
+                    throw ActionSettingMissingException("a connection this workspace holds")
+                }
+                if (connection.type != ConnectionType.SMTP) {
+                    throw ActionSettingMissingException("an SMTP connection to send the mail through")
+                }
             }
 
             ActionSubtype.HTTP_REQUEST -> {
@@ -246,6 +277,10 @@ class ActionAPI(
 
         refuseHolders("the message", action.content)
         refuseHolders("who it goes to", action.targetName)
+        refuseHolders("who the mail goes to", action.emailTo)
+        refuseHolders("who is copied", action.emailCc)
+        refuseHolders("the subject", action.emailSubject)
+        refuseHolders("the reply-to address", action.emailReplyTo)
         refuseHolders("the URL", action.url)
         refuseHolders("the headers", action.headers)
         action.mappings.forEach { refuseHolders("the argument ${it.argument}", it.expression) }
@@ -299,6 +334,11 @@ data class CreateActionInput(
     val content: String? = null,
     val target: MessageTarget? = null,
     val targetName: String? = null,
+    /** A mail's recipients and copy list, comma-separated, and what it is about. */
+    val emailTo: String? = null,
+    val emailCc: String? = null,
+    val emailSubject: String? = null,
+    val emailReplyTo: String? = null,
     val url: String? = null,
     val method: String? = null,
     val headers: String? = null,
@@ -321,6 +361,11 @@ data class UpdateActionInput(
     val content: String? = null,
     val target: MessageTarget? = null,
     val targetName: String? = null,
+    /** A mail's recipients and copy list, comma-separated, and what it is about. */
+    val emailTo: String? = null,
+    val emailCc: String? = null,
+    val emailSubject: String? = null,
+    val emailReplyTo: String? = null,
     val url: String? = null,
     val method: String? = null,
     val headers: String? = null,
@@ -355,6 +400,11 @@ data class ActionView(
     val content: String?,
     val target: MessageTarget?,
     val targetName: String?,
+    /** A mail's recipients and copy list, comma-separated, and what it is about. */
+    val emailTo: String?,
+    val emailCc: String?,
+    val emailSubject: String?,
+    val emailReplyTo: String?,
     val url: String?,
     val method: String?,
     val headers: String?,

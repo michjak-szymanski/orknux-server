@@ -3,7 +3,10 @@ package io.mszymanski.orknux.server.action
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
+import io.mszymanski.orknux.connector.connection.MailDelivery
+import io.mszymanski.orknux.connector.connection.MailMessage
 import io.mszymanski.orknux.connector.connection.OutgoingHttp
+import io.mszymanski.orknux.connector.connection.OutgoingMail
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.workflow.NodeExpressions
@@ -31,11 +34,10 @@ import java.time.OffsetDateTime
 /**
  * Runs an action node.
  *
- * What it does is the action's business, and only one kind of action has a
- * runtime today: a function call, which runs the workspace's JavaScript in the
- * sandbox. A wait holds the run until its condition holds or its time passes.
- * The rest — sending through a connection, calling an HTTP endpoint — report
- * that they were not performed rather than pretending they were.
+ * What it does is the action's business: a function call runs the workspace's
+ * JavaScript in the sandbox, a send goes out through one of its connections, a
+ * request calls an endpoint, a mail leaves through its SMTP server. A wait holds
+ * the run until its condition holds or its time passes.
  *
  * A wait holds nothing while it waits. It answers the question it was given,
  * and if the answer is not yet it parks the step and says when to come back;
@@ -58,6 +60,7 @@ class ActionNodeRunner(
     private val messages: OutgoingMessages,
     private val externals: VariableArguments,
     private val http: OutgoingHttp,
+    private val mail: OutgoingMail,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.ACTION
@@ -74,6 +77,7 @@ class ActionNodeRunner(
             ActionSubtype.CONDITION -> waitForSavedCondition(step, action, input)
             ActionSubtype.TIME -> waitForTime(step, action, input)
             ActionSubtype.OUTGOING_CONNECTION -> send(action, step, input, trigger)
+            ActionSubtype.SEND_EMAIL -> sendMail(action, step, input, trigger)
 
             ActionSubtype.HTTP_REQUEST -> request(action, step, input, trigger)
         }
@@ -131,6 +135,79 @@ class ActionNodeRunner(
             )
         }
     }
+
+    /**
+     * Sends a mail, through the SMTP connection the action points at.
+     *
+     * The node's parameters decide all of it - who it goes to, what it is about,
+     * what it says - so one "Notify by mail" action serves every node that needs
+     * to tell somebody something. Nothing here touches the password:
+     * [OutgoingMail] holds the connection and reports what happened.
+     *
+     * What is missing is reported rather than sent: a node still being drawn has
+     * blanks, and a mail with no subject and no body is not one anybody meant.
+     */
+    private fun sendMail(action: WorkflowAction, step: ExecutionStep, input: String?, trigger: String?): StepResult {
+        val connectionId = action.connectionId
+            ?: return StepResult(StepStatus.SKIPPED, "${action.name} names no mail server to send through.")
+
+        val given = expressions.parse(input)
+        val started = expressions.parse(trigger)
+        val byName = expressions.mappingsOf(step)
+        fun resolved(name: String) = byName[name]?.let { expressions.textOf(it, given, started) }?.trim().orEmpty()
+
+        val to = addresses(resolved(ActionParameters.TO).ifEmpty { action.emailTo.orEmpty() })
+        val subject = resolved(ActionParameters.SUBJECT).ifEmpty { action.emailSubject.orEmpty() }
+        val body = resolved(ActionParameters.BODY).ifEmpty { action.content.orEmpty() }
+
+        if (to.isEmpty()) return StepResult(StepStatus.SKIPPED, "${step.name} has nobody to send to.")
+        if (subject.isEmpty() && body.isEmpty()) {
+            return StepResult(StepStatus.SKIPPED, "${step.name} has nothing to say.")
+        }
+
+        val message = MailMessage(
+            to = to,
+            subject = subject,
+            body = body,
+            cc = addresses(resolved(ActionParameters.CC).ifEmpty { action.emailCc.orEmpty() }),
+            replyTo = resolved(ActionParameters.REPLY_TO).ifEmpty { action.emailReplyTo.orEmpty() }.ifEmpty { null },
+        )
+
+        return when (val delivery = mail.send(connectionId, message)) {
+            is MailDelivery.Sent -> StepResult(
+                StepStatus.COMPLETED,
+                expressions.namedJson(
+                    step.outputName,
+                    mapper.writeValueAsString(mapOf("messageId" to delivery.messageId, "recipients" to delivery.to)),
+                ),
+            )
+
+            is MailDelivery.NotPossible ->
+                StepResult(StepStatus.SKIPPED, "${step.name} sent no mail: ${delivery.reason}.")
+
+            /*
+             * Somebody meant this to send, and it did not. Which recipients it
+             * tried, because a rejected address is nearly always the one that was
+             * wired to the wrong field, and that is not something the server's
+             * reply on its own would say.
+             */
+            is MailDelivery.Refused -> throw ActionFailedException(
+                "${step.name} could not send to \"${to.joinToString(", ").take(TARGET_IN_ERROR)}\": ${delivery.reason}",
+                permanent = delivery.permanent,
+            )
+        }
+    }
+
+    /**
+     * A written list of addresses as the ones it names.
+     *
+     * Commas and semicolons both, because a mail client accepts either and
+     * somebody pasting a list from Outlook gets semicolons. Blanks are dropped
+     * rather than sent, so a trailing comma is not an empty recipient the server
+     * rejects the whole message over.
+     */
+    private fun addresses(written: String): List<String> =
+        written.split(',', ';').map(String::trim).filter { it.isNotEmpty() }
 
     /**
      * Calls whatever the node points at, and hands the answer on.

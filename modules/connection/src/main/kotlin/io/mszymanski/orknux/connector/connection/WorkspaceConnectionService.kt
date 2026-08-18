@@ -23,6 +23,7 @@ import java.time.format.DateTimeFormatter
 class WorkspaceConnectionService(
     private val workspaceConnections: WorkspaceConnectionRepository,
     private val probe: ConnectionProbe,
+    private val mail: OutgoingMail,
     private val events: ApplicationEventPublisher,
 ) {
 
@@ -51,6 +52,10 @@ class WorkspaceConnectionService(
                 authType = input.authType ?: AuthType.NONE,
                 secret = input.secret?.trim()?.ifEmpty { null },
                 appToken = input.appToken?.trim()?.ifEmpty { null },
+                smtpPort = input.smtpPort,
+                smtpUsername = input.smtpUsername?.trim()?.ifEmpty { null },
+                smtpFrom = input.smtpFrom?.trim()?.ifEmpty { null },
+                smtpSecurity = input.smtpSecurity ?: MailSecurity.STARTTLS,
                 headers = input.headers.orEmpty().toHttpHeaders(),
             ),
         )
@@ -88,6 +93,10 @@ class WorkspaceConnectionService(
         input.urlOverride?.let { connection.urlOverride = it.trim().ifEmpty { null } }
         input.secret?.let { connection.secret = it.trim().ifEmpty { null } }
         input.appToken?.let { connection.appToken = it.trim().ifEmpty { null } }
+        input.smtpPort?.let { connection.smtpPort = it.takeIf { port -> port > 0 } }
+        input.smtpUsername?.let { connection.smtpUsername = it.trim().ifEmpty { null } }
+        input.smtpFrom?.let { connection.smtpFrom = it.trim().ifEmpty { null } }
+        input.smtpSecurity?.let { connection.smtpSecurity = it }
         input.headers?.let { connection.headers = it.toHttpHeaders() }
         // Whatever the last probe found described the old configuration.
         connection.forgetLastCheck()
@@ -108,6 +117,11 @@ class WorkspaceConnectionService(
         if (connection.inherited) {
             connection.secret = null
             connection.appToken = null
+            // Who the workspace logged in as and sent from is as much its own as
+            // the password was, so disconnecting leaves none of it behind.
+            connection.smtpUsername = null
+            connection.smtpFrom = null
+            connection.smtpPort = null
             connection.urlOverride = null
             connection.headers = mutableListOf()
             connection.forgetLastCheck()
@@ -125,7 +139,14 @@ class WorkspaceConnectionService(
     fun testWorkspaceConnection(id: Long): WorkspaceConnectionView {
         val connection = workspaceConnections.findByIdOrNull(id) ?: throw ConnectionNotFoundException(id)
 
-        val result = probe.check(connection.target(), connection.type)
+        // A mail server is not asked whether it serves a page. It is asked
+        // whether it opens a session and takes the credentials, which is the only
+        // question about it that a check can answer without sending anybody a mail.
+        val result = if (connection.type == ConnectionType.SMTP) {
+            mail.check(connection)
+        } else {
+            probe.check(connection.target(), connection.type)
+        }
         connection.lastCheckStatus = result.outcome
         connection.lastCheckMessage = result.message
         connection.lastCheckedAt = OffsetDateTime.now()
@@ -168,6 +189,12 @@ data class CreateWorkspaceConnectionInput(
     val secret: String? = null,
     /** Slack's Socket Mode app-level token, when the type wants one. */
     val appToken: String? = null,
+    /** Where the mail server listens; null takes the port [smtpSecurity] implies. */
+    val smtpPort: Int? = null,
+    /** Null sends without authenticating; the password arrives as [secret]. */
+    val smtpUsername: String? = null,
+    val smtpFrom: String? = null,
+    val smtpSecurity: MailSecurity? = null,
     val headers: List<HttpHeaderInput>? = null,
 )
 
@@ -182,6 +209,10 @@ data class UpdateWorkspaceConnectionInput(
     val secret: String? = null,
     /** The Socket Mode app-level token, with the same null and empty meaning. */
     val appToken: String? = null,
+    val smtpPort: Int? = null,
+    val smtpUsername: String? = null,
+    val smtpFrom: String? = null,
+    val smtpSecurity: MailSecurity? = null,
     val headers: List<HttpHeaderInput>? = null,
 )
 
@@ -204,6 +235,11 @@ data class WorkspaceConnectionView(
     val secretSet: Boolean,
     /** Whether an app-level token is stored, which is what opens a listening socket. */
     val appTokenSet: Boolean,
+    /** Where a mail connection sends: the port it uses, whoever it logs in as, and who it is from. */
+    val smtpPort: Int?,
+    val smtpUsername: String?,
+    val smtpFrom: String?,
+    val smtpSecurity: MailSecurity,
     val status: ConnectionStatus,
     /** What the last probe reported, for the settings screen. */
     val lastCheckMessage: String?,
@@ -223,6 +259,12 @@ data class WorkspaceConnectionView(
         inherited = connection.inherited,
         secretSet = !connection.secret.isNullOrBlank(),
         appTokenSet = !connection.appToken.isNullOrBlank(),
+        // The port as it will be used, so the form shows what sending will do
+        // rather than an empty field meaning a default nobody wrote down.
+        smtpPort = connection.smtpPort ?: connection.smtpSecurity.defaultPort,
+        smtpUsername = connection.smtpUsername,
+        smtpFrom = connection.smtpFrom,
+        smtpSecurity = connection.smtpSecurity,
         status = connection.status,
         lastCheckMessage = connection.lastCheckMessage,
         lastCheckedAt = connection.lastCheckedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),

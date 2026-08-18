@@ -39,6 +39,17 @@ data class ConnectionProperties(
      * test cannot point at Microsoft.
      */
     val entraAuthority: String = "https://login.microsoftonline.com",
+
+    /**
+     * How long sending one mail may take.
+     *
+     * Its own setting rather than the HTTP one, because the conversation is a
+     * different shape: an SMTP exchange is several round trips before the body
+     * is written, and a greylisting server can be slow on purpose. Shorter than
+     * a workflow's HTTP call all the same - a mail server that has not answered
+     * in twenty seconds is one to come back to.
+     */
+    val mailTimeoutSeconds: Long = 20,
 )
 
 /** What the last probe found. */
@@ -116,8 +127,17 @@ class ConnectionProbe(
         }
         if (uri.scheme?.lowercase() !in ALLOWED_SCHEMES) return "Only http and https URLs can be checked"
         val host = uri.host ?: return "The URL has no host"
-        return resolutionProblem(host)
+        return vetHost(host)
     }
+
+    /**
+     * The same question for something that is a host and not a URL - a mail
+     * server, which is configured by name and port rather than by address.
+     *
+     * Public so that sending mail asks this rather than carrying its own copy of
+     * the link-local rule; a second copy is a second one to forget.
+     */
+    fun vetHost(host: String): String? = resolutionProblem(host.trim().ifEmpty { return "The host is empty" })
 
     /**
      * Checks a connection, asking whatever question that kind of service can

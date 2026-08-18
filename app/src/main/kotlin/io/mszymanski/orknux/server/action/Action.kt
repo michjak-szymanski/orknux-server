@@ -33,6 +33,20 @@ enum class ActionSubtype {
     OUTGOING_CONNECTION,
     HTTP_REQUEST,
 
+    /**
+     * Sends a mail through one of the workspace's SMTP connections.
+     *
+     * Its own subtype rather than another [ConnectionAction] under
+     * OUTGOING_CONNECTION, because a subtype is what decides the settings a form
+     * asks for and the parameters a node fills in - and a mail's are none of a
+     * chat message's. "Send Message" and "Reply in Thread" are a channel and
+     * some text; a mail is recipients, a subject, a copy list and an address to
+     * answer to. Folding them together would have meant a form and a node panel
+     * that both branch on the connection's kind anyway, with the parameter names
+     * of the other one on screen while somebody filled it in.
+     */
+    SEND_EMAIL,
+
     /** Calls one of the workspace's functions. */
     FUNCTION,
 
@@ -118,6 +132,25 @@ class WorkflowAction(
 
     @Column(name = "target_name", length = 120)
     var targetName: String? = null,
+
+    /**
+     * Who a mail goes to, and who is copied: addresses separated by commas, as
+     * they are typed into a mail client. One column rather than a child table
+     * because the list is written and read whole and nothing ever asks a
+     * question about a single recipient.
+     */
+    @Column(name = "email_to", length = 1000)
+    var emailTo: String? = null,
+
+    @Column(name = "email_cc", length = 1000)
+    var emailCc: String? = null,
+
+    @Column(name = "email_subject", length = 500)
+    var emailSubject: String? = null,
+
+    /** Where answers should go, when that is not the connection's from-address. */
+    @Column(name = "email_reply_to", length = 320)
+    var emailReplyTo: String? = null,
 
     @Column(length = 1000)
     var url: String? = null,

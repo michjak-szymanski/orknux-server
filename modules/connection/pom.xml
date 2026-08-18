@@ -32,6 +32,17 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Sending mail. Spring's JavaMailSender is built one server at a
+             time here rather than auto-configured from application.yml, because
+             the SMTP details belong to a workspace's connection and not to the
+             deployment. The starter is on the path for jakarta.mail and
+             MimeMessageHelper; no `spring.mail.*` property is set, so Boot
+             configures no sender of its own. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <!-- Slack over Socket Mode: an outbound websocket, so no public URL and
              no inbound firewall rule for a development machine to arrange. -->
         <dependency>

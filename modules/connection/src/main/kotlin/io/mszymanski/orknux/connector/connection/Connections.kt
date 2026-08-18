@@ -34,8 +34,38 @@ enum class ConnectionType {
     JIRA,
     TEAMS,
 
+    /**
+     * A mail server to send through. The only type that is not an HTTP endpoint,
+     * so [WorkspaceConnection.url] holds a host name rather than a URL and the
+     * settings beside it - port, user, from-address, how the session is secured -
+     * are the ones a mail server actually asks for.
+     */
+    SMTP,
+
     /** Anything that is just an HTTP endpoint, until it earns a type of its own. */
     WEBHOOK,
+}
+
+/**
+ * How the connection to a mail server is secured.
+ *
+ * Two ways, because mail has two: a session that starts in the clear and is
+ * upgraded once the server offers it, and one that is encrypted from the first
+ * byte. Which one applies is decided by the port the server listens on, not by
+ * anything that can be negotiated, so it has to be configured.
+ *
+ * [NONE] is here for a relay inside a network that does not offer TLS at all -
+ * refusing to speak to one would leave those deployments unable to send - and
+ * is not what a new connection starts as.
+ */
+enum class MailSecurity {
+    NONE,
+
+    /** Port 587: plain to begin with, encrypted before the credentials are sent. */
+    STARTTLS,
+
+    /** Port 465: TLS before anything else, the way HTTPS is. */
+    TLS,
 }
 
 /** What the workspace screen reports about a connection. */
@@ -142,6 +172,36 @@ class WorkspaceConnection(
     @Column(name = "app_token", length = SECRET_COLUMN_LENGTH)
     var appToken: String? = null,
 
+    /**
+     * Which port the mail server listens on. Null uses the one that goes with
+     * [smtpSecurity], since a workspace that picked STARTTLS almost never means
+     * anything other than 587.
+     */
+    @Column(name = "smtp_port")
+    var smtpPort: Int? = null,
+
+    /**
+     * Who to log in as. Null sends without authenticating, which is what an
+     * internal relay that trusts the network expects; the password is [secret],
+     * so a mail credential is encrypted by the same converter as every other.
+     */
+    @Column(name = "smtp_username", length = 320)
+    var smtpUsername: String? = null,
+
+    /**
+     * The address the mail is from.
+     *
+     * Stored rather than taken from [smtpUsername], because the two differ
+     * whenever a service account sends as a team - and a provider that refuses a
+     * From it has not authorised refuses it on the address, not on the login.
+     */
+    @Column(name = "smtp_from", length = 320)
+    var smtpFrom: String? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "smtp_security", nullable = false, length = 16)
+    var smtpSecurity: MailSecurity = MailSecurity.STARTTLS,
+
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(
         name = "workspace_connection_header",
@@ -174,6 +234,16 @@ class WorkspaceConnection(
     val configured: Boolean
         get() = when (type) {
             ConnectionType.SLACK_SOCKET_MODE -> !secret.isNullOrBlank() && !appToken.isNullOrBlank()
+
+            /*
+             * A mail server needs somewhere to send from before it needs a
+             * password: a relay on an internal network authenticates nobody, and
+             * calling that "not configured" would leave it unchecked forever. A
+             * user name without a password is the half-filled form it looks like.
+             */
+            ConnectionType.SMTP ->
+                !smtpFrom.isNullOrBlank() && (smtpUsername.isNullOrBlank() || !secret.isNullOrBlank())
+
             else -> authType == AuthType.NONE || !secret.isNullOrBlank()
         }
 

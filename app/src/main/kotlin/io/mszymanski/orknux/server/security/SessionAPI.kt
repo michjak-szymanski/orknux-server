@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
+import io.mszymanski.orknux.server.user.InternalAuthentication
 import org.springframework.security.authentication.AuthenticationManager
 
 /**
@@ -32,6 +33,7 @@ class SessionAPI(
     private val authenticationManager: AuthenticationManager,
     private val properties: SecurityProperties,
     private val resolver: RoleResolver,
+    private val internal: InternalAuthentication,
 ) {
 
     private val securityContextRepository = HttpSessionSecurityContextRepository()
@@ -42,6 +44,22 @@ class SessionAPI(
         request: HttpServletRequest,
         response: HttpServletResponse,
     ): SessionUser {
+        /*
+         * Somebody this installation made up, checked first.
+         *
+         * Before the directory, and whatever the configured method is: an
+         * internal user exists precisely because the provider does not know
+         * them, so an installation signing in with OIDC still has to let them
+         * in. Everybody else falls through to the door below.
+         */
+        internal.authenticate(credentials.username, credentials.password)?.let { authenticated ->
+            request.getSession(false)?.invalidate()
+            val context = SecurityContextHolder.createEmptyContext().apply { this.authentication = authenticated }
+            SecurityContextHolder.setContext(context)
+            securityContextRepository.saveContext(context, request, response)
+            return sessionUser(authenticated)
+        }
+
         /*
          * There is no password to check where the provider holds them. Refused
          * rather than quietly failing against a directory this installation does not

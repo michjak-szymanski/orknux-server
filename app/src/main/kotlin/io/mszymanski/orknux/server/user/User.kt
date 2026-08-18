@@ -76,6 +76,18 @@ class AppUser(
     )
     var roles: MutableSet<Role> = mutableSetOf(),
 
+    /**
+     * The hash of a password, for an internal user who has one.
+     *
+     * Null for everybody else, and for an internal user who is only ever
+     * assigned things: an identity that cannot sign in is still a useful
+     * identity. Never for an external user - their password belongs to the
+     * directory that keeps it, and holding one here would make this a second
+     * place to change it.
+     */
+    @Column(name = "password_hash", length = 100)
+    var passwordHash: String? = null,
+
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -89,6 +101,50 @@ class AppUser(
     /** Only what this installation made up is this installation's to change. */
     val editable: Boolean
         get() = type == UserType.INTERNAL
+
+    /** Whether they can sign in at all, which is not the same as existing. */
+    val hasPassword: Boolean
+        get() = passwordHash != null
+}
+
+/**
+ * A token: the same person by a different door.
+ *
+ * It carries a user and takes their roles, so what it may do is what they may
+ * do - nothing here is a second permission system. Only the hash is kept: the
+ * secret is shown once when it is made, and a table that could give it back
+ * would be a password written down.
+ */
+@Entity
+@Table(name = "app_user_token")
+class AppUserToken(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
+    @Column(name = "user_id", nullable = false)
+    val userId: Long,
+
+    /** What it is for, in the words of whoever made it. */
+    @Column(nullable = false, length = 120)
+    var name: String,
+
+    @Column(name = "token_hash", nullable = false, length = 64)
+    val tokenHash: String,
+
+    @Column(name = "created_at", nullable = false)
+    val createdAt: OffsetDateTime = OffsetDateTime.now(),
+
+    /** When it was last accepted, so an unused one can be found and removed. */
+    @Column(name = "last_used_at")
+    var lastUsedAt: OffsetDateTime? = null,
+)
+
+interface AppUserTokenRepository : JpaRepository<AppUserToken, Long> {
+
+    fun findByTokenHash(tokenHash: String): AppUserToken?
+
+    fun findByUserId(userId: Long): List<AppUserToken>
 }
 
 interface AppUserRepository : JpaRepository<AppUser, Long> {
@@ -111,6 +167,23 @@ class UserNameTakenException(username: String) :
     RuntimeException("A user named \"$username\" already exists")
 
 class UserNameInvalidException : RuntimeException("A user needs a username")
+
+class PasswordTooShortException(shortest: Int) :
+    RuntimeException("A password needs at least $shortest characters")
+
+class PasswordWrongException : RuntimeException("That is not the current password")
+
+/**
+ * Somebody tried to give a password to a user the directory owns.
+ *
+ * Not a permission that can be granted: the provider is where they are true,
+ * and a password here would be a second one to forget.
+ */
+class PasswordNotSettableException(username: String) : RuntimeException(
+    "\"$username\" signs in through the identity provider, so there is no password to set here",
+)
+
+class TokenNotFoundException(id: Long) : RuntimeException("No token with id $id")
 
 /**
  * Somebody tried to edit an external user.

@@ -9,6 +9,10 @@ type Query {
     role(id: ID!): Role
     "Everybody this installation knows, by name. Administrators only."
     users(search: String): [AppUser!]!
+    "The tokens you hold. Never their secrets - those are shown once, when made."
+    myTokens: [UserToken!]!
+    "One user's tokens. Administrators only."
+    userTokens(id: ID!): [UserToken!]!
     user(id: ID!): AppUser
     "One workspace's issues, newest first."
     workspaceIssues(workspaceId: ID!, status: IssueStatus, search: String, page: Int, size: Int): IssuePage!
@@ -196,6 +200,13 @@ type Mutation {
     commentOnIssue(id: ID!, content: String!): Issue!
     "Changes a comment. Only whoever wrote it may."
     editIssueComment(id: ID!, content: String!): Issue!
+    "Gives an internal user a password. Administrators only."
+    setUserPassword(id: ID!, password: String!): AppUser!
+    "Changes your own, which needs the current one."
+    changeMyPassword(currentPassword: String!, newPassword: String!): Boolean!
+    "Mints a token. Yours when id is absent; anybody's, for an administrator."
+    createUserToken(id: ID, name: String!): NewUserToken!
+    deleteUserToken(id: ID!): Boolean!
     createUser(input: UserInput!): AppUser!
     "Edits an INTERNAL user's display name and roles. Administrators only."
     updateUser(id: ID!, input: UserInput!): AppUser!
@@ -2275,6 +2286,8 @@ type AppUser {
     roles: [RoleRef!]!
     "False for anybody the identity provider defines."
     editable: Boolean!
+    "Whether they can sign in, which is not the same as existing."
+    hasPassword: Boolean!
     "ISO-8601 offset date-time."
     lastModifiedAt: String!
     lastModifiedBy: String!
@@ -2354,6 +2367,22 @@ input IssueInput {
     "Both together, or neither: absent leaves the assignee alone."
     assigneeKind: AssigneeKind
     assigneeId: ID
+}
+
+type UserToken {
+    id: ID!
+    "What it is for, in the words of whoever made it."
+    name: String!
+    "ISO-8601 offset date-time."
+    createdAt: String!
+    "Null until something uses it."
+    lastUsedAt: String
+}
+
+"A token and its secret, which is returned exactly once."
+type NewUserToken {
+    token: UserToken!
+    secret: String!
 }
 
 input UserInput {

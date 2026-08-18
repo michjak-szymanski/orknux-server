@@ -7,8 +7,12 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
+import io.mszymanski.orknux.server.user.TokenAuthenticationFilter
+import org.springframework.security.crypto.factory.PasswordEncoderFactories
+import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.security.config.annotation.web.invoke
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.security.web.authentication.HttpStatusEntryPoint
 import org.springframework.security.web.util.matcher.DispatcherTypeRequestMatcher
 import org.springframework.web.cors.CorsConfiguration
@@ -19,8 +23,22 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 @EnableConfigurationProperties(WebProperties::class, SecurityProperties::class)
 class SecurityConfig {
 
+    /**
+     * How a password is stored, for the few users this installation keeps one for.
+     *
+     * Delegating, so the hash says which algorithm made it: the day bcrypt is
+     * not the answer, what is already stored still verifies and what is written
+     * next is stronger, with nothing to migrate by hand.
+     */
     @Bean
-    fun securityFilterChain(http: HttpSecurity, properties: SecurityProperties): SecurityFilterChain {
+    fun passwordEncoder(): PasswordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder()
+
+    @Bean
+    fun securityFilterChain(
+        http: HttpSecurity,
+        properties: SecurityProperties,
+        tokens: TokenAuthenticationFilter,
+    ): SecurityFilterChain {
         http {
             cors { }
             // The API is cookie-session based; a CSRF token flow still needs adding
@@ -91,6 +109,17 @@ class SecurityConfig {
                 oauth2ResourceServer { jwt { } }
             }
         }
+
+        /*
+         * A token is read before anything asks who this is.
+         *
+         * Ahead of the session filter, so a caller carrying one is somebody by
+         * the time authorisation runs - and behind nothing that matters, since
+         * a request without the header passes straight through. This is what
+         * makes the API and the MCP endpoint reachable by something with no
+         * browser to keep a cookie in.
+         */
+        http.addFilterBefore(tokens, UsernamePasswordAuthenticationFilter::class.java)
 
         return http.build()
     }

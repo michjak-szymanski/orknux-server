@@ -85,7 +85,7 @@ class WorkflowGraphAPI(
         // has; the validator is given the graph, not an argument about it.
         val drawn = input.edges
             .filter { it.source in known && it.target in known }
-            .map { WorkflowEdge(workflowId = workflowId, sourceKey = it.source, targetKey = it.target) }
+            .map { WorkflowEdge(workflowId = workflowId, sourceKey = it.source, targetKey = it.target, branch = it.branch) }
 
         return WorkflowGraphView(
             workflowId = workflowId,
@@ -141,7 +141,9 @@ class WorkflowGraphAPI(
                 positionY = node.y,
             )
         }
-        val proposedEdges = input.edges.map { WorkflowEdge(workflowId = workflowId, sourceKey = it.source, targetKey = it.target) }
+        val proposedEdges = input.edges.map {
+            WorkflowEdge(workflowId = workflowId, sourceKey = it.source, targetKey = it.target, branch = it.branch)
+        }
         val refusals = validator.problems(proposed, proposedEdges, hardOnly = true)
         if (refusals.isNotEmpty()) throw GraphInvalidException(refusals)
 
@@ -153,7 +155,7 @@ class WorkflowGraphAPI(
         nodes.saveAll(input.nodes.map { nodeOf(workflowId, it) })
         edges.saveAll(
             input.edges.map { edge ->
-                WorkflowEdge(workflowId = workflowId, sourceKey = edge.source, targetKey = edge.target)
+                WorkflowEdge(workflowId = workflowId, sourceKey = edge.source, targetKey = edge.target, branch = edge.branch)
             },
         )
 
@@ -227,6 +229,9 @@ class WorkflowGraphAPI(
         icon = node.icon?.trim()?.ifEmpty { null },
         positionX = node.x,
         positionY = node.y,
+        // Only a condition has two ways out to name.
+        yesLabel = node.yesLabel?.trim()?.ifEmpty { null }?.takeIf { node.kind == NodeKind.CONDITION },
+        noLabel = node.noLabel?.trim()?.ifEmpty { null }?.takeIf { node.kind == NodeKind.CONDITION },
         mappings = mappingsFor(node, refusing),
     )
 
@@ -405,6 +410,9 @@ data class WorkflowNodeInput(
      * suggestions, which is what a node freshly pointed at one wants.
      */
     val mappings: List<NodeMappingInput>? = null,
+    /** What a condition node's two ways out are called; null means Yes and No. */
+    val yesLabel: String? = null,
+    val noLabel: String? = null,
     val x: Double,
     val y: Double,
 )
@@ -420,6 +428,8 @@ data class NodeMappingInput(
 data class WorkflowEdgeInput(
     val source: String,
     val target: String,
+    /** Which way out of a condition it leaves by; absent for every other edge. */
+    val branch: EdgeBranch? = null,
 )
 
 data class WorkflowGraphInput(
@@ -484,8 +494,13 @@ data class NodeMappingView(
 data class WorkflowEdgeView(
     val source: String,
     val target: String,
+    val branch: EdgeBranch? = null,
 ) {
-    constructor(edge: WorkflowEdge) : this(source = edge.sourceKey, target = edge.targetKey)
+    constructor(edge: WorkflowEdge) : this(
+        source = edge.sourceKey,
+        target = edge.targetKey,
+        branch = edge.branch,
+    )
 }
 
 data class WorkflowGraphView(

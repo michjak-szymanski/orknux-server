@@ -53,6 +53,7 @@ class TemporalExecutionEngine(
             workflowName = plan.execution.workflowName,
             steps = plan.steps.map { it.nodeKey },
             input = input,
+            edges = plan.edges.map { PlanEdge(it.source, it.target, it.branch) },
         ))
 
         return plan.execution

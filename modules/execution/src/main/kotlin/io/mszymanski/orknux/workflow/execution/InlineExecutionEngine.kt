@@ -40,7 +40,21 @@ class InlineExecutionEngine(
         val plan = planner.plan(workspaceId, workflowId, trigger, input)
         val executionId = requireNotNull(plan.execution.id)
 
+        /*
+         * What still has a reason to run.
+         *
+         * Every node used to run, in order. With branches a step is only
+         * reached if something that actually happened leads to it, so the gate
+         * is asked before each one and told what each one decided.
+         */
+        val gate = BranchGate(plan.edges)
+
         for ((index, step) in plan.steps.withIndex()) {
+            if (!gate.mayRun(step.nodeKey)) {
+                steps.skipStep(executionId, step.nodeKey, "the condition before it went the other way")
+                continue
+            }
+
             val outcome = try {
                 runToDecision(executionId, step.nodeKey)
             } catch (failure: StepFailedException) {
@@ -53,9 +67,14 @@ class InlineExecutionEngine(
                 )
             }
 
-            // A condition that did not hold ends the run: what is left has no
-            // reason to happen, and the run did not fail.
-            if (outcome.halt) {
+            gate.follow(step.nodeKey, outcome.branch)
+
+            /*
+             * A condition that did not hold ends the run - unless it has
+             * branches, in which case it decided a direction rather than an
+             * ending, and the gate has already closed the way not taken.
+             */
+            if (outcome.halt && !gate.branches(step.nodeKey)) {
                 log.info("Execution {} stopped at {}: the run has nothing further to do", executionId, step.nodeKey)
                 return steps.finishRun(executionId, stoppedAt = step.nodeKey, reason = outcome.output)
             }

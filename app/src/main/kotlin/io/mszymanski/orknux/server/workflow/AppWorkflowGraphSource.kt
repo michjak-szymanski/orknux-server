@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.workflow
 
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphNode
 import io.mszymanski.orknux.workflow.execution.NodeBinding
@@ -59,7 +60,9 @@ class AppWorkflowGraphSource(
                     y = node.positionY,
                 )
             },
-            edges = edges.findByWorkflowId(workflowId).map { GraphEdge(it.sourceKey, it.targetKey) },
+            edges = edges.findByWorkflowId(workflowId).map {
+                GraphEdge(it.sourceKey, it.targetKey, it.branch?.let { branch -> EdgeBranch.valueOf(branch.name) })
+            },
         )
     }
 }

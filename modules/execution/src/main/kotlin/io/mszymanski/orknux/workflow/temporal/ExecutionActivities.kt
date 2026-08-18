@@ -30,6 +30,10 @@ interface ExecutionActivities {
 
     @ActivityMethod
     fun finishRun(command: FinishRunCommand)
+
+    /** Writes down a step the run went past, because its branch was not taken. */
+    @ActivityMethod
+    fun skipStep(command: SkipStepCommand)
 }
 
 /**
@@ -58,13 +62,18 @@ class ExecutionActivitiesImpl(private val steps: StepRunner) : ExecutionActiviti
             throw failure
         }
         return StepReport(
-            outcome.status,
-            outcome.output,
-            outcome.halt,
+            status = outcome.status,
+            output = outcome.output,
+            halt = outcome.halt,
+            branch = outcome.branch,
             // A timer is the granularity Temporal deals in, so anything under a
             // second becomes one: sleeping for none of it would only spin.
-            outcome.resumeAfter?.toSeconds()?.coerceAtLeast(1),
+            resumeAfterSeconds = outcome.resumeAfter?.toSeconds()?.coerceAtLeast(1),
         )
+    }
+
+    override fun skipStep(command: SkipStepCommand) {
+        steps.skipStep(command.executionId, command.nodeKey, command.reason)
     }
 
     override fun failRun(command: FailRunCommand) {

@@ -184,6 +184,20 @@ class WorkflowNode(
 
     @Column(name = "position_y", nullable = false)
     var positionY: Double,
+
+    /**
+     * What this condition's two ways out are called.
+     *
+     * Null means the default - "Yes" and "No" - which is what most conditions
+     * want. A question like "is it urgent" reads better as "Escalate" and
+     * "File it", and those words are most of what makes a graph legible at a
+     * glance, so they belong to the node rather than to the edges.
+     */
+    @Column(name = "yes_label", length = 40)
+    var yesLabel: String? = null,
+
+    @Column(name = "no_label", length = 40)
+    var noLabel: String? = null,
 )
 
 @Entity
@@ -201,7 +215,25 @@ class WorkflowEdge(
 
     @Column(name = "target_key", nullable = false, length = 64)
     val targetKey: String,
+
+    /**
+     * Which way out of a condition this edge leaves by, or null for an edge
+     * that is not answering anything.
+     *
+     * Null is what every edge between two ordinary nodes is, and what every
+     * edge was before branches existed - so a graph drawn last week means
+     * exactly what it meant then.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    val branch: EdgeBranch? = null,
 )
+
+/** The two answers a condition has, as the edges leaving it are labelled. */
+enum class EdgeBranch {
+    YES,
+    NO,
+}
 
 interface WorkflowNodeRepository : JpaRepository<WorkflowNode, Long> {
     fun findByWorkflowId(workflowId: Long): List<WorkflowNode>

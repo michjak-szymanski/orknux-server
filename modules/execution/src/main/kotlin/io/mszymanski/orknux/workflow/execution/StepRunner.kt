@@ -10,6 +10,8 @@ data class StepOutcome(
     val status: StepStatus,
     val output: String? = null,
     val halt: Boolean = false,
+    /** Which way out of a condition the run went; null for every other node. */
+    val branch: EdgeBranch? = null,
     /**
      * Set on [StepStatus.WAITING]: how long to leave the step alone before
      * running it again. Whatever is carrying the run spends it.
@@ -141,7 +143,7 @@ class StepRunner(
             if (result.status == StepStatus.COMPLETED) LogLevel.SUCCESS else LogLevel.INFO,
             result.output ?: "${step.name} ${result.status.name.lowercase()}",
         )
-        return StepOutcome(result.status, result.output, result.halt)
+        return StepOutcome(result.status, result.output, result.halt, result.branch)
     }
 
     /**
@@ -165,6 +167,24 @@ class StepRunner(
         steps.save(step)
         log.write(executionId, step.nodeKey, LogLevel.ERROR, "${step.name} failed: $reason")
         throw StepFailedException(step.nodeKey, reason, permanent)
+    }
+
+    /**
+     * Records a step the run went past, because the branch that reaches it was
+     * not the one taken.
+     *
+     * Written down rather than left pending: "skipped, the condition went the
+     * other way" is a fact about what happened, and a step silently absent from
+     * a run is the kind of gap somebody debugging spends an afternoon on.
+     */
+    fun skipStep(executionId: Long, nodeKey: String, reason: String): ExecutionStep {
+        val step = stepOf(executionId, nodeKey)
+        step.status = StepStatus.SKIPPED
+        step.output = reason.take(ERROR_LENGTH)
+        step.startedAt = OffsetDateTime.now()
+        step.finishedAt = OffsetDateTime.now()
+        log.write(executionId, nodeKey, LogLevel.INFO, "${step.name} skipped: $reason")
+        return steps.save(step)
     }
 
     /** Stops the run. The steps it never reached stay pending, because they were. */

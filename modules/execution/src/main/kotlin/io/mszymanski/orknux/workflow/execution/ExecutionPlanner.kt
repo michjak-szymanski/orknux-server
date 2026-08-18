@@ -9,6 +9,14 @@ data class ExecutionPlan(
     val execution: WorkflowExecution,
     /** In the order they are to be run. */
     val steps: List<ExecutionStep>,
+    /**
+     * The graph's edges, carried so an engine can tell what leads where.
+     *
+     * A plan used to be a list and nothing else, because every node ran. With
+     * branches an engine has to know which node a step follows from, and
+     * whether the edge between them was the answer the condition gave.
+     */
+    val edges: List<GraphEdge> = emptyList(),
 )
 
 /**
@@ -73,6 +81,6 @@ class ExecutionPlanner(
         )
 
         log.write(executionId, null, LogLevel.INFO, "${graph.name} started by ${trigger.name.lowercase()}")
-        return ExecutionPlan(execution, recorded)
+        return ExecutionPlan(execution, recorded, graph.edges)
     }
 }

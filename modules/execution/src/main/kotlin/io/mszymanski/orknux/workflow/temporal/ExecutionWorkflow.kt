@@ -2,7 +2,10 @@ package io.mszymanski.orknux.workflow.temporal
 
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.mszymanski.orknux.workflow.execution.BranchGate
+import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
+import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.StepStatus
 import io.temporal.failure.ActivityFailure
 import io.temporal.failure.ApplicationFailure
@@ -39,6 +42,28 @@ data class RunPlan @JsonCreator constructor(
     @JsonProperty("workflowName") val workflowName: String,
     @JsonProperty("steps") val steps: List<String>,
     @JsonProperty("input") val input: String? = null,
+    /**
+     * The graph's edges, so the workflow can tell what leads where.
+     *
+     * Sent once, with the plan, rather than asked for again at each step: a
+     * workflow's own decisions have to be replayable from history, and a graph
+     * fetched mid-run could answer differently the second time it is walked.
+     */
+    @JsonProperty("edges") val edges: List<PlanEdge> = emptyList(),
+)
+
+/** One edge as the plan carries it, with the answer it leaves by. */
+data class PlanEdge @JsonCreator constructor(
+    @JsonProperty("source") val source: String,
+    @JsonProperty("target") val target: String,
+    @JsonProperty("branch") val branch: EdgeBranch? = null,
+)
+
+/** A step the run went past, because the branch reaching it was not taken. */
+data class SkipStepCommand @JsonCreator constructor(
+    @JsonProperty("executionId") val executionId: Long,
+    @JsonProperty("nodeKey") val nodeKey: String,
+    @JsonProperty("reason") val reason: String,
 )
 
 /**
@@ -59,6 +84,8 @@ data class StepReport @JsonCreator constructor(
     @JsonProperty("output") val output: String? = null,
     /** True when the step decided the run has nothing further to do. */
     @JsonProperty("halt") val halt: Boolean = false,
+    /** Which way out of a condition the run went; null for every other node. */
+    @JsonProperty("branch") val branch: EdgeBranch? = null,
     /**
      * Set when the step parked: how long before it is asked again.
      *
@@ -94,8 +121,23 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
     private val activities = Workflow.newActivityStub(ExecutionActivities::class.java)
 
     override fun run(plan: RunPlan): ExecutionStatus {
+        /*
+         * What still has a reason to run. Built from the edges the plan
+         * carries, so this workflow decides the same way the inline engine
+         * does - a run that took different paths depending on which engine
+         * carried it would be the worst kind of difference.
+         */
+        val gate = BranchGate(plan.edges.map { GraphEdge(it.source, it.target, it.branch) })
+
         for ((index, nodeKey) in plan.steps.withIndex()) {
             val unreached = plan.steps.size - index - 1
+
+            if (!gate.mayRun(nodeKey)) {
+                activities.skipStep(
+                    SkipStepCommand(plan.executionId, nodeKey, "the condition before it went the other way"),
+                )
+                continue
+            }
 
             // Ask the step, and sleep on Temporal's clock for as long as it says
             // it is not ready. This is what makes a wait first class: the
@@ -142,8 +184,13 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
                 Workflow.sleep(Duration.ofSeconds(pause))
             }
 
-            // A condition that did not hold ends the run, without failing it.
-            if (report.halt) {
+            gate.follow(nodeKey, report.branch)
+
+            /*
+             * A condition that did not hold ends the run - unless it has
+             * branches, where it chose a direction rather than an ending.
+             */
+            if (report.halt && !gate.branches(nodeKey)) {
                 activities.finishRun(FinishRunCommand(plan.executionId, nodeKey, report.output))
                 return ExecutionStatus.COMPLETED
             }

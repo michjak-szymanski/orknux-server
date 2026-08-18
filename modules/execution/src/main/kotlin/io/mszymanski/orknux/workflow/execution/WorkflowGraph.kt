@@ -63,7 +63,24 @@ data class GraphNode(
     val y: Double = 0.0,
 )
 
-data class GraphEdge(val source: String, val target: String)
+/**
+ * Which way out of a condition an edge leaves by.
+ *
+ * The engine's own copy of the word: a run walks the graph it was handed, and
+ * the graph says which edges answer YES and which answer NO.
+ */
+enum class EdgeBranch {
+    YES,
+    NO,
+}
+
+/**
+ * One edge, and which answer it carries.
+ *
+ * Null for everything that is not leaving a condition, which is most edges and
+ * every edge drawn before branches existed.
+ */
+data class GraphEdge(val source: String, val target: String, val branch: EdgeBranch? = null)
 
 /** A workflow as it stood when a run picked it up. */
 data class WorkflowGraph(

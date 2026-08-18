@@ -35,6 +35,15 @@ data class StepResult(
      * restart of every process involved.
      */
     val resumeAfter: Duration? = null,
+    /**
+     * Which way out of a condition the run went.
+     *
+     * Set only by a condition node, and only where the graph gives it
+     * somewhere to go: what the engine does with it is follow the edges that
+     * carry the same answer and skip whatever only the other answer reached.
+     * Null everywhere else, which is every node that asks nothing.
+     */
+    val branch: EdgeBranch? = null,
 ) {
     init {
         require(status == StepStatus.COMPLETED || status == StepStatus.SKIPPED || status == StepStatus.WAITING) {

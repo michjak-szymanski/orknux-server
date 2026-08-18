@@ -18,3 +18,7 @@ buildNumber.properties
 
 # Written only when orknux.logging.file names a path inside the checkout.
 logs/
+
+# Runtime data: what the application writes while it runs, including
+# whatever anybody attached to a chat. Not the repository’s to carry.
+app/data/

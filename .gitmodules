@@ -1,0 +1,4 @@
+[submodule "orknux-ui"]
+	path = orknux-ui
+	url = https://github.com/michjak-szymanski/orknux-ui.git
+	branch = main

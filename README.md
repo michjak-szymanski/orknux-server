@@ -1,5 +1,9 @@
 # orknux-server
 
+[![CI](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml/badge.svg)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/github/actions/workflow/status/michjak-szymanski/orknux-server/ci.yml?branch=main&label=tests)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
+[![Licence](https://img.shields.io/github/license/michjak-szymanski/orknux-server?label=licence)](LICENSE)
+
 Orknux — pronounced *ZAV-rick* — is fully open source, workspace based, agent
 orchestration platform.
 
@@ -23,7 +27,8 @@ an interface and the app implements it — `WorkspaceDirectory` for the workspac
 reaches, `WorkflowGraphSource` for the graph a run is given. That is also the
 seam to pull on if one of them ever has to become its own service.
 
-[orknux-ui](../orknux-ui) is the React front end, and talks only to this service.
+[orknux-ui](https://github.com/michjak-szymanski/orknux-ui) is the React front
+end, and talks only to this service.
 
 ## Running
 
@@ -35,6 +40,48 @@ docker compose up -d              # postgres, openldap and temporal
 The first build has to be online, and `-pl app` builds the modules it needs.
 Temporal's own UI is on http://localhost:8233, for looking at a run that went
 wrong.
+
+### The front end
+
+That serves the API. The app you sign in to is
+[orknux-ui](https://github.com/michjak-szymanski/orknux-ui), its own repository,
+carried here as a submodule so a clone pins the front end this server was
+built against:
+
+```
+git clone --recurse-submodules https://github.com/michjak-szymanski/orknux-server
+cd orknux-ui
+docker compose up dev             # http://localhost:5173
+```
+
+An existing clone that predates it wants `git submodule update --init`. The
+submodule tracks `main`, so `git submodule update --remote orknux-ui` moves the
+pin forward, and the move is a commit here like any other.
+
+Node is not needed on the machine — the toolchain runs in the container. The dev
+server proxies `/api` and `/graphql` to this service on 8080 (override with
+`ORKNUX_SERVER_URL`), so the browser stays on one origin and the session cookie
+is first-party. Open http://localhost:5173 and sign in with a directory user
+from the table below; going to 8080 directly gets you the API, not the app.
+
+### Checking the image
+
+```
+scripts/verify-image.sh           # builds it, starts it, asserts it works
+```
+
+The suite says the code behaves; this says the artefact runs. It builds the
+image, brings it up against a real Postgres, and checks that it boots and
+serves, that Flyway migrated, that anonymous callers are refused, that it runs
+as `orknux` rather than root, that the JVM is PID 1, and that `docker stop`
+reaches it rather than killing it. CI runs it between the suite and the publish,
+so nothing reaches the registry unstarted.
+
+It starts the image with `ORKNUX_TEMPORAL_ENABLED=false`, because whether a
+separate service is reachable is not a property of this image. Worth knowing
+while reading a green run: with the default configuration the application
+**refuses to start** when Temporal is not up, which is deliberate — so a
+deployment brought up before its Temporal restarts until that service answers.
 
 Flyway migrates the schema on start; JPA runs with `ddl-auto: validate`, so the
 migrations are the only thing that changes the database. One process means one
@@ -497,6 +544,17 @@ for a mention, and runs each workflow instancing one, with the message, channel
 and thread handed to the run. Set
 `orknux.slack.enabled: false` to open no sockets at all.
 
-## License
+## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+**GNU Affero General Public License v3.0 or later** — see [LICENSE](LICENSE),
+and [NOTICE](NOTICE) for the section 7(b) term requiring the attribution shown in
+the interface to be preserved.
+
+You may run this, modify it, host it and charge for it. If you let people use a
+modified version over a network, section 13 requires you to offer them that
+version's source under the same licence.
+
+A commercial licence, which lifts both the attribution term and the source
+obligations, is available from the copyright holder.
+
+Copyright (C) 2026 Michał Szymański.

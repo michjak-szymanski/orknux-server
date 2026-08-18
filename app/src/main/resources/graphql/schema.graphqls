@@ -482,6 +482,9 @@ type WorkflowNode {
     outputName: String
     "Which icon the canvas draws on this node; a name from the interface's own set."
     icon: String
+    "What a condition node's two ways out are called; null means Yes and No."
+    yesLabel: String
+    noLabel: String
     x: Float!
     y: Float!
     "What the node needs, read off whatever it points at."
@@ -512,9 +515,17 @@ type NodeMapping {
     sourceNodeKey: String
 }
 
+"Which way out of a condition an edge leaves by."
+enum EdgeBranch {
+    YES
+    NO
+}
+
 type WorkflowEdge {
     source: String!
     target: String!
+    "The answer this edge carries; null for every edge that is not leaving a condition."
+    branch: EdgeBranch
 }
 
 type WorkflowGraph {
@@ -560,6 +571,9 @@ input WorkflowNodeInput {
     outputName: String
     "Which icon the canvas draws on this node; a name from the interface's own set."
     icon: String
+    "What a condition node's two ways out are called; null means Yes and No."
+    yesLabel: String
+    noLabel: String
     """
     What this node passes to its action. Omitted leaves it to the action's own
     suggestions, which is what a node freshly pointed at one wants. Names the
@@ -580,6 +594,7 @@ input NodeMappingInput {
 input WorkflowEdgeInput {
     source: String!
     target: String!
+    branch: EdgeBranch
 }
 
 input WorkflowGraphInput {

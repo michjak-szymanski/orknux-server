@@ -451,6 +451,9 @@ data class WorkflowNodeView(
     val objectId: Long?,
     val outputName: String?,
     val icon: String?,
+    /** What a condition node's two ways out are called; null means Yes and No. */
+    val yesLabel: String?,
+    val noLabel: String?,
     val x: Double,
     val y: Double,
     /** What the node needs, read off whatever it points at. */
@@ -476,6 +479,8 @@ data class WorkflowNodeView(
         objectId = node.objectId,
         outputName = node.outputName,
         icon = node.icon,
+        yesLabel = node.yesLabel,
+        noLabel = node.noLabel,
         x = node.positionX,
         y = node.positionY,
         inputs = inputs,

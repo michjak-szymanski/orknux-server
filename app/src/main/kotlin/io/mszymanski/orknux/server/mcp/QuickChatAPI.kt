@@ -169,7 +169,27 @@ class QuickChat(
                 "To change one, call `orknux_suggest_function_code` with the complete new source: they are shown " +
                     "it against what is there now and either accept it or reject it. Do not paste a whole " +
                     "function into your reply and ask them to copy it - offer it with the tool and say in one " +
-                    "line what it changes. Nothing is saved unless they accept. "
+                    "line what it changes. Nothing is saved unless they accept. " +
+                    /*
+                     * The sandbox, said up front. A model that does not know it
+                     * writes Node - `import crypto` was the first thing one
+                     * tried - and then spends three suggestions discovering,
+                     * one refusal at a time, what one sentence here prevents.
+                     */
+                    "Functions run in a locked-down sandbox: no `import` or `require` at all, no Node or browser " +
+                    "APIs (no `crypto`, `fs`, `fetch`, `process`), no network. Only plain TypeScript over the " +
+                    "declared parameters and standard JavaScript built-ins. If something needs a capability the " +
+                    "sandbox lacks, say so instead of trying to smuggle it in. " +
+                    /*
+                     * One offer at a time, and honest words when it lands. The
+                     * transcript this guards against had three suggestions in
+                     * flight, a model narrating a wait that was over, and a
+                     * placeholder described as the finished algorithm after it
+                     * was accepted.
+                     */
+                    "Offer one change at a time and wait for the outcome - accepted, rejected, or failed - before " +
+                    "offering another. When one is accepted, describe what the accepted code actually does, no " +
+                    "more; never present a placeholder or a partial version as the finished thing. "
             } else {
                 "You cannot change a function here; describe what you would do instead. "
             },

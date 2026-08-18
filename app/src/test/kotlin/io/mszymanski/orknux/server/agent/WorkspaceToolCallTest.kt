@@ -127,7 +127,7 @@ class WorkspaceToolCallTest(
     private fun tool(name: String, description: String, source: String): Long = graphQlTester.document(
         """mutation { createTool(input: {
              workspaceId: $workspaceId, name: "$name", description: "$description",
-             source: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'}
+             source: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'}, typescript: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'}
            }) { id } }""",
     ).execute().path("createTool.id").entity(Long::class.java).get()
 }

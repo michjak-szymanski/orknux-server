@@ -56,15 +56,16 @@ class ToolAPI(
         if (!IDENTIFIER.matches(name)) throw ToolNameInvalidException(name)
         if (tools.findByWorkspaceIdAndName(input.workspaceId, name) != null) throw ToolNameTakenException(name)
 
-        val source = input.source?.takeIf { it.isNotBlank() } ?: starter(name)
-        requireParses(source)
+        val code = codeFrom(input.source, input.typescript) ?: starter(name)
+        requireParses(code.javascript)
 
         val tool = tools.save(
             AgentTool(
                 workspaceId = input.workspaceId,
                 name = name,
                 description = input.description?.trim()?.ifEmpty { null },
-                source = source,
+                source = code.javascript,
+                typescript = code.typescript,
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -89,9 +90,15 @@ class ToolAPI(
             tool.name = name
         }
         input.description?.let { tool.description = it.trim().ifEmpty { null } }
-        input.source?.let {
-            requireParses(it)
-            tool.source = it
+        /*
+         * Both halves or neither. A write that moved one would leave the editor
+         * showing code the sandbox is not running, which is the one failure this
+         * pair exists to prevent.
+         */
+        codeFrom(input.source, input.typescript)?.let { code ->
+            requireParses(code.javascript)
+            tool.source = code.javascript
+            tool.typescript = code.typescript
         }
         tool.lastModifiedAt = OffsetDateTime.now()
         tool.lastModifiedBy = currentUser()
@@ -148,6 +155,7 @@ class ToolAPI(
         name = tool.name,
         description = tool.description,
         source = tool.source,
+        typescript = tool.typescript,
         enabled = tool.enabled,
         lastModifiedAt = tool.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = tool.lastModifiedBy,
@@ -162,12 +170,37 @@ class ToolAPI(
      * What a new tool starts as: something that parses, and that says in a
      * comment what the agent will be reading when it decides to call it.
      */
-    private fun starter(name: String): String = """
-        export default async function $name(input) {
-          // What this returns is handed back to the agent that called it.
-          return { ok: true };
+    /**
+     * What a new tool starts as.
+     *
+     * The stub takes no annotations, so the same text is both halves: it is
+     * valid TypeScript, and it is what the sandbox would run.
+     */
+    private fun starter(name: String): ToolCode {
+        val stub = """
+            export default async function $name(input) {
+              // What this returns is handed back to the agent that called it.
+              return { ok: true };
+            }
+        """.trimIndent()
+        return ToolCode(javascript = stub, typescript = stub)
+    }
+
+    /**
+     * The pair, from what arrived — or null when neither half was sent, which
+     * means "leave the code alone" on an update and "start from a stub" on a
+     * create.
+     */
+    private fun codeFrom(javascript: String?, typescript: String?): ToolCode? {
+        val compiled = javascript?.takeIf { it.isNotBlank() }
+        val written = typescript?.takeIf { it.isNotBlank() }
+        return when {
+            compiled != null && written != null -> ToolCode(javascript = compiled, typescript = written)
+            compiled != null -> throw ToolCodeIncompleteException("TypeScript this JavaScript was compiled from")
+            written != null -> throw ToolCodeIncompleteException("JavaScript compiled from this TypeScript")
+            else -> null
         }
-    """.trimIndent()
+    }
 
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
@@ -187,15 +220,20 @@ data class CreateToolInput(
     val workspaceId: Long,
     val name: String,
     val description: String? = null,
-    /** Left out for a new tool, which starts from a stub that parses. */
+    /** Both left out for a new tool, which starts from a stub that parses. */
     val source: String? = null,
+    val typescript: String? = null,
 )
 
 data class UpdateToolInput(
     val name: String? = null,
     val description: String? = null,
     val source: String? = null,
+    val typescript: String? = null,
 )
+
+/** What runs, and what it was written as. Saved together, always. */
+data class ToolCode(val javascript: String, val typescript: String)
 
 data class ToolView(
     val id: Long,
@@ -203,6 +241,7 @@ data class ToolView(
     val name: String,
     val description: String?,
     val source: String,
+    val typescript: String,
     val enabled: Boolean,
     val lastModifiedAt: String,
     val lastModifiedBy: String,

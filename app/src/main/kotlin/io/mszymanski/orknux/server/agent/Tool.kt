@@ -39,8 +39,19 @@ class AgentTool(
     @Column(length = 500)
     var description: String? = null,
 
+    /** What runs: the JavaScript the editor compiled from [typescript]. */
     @Column(nullable = false, columnDefinition = "text")
     var source: String,
+
+    /**
+     * What was written, kept beside what runs.
+     *
+     * Reopening a tool has to show the author their own code rather than the
+     * compiler's output, and the sandbox has to be handed JavaScript — so both
+     * are stored, and they are only ever written together.
+     */
+    @Column(nullable = false, columnDefinition = "text")
+    var typescript: String,
 
     /** Off leaves it defined but out of reach, which a delete would not. */
     @Column(nullable = false)
@@ -69,3 +80,15 @@ class ToolNameInvalidException(name: String) :
     RuntimeException("\"$name\" is not a name a script can be called by")
 
 class ToolSourceInvalidException(reason: String) : RuntimeException(reason)
+
+/**
+ * One half of a tool's code arrived without the other.
+ *
+ * Refused rather than guessed at: compiling TypeScript is the editor's job and
+ * nothing on this side can strip types or put them back, so a save that carried
+ * only one half would leave the two permanently out of step.
+ */
+class ToolCodeIncompleteException(missing: String) : RuntimeException(
+    "The $missing is missing. A tool's TypeScript and the JavaScript compiled " +
+        "from it are saved together, so that what runs is always what was written.",
+)

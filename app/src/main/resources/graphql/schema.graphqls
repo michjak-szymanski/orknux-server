@@ -676,7 +676,10 @@ type Tool {
     name: String!
     "What the tool is for. An agent reads this to decide whether to call it."
     description: String
+    "The JavaScript that runs."
     source: String!
+    "The TypeScript it was compiled from, which is what the editor opens."
+    typescript: String!
     "Off leaves it defined but out of reach."
     enabled: Boolean!
     "ISO-8601 offset date-time, and the uid that saved it."
@@ -767,14 +770,23 @@ input CreateToolInput {
     workspaceId: ID!
     name: String!
     description: String
-    "Left out for a new tool, which starts from a stub that parses."
+    """
+    The compiled JavaScript. Given together with `typescript` or not at all: a
+    tool whose halves were written separately is one whose editor and sandbox
+    disagree. Left out with it starts the tool from a stub that parses.
+    """
     source: String
+    "The TypeScript it was compiled from."
+    typescript: String
 }
 
 input UpdateToolInput {
     name: String
     description: String
+    "The compiled JavaScript. Given together with `typescript` or not at all."
     source: String
+    "The TypeScript it was compiled from."
+    typescript: String
 }
 
 """

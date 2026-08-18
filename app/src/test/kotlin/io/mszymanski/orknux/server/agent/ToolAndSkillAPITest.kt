@@ -57,6 +57,46 @@ class ToolAndSkillAPITest(
         assertThat(audit.findAll().map { it.message }).contains("Tool httpRequest created")
     }
 
+    /**
+     * A tool is written in TypeScript and stored with the JavaScript it compiled
+     * to, the way a function is — and the two are only ever written together.
+     */
+    @Test
+    fun `a tool is saved as both what runs and what was written`() {
+        val id = tool("shout")
+
+        graphQlTester.document(
+            """
+            mutation {
+              updateTool(id: $id, input: {
+                source: "export default function shout(input) { return input.toUpperCase(); }",
+                typescript: "export default function shout(input: string): string { return input.toUpperCase(); }"
+              }) { source typescript }
+            }
+            """,
+        ).execute()
+            .path("updateTool.source").entity(String::class.java)
+            .isEqualTo("export default function shout(input) { return input.toUpperCase(); }")
+            .path("updateTool.typescript").entity(String::class.java)
+            .isEqualTo("export default function shout(input: string): string { return input.toUpperCase(); }")
+    }
+
+    /** Half of it is refused: the editor and the sandbox would disagree. */
+    @Test
+    fun `a tool saved with one half of its code is refused`() {
+        val id = tool("shout")
+
+        graphQlTester.document(
+            """mutation { updateTool(id: $id, input: { source: "export default function shout() {}" }) { id } }""",
+        ).execute().errors().expect { it.message?.contains("TypeScript this JavaScript was compiled from") == true }
+            .verify()
+
+        graphQlTester.document(
+            """mutation { updateTool(id: $id, input: { typescript: "export default function shout(): void {}" }) { id } }""",
+        ).execute().errors().expect { it.message?.contains("JavaScript compiled from this TypeScript") == true }
+            .verify()
+    }
+
     @Test
     fun `a tool that does not parse is refused, and Validate says where`() {
         val id = tool("parseDocument")

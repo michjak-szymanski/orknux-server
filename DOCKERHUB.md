@@ -1,7 +1,8 @@
 # orknux-server
 
 Workspace-based agent orchestration: workflows drawn as a graph, run durably,
-with the agents, models, connections and credentials a workspace holds.
+with the agents, models, connections and credentials a workspace holds, and an
+issue tracker beside them that an assistant can work through over MCP.
 
 This image is the API and the engine. The interface people sign in to is
 [`orknux/orknux-ui`](https://hub.docker.com/r/orknux/orknux-ui), which talks
@@ -132,6 +133,13 @@ whoever holds an authority derived from its own name.
 Temporal is what makes a run durable — it survives a restart, retries a step,
 and can be looked at afterwards.
 
+What a trigger, a schedule or the API runs is the workflow **as it was
+published**, not as it is being edited. Publishing takes a copy; saving the
+editor changes the draft, and Run in the editor is the one thing that uses it. A
+workflow nobody has published has nothing to run and says so. Nothing to do on
+upgrade: a workflow that was already marked published takes that copy on its
+first run, which is the graph that was running a minute earlier.
+
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
 | `ORKNUX_TEMPORAL_ENABLED` | `false` runs a workflow on the calling thread, with no retries and no resumption — for a single-process installation with no Temporal. The tests do that; a deployment should not. | `true` | No |
@@ -175,16 +183,26 @@ files, no network and no threads. These bound what it can spend.
 | `ORKNUX_SLACK_RECONCILE_SECONDS` | How often open sockets are compared with stored connections, so a token pasted into the settings form starts listening without a restart. | `30` | No |
 | `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | How long a connection Slack refused is left alone. Changing the token clears the wait, so a corrected credential is not held back by it. | `300` | No |
 
-## Chat and attachments
+Sending mail is configured nowhere here. A mail server is a connection like any
+other, so the host, the port, the login, the address to send from and how the
+session is secured are typed into a workspace's connection form, and the
+password goes through the same encryption every other credential does.
+
+## Chat, attachments and the tracker
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
 | `ORKNUX_CHAT_ENABLED` | Whether this installation has a chat at all. `false` is final: an administrator can turn the chat off from the screen, but not back on where the operator has said no. | `true` | No |
-| `ORKNUX_ATTACHMENTS_ENABLED` | Whether a chat may carry files. `false` is final in the same way — the disk belongs to whoever runs this. | `true` | No |
-| `ORKNUX_ATTACHMENTS_LOCATION` | Where the bytes go, one directory per workspace. **Relative resolves against the working directory**, which is right on a laptop and wrong in a container: give an absolute path on a volume, or attachments land in a layer that goes when the container does. | `data/attachments` | **Yes** if attachments are on |
-| `ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB` | The largest file a chat will accept, refused with a sentence rather than a stack trace. | `25` | No |
+| `ORKNUX_ATTACHMENTS_ENABLED` | Whether files may be attached at all — to a chat message, to an issue, or to a comment on one. `false` is final in the same way, and it hides the upload controls and refuses the endpoint without hiding files already uploaded: switching uploads off is not the same as removing evidence. | `true` | No |
+| `ORKNUX_ATTACHMENTS_LOCATION` | Where the bytes go, one directory per workspace, whatever they were attached to. **Relative resolves against the working directory**, which is right on a laptop and wrong in a container: give an absolute path on a volume, or attachments land in a layer that goes when the container does. | `data/attachments` | **Yes** if attachments are on |
+| `ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB` | The largest file that will be accepted, refused with a sentence rather than a stack trace. | `25` | No |
 | `ORKNUX_UPLOAD_MAX_FILE_SIZE` | The servlet's own cap on one uploaded file. Keep it at or above the attachment cap, or the larger limit is never reached. | `25MB` | No |
 | `ORKNUX_UPLOAD_MAX_REQUEST_SIZE` | The cap on a whole upload request — a file plus what comes with it. | `26MB` | No |
+
+One switch and one directory for both, deliberately: the tracker's attachments
+are the chat's attachments, in the same store, under the same limit and the same
+rule about which pictures may be shown inline rather than downloaded. The
+workspace's own issue tracker needs nothing else configured here.
 
 ## Sessions, HTTP and logging
 

@@ -5,19 +5,17 @@ Notes for anyone — human or agent — changing this repository. See
 
 ## The name
 
-**Orknux**, pronounced *ZAV-rick*. It is a coined word rather than a
-derivation, so there is no etymology to tell — it was chosen for how it sounds
-and because it is genuinely unclaimed. Say it in full; it has no short form, in
-the way Anthropic and OpenAI have none.
+**Orknux**. It is a coined word rather than a derivation, so there is no
+etymology to tell — it was chosen for how it sounds and because it was
+unclaimed. Write it in full in prose, and capitalised: it is the product's name,
+not a command.
 
-Write the pronunciation down wherever the name is introduced. The initial X and
-the terminal Q each admit more than one reading — some will say *ksa-vrik* — and
-a line of documentation settles it, the way nginx has always said "engine-x".
-
-Checked before it was chosen: free on npm and GitHub, and no exact web hits. The
-nearest neighbour is **Xavor Corporation**, an AI-focused software firm sharing
-the first syllable. Not a collision, but the one name worth recognising if it
-ever comes up.
+**`orkx` is the short form, and it belongs to identifiers rather than to prose.**
+It is what appears where the full name would be long or where it has to be typed:
+the command line client, the access token prefix `orkx_`, and the envelope an
+encrypted column is kept in, `orkx1:`. A short form written into a stored value
+outlives the release that chose it, which is why there is exactly one and why
+nothing else should invent a second.
 
 The identifiers have not followed the name. The Kotlin package is still
 `io.mszymanski.orknux`, the Maven artifacts are still `orknux-*`, the config
@@ -31,10 +29,14 @@ rename them halfway.
 
 ```
 docker compose up -d                     # postgres, openldap and temporal
-./mvnw spring-boot:run -pl app           # http://localhost:8080
+./mvnw spring-boot:run -pl app -am       # http://localhost:8080
 ./mvnw test                              # every module
 ./mvnw test -Dtest=IntegrationAPITest    # one class
 ```
+
+`ORKNUX_SECRET_KEY` has to be set in the environment the server is started in.
+It is read on first use, so without it the application starts perfectly, reports
+itself healthy, and fails the first time anything reads or writes a credential.
 
 Three Maven modules: `app` (the deployable), `modules/connection` and
 `modules/execution`. Neither module may depend on `app`; where one needs
@@ -44,11 +46,12 @@ something the app owns it declares an interface — `WorkspaceDirectory`,
 `spring-boot:run` forks a JVM; stopping the Maven process can leave it holding
 port 8080. Kill the process whose command line contains `OrknuxServerKt`.
 
-**`-pl app` resolves the modules from the local repository, not the reactor.**
-After changing anything under `modules/`, `./mvnw install -DskipTests` first, or
-`spring-boot:run -pl app` and `test -pl app` compile against a stale jar and fail
-with unresolved references to code that is plainly there. A plain `./mvnw test`
-builds the whole reactor and does not have this problem.
+**`-am` is not optional.** `-pl app` on its own resolves the modules from the
+local repository rather than from the reactor, so after a change under `modules/`
+it compiles against a stale jar and fails with unresolved references to code that
+is plainly there in the source. `-am` builds them alongside; `./mvnw install
+-DskipTests` first is the other way out. A plain `./mvnw test` builds the whole
+reactor and does not have the problem.
 
 ## Stack quirks worth knowing
 
@@ -100,7 +103,11 @@ is reported to the module rather than cascaded.
   itself into a context it does not own.
 - **Credentials are read in one place.** `ConnectionTarget` resolves them for
   outbound calls; nothing else should touch a `secret` field. A Slack connection
-  also holds an `appToken`, which is what Socket Mode opens the websocket with.
+  also holds an `appToken`, which is what Socket Mode opens the websocket with,
+  and an SMTP connection's password is that same `secret` column — a second
+  password column would be a second one to remember to encrypt. Every one of them
+  goes through `SecretConverter`, so a new credential is a `@Convert` on the
+  entity and nothing else.
 - **What arrives is published, not called.** `modules/connection` opens the
   sockets and knows nothing of triggers, so `SlackListener` publishes an
   `IncomingEvent` and `IncomingTriggerListener` in `app` decides what runs. The
@@ -150,6 +157,33 @@ is reported to the module rather than cascaded.
   workflow; a `workflow_node` of kind `TRIGGER` carries `trigger_id`, and that
   instance is the wiring. An arriving event matches definitions first and finds
   their instances second — `IncomingTriggerListener` shows both halves.
+- **Saving is the draft; publishing is a copy.** The `workflow_node` and
+  `workflow_edge` rows are the draft an editor writes to. `publishWorkflow` writes
+  a snapshot of the runnable graph into `workflow_publication`, and that is what a
+  trigger, a schedule or the API runs — `ExecutionPlanner` asks for
+  `GraphVersion.DRAFT` only when the run was `MANUAL`. Anything that changes what
+  a graph does has to be part of the snapshot, or it will be edited and not run;
+  `WorkflowSnapshot` reads and writes it by hand rather than by reflection,
+  because a shape in a database outlives the class it came from.
+- **Access is decided in roles, not in the provider's vocabulary.** A directory
+  group or an OIDC claim is translated once, by `RoleResolver`, and everything
+  past the front door — who administers, who sees which workspace — deals only in
+  `Role`. Do not add a check that reads an authority string directly.
+- **A notification is written by the desk, never by the screen that caused it.**
+  `IssueNewsDesk` is where an event becomes news for somebody, so the bell and
+  `orknux_news` cannot disagree about what happened. Reading marks read, so a
+  reader that must not clear the count asks for `waiting`, not `unread`.
+- **An issue is addressed by its number.** `#4` is per workspace and is what a
+  URL, a tool call and a person all say; the row id is an implementation detail
+  that should not reach an API or a link.
+- **There is one attachment store.** Chat attachments and issue attachments share
+  `AttachmentStore`, `InstallationSettings` and the list of what may be served
+  inline. A second copy of the inline rule is how one of them ends up serving
+  something the other refuses.
+- **A tool the MCP endpoint offers is a tool an agent can be given.**
+  `OrknuxTools` is the one place that knows the `orknux_*` surface, and the scope
+  it is called with is what decides whether writing is offered. Adding a tool in
+  one place and not the other is two products.
 - Comments say why, not what. KDoc on public types and anything with a rule
   behind it.
 
@@ -169,10 +203,14 @@ the same process. Watch out for:
   the classpath goes through a manifest-only jar and Spring never finds
   `application.yml`. The suite also runs with `orknux.temporal.enabled=false`,
   so a run happens on the calling thread, `orknux.slack.enabled=false`, so no
-  test opens a websocket to Slack, `orknux.model.check.enabled=false`, so no
-  sweep calls a provider on a timer — `ModelAPITest` builds the monitor and calls
-  `sweep()` itself — and `db-scheduler.enabled=false`, so no clock fires while a
-  suite is running — `TriggerSchedulerTest` calls the tick itself.
+  test opens a websocket to Slack, `orknux.model.check.enabled=false` and
+  `orknux.connection.check.enabled=false`, so no sweep calls anything on a timer
+  — `ModelAPITest` builds the monitor and calls `sweep()` itself — and
+  `db-scheduler.enabled=false`, so no clock fires while a
+  suite is running — `TriggerSchedulerTest` calls the tick itself. It also sets a
+  fixed `orknux.security.secret-key`, because the suite stores credentials and
+  they are encrypted with it; a real key has no business in a build file, and the
+  test database is thrown away anyway.
 - **A test that waits must not really wait.** A parked step is waited out on the
   thread by the inline engine, so keep test waits to a second or two; the
   Temporal path is the one to test a long wait on, where

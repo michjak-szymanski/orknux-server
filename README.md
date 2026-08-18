@@ -6,21 +6,21 @@
 [![Docker](https://img.shields.io/docker/v/orknux/orknux-server?label=docker&sort=semver)](https://hub.docker.com/r/orknux/orknux-server)
 [![Image size](https://img.shields.io/docker/image-size/orknux/orknux-server/latest?label=image)](https://hub.docker.com/r/orknux/orknux-server)
 
-Orknux — pronounced *ZAV-rick* — is fully open source, workspace based, agent
-orchestration platform.
+Orknux is a fully open source, workspace based, agent orchestration platform.
 
-A Kotlin/Spring Boot GraphQL API over Postgres, with sign-in against LDAP. One
-deployable, built from modules that cannot reach into each other:
+A Kotlin/Spring Boot GraphQL API over Postgres, signed in against a directory or
+an OIDC provider. One deployable, built from modules that cannot reach into each
+other:
 
 ```
-orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, Teams
+orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, Teams, SMTP
                     └──▶ execution  ──▶ Temporal
 ```
 
 | module               | owns                                                         |
 |----------------------|--------------------------------------------------------------|
-| `app`                | Workspaces, workflow definitions, agents, sign-in, the audit log, and the GraphQL API the browser talks to |
-| `modules/connection` | Connections, MCP servers and every credential                 |
+| `app`                | Workspaces, workflow definitions, agents, sign-in, the issue tracker, the audit log, and the GraphQL API the browser talks to |
+| `modules/connection` | Connections, MCP servers, LLM providers, and every credential |
 | `modules/execution`  | Runs: the engine, the Temporal worker, and what each run did  |
 
 The modules are separate Maven artifacts, so the compiler enforces the boundary:
@@ -45,6 +45,14 @@ change in one of them is invisible until something installs it — and the build
 fails on a symbol that is plainly there in the source.
 Temporal's own UI is on http://localhost:8233, for looking at a run that went
 wrong.
+
+**`ORKNUX_SECRET_KEY` has to be in the environment it is started in** — 32 bytes,
+base64, from `openssl rand -base64 32`, and the same one every time or the
+credentials already stored cannot be read. There is deliberately no default. It
+is read on first use rather than at startup, so a server without it starts
+perfectly, reports itself healthy, and fails the first time anything reads or
+writes a credential; the Doctor page under Admin is what says so before somebody
+trips over it.
 
 ### The front end
 
@@ -119,42 +127,78 @@ to be running, LDAP still comes from compose.
 
 They run with `orknux.temporal.enabled=false`, so a workflow runs on the calling
 thread and no Temporal server is needed; the Temporal path has its own test,
-which brings up an in-process environment. `orknux.model.check.enabled=false`
-keeps the provider sweep from calling anything while a suite runs.
+which brings up an in-process environment. `orknux.model.check.enabled=false` and
+`orknux.connection.check.enabled=false` keep the sweeps from calling anything
+while a suite runs, and a fixed `orknux.security.secret-key` is set in the build
+so the credentials a test stores can be read back — the test database is thrown
+away, and a real key has no business in a build file.
 
 ## How it is put together
 
 | package in `app` | what lives there                                                      |
 |------------------|------------------------------------------------------------------------|
-| `security`       | Session endpoint, workspace visibility, the configurable admin role         |
+| `security`       | Session endpoint, roles, workspace visibility, and the OIDC configuration |
 | `ldap`           | Bind authentication and the group-to-authority mapping                 |
+| `user`           | Everybody this installation knows, internal and external, their passwords and their access tokens |
 | `workspace`           | Workspaces and the audit log every other package writes to                  |
-| `workflow`       | Workflow definitions, the editable graph, and the API over runs        |
+| `workflow`       | Workflow definitions, the editable graph, the published snapshot, and the API over runs |
 | `agent`          | Agents, the MCP servers they may use, the tools they may call and the skills that guide them |
 | `integration`    | The integration API over the connection module                         |
 | `trigger`        | The trigger catalogue, the listener, and the clock that fires the scheduled ones |
 | `action`         | The action catalogue, the workspace's JavaScript functions, and the runtime for an action node |
 | `condition`      | The condition catalogue, what decides one, and the condition node |
+| `obj`            | The shapes a workspace's workflows pass around, and the node that makes one |
+| `variable`       | The workspace's own values and secrets, and how a function is handed them |
 | `chat`           | Chats, and the Spring AI conversation each one is |
+| `attachment`     | Files a chat or an issue carries, where the bytes go, and the installation switches over both |
+| `issue`          | The workspace's issue tracker: issues, comments, mentions, and the feed a bell and an assistant read |
+| `memory`         | Memory catalogs, the notes in them, and the tool an agent reads them through |
 | `model`          | The API over the workspace's LLM providers, the models reached through them, and what they were used for |
+| `mcp`            | The MCP endpoint this server serves, and the tools an outside assistant calls through it |
+| `plugin`         | Plugins loaded into the installation, and the functions they declare |
 | `monitoring`     | The health of the service and everything it needs to be up             |
+| `admin`          | The Doctor: whether this installation is configured correctly, which is not the same question as whether it is up |
 
 The GraphQL schema is `app/src/main/resources/graphql/schema.graphqls`;
 controllers are `@Controller` classes with `@QueryMapping` / `@MutationMapping`.
 
 ### Access
 
-`orknux.security.admin-role` (default `ROLE_ADMINS`) names the role that sees the
-Admin section and every workspace. Everyone else sees a workspace only if they
-belong to the directory group named on it: `cn=backend,ou=groups,…` grants
-`ROLE_BACKEND`, and `WorkspaceAccess` checks that on every read and write. A workspace with
-no group is administrators-only. Group lookup needs
-`orknux.ldap.group-search-base` to point at the OU holding those groups.
+A **role** is this installation's own word for an audience, and it is the only
+vocabulary anything past the front door deals in. A role has a scope: `ADMIN`
+sees the Admin section and every workspace, `USER` sees the workspaces the role
+is assigned to. A workspace names the roles that open it, and `WorkspaceAccess`
+checks them on every read and write; a workspace naming none is
+administrators-only, which is the safe direction to fail in.
+
+What the identity provider calls things is translated once, by `RoleResolver`.
+`orknux.security.role-mapping` maps a group DN or an OIDC claim value onto a
+role by name, and a role is also granted to whoever holds the authority derived
+from its own name — a role called `Backend` to anyone holding `ROLE_BACKEND` —
+so an installation that was using directory groups keeps working with nothing
+written. `orknux.security.admin-role` (default `ROLE_ADMINS`) still administers
+on its own. Group lookup under LDAP needs `orknux.ldap.group-search-base` to
+point at the OU holding the groups.
+
+`orknux.security.auth-method` picks `LDAP` or `OIDC`, one at a time. Beside
+either there are **internal users**: identities this installation made up, which
+may be given a password and may mint access tokens. A token is 32 random bytes
+behind an `orkx_` prefix, kept only as a SHA-256 hash, presented as
+`Authorization: Bearer orkx_…`, and it creates no session. That is how something
+that is not a browser — the CLI, or an assistant calling the MCP endpoint — signs
+in. `POST /api/session` tries an internal password first, so those accounts work
+on an OIDC installation too.
+
+Everybody who signs in is recorded: `UserDetection` writes an `EXTERNAL` row the
+first time somebody arrives, which is what makes an issue assignable to a person
+without the application enumerating a directory it was never given permission to
+read.
 
 ### Audit
 
-`WorkspaceAuditRecorder` writes one row per change, attributed to the LDAP uid of the
-caller. Entries carry a category (`WORKSPACE`, `WORKFLOW`, `AGENT`, `INTEGRATION`, `MODEL`) and
+`WorkspaceAuditRecorder` writes one row per change, attributed to the username of the
+caller. Entries carry a category (`WORKSPACE`, `WORKFLOW`, `AGENT`, `INTEGRATION`,
+`MODEL`, `MEMORY`, `OBJECT`, `CHAT`) and
 a message ready to display. An entry with no workspace is an admin-level change
 and only appears in the admin audit log.
 
@@ -162,7 +206,7 @@ and only appears in the admin audit log.
 
 A controller in `app` checks access, calls the module, and records the audit
 entry — in that order. The modules hold no notion of a user and never check one:
-they cannot, and the check belongs where the directory groups are.
+they cannot, and the check belongs where the roles are.
 
 Their tables are their own. `workspace_connection.workspace_id` has no foreign key to
 `workspace`, because that table belongs to another module, so a deleted workspace is
@@ -189,8 +233,22 @@ POST-only MCP server or webhook says to a HEAD. Only something listening there
 can refuse that way, so it counts as reachable and the message says exactly that
 instead of calling it success.
 
-Secrets are stored as plain columns. They want envelope encryption or an external
-secret store before this runs anywhere but a development machine.
+**A mail server is a connection too.** A connection of type **SMTP** carries a
+host, a port, a login, the address to send from and how the session is secured,
+and its password is the `secret` column every other credential already lives in —
+a second password column would be a second one to remember to encrypt. Its check
+is not a HEAD request, because that answers nothing about a mail server: it opens
+a real SMTP conversation, negotiates, authenticates and closes.
+
+Secrets are encrypted at rest with AES-256-GCM, keyed by
+`orknux.security.secret-key` — 32 bytes, base64, and deliberately without a
+default. `SecretConverter` puts every credential column through it on the way in
+and out, and a stored value is recognisable by its envelope, `orkx1:iv:ciphertext`.
+The key comes from the environment, so this defends a backup, a disk or a replica
+and not somebody who can already read the application's own environment. Losing
+it makes every stored credential unreadable; the Doctor page under Admin is where
+to find out whether the key is set, the right length, and able to read what is
+already there.
 
 ### Chat
 
@@ -253,6 +311,14 @@ They are built in rather than being workspace tools because a workspace tool is
 JavaScript in a sandbox with no IO — it cannot read a table, and widening the
 sandbox so it could would be a hole opened for one feature.
 
+Two more sources join them. An agent granted **access to orknux** is offered the
+same `orknux_*` tools the MCP endpoint serves, scoped to its own workspace and no
+wider: the grant is the authorisation, and there is no session here to ask about
+anything else. And whatever the **MCP servers** it was granted say they offer,
+asked of each server as the tools are assembled rather than read from a list
+written down when somebody added it — a server that cannot be listed contributes
+nothing rather than failing the conversation.
+
 **The workspace's own tools are offered alongside them, under their own names.**
 That is the opposite case: a tool *is* the workspace's code, and the sandbox is
 where it belongs, so `ScriptRunner` runs it with the same limits as everything
@@ -290,6 +356,56 @@ Streaming is why `send` is split into `beginSend` and `finishSend`. The user's
 turn is written before the model is called, the answer when it ends, and nothing
 holds a database transaction open for the minutes in between — a transaction
 open that long is a pooled connection nobody else can have.
+
+### The tracker
+
+Every workspace has an issue tracker. An issue has a **number** of its own within
+its workspace — `#4` is what people say and what the URL carries, not a row id —
+a title, a description in markdown, a status (`OPEN`, `IN_PROGRESS`, `CLOSED`),
+free-text labels, and an assignee. What can be assigned is a person, an **agent**
+or a **model**, because half the work here is done by something that is not a
+person. There is no priority column: `p1` is a label, which is what stops one
+workspace's idea of urgent from being fixed in the schema.
+
+Comments are markdown, editable only by whoever wrote one — administrators
+included — and they carry the time they were edited. Files attach to an issue or
+to a comment, through the same store, the same switch and the same size limit as
+a chat's attachments; only whoever attached a file may take it off. Turning
+attachments off hides the controls and refuses the endpoint but leaves what is
+already there readable, because switching uploads off is not the same as removing
+evidence.
+
+**Being told, rather than having to look.** `IssueNewsDesk` writes one row per
+thing that happened — `ASSIGNED`, `STATUS`, `COMMENT`, `MENTIONED` — addressed to
+whoever it concerns: an assignment tells the new assignee, a status change or a
+comment tells the assignee and the reporter, and a name written into a comment
+tells that person whether or not they had anything to do with the issue. Mentions
+are matched against the names that exist, longest first, so `@Ann` does not match
+inside `@Anna`.
+
+Reading marks read, which is right for an assistant asking what it has missed and
+wrong for a bell — the number would clear itself the moment it was drawn. So
+there are two ways in: `myNotifications` looks without saying it looked, and
+`readMyNotifications` is what says they have been seen.
+
+### The MCP endpoint
+
+This server is itself an MCP server: `POST /mcp/{workspaceId}`, JSON-RPC 2.0 over
+plain HTTP, one endpoint per workspace so the workspace is in the URL rather than
+in every call. There is no separate door — a caller authenticates the way
+everything else does, with a session cookie or an `orkx_` token as a bearer, and
+then `WorkspaceAccess` decides. A workspace that is missing or invisible is
+answered inside the protocol rather than as an HTTP status, because a model
+reading a transport error learns nothing from it.
+
+The tools are `orknux_*`, and they are what lets an assistant work the tracker
+rather than be told about it: list and read issues and their labels, comment, set
+a status, change a title or its labels; list workflows, agents and functions, read
+one run in full, start a workflow or run a past one again. `orknux_news` is the
+same feed the bell reads — what has happened on the issues that concern you since
+you last read — and it can be asked to hold the call open for up to five minutes
+rather than be polled. Which tools are offered depends on the scope: reading is
+always there, writing is offered where the caller may write.
 
 ### Tools and skills
 
@@ -387,10 +503,12 @@ A **model** hangs off a provider and carries what a person calls it against what
 the API is given — "Claude 3.5 Sonnet" against `claude-3-5-sonnet-20241022` —
 plus the workspace's own quotas: a token limit, how often it resets, and a rate.
 
-Usage is a sum over `model_usage_day`, one row per model per day. **Nothing
-writes to it yet**, because no runtime calls a model, so a model reports that its
-window is empty rather than a grid of zeros — the same rule an action with no
-runtime follows. Cost is worked out from the prices recorded on the model, and is
+Usage is a sum over `model_usage_day`, one row per model per day, and every
+answered call adds itself: `ModelChatClient` hands the tokens and the latency the
+provider reported to `ModelUsageRecorder`, which writes in its own transaction —
+a chat that answered should not be rolled back because a counter could not be
+written. A model nothing has called reports that its window is empty rather than
+a grid of zeros. Cost is worked out from the prices recorded on the model, and is
 absent when they are not.
 
 ### Agents in a workflow
@@ -417,10 +535,10 @@ follows.
 ### Actions and functions
 
 An **action** is a reusable block a workflow is built from, defined once in the
-workspace's catalogue: send something through a connection, call an HTTP endpoint,
-call one of the workspace's functions, or wait — for a condition, or for a time. A
-workflow uses one by pointing an **action node** at it, the same arrangement as
-triggers.
+workspace's catalogue: send something through a connection, send a mail, call an
+HTTP endpoint, call one of the workspace's functions, or wait — for a condition,
+or for a time. A workflow uses one by pointing an **action node** at it, the same
+arrangement as triggers.
 
 What an action needs and what it produces are not stored. They are read off its
 settings, so a `{{input.name}}` typed into the content is an input the moment it
@@ -440,9 +558,14 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 Everything crossing the boundary is JSON text; nothing the script touches is a
 live Java object. `ScriptRunnerTest` is where those are held.
 
-Only the function and wait actions have a runtime today. An outgoing connection
-or an HTTP request records that it was not performed rather than claiming it
-was.
+Every subtype runs. A send goes out through its connection, a mail leaves through
+its SMTP server, an HTTP request is made, a function is called, a wait parks. What
+is missing is reported rather than invented: a node with nobody to send to, or a
+mail with no subject and no body, is a **skipped** step saying why, because a
+graph is drawn before it is finished. What was refused is a failure, and mail
+tells the two kinds apart — a rejected login or an address the server will not
+accept is permanent and stops the run, while a timeout or an unreachable server
+is worth another attempt.
 
 What a node **passes** to its action, though, belongs to the node. Selecting an
 action node in the editor lists exactly the parameters that action takes, each
@@ -488,18 +611,41 @@ its payload's fields plus what fired it, an action's ports are read off its
 settings, a condition needs whatever it asks about, and a wait or a condition
 hands on what it was given as well.
 
-Two shapes are refused when saving, because they could never run: something
-feeding a trigger, and something following a publish task. Everything else comes
+Two things are refused when saving. Something feeding a trigger, because a
+trigger is where a run starts. And two nodes claiming one output name, because a
+run carries what every step produced under the name its node gave it: the later
+one would quietly win and every reference to the first would read the wrong
+value — a workflow that runs, finishes, and is wrong. Everything else comes
 back as advice on the graph — a node needing what nothing produces, a node with
 nothing before it, a node with nothing chosen — because a workflow is drawn
 before it is finished, and the editor lists them beside the canvas.
+
+**Which way a node faces is the node's own.** `orientation` is
+`LEFT_TO_RIGHT`, `TOP_TO_BOTTOM`, `RIGHT_TO_LEFT` or `BOTTOM_TO_TOP`, and it
+decides which side the input and output sit on — named for where the work goes,
+because that is what somebody means. Null is the way it always was, so every node
+drawn before this keeps its shape. It is per node rather than per workflow: a
+chain that runs across the top and then turns down the side is what somebody
+draws when they have room, and one direction for the whole graph would trade one
+constraint for another.
 
 ### Conditions
 
 A condition is a question a workspace asks about what a run is carrying, defined once
 and used from three places: a wait that holds until it holds, an action that
-waits on it, and a **condition node**, which stops the run when the answer is no.
-Stopping is not failing — the workflow asked and acted on the answer — so the run
+waits on it, and a **condition node**.
+
+A condition node has two ways out. Draw an edge on the Yes side and an edge on
+the No side and the run follows the one the answer chose, so an alternative path
+is a branch rather than a second workflow; the two ways out can be labelled, and
+"Escalate" and "File it" are what make a graph readable at a glance. `BranchGate`
+is what does it — an edge with no branch is followed whatever the answer, which
+is every edge drawn before branches existed.
+
+**A condition nobody has branched stops the run instead**, which is what one
+always did: where every edge leaving it is a plain one, a No ends the run rather
+than deciding a direction. Stopping is not failing — the workflow asked and acted
+on the answer — so the run
 finishes completed, with where and why recorded on the run itself
 (`stopped_at_node_key`, `stopped_reason`). Otherwise it would be indistinguishable
 from a run that did everything: the executions list marks it **Stopped early**,
@@ -517,10 +663,47 @@ What a condition means in words is not stored. The list's description and the
 sentence under the builder are read off the definition, so they cannot drift
 from what will actually be asked.
 
+### Publishing
+
+**Publishing takes a copy, and the copy is what runs.** Until it did, Publish set
+a word on a screen and nothing read it: a trigger fired every workflow that had a
+node instancing it and the runner read the rows as they stood, so an event
+arriving while somebody was halfway through drawing ran the half-drawn graph. The
+badge said Draft and the graph ran anyway, which was the honest answer to "what
+is the difference between Save and Publish" — there was none.
+
+So the editable rows are the **draft**, and `publishWorkflow` writes a snapshot
+of the runnable graph into `workflow_publication`, one row per workflow. A
+trigger, a schedule or the API runs that snapshot; a person pressing **Run** gets
+the draft, because they mean the graph on their screen. Which one is used is read
+off what started the run — `ExecutionPlanner` asks for `GraphVersion.DRAFT` only
+for `MANUAL` — rather than from a setting somebody has to remember. Editing and
+saving change the draft alone, which is what makes it safe to leave a graph
+half-finished overnight, and an edit after publishing does not change what an
+event runs until somebody publishes again. Saving does put the status back to
+`DRAFT`, which is the badge somebody reads — the snapshot goes on being what
+runs, so the badge is saying "what you are looking at is not what is live", which
+is exactly the thing worth knowing.
+
+A workflow nobody has published has nothing to run and says so in its own
+exception, `WorkflowNotPublishedException`, rather than as "not found": one is a
+wrong id and the other is a graph that exists and is not ready, and somebody
+whose trigger did nothing needs to know which. The one case that is not refused
+is a workflow that was already marked published when this arrived — it has no
+snapshot, and refusing it would take a working installation down on upgrade, so
+its first run takes the copy publishing would have taken, which is what was
+running a minute earlier.
+
+The snapshot holds the graph as the execution module reads it — nodes, their
+bindings, the edges and their branches — rather than a second set of tables
+shadowing the first, and it is written and read by hand rather than by
+reflection: a shape stored in a database outlives the class it came from.
+
 ### Triggers
 
 The Triggers screen is a workspace's **catalogue**: each entry describes an event —
-one arriving on a connection, or a cron expression — and names no workflow. A
+one arriving on a connection, a cron expression, or a URL this installation
+answers on — and names no workflow. A
 workflow picks one up in the editor, by pointing a trigger node at a definition;
 that node is the **instance**, and it is what wires the event to that workflow.
 One definition can be instanced by several workflows, and an entry nobody
@@ -532,11 +715,24 @@ nothing but the cron expression and a function called from it has nothing to
 work on. An incoming trigger puts its payload underneath what arrived, so the
 event wins where both name a field.
 
-Both kinds run. An incoming one fires when its event arrives; a scheduled one
+All three run. An incoming one fires when its event arrives; a scheduled one
 fires on its cron expression, in its timezone, from a db-scheduler task that
-ticks once a minute — which is what makes a schedule survive a restart and fire
-once however many instances are up. The workflows list shows both ends of that:
+ticks once a minute — which is what makes a schedule survive a restart, fire
+once however many instances are up, and be unable to mean anything smaller than a
+minute. The workflows list shows both ends of that:
 when each workflow last ran, and when the clock will start it next.
+
+A **webhook** trigger answers at `/api/webhooks/<path>`, which is how something
+with no connection and no clock starts a workflow — a build finishing, a form
+being submitted, another product's own webhook. Its caller is the open internet,
+so a path nothing listens on, a trigger that has been turned off and a body that
+is not the shape the trigger promises all answer 404 alike: telling them apart
+would tell whoever is probing that something is there and what it expects. A
+caller who fails to prove who they are gets 401 instead, and that is written into
+the trigger's history — a webhook whose caller has the wrong secret otherwise
+looks exactly like a webhook nobody is calling. Proving it is either nothing at
+all or one of the workspace's functions, handed the request and believed, which
+is how a signature is checked against a secret nobody has to paste into a graph.
 
 Slack arrives over **Socket Mode**, a websocket orknux dials out on, so a
 self-hosted installation needs no public URL and no inbound rule. Add a

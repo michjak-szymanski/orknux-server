@@ -33,6 +33,18 @@ import java.time.format.DateTimeFormatter
  * resolved to a name on the way out, so a rename reads correctly afterwards
  * and a deletion reads as "no longer here" rather than as a dangling id.
  */
+/**
+ * What a list of issues is ordered by.
+ *
+ * Three, because they are the three questions somebody actually asks of a
+ * tracker: what is newest, what is this thing called, and what is moving.
+ */
+enum class IssueOrder {
+    NUMBER,
+    TITLE,
+    UPDATED,
+}
+
 @Controller
 class IssueAPI(
     private val issues: IssueRepository,
@@ -58,10 +70,35 @@ class IssueAPI(
         @Argument search: String?,
         @Argument page: Int?,
         @Argument size: Int?,
+        @Argument order: IssueOrder?,
+        @Argument ascending: Boolean?,
     ): IssuePageView {
         requireWorkspaceAccess(workspaceId)
-        // Newest first: an issue tracker is read from the top.
-        val asked = PageRequest.of(page ?: 0, (size ?: 20).coerceIn(1, 100), Sort.by("number").descending())
+        /*
+         * Newest first by default: an issue tracker is read from the top.
+         *
+         * Sorted on the server rather than in the page, because the page holds
+         * twenty rows of a hundred and sorting those twenty would order the
+         * page rather than the tracker - which looks like it worked until the
+         * row somebody wanted turns out to be on page three.
+         */
+        val by = when (order ?: IssueOrder.NUMBER) {
+            IssueOrder.NUMBER -> "number"
+            IssueOrder.TITLE -> "title"
+            IssueOrder.UPDATED -> "lastModifiedAt"
+        }
+        val direction = if (ascending == true) Sort.Direction.ASC else Sort.Direction.DESC
+        /*
+         * Case is ignored for the title and nowhere else. By the words rather
+         * than by their case is what somebody means by "sort by name", and
+         * Postgres would otherwise put every capital first - but asking it to
+         * lower() a number or a timestamp is a function that does not exist,
+         * and the query fails rather than sorting badly.
+         */
+        val sorted = Sort.by(
+            Sort.Order(direction, by).let { if (by == "title") it.ignoreCase() else it },
+        )
+        val asked = PageRequest.of(page ?: 0, (size ?: 20).coerceIn(1, 100), sorted)
         val wanted = search?.trim().orEmpty()
         val found = if (status == null) {
             issues.search(workspaceId, wanted, asked)

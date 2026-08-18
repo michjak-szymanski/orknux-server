@@ -21,9 +21,17 @@ import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import java.time.OffsetDateTime
 
-/** Where an issue is in its life. Two states; a third would need a reason. */
+/**
+ * Where an issue is in its life.
+ *
+ * The third one earns its place: "open" covers both nobody having looked at it
+ * and somebody being halfway through, and those are the two things a person
+ * scanning the list most needs told apart. Anything past three would be a
+ * workflow this tracker does not have.
+ */
 enum class IssueStatus {
     OPEN,
+    IN_PROGRESS,
     CLOSED,
 }
 
@@ -157,6 +165,12 @@ interface IssueRepository : JpaRepository<Issue, Long> {
      * field they meant is asking them to know the schema. An empty search
      * matches everything, which is what makes this one query rather than two.
      *
+     * The labels are asked about with `exists` rather than joined. A join
+     * multiplies an issue by its labels and needs `distinct` to undo it, and
+     * Postgres will not order a distinct select by an expression that is not in
+     * the select list - so `order by lower(title)` failed outright the moment
+     * sorting by name was offered.
+     *
      * The search is never null. Postgres cannot type a null parameter inside
      * `lower()` - it guesses bytea and refuses the function - so "no filter" is
      * the empty string rather than a null. Status is the same story told the
@@ -165,25 +179,29 @@ interface IssueRepository : JpaRepository<Issue, Long> {
      */
     @Query(
         """
-        select distinct i from Issue i
-        left join i.labels l
+        select i from Issue i
         where i.workspaceId = :workspaceId
           and (
             :search = ''
             or lower(i.title) like lower(concat('%', :search, '%'))
             or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or lower(coalesce(l, '')) like lower(concat('%', :search, '%'))
+            or exists (
+              select 1 from Issue held join held.labels l
+              where held = i and lower(l) like lower(concat('%', :search, '%'))
+            )
           )
         """,
         countQuery = """
-        select count(distinct i) from Issue i
-        left join i.labels l
+        select count(i) from Issue i
         where i.workspaceId = :workspaceId
           and (
             :search = ''
             or lower(i.title) like lower(concat('%', :search, '%'))
             or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or lower(coalesce(l, '')) like lower(concat('%', :search, '%'))
+            or exists (
+              select 1 from Issue held join held.labels l
+              where held = i and lower(l) like lower(concat('%', :search, '%'))
+            )
           )
         """,
     )
@@ -191,27 +209,31 @@ interface IssueRepository : JpaRepository<Issue, Long> {
 
     @Query(
         """
-        select distinct i from Issue i
-        left join i.labels l
+        select i from Issue i
         where i.workspaceId = :workspaceId
           and i.status = :status
           and (
             :search = ''
             or lower(i.title) like lower(concat('%', :search, '%'))
             or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or lower(coalesce(l, '')) like lower(concat('%', :search, '%'))
+            or exists (
+              select 1 from Issue held join held.labels l
+              where held = i and lower(l) like lower(concat('%', :search, '%'))
+            )
           )
         """,
         countQuery = """
-        select count(distinct i) from Issue i
-        left join i.labels l
+        select count(i) from Issue i
         where i.workspaceId = :workspaceId
           and i.status = :status
           and (
             :search = ''
             or lower(i.title) like lower(concat('%', :search, '%'))
             or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or lower(coalesce(l, '')) like lower(concat('%', :search, '%'))
+            or exists (
+              select 1 from Issue held join held.labels l
+              where held = i and lower(l) like lower(concat('%', :search, '%'))
+            )
           )
         """,
     )

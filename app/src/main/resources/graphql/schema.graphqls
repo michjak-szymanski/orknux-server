@@ -15,7 +15,17 @@ type Query {
     userTokens(id: ID!): [UserToken!]!
     user(id: ID!): AppUser
     "One workspace's issues, newest first."
-    workspaceIssues(workspaceId: ID!, status: IssueStatus, search: String, page: Int, size: Int): IssuePage!
+    workspaceIssues(
+        workspaceId: ID!,
+        status: IssueStatus,
+        search: String,
+        page: Int,
+        size: Int,
+        "Newest first when absent."
+        order: IssueOrder,
+        "Descending when absent."
+        ascending: Boolean
+    ): IssuePage!
     "One issue, by the number people say - not by its row id."
     workspaceIssue(workspaceId: ID!, number: Int!): Issue
     "Every label in use in this workspace, so a filter can offer what exists."
@@ -2317,7 +2327,19 @@ type RoleRef {
 
 enum IssueStatus {
     OPEN
+    "Somebody has picked it up. Open means nobody has yet."
+    IN_PROGRESS
     CLOSED
+}
+
+"What a list of issues is ordered by."
+enum IssueOrder {
+    "By number, which is the order they were filed in."
+    NUMBER
+    "By title, so a name can be found without reading every row."
+    TITLE
+    "By when it last changed, which is what \"what is happening\" means."
+    UPDATED
 }
 
 "What kind of thing an issue is assigned to."

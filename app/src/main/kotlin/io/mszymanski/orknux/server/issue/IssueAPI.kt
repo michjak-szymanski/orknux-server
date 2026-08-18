@@ -42,6 +42,7 @@ class IssueAPI(
     private val models: ModelService,
     private val audit: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
+    private val newsDesk: IssueNewsDesk,
 ) {
 
     /*
@@ -142,6 +143,7 @@ class IssueAPI(
             ),
         )
         audit.record(workspaceId, WorkspaceAuditCategory.WORKSPACE, "Issue #${made.number} \"$title\" opened")
+        newsDesk.assigned(made, currentUser())
         return describe(made)
     }
 
@@ -159,6 +161,7 @@ class IssueAPI(
         // written; an absent one is a field they did not touch.
         input.description?.let { held.description = it.trim().takeIf { text -> text.isNotEmpty() } }
         input.labels?.let { held.labels = cleanLabels(it) }
+        var statusChanged = false
         input.status?.let { wanted ->
             if (wanted != held.status) {
                 audit.record(
@@ -166,15 +169,28 @@ class IssueAPI(
                     WorkspaceAuditCategory.WORKSPACE,
                     "Issue #${held.number} ${if (wanted == IssueStatus.CLOSED) "closed" else "reopened"}",
                 )
+                statusChanged = true
             }
             held.status = wanted
         }
+        /*
+         * Handed to somebody else is news to the somebody else, and only if it
+         * is somebody else: saving the page without touching the assignee sends
+         * the same one back, and a notification for that would train whoever
+         * gets it to stop reading them.
+         */
+        val before = held.assignee?.let { it.kind to it.id }
         if (input.assigneeKind != null || input.assigneeId != null) {
             held.assignee = assigneeFrom(held.workspaceId, input)
         }
+        val handedOver = held.assignee?.let { it.kind to it.id } != before
+
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
-        return describe(issues.save(held))
+        val saved = issues.save(held)
+        if (handedOver) newsDesk.assigned(saved, currentUser())
+        if (statusChanged) newsDesk.statusChanged(saved, currentUser())
+        return describe(saved)
     }
 
     /**
@@ -225,7 +241,9 @@ class IssueAPI(
         held.comments.add(IssueComment(author = currentUser(), content = said))
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
-        return describe(issues.save(held))
+        val saved = issues.save(held)
+        newsDesk.commented(saved, currentUser(), said)
+        return describe(saved)
     }
 
     /**

@@ -106,6 +106,7 @@ class OrknuxTools(
     private val agents: AgentRepository,
     private val functions: WorkflowFunctionRepository,
     private val issueTools: IssueTools,
+    private val newsTools: NewsTools,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
 ) {
@@ -250,6 +251,36 @@ class OrknuxTools(
             )
         }
 
+        /*
+         * The one tool that can take its time.
+         *
+         * Everything else here answers a question; this one waits for the
+         * answer to arrive. `wait` is what makes the tracker work in both
+         * directions - without it somebody has to say "I replied on #6" by
+         * hand, which is the message the tracker was supposed to replace.
+         */
+        add(
+            ToolSpec(
+                name = "orknux_news",
+                description =
+                    "What has happened on the issues that concern you - assigned to you, closed, reopened or " +
+                        "commented on - since you last read. Reading marks it read. Set `wait` to hold the " +
+                        "call open until something happens: this is how you find out without being told.",
+                parameters = listOf(
+                    ToolParameterSpec(
+                        "wait",
+                        "Seconds to wait if there is nothing yet, up to 300. Absent or 0 answers straight away.",
+                        required = false,
+                    ),
+                    ToolParameterSpec(
+                        "as",
+                        "An agent's name, to read what it has been sent instead of your own news.",
+                        required = false,
+                    ),
+                ),
+            ),
+        )
+
         add(
             ToolSpec(
                 name = "orknux_functions",
@@ -365,6 +396,7 @@ class OrknuxTools(
              * transaction around them - and a transaction cannot be
              * started by one private method calling another in here.
              */
+            "orknux_news" -> newsTools.news(scope, arguments)
             "orknux_issues" -> issueTools.list(scope, arguments)
             "orknux_issue" -> issueTools.one(scope, arguments)
             "orknux_comment_on_issue" -> issueTools.comment(scope, arguments)

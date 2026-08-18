@@ -5,6 +5,7 @@ import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.Issue
 import io.mszymanski.orknux.server.issue.IssueComment
+import io.mszymanski.orknux.server.issue.IssueNewsDesk
 import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.security.WebProperties
@@ -35,6 +36,7 @@ class IssueTools(
     private val issues: IssueRepository,
     private val users: AppUserRepository,
     private val agents: AgentRepository,
+    private val newsDesk: IssueNewsDesk,
     private val models: ModelService,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
@@ -145,6 +147,7 @@ class IssueTools(
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)
+        newsDesk.commented(held, currentUser(), said.trim())
         return mapper.writeValueAsString(
             mapOf("said" to true, "issue" to held.number, "url" to issueLink(scope.workspaceId, held.number)),
         )
@@ -158,10 +161,12 @@ class IssueTools(
         val wanted = IssueStatus.entries.firstOrNull { it.name.equals(asked, ignoreCase = true) }
             ?: return refuse("There is no issue status called $asked")
 
+        val moved = held.status != wanted
         held.status = wanted
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)
+        if (moved) newsDesk.statusChanged(held, currentUser())
         return mapper.writeValueAsString(mapOf("issue" to held.number, "status" to wanted))
     }
 

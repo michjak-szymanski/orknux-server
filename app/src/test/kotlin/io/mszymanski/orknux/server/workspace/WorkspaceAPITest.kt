@@ -261,6 +261,60 @@ class WorkspaceAPITest(
         assertThat(repository.findAll().single().roles).isEmpty()
     }
 
+    /**
+     * A workspace goes even when one of its workflows points at one of its
+     * agents.
+     *
+     * Deleting a workspace cascades to its agents, and `workflow_node.agent_id`
+     * used to refuse that — so a workspace holding a single graph with an LLM
+     * Agent node in it could not be deleted at all, and the API answered
+     * INTERNAL_ERROR while the administration page promised the opposite. Every
+     * other reference a node holds already released it this way.
+     */
+    @Test
+    fun `deletes a workspace whose graph still points at one of its agents`() {
+        val workspaceId = graphQlTester.document(
+            """mutation { createWorkspace(input: { name: "backend" }) { id } }""",
+        ).execute().path("createWorkspace.id").entity(Long::class.java).get()
+
+        val agentId = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Responder", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        val workflowId = graphQlTester.document(
+            """mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "Answering" }) { workflowId } }""",
+        ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{ key: "ask", kind: AGENT, name: "Responder", agentId: $agentId, x: 0, y: 0 }],
+                edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].key").entity(String::class.java).isEqualTo("ask")
+
+        // Published, which is the state that mattered: publishing keeps a copy of
+        // the graph, and those nodes point at the agent too.
+        graphQlTester.document(
+            """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflowId) { status } }""",
+        ).execute().path("publishWorkflow.status").entity(String::class.java).isEqualTo("PUBLISHED")
+
+        // And run once. A run keeps the workflow alive past the cascade, so its
+        // nodes — and their reference to the agent — are still there when the
+        // agents go.
+        graphQlTester.document(
+            """mutation { startExecution(workspaceId: $workspaceId, workflowId: $workflowId) { id } }""",
+        ).execute()
+
+        graphQlTester.document("""mutation { deleteWorkspace(id: $workspaceId) }""")
+            .execute().path("deleteWorkspace").entity(Boolean::class.java).isEqualTo(true)
+
+        assertThat(repository.findAll()).isEmpty()
+    }
+
     @Test
     fun `deletes a workspace and reports whether it existed`() {
         val workspace = repository.save(Workspace(name = "platform"))

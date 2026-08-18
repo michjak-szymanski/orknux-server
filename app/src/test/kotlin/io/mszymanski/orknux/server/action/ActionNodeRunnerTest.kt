@@ -96,6 +96,7 @@ class ActionNodeRunnerTest(
         val functionId = function(
             "transformPayload",
             """export default function transformPayload(input) { throw new Error("bad payload"); }""",
+            params = """[{ name: "input", type: MAP }]""",
         )
         graph(functionAction(functionId, "Transform Data"))
 
@@ -189,6 +190,7 @@ class ActionNodeRunnerTest(
         val functionId = function(
             "echo",
             """export default function echo(input) { return { seen: true }; }""",
+            params = """[{ name: "input", type: MAP }]""",
         )
         val actionId = functionAction(functionId, "After the gate")
         graphQlTester.document(
@@ -223,7 +225,7 @@ class ActionNodeRunnerTest(
     }
 
     @Test
-    fun `an action with no runtime yet says so rather than claiming it sent anything`() {
+    fun `a send with nobody to send to is skipped, and says which node and why`() {
         val connectionId = graphQlTester.document(
             """
             mutation {
@@ -248,8 +250,11 @@ class ActionNodeRunnerTest(
         start()
 
         val step = steps.findAll().single { it.actionId == actionId }
+        // Sending is implemented now, so what stops this is the send itself: the
+        // node was given no target, and a step that performed nothing has to say
+        // so rather than report a message nobody received.
         assertThat(step.status).isEqualTo(StepStatus.SKIPPED)
-        assertThat(step.output).contains("no runtime yet")
+        assertThat(step.output).contains("has nobody to send to")
     }
 
     /**
@@ -286,7 +291,7 @@ class ActionNodeRunnerTest(
                 nodes: [{
                   key: "act", kind: ACTION, name: "Act", actionId: $actionId, x: 0, y: 0,
                   mappings: [
-                    { name: "input", expression: "{{input.payload}}" },
+                    { name: "input", expression: "payload", mode: REFERENCE },
                     { name: "format", expression: "verbose" }
                   ]
                 }],
@@ -307,15 +312,20 @@ class ActionNodeRunnerTest(
 
         // And editing the node left the action alone.
         assertThat(actions.findAll().single { it.id == actionId }.mappings.map { it.argument to it.expression })
-            .containsExactly("input" to "{{input.payload}}", "format" to "{{input.format}}")
+            .containsExactly("format" to "compact")
     }
 
-    private fun function(name: String, source: String): Long = graphQlTester.document(
+    private fun function(
+        name: String,
+        source: String,
+        params: String = """[{ name: "input", type: MAP }, { name: "format", type: STRING }]""",
+    ): Long = graphQlTester.document(
         """
         mutation {
           createFunction(input: {
-            workspaceId: $workspaceId, name: "$name", returnType: OBJECT, source: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'},
-            params: [{ name: "input", type: OBJECT }, { name: "format", type: STRING }]
+            workspaceId: $workspaceId, name: "$name", returnType: MAP,
+            source: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'}, typescript: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'},
+            params: $params
           }) { id }
         }
         """,
@@ -335,22 +345,33 @@ class ActionNodeRunnerTest(
         mutation {
           createAction(input: {
             workspaceId: $workspaceId, name: "$name", type: EXECUTE, subtype: FUNCTION, functionId: $functionId,
-            mappings: [
-              { argument: "input", expression: "{{input.payload}}" },
-              { argument: "format", expression: "{{input.format}}" }
-            ]
+            mappings: [{ argument: "format", expression: "compact" }]
           }) { id }
         }
         """,
     ).execute().path("createAction.id").entity(Long::class.java).get()
 
     /** One action node, which is the whole workflow. */
-    private fun graph(actionId: Long) {
+    /**
+     * One action node, which is the whole workflow.
+     *
+     * It says where `input` comes from, because that is the node's to say: the
+     * action suggests values, and a reference to a field of what the run was
+     * started with is not something a definition can suggest for every use of
+     * it. [mappings] is what a test wants to vary on top of that.
+     */
+    private fun graph(
+        actionId: Long,
+        mappings: String = """[{ name: "input", expression: "payload", mode: REFERENCE }]""",
+    ) {
         graphQlTester.document(
             """
             mutation {
               saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
-                nodes: [{ key: "act", kind: ACTION, name: "Act", actionId: $actionId, x: 0, y: 0 }],
+                nodes: [{
+                  key: "act", kind: ACTION, name: "Act", actionId: $actionId, x: 0, y: 0,
+                  mappings: $mappings
+                }],
                 edges: []
               }) { nodes { key actionId } }
             }

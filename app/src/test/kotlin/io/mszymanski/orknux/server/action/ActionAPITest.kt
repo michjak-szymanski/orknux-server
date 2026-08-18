@@ -61,14 +61,14 @@ class ActionAPITest(
     }
 
     @Test
-    fun `a message action takes what its content asks for and answers with a status`() {
+    fun `a message action offers what a send is made of, and answers with where it landed`() {
         graphQlTester.document(
             """
             mutation {
               createAction(input: {
                 workspaceId: $workspaceId, name: "Send Slack Notification", type: EXECUTE, subtype: OUTGOING_CONNECTION,
                 connectionId: $connectionId, connectionAction: SEND_MESSAGE,
-                content: "Hello {{input.name}}, your request {{input.id}} is approved",
+                content: "Your request is approved",
                 target: CHANNEL, targetName: "#notifications"
               }) { subtypeLabel connectionName inputParams { display } outputParams { display } }
             }
@@ -77,22 +77,22 @@ class ActionAPITest(
             .path("createAction.subtypeLabel").entity(String::class.java).isEqualTo("Outgoing Connection")
             .path("createAction.connectionName").entity(String::class.java).isEqualTo("Slack")
             .path("createAction.inputParams[*].display").entityList(String::class.java)
-            .containsExactly("name: string", "id: string")
+            .containsExactly("target: string", "content: string", "threadTs: string")
             .path("createAction.outputParams[*].display").entityList(String::class.java)
-            .containsExactly("status: boolean")
+            .containsExactly("channel: string", "ts: string")
 
         assertThat(audit.findAll().map { it.message }).contains("Action Send Slack Notification created")
     }
 
     @Test
-    fun `an HTTP action reads its inputs from the URL and the headers`() {
+    fun `an HTTP action offers the call a node may vary, and answers with the response`() {
         graphQlTester.document(
             """
             mutation {
               createAction(input: {
                 workspaceId: $workspaceId, name: "Fetch API Data", type: EXECUTE, subtype: HTTP_REQUEST,
-                url: "https://api.example.com/{{input.endpoint}}", method: "get",
-                headers: "{ \"Authorization\": \"Bearer {{input.token}}\" }"
+                url: "https://api.example.com/orders", method: "get",
+                headers: "{ \"Authorization\": \"Bearer a-token\" }"
               }) { method subtypeLabel inputParams { display } outputParams { display } }
             }
             """,
@@ -100,34 +100,30 @@ class ActionAPITest(
             .path("createAction.method").entity(String::class.java).isEqualTo("GET")
             .path("createAction.subtypeLabel").entity(String::class.java).isEqualTo("HTTP Request")
             .path("createAction.inputParams[*].display").entityList(String::class.java)
-            .containsExactly("endpoint: string", "token: string")
+            .containsExactly("url: string", "body: string")
             .path("createAction.outputParams[*].display").entityList(String::class.java)
-            .containsExactly("response: object")
+            .containsExactly("response: map")
     }
 
     @Test
     fun `a function action answers with what the function returns`() {
-        val functionId = createFunction("transformPayload", "OBJECT")
+        val functionId = createFunction("transformPayload", "MAP")
 
         graphQlTester.document(
             """
             mutation {
               createAction(input: {
                 workspaceId: $workspaceId, name: "Transform Data", type: EXECUTE, subtype: FUNCTION,
-                functionId: $functionId,
-                mappings: [
-                  { argument: "input", expression: "{{input.payload}}" },
-                  { argument: "format", expression: "{{input.format}}" }
-                ]
+                functionId: $functionId
               }) { functionName inputParams { display } outputParams { display } }
             }
             """,
         ).execute()
             .path("createAction.functionName").entity(String::class.java).isEqualTo("transformPayload")
             .path("createAction.inputParams[*].display").entityList(String::class.java)
-            .containsExactly("payload: string", "format: string")
+            .containsExactly("input: map", "format: string")
             .path("createAction.outputParams[*].display").entityList(String::class.java)
-            .containsExactly("result: object")
+            .containsExactly("result: map")
     }
 
     @Test
@@ -261,7 +257,10 @@ class ActionAPITest(
     private fun createFunction(name: String, returnType: String): Long = graphQlTester.document(
         """
         mutation {
-          createFunction(input: { workspaceId: $workspaceId, name: "$name", returnType: $returnType }) { id }
+          createFunction(input: {
+            workspaceId: $workspaceId, name: "$name", returnType: $returnType,
+            params: [{ name: "input", type: MAP }, { name: "format", type: STRING }]
+          }) { id }
         }
         """,
     ).execute().path("createFunction.id").entity(Long::class.java).get()

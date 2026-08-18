@@ -132,7 +132,7 @@ class ConditionAPITest(
         assertThat(evaluator.holds(condition, """{"priority":"Low"}""")).isFalse()
 
         // One that answers with anything else is not a condition.
-        val objectReturning = function("summarize", "OBJECT", "export default function summarize() { return {}; }")
+        val objectReturning = function("summarize", "MAP", "export default function summarize(input) { return {}; }")
         graphQlTester.document(
             """
             mutation {
@@ -141,7 +141,7 @@ class ConditionAPITest(
               }) { id }
             }
             """,
-        ).execute().errors().expect { it.message?.contains("returns object") == true }.verify()
+        ).execute().errors().expect { it.message?.contains("returns map") == true }.verify()
     }
 
     @Test
@@ -213,8 +213,9 @@ class ConditionAPITest(
         """
         mutation(${'$'}source: String!) {
           createFunction(input: {
-            workspaceId: $workspaceId, name: "$name", returnType: $returnType, source: ${'$'}source,
-            params: [{ name: "input", type: OBJECT }]
+            workspaceId: $workspaceId, name: "$name", returnType: $returnType,
+            source: ${'$'}source, typescript: ${'$'}source,
+            params: [{ name: "input", type: MAP }]
           }) { id }
         }
         """,

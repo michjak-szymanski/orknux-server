@@ -40,7 +40,7 @@ class SessionAPITest(
 
     @Test
     fun `signs in a directory user and reports their roles`() {
-        val response = login("alice", "password")
+        val response = signIn("alice", "password")
 
         assertThat(response.statusCode).isEqualTo(HttpStatus.OK)
         assertThat(response.body?.username).isEqualTo("alice")
@@ -116,7 +116,22 @@ class SessionAPITest(
         assertThat(entry.newWorkspaceName).isEqualTo("platform")
     }
 
-    private fun login(username: String, password: String): ResponseEntity<SessionUser> =
+    /**
+     * Sign-in, read as text.
+     *
+     * A refusal answers with an error object rather than a user, so asking for
+     * one back means a rejected password fails while being deserialised instead
+     * of being asserted on. [signIn] is for the calls that expect a user.
+     */
+    private fun login(username: String, password: String): ResponseEntity<String> =
+        client.post().uri("/api/session")
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(LoginRequest(username, password))
+            .retrieve()
+            .toEntity(String::class.java)
+
+    /** Sign-in that is expected to succeed, with the user it answers with. */
+    private fun signIn(username: String, password: String): ResponseEntity<SessionUser> =
         client.post().uri("/api/session")
             .contentType(MediaType.APPLICATION_JSON)
             .body(LoginRequest(username, password))
@@ -131,8 +146,15 @@ class SessionAPITest(
             .retrieve()
             .toEntity(String::class.java)
 
+    /**
+     * The session cookie, which is `SESSION` and not `JSESSIONID`.
+     *
+     * Sessions live in the database rather than in this process's heap, so the
+     * one that comes back is Spring Session's, under its name. Looking for the
+     * container's name found nothing and read as "sign-in issued no cookie".
+     */
     private fun sessionCookie(response: ResponseEntity<*>): String? =
         response.headers[HttpHeaders.SET_COOKIE]
-            ?.firstOrNull { it.startsWith("JSESSIONID=") }
+            ?.firstOrNull { it.startsWith("SESSION=") }
             ?.substringBefore(';')
 }

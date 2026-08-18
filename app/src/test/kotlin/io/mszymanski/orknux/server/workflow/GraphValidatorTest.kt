@@ -66,7 +66,7 @@ class GraphValidatorTest(
     @Test
     fun `a node is told what it needs, from the catalogue entry it points at`() {
         val functionId = function("summarize")
-        val actionId = functionAction(functionId, "Summarize", mapOf("order" to "{{input.order}}"))
+        val actionId = functionAction(functionId, "Summarize", emptyMap())
         val triggerId = scheduled("nightly", """{ "order": { "id": 7 } }""")
 
         val problems = save(
@@ -92,14 +92,15 @@ class GraphValidatorTest(
             .path("workflowGraph.nodes[1].inputs[*].display").entityList(String::class.java)
             .containsExactly("order: string")
             .path("workflowGraph.nodes[1].outputs[*].display").entityList(String::class.java)
-            .containsExactly("result: object")
+            .containsExactly("result: map")
     }
 
     @Test
     fun `a node asking for something nothing produces is warned about`() {
         val functionId = function("summarize")
-        val actionId = functionAction(functionId, "Summarize", mapOf("order" to "{{input.missing}}"))
-        val triggerId = scheduled("nightly", """{ "order": { "id": 7 } }""")
+        val actionId = functionAction(functionId, "Summarize", emptyMap())
+        // Carries something, but not the `order` the function declares.
+        val triggerId = scheduled("nightly", """{ "invoice": { "id": 7 } }""")
 
         val problems = save(
             nodes = """
@@ -110,7 +111,7 @@ class GraphValidatorTest(
         )
 
         assertThat(problems).anySatisfy {
-            assertThat(it).contains("WARNING").contains("needs missing: string")
+            assertThat(it).contains("WARNING").contains("needs order: string")
         }
     }
 
@@ -119,7 +120,7 @@ class GraphValidatorTest(
         val triggerId = scheduled("nightly", """{ "order": { "id": 7 } }""")
         val waitId = wait("Pause")
         val functionId = function("summarize")
-        val actionId = functionAction(functionId, "Summarize", mapOf("order" to "{{input.order}}"))
+        val actionId = functionAction(functionId, "Summarize", emptyMap())
 
         val problems = save(
             nodes = """
@@ -223,7 +224,7 @@ class GraphValidatorTest(
         """
         mutation {
           createFunction(input: {
-            workspaceId: $workspaceId, name: "$name", returnType: OBJECT, params: [{ name: "order", type: OBJECT }]
+            workspaceId: $workspaceId, name: "$name", returnType: MAP, params: [{ name: "order", type: MAP }]
           }) { id }
         }
         """,

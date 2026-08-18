@@ -45,14 +45,14 @@ class FunctionAPITest(
             """
             mutation {
               createFunction(input: {
-                workspaceId: $workspaceId, name: "transformPayload", returnType: OBJECT,
-                params: [{ name: "input", type: OBJECT }, { name: "format", type: STRING }]
+                workspaceId: $workspaceId, name: "transformPayload", returnType: MAP,
+                params: [{ name: "input", type: MAP }, { name: "format", type: STRING }]
               }) { name signature source returnType lastModifiedBy }
             }
             """,
         ).execute()
             .path("createFunction.signature").entity(String::class.java)
-            .isEqualTo("(input: object, format: string)")
+            .isEqualTo("(input: map, format: string)")
             .path("createFunction.lastModifiedBy").entity(String::class.java).isEqualTo("alice")
             .path("createFunction.source").entity(String::class.java)
             .satisfies { assertThat(it).contains("export default async function transformPayload(input, format)") }
@@ -69,6 +69,7 @@ class FunctionAPITest(
             mutation {
               updateFunction(id: $id, input: {
                 source: "export default function validateEmail(email) { return email.includes('@'); }",
+                typescript: "export default function validateEmail(email) { return email.includes('@'); }",
                 description: "Whether an address looks like one."
               }) { source description }
             }
@@ -78,7 +79,15 @@ class FunctionAPITest(
             .isEqualTo("Whether an address looks like one.")
 
         graphQlTester.document(
-            """mutation { updateFunction(id: $id, input: { source: "export default function ( {" }) { id } }""",
+            // Both halves, so what is refused is the code failing to parse rather
+            // than the pair being incomplete.
+            """
+            mutation {
+              updateFunction(id: $id, input: {
+                source: "export default function ( {", typescript: "export default function ( {"
+              }) { id }
+            }
+            """,
         ).execute().errors().expect { it.message?.contains("Expected") == true || it.message?.contains("Error") == true }
             .verify()
     }
@@ -135,6 +144,13 @@ class FunctionAPITest(
     }
 
     private fun create(name: String): Long = graphQlTester.document(
-        """mutation { createFunction(input: { workspaceId: $workspaceId, name: "$name" }) { id } }""",
+        """
+        mutation {
+          createFunction(input: {
+            workspaceId: $workspaceId, name: "$name",
+            params: [{ name: "email", type: STRING }]
+          }) { id }
+        }
+        """,
     ).execute().path("createFunction.id").entity(Long::class.java).get()
 }

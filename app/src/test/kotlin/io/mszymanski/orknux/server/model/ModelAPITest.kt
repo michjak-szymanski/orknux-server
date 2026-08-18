@@ -325,7 +325,10 @@ class ModelAPITest(
         ).execute()
             .path("modelUsage.empty").entity(Boolean::class.java).isEqualTo(true)
             .path("modelUsage.requests").entity(Int::class.java).isEqualTo(0)
-            .path("modelUsage.series").entityList(Any::class.java).hasSize(0)
+            // A day per day of the window, all of them nothing: `empty` above is
+            // what says so, not the absence of points.
+            .path("modelUsage.series").entityList(Any::class.java).hasSize(30)
+            .path("modelUsage.series[?(@.requests > 0)]").entityList(Any::class.java).hasSize(0)
             // No prices recorded, so there is no cost to state.
             .path("modelUsage.costEstimate").valueIsNull()
     }
@@ -384,7 +387,10 @@ class ModelAPITest(
             .path("modelUsage.averageLatencyMillis").entity(Double::class.java).isEqualTo(1500.0)
             // 2M in at $3/M, 400k out at $15/M.
             .path("modelUsage.costEstimate").entity(Double::class.java).isEqualTo(12.0)
-            .path("modelUsage.series").entityList(Any::class.java).hasSize(2)
+            // The window, with the two recorded days in it.
+            .path("modelUsage.series").entityList(Any::class.java).hasSize(30)
+            .path("modelUsage.series[?(@.requests > 0)].requests").entityList(Int::class.java)
+            .containsExactly(100, 100)
     }
 
     @Test

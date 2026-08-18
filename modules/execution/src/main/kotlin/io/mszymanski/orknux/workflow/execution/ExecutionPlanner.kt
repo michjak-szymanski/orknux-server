@@ -43,7 +43,15 @@ class ExecutionPlanner(
         trigger: ExecutionTrigger,
         input: String?,
     ): ExecutionPlan {
-        val graph = graphs.graph(workspaceId, workflowId)
+        /*
+         * A person pressing Run means the graph on their screen; anything else
+         * means the graph that was published. The distinction is the whole of
+         * what publishing buys - an event arriving mid-edit must not run what
+         * is half-drawn - and it is read off what started the run rather than
+         * from a setting somebody has to remember.
+         */
+        val version = if (trigger == ExecutionTrigger.MANUAL) GraphVersion.DRAFT else GraphVersion.PUBLISHED
+        val graph = graphs.graph(workspaceId, workflowId, version)
         val order = graph.runOrder()
 
         val execution = executions.save(

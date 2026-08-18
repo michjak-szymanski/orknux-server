@@ -17,7 +17,10 @@ import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.stereotype.Controller
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.transaction.annotation.Transactional
+import tools.jackson.databind.ObjectMapper
+import java.time.OffsetDateTime
 
 @Controller
 class WorkflowGraphAPI(
@@ -35,6 +38,9 @@ class WorkflowGraphAPI(
     private val objects: WorkflowObjectRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val publications: WorkflowPublicationRepository,
+    private val graphSource: AppWorkflowGraphSource,
+    private val mapper: ObjectMapper,
 ) {
 
     @QueryMapping
@@ -175,10 +181,30 @@ class WorkflowGraphAPI(
         val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
         if (nodes.findByWorkflowId(workflowId).isEmpty()) throw WorkflowGraphEmptyException()
 
+        /*
+         * Publishing is the copy, not the badge.
+         *
+         * The status is what a person reads; this is what a trigger runs. They
+         * are written together so that a graph can never be marked live without
+         * something live to point at - and from here, editing and saving change
+         * the draft alone, which is what makes it safe to leave one half-drawn.
+         */
+        publications.save(
+            WorkflowPublication(
+                workflowId = workflowId,
+                publishedAt = OffsetDateTime.now(),
+                publishedBy = currentUser(),
+                graph = WorkflowSnapshot.write(graphSource.drafted(workflowId, workflow.name), mapper),
+            ),
+        )
         workflow.status = WorkflowStatus.PUBLISHED
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow ${workflow.name} published")
         return graphOf(workflowId)
     }
+
+    /** Whoever is asking, for the record of who made a graph live. */
+    private fun currentUser(): String =
+        SecurityContextHolder.getContext().authentication?.name ?: "system"
 
     private fun graphOf(workflowId: Long): WorkflowGraphView {
         val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)

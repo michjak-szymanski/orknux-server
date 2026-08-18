@@ -17,7 +17,8 @@ class FakeWorkflowGraphSource : WorkflowGraphSource {
 
     val graphs = mutableMapOf<Long, WorkflowGraph>()
 
-    override fun graph(workspaceId: Long, workflowId: Long): WorkflowGraph =
+    /** One graph per workflow: a fake has no draft to tell from a publication. */
+    override fun graph(workspaceId: Long, workflowId: Long, version: GraphVersion): WorkflowGraph =
         graphs[workflowId] ?: throw WorkflowNotFoundException(workspaceId, workflowId)
 }
 

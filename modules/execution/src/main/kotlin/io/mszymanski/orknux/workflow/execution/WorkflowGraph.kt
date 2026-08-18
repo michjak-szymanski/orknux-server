@@ -97,12 +97,41 @@ data class WorkflowGraph(
  */
 interface WorkflowGraphSource {
 
-    /** Throws if the workflow is not there, or if the source cannot be reached. */
-    fun graph(workspaceId: Long, workflowId: Long): WorkflowGraph
+    /**
+     * Throws if the workflow is not there, or if the source cannot be reached.
+     *
+     * @param version which copy to run. A published workflow has two: the one
+     *   somebody is editing and the one that was published, and they are the
+     *   same graph only until the next edit.
+     */
+    fun graph(workspaceId: Long, workflowId: Long, version: GraphVersion = GraphVersion.PUBLISHED): WorkflowGraph
+}
+
+/**
+ * Which copy of a workflow a run uses.
+ *
+ * An event has to run the published one: the alternative is what this product
+ * did until now, where a trigger firing mid-edit ran a half-drawn graph. A
+ * person pressing Run means the opposite - run what is on my screen - so the
+ * two are told apart by what started the run rather than by a setting.
+ */
+enum class GraphVersion {
+    PUBLISHED,
+    DRAFT,
 }
 
 class WorkflowNotFoundException(workspaceId: Long, workflowId: Long) :
     RuntimeException("Workflow $workflowId is not assigned to workspace $workspaceId")
+
+/**
+ * Asked to run a workflow that has never been published.
+ *
+ * Its own exception rather than "not found", because the two want different
+ * answers: one is a wrong id and the other is a graph that exists and is not
+ * ready. Somebody whose trigger did nothing needs to be told which.
+ */
+class WorkflowNotPublishedException(workflowId: Long) :
+    RuntimeException("Workflow $workflowId has never been published, so there is nothing to run")
 
 class WorkflowGraphEmptyException(workflowId: Long) :
     RuntimeException("Workflow $workflowId has no nodes to run")

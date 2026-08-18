@@ -39,11 +39,28 @@ services:
       - orknux-data:/app/data      # only if attachments are on
 ```
 
+## Reading the tables
+
+Every setting is one environment variable, all prefixed the same way, so
+`env | grep ORKNUX_` is the whole of an installation's configuration. Each is
+listed with what it does, what happens if you say nothing, and whether you have
+to say anything at all.
+
+**Required** means: will this installation be wrong without it?
+
+- **Yes** — set it, or the thing it configures does not work.
+- **No** — the default is a real answer; change it when you want something else.
+- **Conditional** — required only in the case named, and ignored otherwise.
+
+The defaults are development defaults. They make the server run on a laptop
+against a local Postgres, LDAP and Temporal; several of them are the wrong
+answer in a deployment, and those say so.
+
 ## The one that matters most
 
-| Variable | Default | |
-| --- | --- | --- |
-| `ORKNUX_SECRET_KEY` | *none* | Encrypts every credential this server is trusted with — provider keys, Slack tokens, MCP secrets — so the database on its own is not enough to use them. |
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_SECRET_KEY` | Encrypts every credential this server is trusted with — provider keys, Slack tokens, MCP secrets — so the database on its own is not enough to use them. 32 bytes, base64. | *none* | **Yes** |
 
 There is deliberately **no default**: a key committed to an image would be a key
 every installation shares, which is the same as no key at all. Generate one and
@@ -54,118 +71,142 @@ right length, and whether every stored secret can be read with it.
 
 ## Database
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_DB_URL` | `jdbc:postgresql://localhost:5432/orknux` |
-| `ORKNUX_DB_USERNAME` | `orknux` |
-| `ORKNUX_DB_PASSWORD` | `orknux` |
-| `ORKNUX_DB_MIGRATE` | `true` — Flyway migrates on start; JPA runs with `ddl-auto: validate`, so the migrations are the only thing that changes the schema |
+Postgres. The schema is Flyway's, and JPA runs with `ddl-auto: validate`, so the
+migrations are the only thing that ever changes it.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_DB_URL` | JDBC URL of the database. | `jdbc:postgresql://localhost:5432/orknux` | **Yes** in a deployment — the default points at localhost |
+| `ORKNUX_DB_USERNAME` | The user it connects as. | `orknux` | **Yes** in a deployment |
+| `ORKNUX_DB_PASSWORD` | That user's password. | `orknux` | **Yes** in a deployment |
+| `ORKNUX_DB_MIGRATE` | Whether Flyway migrates on start. Turn off only where something else owns the schema; the application expects it to be at the version this build ships. | `true` | No |
 
 ## Signing in
 
-`ORKNUX_AUTH_METHOD` picks one, and only one: `LDAP` (default) or `OIDC`. Both
-at once would mean an LDAP password sign-in beside a provider that is meant to
-be the only way in.
+`ORKNUX_AUTH_METHOD` picks one, and only one. Both at once would mean an LDAP
+password for every account the OIDC provider governs — a second way in that its
+policies do not reach and its administrators do not know about.
 
-**LDAP**
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_AUTH_METHOD` | `LDAP` or `OIDC`. | `LDAP` | No |
+| `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_LDAP_URLS` | `ldap://localhost:389` |
-| `ORKNUX_LDAP_BASE` | `dc=orknux,dc=io` |
-| `ORKNUX_LDAP_BIND_DN` | `cn=admin,dc=orknux,dc=io` |
-| `ORKNUX_LDAP_BIND_PASSWORD` | `admin` |
-| `ORKNUX_LDAP_USER_SEARCH_BASE` | `ou=people` |
-| `ORKNUX_LDAP_USER_SEARCH_FILTER` | `(uid={0})` |
-| `ORKNUX_LDAP_GROUP_SEARCH_BASE` | `ou=groups` — empty disables group search |
-| `ORKNUX_LDAP_GROUP_SEARCH_FILTER` | `(member={0})` |
+**LDAP** — read only when `ORKNUX_AUTH_METHOD=LDAP`.
 
-**OIDC**
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_LDAP_URLS` | The directory to bind to. | `ldap://localhost:389` | **Yes** under LDAP |
+| `ORKNUX_LDAP_BASE` | The root of the tree everything below is relative to. | `dc=orknux,dc=io` | **Yes** under LDAP |
+| `ORKNUX_LDAP_BIND_DN` | The account this server binds as to search. | `cn=admin,dc=orknux,dc=io` | **Yes** under LDAP |
+| `ORKNUX_LDAP_BIND_PASSWORD` | That account's password. | `admin` | **Yes** under LDAP |
+| `ORKNUX_LDAP_USER_SEARCH_BASE` | Where people are looked for, under the base. | `ou=people` | No |
+| `ORKNUX_LDAP_USER_SEARCH_FILTER` | How a typed username is matched; `{0}` is what was typed. | `(uid={0})` | No |
+| `ORKNUX_LDAP_GROUP_SEARCH_BASE` | Where groups live. Workspace groups have to be under this base for membership to be picked up; empty disables group search entirely. | `ou=groups` | No |
+| `ORKNUX_LDAP_GROUP_SEARCH_FILTER` | How a person's groups are found; `{0}` is their DN. | `(member={0})` | No |
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_OIDC_ISSUER` | *none* |
-| `ORKNUX_OIDC_CLIENT_ID` | *none* |
-| `ORKNUX_OIDC_CLIENT_SECRET` | *none* |
-| `ORKNUX_OIDC_SCOPES` | `openid,profile,email,groups` |
-| `ORKNUX_OIDC_USERNAME_CLAIM` | `preferred_username` |
-| `ORKNUX_OIDC_ROLES_CLAIM` | `groups` |
-| `ORKNUX_OIDC_DISPLAY_NAME` | `single sign-on` — what the sign-in button says |
+**OIDC** — read only when `ORKNUX_AUTH_METHOD=OIDC`, and ignored otherwise. Two
+flows at once: a browser is sent to the provider and comes back with a code,
+exchanged for the same session cookie a password sign-in issues; a script
+presents the provider's token as a bearer instead, validated per request.
 
-**Access**
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_OIDC_ISSUER` | The provider. Its discovery document says where the endpoints are and which keys sign its tokens, so none of that is written here to go stale. | *none* | **Yes** under OIDC |
+| `ORKNUX_OIDC_CLIENT_ID` | This installation, as the provider knows it. | *none* | **Yes** under OIDC |
+| `ORKNUX_OIDC_CLIENT_SECRET` | Its secret. | *none* | **Yes** under OIDC |
+| `ORKNUX_OIDC_SCOPES` | What is asked for, comma separated. | `openid,profile,email,groups` | No |
+| `ORKNUX_OIDC_USERNAME_CLAIM` | The claim to show as somebody's name. The subject is the fallback, being stable and unreadable. | `preferred_username` | No |
+| `ORKNUX_OIDC_ROLES_CLAIM` | The claim carrying group or role membership; there is no standard one. Keycloak and Okta usually say `groups`, Entra says `groups` or `roles`. Each value in it is treated the way an LDAP group is. | `groups` | No |
+| `ORKNUX_OIDC_DISPLAY_NAME` | What the sign-in button says, in the words the people signing in use. | `single sign-on` | No |
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_ADMIN_ROLE` | `ROLE_ADMINS` — the role that sees the Admin section and every workspace |
+Which of the provider's names grants which of this installation's roles is
+`orknux.security.role-mapping`, and it is **YAML only** — the keys are group DNs
+and claim values, full of dots, equals signs and commas, and the
+environment-variable spelling of one is not something anybody should have to
+work out. Empty is a working configuration: a role with no mapping is granted to
+whoever holds an authority derived from its own name.
 
 ## Runs
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_TEMPORAL_ENABLED` | `true` — `false` runs a workflow on the calling thread, for a single-process installation with no Temporal |
-| `ORKNUX_TEMPORAL_TARGET` | `localhost:7233` |
-| `ORKNUX_TEMPORAL_NAMESPACE` | `default` |
-| `ORKNUX_TEMPORAL_TASK_QUEUE` | `orknux-workflow` |
-| `ORKNUX_TEMPORAL_RUN_TIMEOUT_HOURS` | `24` |
-| `ORKNUX_TEMPORAL_STEP_TIMEOUT_SECONDS` | `300` |
-| `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | `3` |
-| `ORKNUX_TEMPORAL_UI_URL` | `http://localhost:8233` — where "Open in Temporal" points |
-| `ORKNUX_INLINE_MAX_WAIT` | `5m` — how long an inline run may park |
-| `ORKNUX_SCHEDULER_ENABLED` | `true` |
-| `ORKNUX_SCHEDULER_POLLING_INTERVAL` | `10s` |
-| `ORKNUX_SCHEDULER_THREADS` | `4` |
+Temporal is what makes a run durable — it survives a restart, retries a step,
+and can be looked at afterwards.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_TEMPORAL_ENABLED` | `false` runs a workflow on the calling thread, with no retries and no resumption — for a single-process installation with no Temporal. The tests do that; a deployment should not. | `true` | No |
+| `ORKNUX_TEMPORAL_TARGET` | Host and port of the Temporal frontend. | `localhost:7233` | **Yes** in a deployment, unless Temporal is off |
+| `ORKNUX_TEMPORAL_NAMESPACE` | The Temporal namespace to run in. | `default` | No |
+| `ORKNUX_TEMPORAL_TASK_QUEUE` | The queue workers take work from. Change it to run two installations against one Temporal. | `orknux-workflow` | No |
+| `ORKNUX_TEMPORAL_RUN_TIMEOUT_HOURS` | How long a whole run may take, waits included. | `24` | No |
+| `ORKNUX_TEMPORAL_STEP_TIMEOUT_SECONDS` | How long one step's own work may take. A model call is slow, so a step is given minutes. This does not bound what a step *waits* for: a wait parks the step and answers. | `300` | No |
+| `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | How many times a failing step is tried, since most of what a step does is call something else. | `3` | No |
+| `ORKNUX_TEMPORAL_UI_URL` | Temporal's own web interface, used only to link out to it from a run. Empty offers no links, which is right where it is not exposed. | `http://localhost:8233` | No |
+| `ORKNUX_INLINE_MAX_WAIT` | Only the inline engine: how long a run may spend parked in total before the step fails and says what would have carried it. A Temporal wait is a timer and is bounded by the run timeout instead. | `5m` | No |
+| `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
+| `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
+| `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |
 
 ## What a workspace's code may do
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_SCRIPT_TIMEOUT_MILLIS` | `5000` — a function or tool that runs longer is stopped |
-| `ORKNUX_SCRIPT_STATEMENT_LIMIT` | `5000000` |
-| `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | `30` |
+A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
+files, no network and no threads. These bound what it can spend.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_SCRIPT_TIMEOUT_MILLIS` | A function or tool that runs longer is stopped. | `5000` | No |
+| `ORKNUX_SCRIPT_STATEMENT_LIMIT` | How many statements one may execute — what catches a loop that never ends. | `5000000` | No |
+| `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | How long a workflow's own HTTP request may take. A step that never returns holds the run that made it. | `30` | No |
 
 ## Models and connections
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_MODEL_TIMEOUT` | `2m` |
-| `ORKNUX_MODEL_CHECK_ENABLED` | `true` — periodically asks each provider whether it answers |
-| `ORKNUX_MODEL_CHECK_INTERVAL` | `5m` |
-| `ORKNUX_MODEL_CHECK_INITIAL_DELAY` | `30s` |
-| `ORKNUX_CONNECTION_CHECK_ENABLED` | `true` |
-| `ORKNUX_CONNECTION_CHECK_INTERVAL` | `5m` |
-| `ORKNUX_CONNECTION_CHECK_INITIAL_DELAY` | `30s` |
-| `ORKNUX_CONNECTION_PROBE_TIMEOUT_SECONDS` | `5` |
-| `ORKNUX_CONNECTION_ALLOW_LINK_LOCAL` | `false` — link-local and metadata addresses are refused; turning this on lets a workspace's connection reach them |
-| `ORKNUX_SLACK_ENABLED` | `true` |
-| `ORKNUX_SLACK_RECONCILE_SECONDS` | `30` |
-| `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | `300` |
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_MODEL_TIMEOUT` | How long a model has to answer. Generous: a large local model on a laptop is slow, and giving up on it is worse than waiting. | `2m` | No |
+| `ORKNUX_MODEL_CHECK_ENABLED` | Periodically asks each provider whether it still answers, so a status on the screen was true recently rather than whenever somebody last pressed the button. | `true` | No |
+| `ORKNUX_MODEL_CHECK_INTERVAL` | How often that sweep runs. | `5m` | No |
+| `ORKNUX_MODEL_CHECK_INITIAL_DELAY` | How long after start the first sweep waits. | `30s` | No |
+| `ORKNUX_CONNECTION_CHECK_ENABLED` | The same, for connections. | `true` | No |
+| `ORKNUX_CONNECTION_CHECK_INTERVAL` | How often connections are checked. | `5m` | No |
+| `ORKNUX_CONNECTION_CHECK_INITIAL_DELAY` | How long the first check waits. | `30s` | No |
+| `ORKNUX_CONNECTION_PROBE_TIMEOUT_SECONDS` | How long a check may take to find out whether anything is listening. | `5` | No |
+| `ORKNUX_CONNECTION_ALLOW_LINK_LOCAL` | Link-local addresses reach cloud instance metadata, so they are refused. Turning this on lets a workspace's connection reach them. Private and loopback addresses stay reachable either way, since internal services are the point. | `false` | No |
+| `ORKNUX_SLACK_ENABLED` | Opens one Socket Mode websocket per Slack connection holding an app-level token, and turns arriving mentions into workflow runs. | `true` | No |
+| `ORKNUX_SLACK_RECONCILE_SECONDS` | How often open sockets are compared with stored connections, so a token pasted into the settings form starts listening without a restart. | `30` | No |
+| `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | How long a connection Slack refused is left alone. Changing the token clears the wait, so a corrected credential is not held back by it. | `300` | No |
 
 ## Chat and attachments
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_CHAT_ENABLED` | `true` — `false` is final, whatever the admin screen says |
-| `ORKNUX_ATTACHMENTS_ENABLED` | `true` — same |
-| `ORKNUX_ATTACHMENTS_LOCATION` | `data/attachments` — **relative resolves against the working directory**, which is right on a laptop and wrong in a container. Give it an absolute path on a volume, or attachments land in a layer that goes when the container does. |
-| `ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB` | `25` |
-| `ORKNUX_UPLOAD_MAX_FILE_SIZE` | `25MB` |
-| `ORKNUX_UPLOAD_MAX_REQUEST_SIZE` | `26MB` |
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_CHAT_ENABLED` | Whether this installation has a chat at all. `false` is final: an administrator can turn the chat off from the screen, but not back on where the operator has said no. | `true` | No |
+| `ORKNUX_ATTACHMENTS_ENABLED` | Whether a chat may carry files. `false` is final in the same way — the disk belongs to whoever runs this. | `true` | No |
+| `ORKNUX_ATTACHMENTS_LOCATION` | Where the bytes go, one directory per workspace. **Relative resolves against the working directory**, which is right on a laptop and wrong in a container: give an absolute path on a volume, or attachments land in a layer that goes when the container does. | `data/attachments` | **Yes** if attachments are on |
+| `ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB` | The largest file a chat will accept, refused with a sentence rather than a stack trace. | `25` | No |
+| `ORKNUX_UPLOAD_MAX_FILE_SIZE` | The servlet's own cap on one uploaded file. Keep it at or above the attachment cap, or the larger limit is never reached. | `25MB` | No |
+| `ORKNUX_UPLOAD_MAX_REQUEST_SIZE` | The cap on a whole upload request — a file plus what comes with it. | `26MB` | No |
 
 ## Sessions, HTTP and logging
 
-| Variable | Default |
-| --- | --- |
-| `ORKNUX_PORT` | `8080` |
-| `ORKNUX_ALLOWED_ORIGINS` | `http://localhost:5173` — where the interface is served from |
-| `ORKNUX_SESSION_TIMEOUT` | `14d` |
-| `ORKNUX_SESSION_COOKIE_SAME_SITE` | `lax` |
-| `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | `true` |
-| `ORKNUX_LOG_FORMAT` | `plain` — `json` for a log collector |
-| `ORKNUX_LOG_FILE` | *none* — stdout only |
-| `ORKNUX_LOG_MAX_FILE_SIZE` | `10MB` |
-| `ORKNUX_LOG_MAX_HISTORY` | `14` |
-| `ORKNUX_LOG_TOTAL_SIZE_CAP` | `1GB` |
-| `JAVA_OPTS` | `-XX:MaxRAMPercentage=75` |
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
+| `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is on another origin |
+| `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider: the provider is where a leaver is disabled, and this is not the lock keeping anybody out. Shorten it where that is not true. | `14d` | No |
+| `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface is served from this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
+| `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |
+| `ORKNUX_LOG_FORMAT` | `plain` reads well in a terminal; `json` (one ECS object per line) is what a collector wants. Applies to the console and the file alike. | `plain` | No |
+| `ORKNUX_LOG_FILE` | Console always; name a file here and it is written to as well. Use an absolute path — the working directory of a container is not somewhere anyone goes looking. | *none* (stdout only) | No |
+| `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
+| `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
+| `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together — a log that grows without bound fills the disk it shares with the database. | `1GB` | No |
+| `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |
 
 Sessions are kept in the database, so signing in outlives a restart and survives
 more than one replica.
+
+## What is deliberately not configurable
+
+The schema validation mode, Flyway's own locations, and Spring AI's schema
+initialisation. Those are invariants this application is built around rather
+than choices — changing one does not configure the server, it breaks it.

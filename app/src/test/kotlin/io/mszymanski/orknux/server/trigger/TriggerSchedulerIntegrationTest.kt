@@ -107,6 +107,12 @@ class TriggerSchedulerIntegrationTest(
             """,
         ).execute()
 
+        // Published, because a trigger runs the published copy: a graph that
+        // was only ever saved is one somebody is still drawing.
+        graphQlTester.document(
+            """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflowId) { status } }""",
+        ).execute()
+
         // Rather than waiting for the top of the minute, the task is asked to run
         // now; everything after that is the scheduler's own doing.
         scheduler.reschedule(TaskInstanceId.of(TASK_NAME, INSTANCE), Instant.now())

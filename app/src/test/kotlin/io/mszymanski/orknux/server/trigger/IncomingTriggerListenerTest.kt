@@ -336,5 +336,11 @@ class IncomingTriggerListenerTest(
             }
             """,
         ).execute().path("saveWorkflowGraph.nodes[0].triggerId").entity(Long::class.java).isEqualTo(triggerId)
+
+        // Published, because a trigger runs the published copy: a graph that
+        // was only ever saved is one somebody is still drawing.
+        graphQlTester.document(
+            """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflow) { status } }""",
+        ).execute()
     }
 }

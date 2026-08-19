@@ -263,6 +263,9 @@ away, and a real key has no business in a build file.
 | `memory`         | Memory catalogs, the notes in them, and the tool an agent reads them through |
 | `model`          | The API over the workspace's LLM providers, the models reached through them, and what they were used for |
 | `mcp`            | The MCP endpoint this server serves, and the tools an outside assistant calls through it |
+| `shell`          | The tool an agent runs commands through, on the machines Admin -> Shell holds; the sessions themselves belong to `modules/connection` |
+| `mail`           | The installation's own relay, and the one thing it sends: a password reset link |
+| `database`       | What SQLite needs and Postgres does not - the dialect, the pragmas, and the SQL the scheduler ships no dialect for |
 | `plugin`         | Plugins loaded into the installation, and the functions they declare |
 | `monitoring`     | The health of the service and everything it needs to be up             |
 | `admin`          | The Doctor: whether this installation is configured correctly, which is not the same question as whether it is up |
@@ -296,6 +299,40 @@ behind an `orkx_` prefix, kept only as a SHA-256 hash, presented as
 that is not a browser — the CLI, or an assistant calling the MCP endpoint — signs
 in. `POST /api/session` tries an internal password first, so those accounts work
 on an OIDC installation too.
+
+**The first internal user is the one nothing can make.** Every account either
+comes from an administrator or is written down when a provider vouches for
+somebody at the door, so an installation with no directory and no OIDC provider
+has nobody to create the administrator who could create you.
+`ORKNUX_BOOTSTRAP_ADMIN_USERNAME` and `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` close
+that circle: set both and one internal administrator is created at startup,
+holding the built-in `Administrators` role and signing in on the ordinary form.
+`BootstrapAdmin` only ever creates - an account of that name that already exists
+is left exactly as it is, password and roles alike, so a variable still set on
+the tenth restart cannot put back a password somebody changed or a role somebody
+deliberately took away. A password in a variable is a way in and not a credential
+to keep: sign in, change it, unset both. With SQLite underneath, that is an
+Orknux with no database server and no directory to run.
+
+`POST /api/session` is throttled per username and per address alike -
+`orknux.security.sign-in` - because a username somebody knows exists could
+otherwise be tried at whatever rate the network allowed, and under LDAP every
+try landed on the directory too. It backs off rather than locking: the wait
+doubles to a ceiling and stops, a success clears the record, and going quiet
+forgets it. An account that locks is one a stranger can close by guessing at it
+badly on purpose.
+
+**A forgotten password is reset by a link mailed to the address on the account**,
+good once and for an hour, and only for an internal user who already has one - a
+directory or OIDC account's password belongs to the provider. It needs the
+installation's own mail relay (`orknux.mail`) and `orknux.web.base-url`, and
+without them the form answers the same polite sentence to everybody and the log
+says what is missing. The relay is an operator's setting rather than a
+workspace's SMTP connection on purpose: that credential belongs to one team,
+would stop working the day they rotated it, and a reset has to work for somebody
+who belongs to no workspace at all. The base URL is configured rather than read
+off the `Host` header because that header is written by whoever is calling, and
+the link in question opens an account.
 
 Everybody who signs in is recorded: `UserDetection` writes an `EXTERNAL` row the
 first time somebody arrives, which is what makes an issue assignable to a person

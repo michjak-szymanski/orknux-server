@@ -125,6 +125,28 @@ policies do not reach and its administrators do not know about.
 | `ORKNUX_AUTH_METHOD` | `LDAP` or `OIDC`. | `LDAP` | No |
 | `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
+**How hard somebody may try.** Sign-in is the one door anybody may knock on, and
+a username somebody knows exists could otherwise be tried at whatever rate the
+network allowed - which under LDAP landed on the directory as well. A wrong
+password costs nothing until the allowance is spent, then a pause that doubles up
+to the ceiling and stops there.
+
+Nothing here locks anybody out, deliberately: the pause has an end, a successful
+sign-in clears the record, and so does going quiet for the forget time. An
+account that locks is an account a stranger can close by guessing at it badly on
+purpose. Both counts are kept at once, because per username alone does not slow a
+list of names and per address alone does not slow a botnet. The state is in
+memory in this process, so a restart forgets it and two replicas keep a count
+each.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_SIGN_IN_PER_USERNAME` | Tries against one username that cost nothing; the next one waits. | `5` | No |
+| `ORKNUX_SIGN_IN_PER_ADDRESS` | Tries from one address that cost nothing. Higher, since an address is not a person: an office behind one router is one address. | `20` | No |
+| `ORKNUX_SIGN_IN_FIRST_WAIT` | The pause on the first failure past the allowance. It doubles after that. | `2s` | No |
+| `ORKNUX_SIGN_IN_LONGEST_WAIT` | Where the doubling stops. | `5m` | No |
+| `ORKNUX_SIGN_IN_FORGET_AFTER` | How long a quiet username or address is remembered for, so a bad afternoon does not follow anybody into the next day. | `15m` | No |
+
 **LDAP** — read only when `ORKNUX_AUTH_METHOD=LDAP`.
 
 | Variable | What it does | Default | Required |
@@ -152,6 +174,31 @@ presents the provider's token as a bearer instead, validated per request.
 | `ORKNUX_OIDC_USERNAME_CLAIM` | The claim to show as somebody's name. The subject is the fallback, being stable and unreadable. | `preferred_username` | No |
 | `ORKNUX_OIDC_ROLES_CLAIM` | The claim carrying group or role membership; there is no standard one. Keycloak and Okta usually say `groups`, Entra says `groups` or `roles`. Each value in it is treated the way an LDAP group is. | `groups` | No |
 | `ORKNUX_OIDC_DISPLAY_NAME` | What the sign-in button says, in the words the people signing in use. | `single sign-on` | No |
+| `ORKNUX_OIDC_AUDIENCES` | Which audiences a bearer token may name, comma separated. Empty means the client id. **Read the paragraph below before you upgrade an OIDC installation** - the wrong answer here is a 401 on every API call. | *the client id* | **Conditional** - see below |
+
+**`ORKNUX_OIDC_AUDIENCES` is the one that can lock people out on upgrade.** A
+bearer token has to name this installation in its `aud` claim, and empty means
+the client id, which is what a provider writes into a token minted for this
+application. Two common providers write something else:
+
+- **Keycloak** names `account`, unless an audience mapper is configured against
+  this client.
+- **Entra** names the application's **App ID URI** - `api://…` - rather than its
+  client id.
+
+Neither is the client id. The `aud` claim has been checked since **0.5.0** -
+before that only the issuer was, so any token the provider minted was accepted,
+including one issued to a different application in the same Keycloak realm or
+Entra tenant. An installation coming from 0.4 or earlier therefore accepts those
+tokens today and refuses them after the upgrade: a 401 on API calls that worked
+yesterday, with `The aud claim is not valid` in the server log.
+Browser sign-in is unaffected either way - this checks bearer tokens, and the
+code flow is a different door.
+
+There are two ways out and you only need one: configure the provider to name
+this client, or set `ORKNUX_OIDC_AUDIENCES` to what its tokens actually carry.
+It takes a list, and a token has to match **one** of them rather than all -
+`ORKNUX_OIDC_AUDIENCES=account,api://orknux` accepts either.
 
 Which of the provider's names grants which of this installation's roles is
 `orknux.security.role-mapping`, and it is **YAML only** — the keys are group DNs
@@ -209,6 +256,13 @@ workspace at all.
 | `ORKNUX_PASSWORD_RESET_EXPIRY` | How long a mailed link works for. The link is a secret sitting in a mailbox, so what matters is not how long a person needs but how long that copy stays dangerous. | `1h` | No |
 | `ORKNUX_PASSWORD_RESET_PER_EMAIL` | Requests about one address that cost nothing; the next one waits. | `3` | No |
 | `ORKNUX_PASSWORD_RESET_PER_ADDRESS` | Requests from one caller that cost nothing. Higher, since an office behind one router is one address. | `20` | No |
+| `ORKNUX_PASSWORD_RESET_FIRST_WAIT` | The pause on the first request past the allowance; it doubles after that. | `2s` | No |
+| `ORKNUX_PASSWORD_RESET_LONGEST_WAIT` | Where that doubling stops. | `5m` | No |
+| `ORKNUX_PASSWORD_RESET_FORGET_AFTER` | How long a quiet address is remembered for. | `15m` | No |
+
+The forgotten-password form is throttled by the same rules as sign-in and counted
+separately, so somebody asking about your account repeatedly cannot put you into
+a pause on the sign-in page.
 
 ## Runs
 
@@ -265,10 +319,15 @@ files, no network and no threads. These bound what it can spend.
 | `ORKNUX_SLACK_RECONCILE_SECONDS` | How often open sockets are compared with stored connections, so a token pasted into the settings form starts listening without a restart. | `30` | No |
 | `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | How long a connection Slack refused is left alone. Changing the token clears the wait, so a corrected credential is not held back by it. | `300` | No |
 
-Sending mail is configured nowhere here. A mail server is a connection like any
-other, so the host, the port, the login, the address to send from and how the
-session is secured are typed into a workspace's connection form, and the
-password goes through the same encryption every other credential does.
+**A workspace's mail is not configured here.** The `ORKNUX_MAIL_*` variables
+above are the installation's own relay, and the only thing it sends today is a
+password reset. Mail a *workflow* sends is a connection like any other: the host,
+the port, the login, the address to send from and how the session is secured are
+typed into a workspace's connection form, and the password goes through the same
+encryption every other credential does. The two are deliberately separate - a
+workspace's credential belongs to one team and would stop working the day they
+rotated it, and a password reset has to work for somebody who belongs to no
+workspace at all.
 
 ## Chat, attachments and the tracker
 
@@ -293,6 +352,8 @@ workspace's own issue tracker needs nothing else configured here.
 | `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
 | `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is on another origin |
 | `ORKNUX_BASE_URL` | Where the interface is reached from, as somebody's browser spells it. It is what a mailed password reset link points at. Configured rather than worked out from the request, because the `Host` header is written by whoever is calling — a link built from it is a link an attacker chooses the address of, and this one opens an account. | `http://localhost:5173` | **Yes** for password resets |
+| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, written any way `DataSize` reads: `1MB`, `512KB`, `2000000`. That endpoint is open to the internet by necessity - a build server cannot sign in - and what arrives is kept several times over on the way to becoming a run's input, so its size is the one thing an anonymous caller must not get to choose. Anything larger is refused with 413 and never reaches a trigger. Raise it where a sender genuinely posts more. | `1MB` | No |
+| `ORKNUX_ASYNC_REQUEST_TIMEOUT` | How long a request that answered with a promise may stay open before the container gives up on it. The container's own default is thirty seconds, which is shorter than the five minutes `orknux_news` may be asked to wait - so a wait would have been cut off by the machinery that makes it cost nothing. Longer than the longest wait, with slack. | `330s` | No |
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider: the provider is where a leaver is disabled, and this is not the lock keeping anybody out. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface is served from this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |

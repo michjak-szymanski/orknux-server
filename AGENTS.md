@@ -28,10 +28,11 @@ rename them halfway.
 ## Commands
 
 ```
-docker compose up -d                     # postgres, openldap and temporal
-./mvnw spring-boot:run -pl app -am       # http://localhost:8080
-./mvnw test                              # every module
-./mvnw test -Dtest=IntegrationAPITest    # one class
+docker compose up -d                        # postgres, openldap and temporal
+./mvnw spring-boot:run -pl app -am          # http://localhost:8080
+./mvnw test                                 # every module, on Postgres
+./mvnw test -Dtest=IntegrationAPITest       # one class
+./mvnw test -Dorknux.test.database=sqlite   # the same suite, on SQLite
 ```
 
 `ORKNUX_SECRET_KEY` has to be set in the environment the server is started in.
@@ -94,9 +95,22 @@ nothing about a `CHECK` constraint, so `SqliteCheckConstraintTest` reads both
 files and covers that half - a value a `CHECK` allows on Postgres has to be
 allowed on SQLite too.
 
+**Know what the guards do not catch.** `SqliteCheckConstraintTest` compares the
+two schemas by constraint name only, because the Postgres history also holds
+constraints on tables it went on to drop and a name that no longer exists is not
+drift. So a `CHECK` added to a table that already existed, and folded into only
+one of the two files, slips past it - one arriving with a new table does not,
+since `validate` is looking for the table itself. If a migration widens or adds a
+`CHECK` on an existing table, read the baseline yourself rather than trusting a
+green run.
+
 The whole suite runs against either: `./mvnw test` on Postgres,
 `./mvnw test -Dorknux.test.database=sqlite` on SQLite. Run both when the schema
-moved.
+moved. `TestDatabase` is what switches them, before any Spring context exists: a
+Postgres container by default, and a file in `app/target` for SQLite, which needs
+no Docker. `SqliteSchemaTest` keeps a database of its own, deleted at the start of
+every run - a file left behind refuses the next run with a checksum mismatch the
+moment the baseline is edited, which is precisely when somebody is editing it.
 
 Module tables carry no foreign keys across a module boundary, so a deleted workspace
 is reported to the module rather than cascaded.
@@ -123,9 +137,18 @@ is reported to the module rather than cascaded.
   outbound calls; nothing else should touch a `secret` field. A Slack connection
   also holds an `appToken`, which is what Socket Mode opens the websocket with,
   and an SMTP connection's password is that same `secret` column — a second
-  password column would be a second one to remember to encrypt. Every one of them
+  password column would be a second one to remember to encrypt, and a shell's
+  private key and its passphrase are two more of the same. Every one of them
   goes through `SecretConverter`, so a new credential is a `@Convert` on the
   entity and nothing else.
+- **New configuration is a named `ORKNUX_` variable, and a row in
+  `DOCKERHUB.md`.** Spring would let any property be overridden by a name derived
+  from its path, but a derived name is one nobody can look up and one that
+  changes when a property moves - so every setting an operator would touch is
+  written `${ORKNUX_SOMETHING:default}` in `application.yml`, with the reason
+  beside it. `DOCKERHUB.md` claims to list all of them; adding one and not the
+  other makes that claim false, and the claim is what an operator plans an
+  upgrade from.
 - **What arrives is published, not called.** `modules/connection` opens the
   sockets and knows nothing of triggers, so `SlackListener` publishes an
   `IncomingEvent` and `IncomingTriggerListener` in `app` decides what runs. The
@@ -215,6 +238,32 @@ mattered has moved on, and what survives is a list of what was touched.
 The order is: land the work, write the entry, bump the version, tag. The tag is
 what CI turns into images, so anything after it is in the next release whether
 or not it belongs there.
+
+Concretely, for `X.Y.Z`:
+
+1. Move the **Unreleased** heading in `CHANGELOG.md` to `## X.Y.Z`.
+2. Bump `<version>` in the root `pom.xml` and the `<parent>` version in
+   `app/pom.xml`, `modules/connection/pom.xml` and `modules/execution/pom.xml`.
+   The application reports `@project.version@` on the monitoring screen, so a
+   version left behind is a version an operator is shown.
+3. Bump `version` in `orknux-ui/package.json` and move the submodule pin. The two
+   halves are released together under one number.
+4. Move the pins in `deploy/compose.yaml` - `ORKNUX_SERVER_TAG` and
+   `ORKNUX_UI_TAG` default to the release, not to `latest` - and any version
+   quoted in `deploy/README.md`.
+5. Tag `vX.Y.Z` and push it.
+
+CI does the rest: `.github/workflows/ci.yml` builds, runs the suite, runs
+`scripts/verify-image.sh` against the built image, and only then publishes.
+`latest` follows `main`; a `v*` tag also publishes `X.Y.Z` and `X.Y`; every build
+is tagged `sha-<commit>`, which is the only tag that never moves.
+
+**`DOCKERHUB.md` is not published by anything.** It is the Docker Hub repository
+description and is pasted there by hand, so a variable documented in it after a
+release is a variable Docker Hub does not know about until somebody goes and
+updates the description. It claims to list every environment variable the server
+reads; `grep -oE 'ORKNUX_[A-Z0-9_]+' app/src/main/resources/application.yml`
+against it is how that claim gets checked.
 
 Three headings, and no others: **Added** for what is new, **Changed** for what
 an existing installation will do differently - the section people actually need

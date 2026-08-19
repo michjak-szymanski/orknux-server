@@ -14,7 +14,7 @@ docker compose up -d
 Then open **http://localhost:8080** and sign in as `alice` / `password`.
 
 The first start takes a minute or two: Temporal applies its own schema, and the
-server runs its way through eighty-odd Flyway migrations before it answers
+server runs its way through ninety-odd Flyway migrations before it answers
 anything. `docker compose logs -f orknux-server` is where it says so.
 
 ## The secret key, before anything else
@@ -48,7 +48,7 @@ length, and whether every stored secret can still be read with it.
 
 | Service | Required? | What it is for |
 | --- | --- | --- |
-| `postgres` | Yes | Everything Orknux knows. Sessions live here too, so signing in survives a restart. |
+| `postgres` | Yes, unless you use SQLite *and* drop Temporal | Everything Orknux knows. Sessions live here too, so signing in survives a restart. Temporal keeps its own state here as well, which is why dropping it takes both. |
 | `ldap` | Yes, unless you use OIDC or the internal administrator below | Somewhere to sign in against. Orknux keeps its own users too, but nothing seeds the first one for you. |
 | `temporal` | Yes, as configured here | What makes a run durable: it survives a restart, retries a step, and can be looked at afterwards. |
 | `orknux-server` | Yes | The API and the engine. |
@@ -93,6 +93,60 @@ ORKNUX_TEMPORAL_UI_URL=http://localhost:8233 docker compose up -d
 ```
 
 The second line is what makes a run inside Orknux link out to its history.
+
+## Postgres or SQLite
+
+Orknux keeps its state in either, and which one is `ORKNUX_DB_URL` on the server
+and nothing else - the driver, the Hibernate dialect and which set of migrations
+Flyway reads are all worked out from that one line.
+
+```
+ORKNUX_DB_URL: jdbc:postgresql://postgres:5432/orknux   # a server, and what this file runs
+ORKNUX_DB_URL: jdbc:sqlite:/home/orknux/orknux.db       # a file, and nothing else to run
+```
+
+**Take Postgres unless you can say why not.** It takes more than one writer, it
+is what the suite runs against by default, and it is where any behaviour under
+load has actually been watched. It is also what this file already brings up, so
+choosing it costs you nothing you are not already paying.
+
+**SQLite is for the installation of one, or few.** There is no second container,
+no password, and a backup is a file copy. Everything the test suite covers works
+- signing in, workspaces, issues, agents, workflows, runs, chat, the MCP
+endpoint, attachments, sessions, password resets - and the suite is run against
+both. What it costs is worth knowing before rather than after:
+
+- **One writer at a time.** SQLite takes a single write lock for the database, so
+  two requests that both write are serialised rather than run together. Quick
+  enough for a handful of people, and not a database to run a busy installation
+  on.
+- **One process, one machine.** The file is the installation. Two servers pointed
+  at one file over a network share will corrupt it, so there is no second node
+  and no rolling restart.
+- **No time zone on a timestamp.** SQLite has no zoned type. The moment is kept
+  and compares correctly; the original offset is not stored.
+- **Backups are a file copy, and only when nothing is writing.** There is no
+  `pg_dump` here. A running server writes `-wal` and `-shm` files beside the
+  database, so copy all three together or stop the server first.
+
+Two things to get right when you point it at a file. Put it on a volume that
+outlives the container - `/home/orknux` is the one this file already mounts, and
+the one the server user can write. And **the directory has to exist**: the server
+creates the database file, not the folder holding it, and says which path is
+missing rather than failing with something about a connection.
+
+Using it here means setting `ORKNUX_DB_URL` on `orknux-server`, dropping
+`ORKNUX_DB_USERNAME` and `ORKNUX_DB_PASSWORD` (a file has nobody to authenticate
+to, and they are ignored), and removing the `postgres` entry under `depends_on:`.
+The `postgres` service itself only goes if Temporal goes too: Temporal keeps its
+own state there, and the `auto-setup` image this file runs is pointed at
+Postgres. So the small installation that really is a file and nothing else is the
+one that also sets `ORKNUX_TEMPORAL_ENABLED=false` and drops both services, with
+the trade the Temporal section above describes - runs on the calling thread, no
+retries, no resumption, and a restart mid-run loses the run.
+
+The README's **The database** section in the source repository is the full list
+of what differs underneath.
 
 ## Signing in without a directory
 
@@ -169,11 +223,43 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP` or `OIDC`. |
 | `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | *empty* | The first internal administrator, created at startup if nobody has that name. Empty seeds nobody. See above. |
 | `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | *empty* | What they sign in with the first time. At least 12 characters, and something to change and unset once you are in. |
-| `ORKNUX_SERVER_TAG` | `0.4` | Which `orknux/orknux-server` image. |
-| `ORKNUX_UI_TAG` | `0.4` | Which `orknux/orknux-ui` image. |
+| `ORKNUX_SERVER_TAG` | `0.6` | Which `orknux/orknux-server` image. |
+| `ORKNUX_UI_TAG` | `0.6` | Which `orknux/orknux-ui` image. |
 | `ORKNUX_TEMPORAL_UI_URL` | *empty* | Where a run links out to. Empty offers no links, which is right while the Temporal UI is not running. |
 | `ORKNUX_ALLOWED_ORIGINS` | *empty* | Cross-origin callers to allow. Empty is correct here, since the browser only talks to `orknux-ui`. |
 | `ORKNUX_TEMPORAL_UI_PORT` | `8233` | Only with `--profile debug`. |
+| `ORKNUX_OIDC_ISSUER` | *empty* | The OIDC provider, by its issuer. Only read when `ORKNUX_AUTH_METHOD=OIDC`. |
+| `ORKNUX_OIDC_CLIENT_ID` | *empty* | This installation, as the provider knows it. |
+| `ORKNUX_OIDC_CLIENT_SECRET` | *empty* | Its secret, where the provider issued one. |
+| `ORKNUX_OIDC_AUDIENCES` | *the client id* | Which audiences a bearer token may name, comma separated. **The one that can lock an upgrade out** - see below. |
+| `ORKNUX_BASE_URL` | *empty* | Where this installation is reached from, as a browser spells it, and what a mailed password reset link points at. Empty writes no link and sends none. |
+| `ORKNUX_MAIL_HOST` | *empty* | The relay this installation sends its own mail through. Empty means it cannot, so there is no password reset. |
+| `ORKNUX_MAIL_FROM` | *empty* | What that mail is from. A relay will not take a message without one. |
+| `ORKNUX_MAIL_PORT` | *by security* | Empty takes 587 for STARTTLS, 465 for TLS, 25 for none. |
+| `ORKNUX_MAIL_USERNAME`, `ORKNUX_MAIL_PASSWORD` | *empty* | Empty sends without authenticating, which is what an internal relay usually wants. |
+| `ORKNUX_MAIL_SECURITY` | `STARTTLS` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than merely offered. |
+| `ORKNUX_SESSION_COOKIE_SAME_SITE` | `lax` | `strict` once nothing links into Orknux from elsewhere. |
+
+**Resetting a forgotten password needs three of those.** A reset is a link mailed
+to the address on the account, good once and for an hour, and it only exists for
+an internal user who already has a password - a directory or OIDC account's
+password belongs to the provider. It is off until `ORKNUX_MAIL_HOST`,
+`ORKNUX_MAIL_FROM` and `ORKNUX_BASE_URL` are all set, and until they are the form
+still answers the same polite sentence to everybody and the log says what is
+missing. That is deliberate: an answer that varied would say which addresses have
+accounts here.
+
+**`ORKNUX_OIDC_AUDIENCES` is the setting most likely to break an upgrade.** A
+bearer token has to name this installation in its `aud` claim - checked since
+0.5.0, where before that only the issuer was - and empty means the client id,
+which is what a provider writes into a token minted for this application and is
+not what two common providers write. Keycloak names
+`account` unless an audience mapper is configured against this client; Entra
+names the application's App ID URI. Browser sign-in is unaffected either way,
+but API calls that worked yesterday answer 401, with `The aud claim is not
+valid` in the server log. Either configure the provider to name this client, or
+set this to what its tokens actually carry - it takes a list, and a token has to
+match one of them rather than all.
 
 Everything else the server understands is one environment variable on
 `orknux-server`, all prefixed the same way, and
@@ -189,13 +275,13 @@ Both images are published from CI on every push to `main`:
 - `sha-<commit>` never moves, and is the one to pin to if you want to be certain
   what you are running.
 
-`compose.yaml` pins `0.4`, so what you bring up today is what you bring up next
+`compose.yaml` pins `0.6`, so what you bring up today is what you bring up next
 week. `latest` follows `main` and moving under a running deployment is how an
 upgrade happens to you rather than being something you did. Set
 `ORKNUX_SERVER_TAG` and `ORKNUX_UI_TAG` to move deliberately, and to
 `sha-<commit>` if you want to be certain to the commit.
 
-Both repositories are at `0.4`/`0.4.0`, released together, and that is what
+Both repositories are at `0.6`/`0.6.0`, released together, and that is what
 this file uses. They are meant to move together - the interface and the server
 are one product released under one version - so pin them to the same number.
 Check what exists before reaching for a different one:
@@ -227,7 +313,11 @@ skipped:
    provider's groups grants which role is `orknux.security.role-mapping`, and it
    is YAML only - the keys are claim values full of dots and commas, and the
    environment-variable spelling of one is not something anybody should have to
-   work out. Mount an `application.yml` to set it.
+   work out. Mount an `application.yml` to set it. If anything but a browser
+   signs in - the CLI, a script, an assistant on the MCP endpoint - check what
+   your provider writes into `aud` and set `ORKNUX_OIDC_AUDIENCES` accordingly,
+   because the default is the client id and Keycloak and Entra both write
+   something else.
 4. **Or run neither**, with the internal administrator above, and then finish
    the job: sign in, change that password from the account's own preferences,
    and unset `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` and

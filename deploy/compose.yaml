@@ -41,6 +41,13 @@ services:
   # start. Orknux's schema is Flyway's, applied by the server as it boots, and
   # JPA runs with `ddl-auto: validate` so the migrations are the only thing that
   # ever changes it. That is why nothing here initialises a schema.
+  #
+  # Postgres is what this file runs and what a deployment should use. Orknux
+  # also runs on SQLite - a file, no second container, no password - and which
+  # one an installation uses is ORKNUX_DB_URL on the server below and nothing
+  # else. It costs one writer at a time, one machine and one process, so it is
+  # not a swap to make without reading **Postgres or SQLite** in
+  # deploy/README.md first. Temporal keeps its own state in Postgres either way.
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:18
@@ -148,11 +155,11 @@ services:
   # ---------------------------------------------------------------------------
   orknux-server:
     # Pinned, so what you bring up today is what you bring up next week.
-    # ORKNUX_SERVER_TAG moves it: a release (`0.4`, `0.4.0`), `sha-<commit>`
+    # ORKNUX_SERVER_TAG moves it: a release (`0.6`, `0.6.0`), `sha-<commit>`
     # which never moves, or `latest` to follow main and accept that an upgrade
     # can happen to you. The interface below is pinned to the same number on
     # purpose - the two halves are released together.
-    image: orknux/orknux-server:${ORKNUX_SERVER_TAG:-0.4}
+    image: orknux/orknux-server:${ORKNUX_SERVER_TAG:-0.6}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -191,6 +198,16 @@ services:
       ORKNUX_DB_PASSWORD: ${ORKNUX_DB_PASSWORD:-orknux}
 
       ORKNUX_AUTH_METHOD: ${ORKNUX_AUTH_METHOD:-LDAP}
+
+      # The first administrator, for an installation running with neither a
+      # directory nor an OIDC provider. Both empty seeds nobody, which is right
+      # wherever a provider exists. Set both and one internal administrator is
+      # created on the next start; it only ever creates, so an account that
+      # already has that name is left exactly as it is. See deploy/README.md -
+      # a password in a variable is a way in and not a credential to keep.
+      ORKNUX_BOOTSTRAP_ADMIN_USERNAME: ${ORKNUX_BOOTSTRAP_ADMIN_USERNAME:-}
+      ORKNUX_BOOTSTRAP_ADMIN_PASSWORD: ${ORKNUX_BOOTSTRAP_ADMIN_PASSWORD:-}
+
       ORKNUX_LDAP_URLS: ldap://ldap:389
       ORKNUX_LDAP_BASE: dc=orknux,dc=io
       ORKNUX_LDAP_BIND_DN: cn=admin,dc=orknux,dc=io
@@ -206,6 +223,50 @@ services:
       # only ever talks to orknux-ui, and orknux-ui forwards. Fill this in only
       # if you serve the interface from a different origin to the API.
       ORKNUX_ALLOWED_ORIGINS: ${ORKNUX_ALLOWED_ORIGINS:-}
+
+      # Where this installation is reached from, as somebody's browser spells
+      # it, and what a mailed password reset link points at. Empty means no
+      # link can be written and none is sent - which is why this stays empty
+      # until somebody knows the address, rather than guessing at localhost.
+      # It is configured rather than read off the Host header because that
+      # header is written by whoever is calling, and the link opens an account.
+      ORKNUX_BASE_URL: ${ORKNUX_BASE_URL:-}
+
+      # The installation's own mail relay - today, the password reset link and
+      # nothing else. Not a workspace's SMTP connection: that credential belongs
+      # to one team, and a reset has to work for somebody who belongs to no
+      # workspace. Empty host or from means this installation cannot send its
+      # own mail, which is a supported state - it simply cannot offer a reset,
+      # and says so in the log. Set both, and ORKNUX_BASE_URL above, to turn it
+      # on. Port empty takes what the security usually listens on: 587 for
+      # STARTTLS, 465 for TLS, 25 for none.
+      ORKNUX_MAIL_HOST: ${ORKNUX_MAIL_HOST:-}
+      ORKNUX_MAIL_FROM: ${ORKNUX_MAIL_FROM:-}
+      ORKNUX_MAIL_PORT: ${ORKNUX_MAIL_PORT:-}
+      ORKNUX_MAIL_USERNAME: ${ORKNUX_MAIL_USERNAME:-}
+      ORKNUX_MAIL_PASSWORD: ${ORKNUX_MAIL_PASSWORD:-}
+      ORKNUX_MAIL_SECURITY: ${ORKNUX_MAIL_SECURITY:-STARTTLS}
+
+      # Which audiences a bearer token may name, comma separated. Empty means
+      # the client id, which is what a provider writes into a token minted for
+      # this application. Only read under OIDC, and the one setting that can
+      # lock an upgrade out: Keycloak names `account` unless an audience mapper
+      # is configured against this client, and Entra names the App ID URI.
+      # Neither is the client id, and the symptom is 401 on every API call.
+      ORKNUX_OIDC_AUDIENCES: ${ORKNUX_OIDC_AUDIENCES:-}
+
+      # The provider itself, read only when ORKNUX_AUTH_METHOD is OIDC and
+      # ignored otherwise. The issuer is enough on its own - its discovery
+      # document says where the endpoints are and which keys sign its tokens.
+      # Set these three, set ORKNUX_AUTH_METHOD=OIDC, and the `ldap` service can
+      # go along with its entry under depends_on.
+      ORKNUX_OIDC_ISSUER: ${ORKNUX_OIDC_ISSUER:-}
+      ORKNUX_OIDC_CLIENT_ID: ${ORKNUX_OIDC_CLIENT_ID:-}
+      ORKNUX_OIDC_CLIENT_SECRET: ${ORKNUX_OIDC_CLIENT_SECRET:-}
+
+      # `strict` once nothing links into Orknux from elsewhere; `lax` is what
+      # lets a link from Slack or an email arrive already signed in.
+      ORKNUX_SESSION_COOKIE_SAME_SITE: ${ORKNUX_SESSION_COOKIE_SAME_SITE:-lax}
 
       # Where attached files land. It must be an absolute path on the volume
       # below - the default is relative to the working directory, which in a
@@ -241,7 +302,7 @@ services:
   # with no way out to the internet still has it.
   # ---------------------------------------------------------------------------
   orknux-ui:
-    image: orknux/orknux-ui:${ORKNUX_UI_TAG:-0.4}
+    image: orknux/orknux-ui:${ORKNUX_UI_TAG:-0.6}
     restart: unless-stopped
     depends_on:
       orknux-server:

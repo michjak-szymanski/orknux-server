@@ -90,7 +90,7 @@ class IssueNewsTest(
 
     private fun readAs(name: String, wait: Int = 0): List<Map<String, Any?>> {
         val answer = asUser(name) {
-            tools.news(OrknuxScope(workspaceId = workspaceId, mayWrite = true), """{"wait": $wait}""")
+            tools.news(OrknuxScope(workspaceId = workspaceId, mayWrite = true), """{"wait": $wait}""").join()
         }
         val parsed = mapper.readValue(answer, Map::class.java)
         assertThat(parsed["reading"]).isEqualTo(name)
@@ -166,7 +166,7 @@ class IssueNewsTest(
 
             val began = System.currentTimeMillis()
             val told = asUser("alice") {
-                tools.news(OrknuxScope(workspaceId = workspaceId, mayWrite = true), """{"wait": 5}""")
+                tools.news(OrknuxScope(workspaceId = workspaceId, mayWrite = true), """{"wait": 5}""").join()
             }
             val took = System.currentTimeMillis() - began
 

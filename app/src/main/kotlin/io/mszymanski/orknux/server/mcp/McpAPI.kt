@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RestController
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
+import java.util.concurrent.CompletableFuture
 
 /**
  * Orknux as an MCP server, for agents that live outside it.
@@ -44,6 +45,18 @@ import tools.jackson.databind.ObjectMapper
  * JSON-RPC 2.0 over plain HTTP POST. No SSE and no session resumption: this
  * server has no long-lived state to resume and never sends an unsolicited
  * message, so a request and its answer is the whole of the transport.
+ *
+ * **The answer is a promise**, because one tool waits. `orknux_news` holds its
+ * call open until something happens on an issue, for as long as five minutes,
+ * and anybody who can sign in can ask for it. Answering on the thread that took
+ * the request would have meant a couple of hundred such calls holding every
+ * thread Tomcat has and taking the server off the air - through the one tool
+ * whose whole purpose is to wait. Everything else here completes before it
+ * returns, so nothing is slower for it.
+ *
+ * A wait this long outlives the container's default timeout for an unanswered
+ * request, so `spring.mvc.async.request-timeout` is set past it in
+ * `application.yml`; the two belong together and moving one means moving both.
  */
 @RestController
 class McpAPI(
@@ -54,7 +67,7 @@ class McpAPI(
 ) {
 
     @PostMapping("/mcp/{workspaceId}", produces = [MediaType.APPLICATION_JSON_VALUE])
-    fun rpc(@PathVariable workspaceId: Long, @RequestBody body: JsonNode): ResponseEntity<Any> {
+    fun rpc(@PathVariable workspaceId: Long, @RequestBody body: JsonNode): CompletableFuture<ResponseEntity<Any>> {
         val method = body.path("method").stringValue().orEmpty()
         val requestId = body.path("id").takeUnless { it.isMissingNode || it.isNull }
 
@@ -69,8 +82,10 @@ class McpAPI(
          * "not yours", the way it does not anywhere else here.
          */
         val workspace = workspaces.findByIdOrNull(workspaceId)?.takeIf { access.canSee(it) }
-            ?: return ResponseEntity.ok(
-                error(requestId, INVALID_PARAMS, "There is no workspace $workspaceId that you can see"),
+            ?: return done(
+                ResponseEntity.ok(
+                    error(requestId, INVALID_PARAMS, "There is no workspace $workspaceId that you can see"),
+                ),
             )
 
         val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = true)
@@ -83,17 +98,21 @@ class McpAPI(
          */
         if (id == null) {
             log.debug("MCP notification {} for workspace {}", method, workspaceId)
-            return ResponseEntity.accepted().build()
+            return done(ResponseEntity.accepted().build())
         }
 
         return when (method) {
-            "initialize" -> ok(id, initialize())
-            "tools/list" -> ok(id, mapOf("tools" to tools.specs(scope).map(::described)))
-            "tools/call" -> ok(id, call(scope, body.path("params")))
-            "ping" -> ok(id, emptyMap<String, Any>())
-            else -> ResponseEntity.ok(error(id, METHOD_NOT_FOUND, "This server does not do $method"))
+            "initialize" -> done(ok(id, initialize()))
+            "tools/list" -> done(ok(id, mapOf("tools" to tools.specs(scope).map(::described))))
+            "tools/call" -> call(scope, body.path("params")).thenApply { answered -> ok(id, answered) }
+            "ping" -> done(ok(id, emptyMap<String, Any>()))
+            else -> done(ResponseEntity.ok(error(id, METHOD_NOT_FOUND, "This server does not do $method")))
         }
     }
+
+    /** An answer that was ready before the method returned, which is most of them. */
+    private fun done(answer: ResponseEntity<Any>): CompletableFuture<ResponseEntity<Any>> =
+        CompletableFuture.completedFuture(answer)
 
     private fun error(id: JsonNode?, code: Int, says: String): Map<String, Any?> =
         mapOf("jsonrpc" to "2.0", "id" to id, "error" to mapOf("code" to code, "message" to says))
@@ -117,20 +136,21 @@ class McpAPI(
      * JSON-RPC error: the protocol reserves those for the call not happening at
      * all, and a model needs to read what went wrong to try something else.
      */
-    private fun call(scope: OrknuxScope, params: JsonNode): Map<String, Any> {
+    private fun call(scope: OrknuxScope, params: JsonNode): CompletableFuture<Map<String, Any>> {
         val name = params.path("name").stringValue().orEmpty()
         if (!tools.handles(name)) {
-            return content("There is no tool called $name", failed = true)
+            return CompletableFuture.completedFuture(content("There is no tool called $name", failed = true))
         }
 
         val arguments = params.path("arguments").takeUnless { it.isMissingNode || it.isNull }
-        val answer = tools.run(scope, name, arguments?.let(mapper::writeValueAsString) ?: "{}")
-
-        // The surface reports its own refusals as `{"error": ...}`; those are
-        // the tool's answer, not a transport failure, but the client should
-        // still see them as an error rather than as a result to act on.
-        val refused = runCatching { mapper.readTree(answer).has("error") }.getOrDefault(false)
-        return content(answer, failed = refused)
+        return tools.runAsync(scope, name, arguments?.let(mapper::writeValueAsString) ?: "{}").thenApply { answer ->
+            // The surface reports its own refusals as `{"error": ...}`; those
+            // are the tool's answer, not a transport failure, but the client
+            // should still see them as an error rather than as a result to act
+            // on.
+            val refused = runCatching { mapper.readTree(answer).has("error") }.getOrDefault(false)
+            content(answer, failed = refused)
+        }
     }
 
     private fun content(text: String, failed: Boolean): Map<String, Any> = mapOf(

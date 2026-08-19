@@ -27,6 +27,12 @@ import org.springframework.security.authentication.AuthenticationManager
  * Username/password sign-in against the directory. The credentials are checked by
  * the LDAP [AuthenticationManager]; the resulting authentication is stored in the
  * HTTP session, so subsequent GraphQL calls are attributed to that LDAP user.
+ *
+ * This is the one door anybody may knock on, so it counts the knocking. See
+ * [SignInThrottle] for what a wrong password costs the second and the tenth
+ * time. It is asked here rather than in a filter for one reason: the throttle
+ * needs the username, and the username is in the body - a filter would have to
+ * read and parse the request to find out what the endpoint is handed anyway.
  */
 @RestController
 @RequestMapping(LOGIN_PATH)
@@ -36,6 +42,7 @@ class SessionAPI(
     private val resolver: RoleResolver,
     private val internal: InternalAuthentication,
     private val users: AppUserRepository,
+    private val throttle: SignInThrottle,
 ) {
 
     private val securityContextRepository = HttpSessionSecurityContextRepository()
@@ -47,6 +54,18 @@ class SessionAPI(
         response: HttpServletResponse,
     ): SessionUser {
         /*
+         * Whoever is knocking, before anything is checked for them.
+         *
+         * The address is the one the connection came from and not a header,
+         * because a header is written by the caller: honouring `X-Forwarded-For`
+         * here would hand an attacker a fresh address per request and leave the
+         * per-address count counting nothing. Behind a proxy every caller shares
+         * one address, and it is the per-username count that does the work.
+         */
+        val from = request.remoteAddr ?: "unknown"
+        throttle.check(credentials.username, from)
+
+        /*
          * Somebody this installation made up, checked first.
          *
          * Before the directory, and whatever the configured method is: an
@@ -55,6 +74,7 @@ class SessionAPI(
          * in. Everybody else falls through to the door below.
          */
         internal.authenticate(credentials.username, credentials.password)?.let { authenticated ->
+            throttle.succeeded(credentials.username, from)
             request.getSession(false)?.invalidate()
             val context = SecurityContextHolder.createEmptyContext().apply { this.authentication = authenticated }
             SecurityContextHolder.setContext(context)
@@ -66,8 +86,13 @@ class SessionAPI(
          * There is no password to check where the provider holds them. Refused
          * rather than quietly failing against a directory this installation does not
          * use, because the answer is not "wrong password" — it is "not this way".
+         *
+         * Counted as a failure all the same. The password was already checked
+         * against an internal user on the way here, and that is real work an
+         * unlimited caller would be spending.
          */
         if (properties.authMethod != AuthMethod.LDAP) {
+            throttle.failed(credentials.username, from)
             throw ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "This installation signs in with ${properties.oidc.displayName}, not with a password.",
@@ -79,8 +104,11 @@ class SessionAPI(
                 UsernamePasswordAuthenticationToken(credentials.username, credentials.password),
             )
         } catch (_: AuthenticationException) {
+            throttle.failed(credentials.username, from)
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password")
         }
+
+        throttle.succeeded(credentials.username, from)
 
         // Drop any pre-login session so the authenticated user gets a fresh id.
         request.getSession(false)?.invalidate()

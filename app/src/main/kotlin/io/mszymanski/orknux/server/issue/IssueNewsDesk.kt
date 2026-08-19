@@ -9,8 +9,8 @@ import org.springframework.transaction.annotation.Transactional
 import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.OffsetDateTime
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 
 /** An audience for news: what it is, and the name both ends can say. */
 data class NewsReader(val kind: AssigneeKind, val name: String, val id: String? = null)
@@ -39,13 +39,17 @@ class IssueNewsDesk(
     /*
      * Everybody waiting, woken together.
      *
-     * One condition for the whole server rather than one per workspace: a
-     * waiter that wakes for somebody else's news asks its own question again
-     * and goes back to sleep, which costs a query nobody notices, and the
-     * bookkeeping of a map of locks costs more than it saves at this size.
+     * One list for the whole server rather than one per workspace: a waiter
+     * woken by somebody else's news asks its own question again and goes back
+     * to waiting, which costs a query nobody notices, and the bookkeeping of a
+     * map costs more than it saves at this size.
+     *
+     * A promise rather than a lock, because a waiter is a call somebody is
+     * holding open and a lock would mean a thread held open with it. Nothing
+     * here sleeps; the promise is kept and whoever was waiting on it carries on
+     * wherever they choose to.
      */
-    private val lock = ReentrantLock()
-    private val arrived = lock.newCondition()
+    private val bells = ConcurrentHashMap.newKeySet<CompletableFuture<Boolean>>()
 
     /** It was given to somebody. Only the new owner is told. */
     @Transactional
@@ -130,21 +134,23 @@ class IssueNewsDesk(
     }
 
     /**
-     * Sleep until something is written down, or until the time is up.
+     * A promise kept the moment anything is written down.
      *
-     * @return whether anything woke it, which the caller uses only to decide
-     *   whether asking again is worth it.
+     * Taken before looking, so news written between the look and the wait rings
+     * this rather than falling into the gap between them. The caller completes
+     * it themselves when they give up or when their own time is out, and doing
+     * so takes it off the list - so a reader that walked away leaves nothing
+     * behind.
+     *
+     * Whatever the caller hangs off it should be hung asynchronously. This is
+     * kept from inside `afterCommit` on the thread that wrote the news, and
+     * that thread has a request of its own to finish.
      */
-    fun awaitNews(millis: Long): Boolean {
-        lock.lock()
-        try {
-            return arrived.await(millis, TimeUnit.MILLISECONDS)
-        } catch (interrupted: InterruptedException) {
-            Thread.currentThread().interrupt()
-            return false
-        } finally {
-            lock.unlock()
-        }
+    fun nextNews(): CompletableFuture<Boolean> {
+        val bell = CompletableFuture<Boolean>()
+        bells += bell
+        bell.whenComplete { _, _ -> bells.remove(bell) }
+        return bell
     }
 
     private fun write(
@@ -196,13 +202,12 @@ class IssueNewsDesk(
         )
     }
 
+    /**
+     * Copied out before it is walked: keeping a promise takes it off the list,
+     * and a set being read while it shrinks is not something to rely on.
+     */
     private fun signal() {
-        lock.lock()
-        try {
-            arrived.signalAll()
-        } finally {
-            lock.unlock()
-        }
+        bells.toList().forEach { it.complete(true) }
     }
 
     /** Whoever has it and whoever filed it: the two people an issue concerns. */

@@ -66,6 +66,26 @@ class SecurityConfig {
                  * error page carries a status and a message, not data.
                  */
                 authorize(DispatcherTypeRequestMatcher(DispatcherType.ERROR), permitAll)
+                /*
+                 * The async dispatch, which is the back half of a request that
+                 * answered with a promise rather than a value.
+                 *
+                 * The same argument as the error dispatch above, and for the
+                 * same reason it has to be said: the container comes back to
+                 * finish writing the response and that arrives here looking
+                 * like a fresh request, with nobody on it - the filters that
+                 * establish who is calling all decline to run twice, by
+                 * design. Refusing it answers 401 to a caller who was
+                 * authorised on the way in and whose answer is already
+                 * computed.
+                 *
+                 * Nothing is opened by this. A request only reaches an async
+                 * dispatch by having passed the check above on its first, and
+                 * what happens here is serialising an answer that was decided
+                 * while somebody was still known to be there. `orknux_news` is
+                 * what made it necessary; see [McpAPI].
+                 */
+                authorize(DispatcherTypeRequestMatcher(DispatcherType.ASYNC), permitAll)
                 authorize(HttpMethod.POST, LOGIN_PATH, permitAll)
                 /*
                  * How to sign in is not itself a secret, and the sign-in screen has

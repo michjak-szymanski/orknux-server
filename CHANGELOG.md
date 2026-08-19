@@ -74,6 +74,37 @@ have failed.
 
 ### Fixed
 
+- **Waiting for tracker news no longer costs a thread.** `orknux_news` can be
+  asked to hold its call open for up to five minutes, and it did that by sitting
+  on the thread that took the request. Tomcat has two hundred of those and
+  anybody who can sign in can ask for the longest wait there is, so a couple of
+  hundred such calls took the whole server off the air - through the one tool
+  whose entire purpose is waiting. The call is still held open and behaves
+  exactly as before; between one look and the next it now holds no thread, no
+  transaction and no database connection. A request that waits this long outlives
+  the container's default patience, so `ORKNUX_ASYNC_REQUEST_TIMEOUT` sets how
+  long a request answered this way may stay open, defaulting to `330s`.
+- **A webhook body has a size limit.** The webhook endpoint is open to the
+  internet by necessity - a build server cannot sign in - and it accepted a body
+  of any size, which then became a string, a tree, a copy of the tree, its
+  serialisation and a row in the run's input. An anonymous caller chose the size
+  of all five. `ORKNUX_WEBHOOK_MAX_BODY_SIZE` now bounds it, defaulting to `1MB`,
+  which no real webhook approaches; anything larger is refused with 413 before it
+  is read, and never reaches a trigger or its history. Raise it where a sender
+  genuinely posts more.
+- **Signing in can no longer be tried without limit.** `POST /api/session`
+  counted nothing, so a username somebody knew existed could be guessed at as
+  fast as the network allowed - and under LDAP every attempt landed on the
+  directory as well. Wrong passwords are now counted per username and per
+  address: the first few cost nothing, after which there is a pause that doubles
+  and then stops. Nothing locks: the pause always ends, a successful sign-in
+  clears the count, and so does a quarter of an hour of quiet, so nobody can be
+  shut out by somebody else guessing at their name badly on purpose. Somebody
+  made to wait is told so with a 429 and how long to leave it.
+  `ORKNUX_SIGN_IN_PER_USERNAME` (5), `ORKNUX_SIGN_IN_PER_ADDRESS` (20),
+  `ORKNUX_SIGN_IN_FIRST_WAIT` (2s), `ORKNUX_SIGN_IN_LONGEST_WAIT` (5m) and
+  `ORKNUX_SIGN_IN_FORGET_AFTER` (15m) change it. The counts are kept in the
+  process, so two instances each keep their own.
 - **The files sent into a chat are as private as the chat.** A chat belongs to
   whoever started it, but the documents attached to one were checked against the
   workspace: anybody who could see the workspace could list the attachments on

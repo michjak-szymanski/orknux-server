@@ -141,6 +141,32 @@ environment-variable spelling of one is not something anybody should have to
 work out. Empty is a working configuration: a role with no mapping is granted to
 whoever holds an authority derived from its own name.
 
+**The first administrator**, for an installation running with neither a
+directory nor an OIDC provider. Nothing else can make one: an account is created
+by an administrator, or written down when a provider vouches for somebody at the
+door, so an installation with no provider has nobody to create the administrator
+who could create you. Set both of these and one internal administrator is
+created at startup, holding the built-in `Administrators` role and signing in
+with a password on the sign-in form, which internal users may always do whatever
+`ORKNUX_AUTH_METHOD` says.
+
+It only ever creates. A user of that name that already exists is left exactly as
+it is, password and roles alike, so leaving the variables set cannot put back a
+password somebody changed or a role somebody deliberately took away, and the log
+says it left the account alone. The password has to be at least 12 characters,
+the same minimum as everywhere else; a shorter one seeds nobody rather than
+making an account nobody could use.
+
+A password in an environment variable is readable by anything that can see the
+process and sits in whatever `.env` file it was written into. It is a way in
+rather than a credential to keep: sign in, change it from the account's own
+preferences, then unset both variables.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | The first administrator's username, created at startup if no user has it. Empty seeds nobody. | *none* | **Yes** with no directory and no OIDC |
+| `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | What they sign in with the first time. At least 12 characters. Change it from inside and unset this. | *none* | With the above |
+
 **Resetting a forgotten password** — a link mailed to the address on the
 account, good once and for an hour. Only for a user this installation made up
 who already has a password: a directory or OIDC account's password belongs to

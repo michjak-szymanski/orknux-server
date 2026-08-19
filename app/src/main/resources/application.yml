@@ -169,6 +169,29 @@ orknux:
     # a server that has stopped offering it is refused rather than quietly
     # receiving the password in the clear.
     security: ${ORKNUX_MAIL_SECURITY:STARTTLS}
+  bootstrap-admin:
+    # The first administrator, for an installation that has no directory and no
+    # OIDC provider to sign in against. Without this such an installation cannot
+    # be entered at all: an account is made by an administrator or written down
+    # when a provider vouches for somebody, so there is nobody to create the
+    # administrator who could create you.
+    #
+    # Both empty, which is right wherever a provider exists - the people are the
+    # provider's, and an account made here would be a second way in that its
+    # policies do not reach.
+    #
+    # Only ever creates. A user of this name that already exists is left exactly
+    # as it is, password and roles alike, so a variable still set on the tenth
+    # restart cannot put back a password somebody changed or a role somebody
+    # deliberately took away. The password has to meet the same minimum as any
+    # other; a shorter one seeds nobody and says so.
+    #
+    # A password in a variable is readable by anything that can see this
+    # process's environment and sits in whatever file the variables were written
+    # into. It is a way in, not a credential to keep: sign in, change it from
+    # inside, then unset both of these.
+    username: ${ORKNUX_BOOTSTRAP_ADMIN_USERNAME:}
+    password: ${ORKNUX_BOOTSTRAP_ADMIN_PASSWORD:}
   security:
     # Sees the Admin section and every workspace.
     # LDAP or OIDC. One at a time, deliberately: both would mean an LDAP password

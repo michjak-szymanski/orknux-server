@@ -49,7 +49,7 @@ length, and whether every stored secret can still be read with it.
 | Service | Required? | What it is for |
 | --- | --- | --- |
 | `postgres` | Yes | Everything Orknux knows. Sessions live here too, so signing in survives a restart. |
-| `ldap` | Yes, or an OIDC provider instead | Somewhere to sign in against. Orknux has no user table of its own. |
+| `ldap` | Yes, unless you use OIDC or the internal administrator below | Somewhere to sign in against. Orknux keeps its own users too, but nothing seeds the first one for you. |
 | `temporal` | Yes, as configured here | What makes a run durable: it survives a restart, retries a step, and can be looked at afterwards. |
 | `orknux-server` | Yes | The API and the engine. |
 | `orknux-ui` | Yes | What you open. It also serves the manual at `/docs`. |
@@ -66,6 +66,10 @@ The default is LDAP, so without a directory the sign-in screen has nothing to
 ask. What *is* a development convenience is this particular directory: `alice`
 and `bob`, whose passwords are the word `password`, seeded from an LDIF written
 into the compose file. Replace them (see below) before this holds anything.
+
+A third answer is to run neither: **Signing in without a directory**, further
+down, seeds one internal administrator from two environment variables, and the
+`ldap` service can then go entirely.
 
 **Temporal is not optional either**, with the configuration in this file, and
 not only in the sense that runs would misbehave: the server **exits** when it
@@ -89,6 +93,53 @@ ORKNUX_TEMPORAL_UI_URL=http://localhost:8233 docker compose up -d
 ```
 
 The second line is what makes a run inside Orknux link out to its history.
+
+## Signing in without a directory
+
+Orknux keeps its own users - people it made up rather than people a provider
+vouches for - and they sign in with a password on the ordinary sign-in form,
+whatever `ORKNUX_AUTH_METHOD` says. What it cannot do on its own is make the
+first one: an account is created by an administrator, or written down when a
+provider vouches for somebody at the door, so an installation with no directory
+and no OIDC has nobody to create the administrator who could create you.
+
+Two variables on `orknux-server` close that circle:
+
+```
+ORKNUX_BOOTSTRAP_ADMIN_USERNAME=admin
+ORKNUX_BOOTSTRAP_ADMIN_PASSWORD=a long password you chose
+```
+
+On the next start, if no user has that name, one internal user is created with
+that password and the built-in `Administrators` role - the same role the Roles
+screen shows and the same sign-in everybody else uses. Nothing is loosened to let
+it in.
+
+Then the `ldap` service can go: delete it, and delete the `ldap:` entry under
+`depends_on:` on `orknux-server` as well, or the server waits for a service that
+no longer exists. Leave `ORKNUX_AUTH_METHOD` at `LDAP` - internal users are
+checked before the directory is ever called, so the sign-in form works with
+nothing behind it. Everybody else is then somebody you create under **Admin ->
+Users**, with a password you set there.
+
+The password has to be at least 12 characters, the same minimum every other way
+of setting one holds to. A shorter one seeds nobody and says so in the log,
+rather than making an account that could never be signed in to.
+
+**It only ever creates.** A user of that name that already exists is left exactly
+as it is, password and roles alike, and the log says it was left alone. So
+leaving the variables set cannot reset a password somebody has since changed or
+put back a role somebody deliberately took away, and a restart is not a way for
+anyone who can edit this file to take over an account they do not own.
+
+**A password in an environment variable is a compromise, and it is one on
+purpose.** It is readable by anything that can see the server's environment -
+`docker inspect`, another process in the container, the `.env` file sitting next
+to `compose.yaml` - and it stays readable for as long as it is set. It is how you
+get in the first time and nothing more. So, once you are in: change it from the
+account's own preferences, then unset both variables and bring the server up
+again. Until you do, every start says in the log that the account still has the
+password from the environment.
 
 ## Only one port is published
 
@@ -116,6 +167,8 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_DB_PASSWORD` | `orknux` | The Postgres password, used by Postgres, the server and Temporal alike. Only read when the database volume is first created. |
 | `ORKNUX_LDAP_ADMIN_PASSWORD` | `admin` | The directory's admin password, which is also what the server binds with. |
 | `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP` or `OIDC`. |
+| `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | *empty* | The first internal administrator, created at startup if nobody has that name. Empty seeds nobody. See above. |
+| `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | *empty* | What they sign in with the first time. At least 12 characters, and something to change and unset once you are in. |
 | `ORKNUX_SERVER_TAG` | `0.4` | Which `orknux/orknux-server` image. |
 | `ORKNUX_UI_TAG` | `0.4` | Which `orknux/orknux-ui` image. |
 | `ORKNUX_TEMPORAL_UI_URL` | *empty* | Where a run links out to. Empty offers no links, which is right while the Temporal UI is not running. |
@@ -175,20 +228,26 @@ skipped:
    is YAML only - the keys are claim values full of dots and commas, and the
    environment-variable spelling of one is not something anybody should have to
    work out. Mount an `application.yml` to set it.
-4. **Change the passwords.** `ORKNUX_DB_PASSWORD` and
+4. **Or run neither**, with the internal administrator above, and then finish
+   the job: sign in, change that password from the account's own preferences,
+   and unset `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` and
+   `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD`. A password left in the environment is
+   readable by anything that can see the server, and the log says so on every
+   start until it is changed.
+5. **Change the passwords.** `ORKNUX_DB_PASSWORD` and
    `ORKNUX_LDAP_ADMIN_PASSWORD` are both the obvious word.
-5. **Put TLS in front of it.** Terminate in your own proxy and forward to
+6. **Put TLS in front of it.** Terminate in your own proxy and forward to
    `orknux-ui` on 8080. Make sure that proxy sets `X-Forwarded-For` and
    `X-Forwarded-Proto`, or the audit log attributes every action to the proxy
    rather than to the person. Then set
    `ORKNUX_SESSION_COOKIE_SAME_SITE=strict` if nothing links into Orknux from
    elsewhere; leave it `lax` if Slack or an email is expected to link somebody
    straight to a run.
-6. **Stop using `temporalio/auto-setup`.** It applies the Temporal schema on
+7. **Stop using `temporalio/auto-setup`.** It applies the Temporal schema on
    every start, which is what makes it a one-line dependency here and what makes
    it wrong to keep: a restart should not be a migration. Run
    `temporalio/server` and apply the schema yourself with `temporal-sql-tool`.
-7. **Back up the Postgres volume**, and back up the secret key separately from
+8. **Back up the Postgres volume**, and back up the secret key separately from
    it. A backup of the database without the key restores everything except the
    credentials, which is a restore that does not work.
 

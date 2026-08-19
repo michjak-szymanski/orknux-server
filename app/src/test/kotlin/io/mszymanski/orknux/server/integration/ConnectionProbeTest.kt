@@ -5,6 +5,8 @@ import io.mszymanski.orknux.connector.connection.AuthType
 import io.mszymanski.orknux.connector.connection.CheckOutcome
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.connection.ConnectionProperties
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.connection.ConnectionTarget
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -29,7 +31,7 @@ import java.net.InetSocketAddress
 class ConnectionProbeTest {
 
     private lateinit var server: HttpServer
-    private val probe = ConnectionProbe(ConnectionProperties())
+    private val probe = ConnectionProbe(ConnectionProperties(), ProxyRouter(ProxyRuleSource { emptyList() }))
 
     /** Whatever status the path is named after, and nothing in the body. */
     @BeforeEach

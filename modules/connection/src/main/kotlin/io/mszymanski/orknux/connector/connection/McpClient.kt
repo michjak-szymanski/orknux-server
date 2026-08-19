@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.connection
 
 import org.slf4j.LoggerFactory
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.stereotype.Service
@@ -61,9 +62,10 @@ class McpClient(
     private val mapper: ObjectMapper,
     private val properties: McpProperties,
     private val probe: ConnectionProbe,
+    private val proxies: ProxyRouter,
 ) {
 
-    private val client: HttpClient = HttpClient.newBuilder()
+    private val client: HttpClient = proxies.builder()
         .connectTimeout(CONNECT_TIMEOUT)
         // Not followed, for the reason the probe does not follow one either: a
         // redirect can leave the host somebody configured and take the stored

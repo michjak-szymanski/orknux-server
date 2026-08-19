@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
 import java.net.InetAddress
@@ -99,9 +100,13 @@ fun McpServer.target(): ConnectionTarget = ConnectionTarget(address, authType, s
 @Service
 class ConnectionProbe(
     private val properties: ConnectionProperties,
+    private val proxies: ProxyRouter,
 ) {
 
-    private val client: HttpClient = HttpClient.newBuilder()
+    // Built by the router, so a probe obeys the same proxy rules a real call
+    // does. A check that reached an endpoint by a route the calls cannot take
+    // would report a connection nothing else can use.
+    private val client: HttpClient = proxies.builder()
         // Cleartext HTTP/2 negotiation hangs against servers that ignore the
         // upgrade, and a probe has no reason to care which version answers.
         .version(HttpClient.Version.HTTP_1_1)

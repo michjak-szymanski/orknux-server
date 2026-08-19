@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.springframework.stereotype.Service
 import java.net.URI
 import java.net.http.HttpClient
@@ -47,9 +48,10 @@ sealed interface HttpAnswer {
 class OutgoingHttp(
     private val properties: ConnectionProperties,
     private val probe: ConnectionProbe,
+    private val proxies: ProxyRouter,
 ) {
 
-    private val client: HttpClient = HttpClient.newBuilder()
+    private val client: HttpClient = proxies.builder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(properties.requestTimeoutSeconds))
         .followRedirects(HttpClient.Redirect.NEVER)

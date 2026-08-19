@@ -9,6 +9,8 @@ import io.mszymanski.orknux.connector.connection.McpClient
 import io.mszymanski.orknux.connector.connection.McpListing
 import io.mszymanski.orknux.connector.connection.McpProperties
 import io.mszymanski.orknux.connector.connection.McpServer
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -42,7 +44,15 @@ class McpAddressGuardTest {
     private val methods = CopyOnWriteArrayList<String>()
     private val followed = CopyOnWriteArrayList<String>()
 
-    private val client = McpClient(ObjectMapper(), McpProperties(), ConnectionProbe(ConnectionProperties()))
+    /** No proxy rules: this test is about the address guard, not about routing. */
+    private val proxies = ProxyRouter(ProxyRuleSource { emptyList() })
+
+    private val client = McpClient(
+        ObjectMapper(),
+        McpProperties(),
+        ConnectionProbe(ConnectionProperties(), proxies),
+        proxies,
+    )
 
     @BeforeEach
     fun start() {

@@ -70,6 +70,19 @@ type Query {
     chatAttachments(chatId: ID!): [ChatAttachment!]!
     "The admin default connections, ordered by name. Administrators only."
     connections(page: Int = 0, size: Int = 20): ConnectionPage!
+    """
+    The proxy rules, in the order they are consulted. Administrators only.
+
+    Never carries a proxy password; `passwordSet` is all that is said about one.
+    """
+    proxyRules: [ProxyRule!]!
+    """
+    Which rule one URL would go through, and which rules it beat to it.
+
+    Answered by the thing that actually routes requests rather than worked out
+    beside the screen, so it cannot drift from what a real call would do.
+    """
+    proxyRoute(url: String!): ProxyRoute!
     connection(id: ID!): Connection
     "The connections one workspace holds, ordered by name."
     workspaceConnections(workspaceId: ID!): [WorkspaceConnection!]!
@@ -409,6 +422,21 @@ type Mutation {
     updateConnection(id: ID!, input: ConnectionInput!): Connection!
     "Removes the default; workspaces keep the copy they hold, credentials included."
     deleteConnection(id: ID!): Boolean!
+    "Adds a rule sending the URLs it matches through a proxy. Administrators only."
+    createProxyRule(input: ProxyRuleInput!): ProxyRule!
+    "A null password leaves the stored one alone; an empty one clears it."
+    updateProxyRule(id: ID!, input: ProxyRuleInput!): ProxyRule!
+    "Turns a rule on or off without opening it."
+    setProxyRuleEnabled(id: ID!, enabled: Boolean!): ProxyRule!
+    """
+    Moves a rule one place in the order, and gives back the whole order.
+
+    The whole order because moving one rule changes what the rules around it do,
+    and a screen told only about the one it moved would be showing an order that
+    is no longer true.
+    """
+    moveProxyRule(id: ID!, up: Boolean!): [ProxyRule!]!
+    deleteProxyRule(id: ID!): Boolean!
     "Adds a connection that belongs to this workspace alone."
     createWorkspaceConnection(input: CreateWorkspaceConnectionInput!): WorkspaceConnection!
     """
@@ -1185,6 +1213,68 @@ input ConnectionInput {
     url: String!
     "Also hand the connection to the workspaces that already exist. Ignored on update."
     addToExistingWorkspaces: Boolean
+}
+
+"""
+One installation-wide answer to "does this address need a proxy".
+
+Installation-wide because the reason a proxy exists is the network this process
+sits in rather than the team whose workflow made the call, and because it is the
+only scope covering the calls made for nobody in particular - a provider's token
+grant, the sweep that asks whether connections still answer.
+"""
+type ProxyRule {
+    id: ID!
+    name: String!
+    """
+    A regular expression, matched against the whole request URL - scheme and
+    path included - found anywhere in it rather than end to end, ignoring case.
+    Anchor it with `^` and `$` to match the whole URL.
+    """
+    pattern: String!
+    "A host name, without a scheme: a proxy is spoken to over plain HTTP."
+    proxyHost: String!
+    proxyPort: Int!
+    username: String
+    "Whether a password is stored. The password itself is never returned."
+    passwordSet: Boolean!
+    enabled: Boolean!
+    "Ascending. The first enabled rule that matches a URL is the one used."
+    position: Int!
+    createdAt: String!
+    lastModifiedAt: String!
+}
+
+input ProxyRuleInput {
+    name: String!
+    pattern: String!
+    proxyHost: String!
+    proxyPort: Int!
+    username: String
+    "Null leaves the stored password alone; an empty string clears it."
+    password: String
+    "Defaults to on for a new rule; omitting it on an update leaves it as it is."
+    enabled: Boolean
+}
+
+"What would happen to one URL, for the box on the Networking page that asks."
+type ProxyRoute {
+    url: String!
+    "The rule that answers, or null for a request that goes out directly."
+    matched: ProxyRule
+    """
+    Rules that also match but never get the chance, in the order they are
+    consulted. A rule appearing here is one that will never fire for this URL,
+    which is the whole answer to "why does my rule do nothing".
+    """
+    beaten: [ProxyRule!]!
+    """
+    Why the address guard would refuse this URL outright, before any rule
+    mattered. A proxied request is still vetted exactly as an unproxied one is.
+    """
+    refusedBecause: String
+    "What the same guard thinks of the matched rule's own proxy address."
+    proxyProblem: String
 }
 
 "A connection as one workspace holds it, with that workspace's credentials."

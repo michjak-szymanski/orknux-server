@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -57,9 +58,10 @@ class ModelSpeechClient(
     private val probe: ModelProviderProbe,
     private val connections: ConnectionProbe,
     private val mapper: ObjectMapper,
+    private val proxies: ProxyRouter,
 ) {
 
-    private val http: HttpClient = HttpClient.newBuilder()
+    private val http: HttpClient = proxies.builder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(CONNECT_SECONDS))
         // Said out loud rather than left to the default, because it is the same

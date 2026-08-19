@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.connection.CheckResult
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import io.mszymanski.orknux.connector.connection.HttpHeader
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.security.SecretCipher
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
@@ -34,6 +35,7 @@ class ModelProviderProbe(
     private val mapper: ObjectMapper,
     /** Only to recognise a credential that never came out of its envelope. */
     private val cipher: SecretCipher,
+    private val proxies: ProxyRouter,
 ) {
 
     /**
@@ -42,7 +44,7 @@ class ModelProviderProbe(
      */
     private val cached = ConcurrentHashMap<TokenKey, HeldToken>()
 
-    private val client: HttpClient = HttpClient.newBuilder()
+    private val client: HttpClient = proxies.builder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(properties.probeTimeoutSeconds))
         .followRedirects(HttpClient.Redirect.NEVER)

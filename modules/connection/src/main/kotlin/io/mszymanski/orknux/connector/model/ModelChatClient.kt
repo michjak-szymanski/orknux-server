@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.data.repository.findByIdOrNull
@@ -116,6 +117,7 @@ class ModelChatClient(
     private val mapper: ObjectMapper,
     private val properties: ModelChatProperties,
     private val usage: ModelUsageRecorder,
+    private val proxies: ProxyRouter,
 ) {
 
     /**
@@ -151,7 +153,7 @@ class ModelChatClient(
         input to output
     }.getOrDefault(0L to 0L)
 
-    private val client: HttpClient = HttpClient.newBuilder()
+    private val client: HttpClient = proxies.builder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(CONNECT_SECONDS))
         .followRedirects(HttpClient.Redirect.NEVER)

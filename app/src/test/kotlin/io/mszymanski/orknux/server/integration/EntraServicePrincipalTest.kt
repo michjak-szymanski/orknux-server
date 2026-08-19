@@ -8,6 +8,8 @@ import io.mszymanski.orknux.connector.model.ModelProvider
 import io.mszymanski.orknux.connector.model.ModelProviderProbe
 import io.mszymanski.orknux.connector.model.ProviderAuthMethod
 import io.mszymanski.orknux.connector.model.ProviderType
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.security.SecretCipher
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -124,7 +126,14 @@ class EntraServicePrincipalTest {
         // A real cipher with a real key: these providers hold plaintext secrets
         // set in the test, so nothing here is ever in an envelope — the cipher
         // is only asked whether one is.
-        return ModelProviderProbe(ConnectionProbe(properties), properties, ObjectMapper(), SecretCipher(TEST_KEY))
+        val router = ProxyRouter(ProxyRuleSource { emptyList() })
+        return ModelProviderProbe(
+            ConnectionProbe(properties, router),
+            properties,
+            ObjectMapper(),
+            SecretCipher(TEST_KEY),
+            router,
+        )
     }
 
     /**

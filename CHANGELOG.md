@@ -13,6 +13,63 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **One address can be reached through a proxy without sending everything through
+  it.** A new Admin -> Networking page holds proxy rules: a regular expression
+  matched against the request URL, the proxy that URL goes through, an optional
+  username and password for it, and a switch. The case it was built for is the
+  narrow one - everything works direct except the Entra ID token endpoint, which
+  the network insists is reached through a proxy - and setting a proxy for the
+  whole process would have been a far larger change than that problem asked for.
+
+  It covers everything outbound, which is the part worth trusting. Connection
+  checks, workflow HTTP calls, MCP servers, model providers and the token grants
+  they need, transcription and speech all build their client the same way, so
+  there is no outbound call the rules do not reach. Mail is deliberately not
+  covered: SMTP is not an HTTP request, and a mail server is configured by host
+  on the connection itself.
+
+  Rules are ordered and the first one that matches wins. The order is a column on
+  the page with buttons to change it, and there is a box at the bottom that will
+  say, for any address you paste in, which rule answers and which rules matched
+  but will never fire - because a rule that looks configured and silently does
+  nothing is the thing this page exists to prevent.
+
+  Nothing about a proxy rule relaxes the address guard. The address being called
+  is checked exactly as it was before, and the proxy's own address is checked by
+  the same guard when the rule is saved: a proxy is where the connection actually
+  lands, and a rule pointing at a link-local address would otherwise turn every
+  URL it matched into a request to this host's instance metadata. Proxy passwords
+  are encrypted at rest with every other credential on the platform, and no query
+  can read one back.
+
+- **An installation can be entered without a directory.** Set
+  `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` and `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` and one
+  internal administrator is created at startup, holding the built-in
+  `Administrators` role and signing in on the ordinary form. Until now there was
+  no first step: an account is made by an administrator or written down when a
+  provider vouches for somebody, so an installation with neither LDAP nor OIDC
+  had nobody to create the administrator who could create you. Nothing about the
+  account is special - it is an ordinary internal user, and internal users have
+  always been checked before the directory, whatever the configured method is.
+  Everybody else is then made under Admin -> Users.
+
+  It only ever creates. A user of that name that already exists is left exactly
+  as it is, password and roles alike, and the log says it was left alone: leaving
+  the variables set on the tenth restart cannot reset a password somebody has
+  since changed or put back a role somebody deliberately took away. The password
+  has to meet the same twelve-character minimum as every other, and a shorter one
+  seeds nobody rather than making an account nobody could use.
+
+  A password in an environment variable is a compromise, and it is one you should
+  undo. It is readable by anything that can see the server's environment, so it
+  is a way in rather than a credential to keep: sign in, change it, and unset
+  both variables. Every start says so in the log while the account still has it.
+  `deploy/README.md` has the whole of it.
+
 ## 0.5.0
 
 ### Added
@@ -173,6 +230,23 @@ have failed.
   only that the thing does not exist or is not the caller's, and arrives as not
   found rather than forbidden - which is what the REST side has always answered
   to the same refusal.
+
+  The other half of that leak is now closed too: a query holding an id answers
+  null for anything the caller cannot see, so an entity in somebody else's
+  workspace is indistinguishable from an id that was never used. Before this,
+  three answers came back for an arbitrary number - null, an error, or the thing
+  itself - and the error was the one that said "that id is real". It applies to
+  every by-id query: `action`, `condition`, `function`, `agent`, `skill`, `tool`,
+  `trigger`, `execution`, `model`, `modelProvider`, `mcpServer`,
+  `workspaceConnection`, `memory`, `memoryCatalog`, `variable`, `workflowObject`,
+  `chatSession` and `workspaceIssue`. The five that cannot answer null, because
+  the schema declares what they return non-nullable, refuse instead as though the
+  thing were missing: `memories`, `memoryAuthors`, `triggerFirings`,
+  `discoveredModels` and `modelUsage`.
+  **On upgrade**: nothing to configure. Anything reading these queries has to
+  treat null as "gone or never yours" rather than as an error worth reporting;
+  the interface already does, and now says so in the same words on the action,
+  condition and issue screens as everywhere else.
 - The `@` mention list appeared at the bottom of the whole editor box rather
   than at the mention. In the comment box, which sits low on the page, that put
   it off the bottom of the window with only the first two names reachable.

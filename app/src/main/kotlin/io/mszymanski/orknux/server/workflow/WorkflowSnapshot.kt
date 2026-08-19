@@ -61,7 +61,9 @@ object WorkflowSnapshot {
         return RunnableGraph(
             workflowId = held.path("workflowId").asLong(),
             name = text(held, "name").orEmpty(),
-            nodes = held.path("nodes").map { node ->
+            // `.values()` rather than iterating the node directly: Jackson 3.1 gave
+            // JsonNode a `map` member, and a member wins over Kotlin's Iterable.map.
+            nodes = held.path("nodes").values().map { node ->
                 GraphNode(
                     key = text(node, "key").orEmpty(),
                     kind = NodeKind.valueOf(text(node, "kind") ?: NodeKind.ACTION.name),
@@ -82,7 +84,7 @@ object WorkflowSnapshot {
                     y = node.path("y").asDouble(),
                 )
             },
-            edges = held.path("edges").map { edge ->
+            edges = held.path("edges").values().map { edge ->
                 GraphEdge(
                     source = text(edge, "source").orEmpty(),
                     target = text(edge, "target").orEmpty(),

@@ -24,7 +24,7 @@
     <properties>
         <java.version>25</java.version>
         <kotlin.version>2.4.10</kotlin.version>
-        <spring-boot.version>4.0.0</spring-boot.version>
+        <spring-boot.version>4.0.7</spring-boot.version>
         <temporal.version>1.38.0</temporal.version>
         <slack.version>1.45.3</slack.version>
         <graaljs.version>24.2.1</graaljs.version>

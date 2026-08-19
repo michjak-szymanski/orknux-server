@@ -46,7 +46,7 @@ class WorkflowGraphAPI(
     @QueryMapping
     fun workflowGraph(@Argument workspaceId: Long, @Argument workflowId: Long): WorkflowGraphView {
         requireAssignment(workspaceId, workflowId)
-        return graphOf(workflowId)
+        return graphOf(workspaceId, workflowId)
     }
 
     /**
@@ -98,6 +98,7 @@ class WorkflowGraphAPI(
             name = workflow.name,
             description = workflow.description,
             status = workflow.status,
+            enabled = enabledIn(workspaceId, workflowId),
             nodes = proposed.map { node ->
                 val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
@@ -171,7 +172,7 @@ class WorkflowGraphAPI(
         workflow.status = WorkflowStatus.DRAFT
 
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow ${workflow.name} graph updated")
-        return graphOf(workflowId)
+        return graphOf(workspaceId, workflowId)
     }
 
     @MutationMapping
@@ -200,14 +201,14 @@ class WorkflowGraphAPI(
         )
         workflow.status = WorkflowStatus.PUBLISHED
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow ${workflow.name} published")
-        return graphOf(workflowId)
+        return graphOf(workspaceId, workflowId)
     }
 
     /** Whoever is asking, for the record of who made a graph live. */
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 
-    private fun graphOf(workflowId: Long): WorkflowGraphView {
+    private fun graphOf(workspaceId: Long, workflowId: Long): WorkflowGraphView {
         val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
         val held = nodes.findByWorkflowId(workflowId)
         val drawn = edges.findByWorkflowId(workflowId)
@@ -216,6 +217,7 @@ class WorkflowGraphAPI(
             name = workflow.name,
             description = workflow.description,
             status = workflow.status,
+            enabled = enabledIn(workspaceId, workflowId),
             nodes = held.map { node ->
                 val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
@@ -406,6 +408,17 @@ class WorkflowGraphAPI(
         if (condition.workspaceId != workspaceId) throw ConditionNotInCatalogueException(conditionId)
     }
 
+    /**
+     * Whether the workspace has this workflow switched on.
+     *
+     * The editor is told because Run still works on one that is switched off -
+     * trying a graph by hand is how it gets fixed - and somebody who cannot see
+     * the switch from here would otherwise publish, walk away, and wait for a
+     * trigger that is never going to start it.
+     */
+    private fun enabledIn(workspaceId: Long, workflowId: Long): Boolean =
+        assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.enabled != false
+
     /** The workflow has to be assigned to a workspace the caller can see. */
     private fun requireAssignment(workspaceId: Long, workflowId: Long) {
         val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
@@ -545,6 +558,8 @@ data class WorkflowGraphView(
     val name: String,
     val description: String?,
     val status: WorkflowStatus,
+    /** Whether the workspace has it switched on; see `enabledIn`. */
+    val enabled: Boolean = true,
     val nodes: List<WorkflowNodeView>,
     val edges: List<WorkflowEdgeView>,
     /** Everything the graph is missing, worst first; empty when it holds together. */

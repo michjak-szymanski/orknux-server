@@ -27,7 +27,10 @@ import tools.jackson.databind.node.ObjectNode
  * runs the same way and are audited the same way.
  *
  * Nobody is signed in when a trigger fires, so a run is attributed to the
- * trigger rather than to a person.
+ * trigger rather than to a person. That is also why the workspace's switch on a
+ * workflow is honoured here: this is the path nobody is watching, and a
+ * workflow somebody has switched off is one they have said should not start
+ * without them.
  */
 @Service
 class TriggerRunner(
@@ -68,14 +71,30 @@ class TriggerRunner(
     /** What both ways of firing have in common, once the input is decided. */
     private fun fire(trigger: WorkflowTrigger, fill: (ObjectNode) -> Unit): Int {
         val triggerId = requireNotNull(trigger.id)
-        val workflowIds = instances.findByTriggerId(triggerId)
+        val assigned = instances.findByTriggerId(triggerId)
             .map { it.workflowId }
             .distinct()
-            .filter { assignments.existsByWorkspaceIdAndWorkflowId(trigger.workspaceId, it) }
+            .mapNotNull { assignments.findByWorkspaceIdAndWorkflowId(trigger.workspaceId, it) }
 
-        if (workflowIds.isEmpty()) {
+        if (assigned.isEmpty()) {
             log.info("Trigger {} fired, but no workflow instances it", trigger.name)
             record(trigger, FiringOutcome.NO_INSTANCE, "No workflow has a trigger node pointing at this definition")
+            return 0
+        }
+
+        /*
+         * A workflow the workspace has switched off is not started by anything
+         * that starts by itself, which is what the switch is for.
+         *
+         * Asked before the condition, and before the payload is assembled,
+         * because a condition can call a function and there is nothing left for
+         * its answer to decide: whichever way it went, nothing would run.
+         */
+        val (runnable, switchedOff) = assigned.partition { it.enabled }
+        val offNames = switchedOff.map { "${it.workflow.name} is switched off in this workspace" }
+        if (runnable.isEmpty()) {
+            log.info("Trigger {} fired at workflows that are all switched off", trigger.name)
+            record(trigger, FiringOutcome.WORKFLOW_DISABLED, offNames.joinToString("; "))
             return 0
         }
 
@@ -86,10 +105,12 @@ class TriggerRunner(
             return 0
         }
 
-        val refusals = mutableListOf<String>()
-        val started = workflowIds.count { start(trigger, it, payload, refusals) }
-        if (started == workflowIds.size) {
-            record(trigger, FiringOutcome.STARTED, "Started $started of ${workflowIds.size}", started)
+        // The ones that are off are refusals like any other, so a firing that
+        // started two of three says which one it left alone and why.
+        val refusals = offNames.toMutableList()
+        val started = runnable.count { start(trigger, requireNotNull(it.workflow.id), payload, refusals) }
+        if (started == assigned.size) {
+            record(trigger, FiringOutcome.STARTED, "Started $started of ${assigned.size}", started)
         } else {
             /*
              * Partly started is not started, and the record says why rather
@@ -101,7 +122,7 @@ class TriggerRunner(
             record(
                 trigger,
                 FiringOutcome.FAILED,
-                "Started $started of ${workflowIds.size}: ${refusals.joinToString("; ")}",
+                "Started $started of ${assigned.size}: ${refusals.joinToString("; ")}",
                 started,
             )
         }

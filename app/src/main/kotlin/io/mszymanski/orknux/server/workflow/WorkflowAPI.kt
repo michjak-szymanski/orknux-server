@@ -43,7 +43,10 @@ class WorkflowAPI(
             assignments.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("workflow.name"))),
         ) { assignment ->
             val workflowId = requireNotNull(assignment.workflow.id)
-            lastRunOf(workspaceId, workflowId) to nextRunOf(workflowId)
+            // A workflow that is switched off is not started by the clock, so
+            // promising a next run would be the list stating the very thing the
+            // switch has just stopped from happening.
+            lastRunOf(workspaceId, workflowId) to nextRunOf(workflowId).takeIf { assignment.enabled }
         }
     }
 

@@ -28,6 +28,16 @@ enum class FiringOutcome {
     FAILED,
 
     /**
+     * Every workflow this trigger reaches is switched off in its workspace.
+     *
+     * Its own value rather than a kind of failure, because nothing went wrong:
+     * somebody turned it off and this is the trigger honouring that. It is
+     * recorded because the whole complaint about a switch is that a workflow
+     * quietly not running looks exactly like a trigger that never fired.
+     */
+    WORKFLOW_DISABLED,
+
+    /**
      * A webhook call that could not prove it was allowed to make one.
      *
      * Recorded rather than dropped: a webhook whose caller has the wrong secret

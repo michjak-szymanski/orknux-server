@@ -14,4 +14,10 @@ interface WorkspaceWorkflowRepository : JpaRepository<WorkspaceWorkflow, Long> {
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkspaceWorkflow>
 
     fun existsByWorkspaceIdAndWorkflowId(workspaceId: Long, workflowId: Long): Boolean
+
+    /**
+     * The assignment itself, for a caller that needs more than whether it is
+     * there - which in practice means whether the workspace has it switched on.
+     */
+    fun findByWorkspaceIdAndWorkflowId(workspaceId: Long, workflowId: Long): WorkspaceWorkflow?
 }

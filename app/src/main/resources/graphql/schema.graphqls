@@ -623,6 +623,8 @@ type WorkflowGraph {
     name: String!
     description: String
     status: WorkflowStatus!
+    "Whether the workspace has it switched on. Off means nothing starts it by itself; Run still does."
+    enabled: Boolean!
     nodes: [WorkflowNode!]!
     edges: [WorkflowEdge!]!
     "What the graph is missing, worst first; empty when it holds together."
@@ -746,10 +748,11 @@ type WorkspaceWorkflow {
     workflowId: ID!
     name: String!
     description: String
+    "Off means no trigger, schedule or tool call starts it. Run still does."
     enabled: Boolean!
     "Where it last got to; null until it has run."
     lastRun: LastRun
-    "When a scheduled trigger will start it next, ISO-8601; null when nothing schedules it."
+    "When a scheduled trigger will start it next, ISO-8601; null when nothing schedules it or it is switched off."
     nextRun: String
 }
 
@@ -1941,6 +1944,8 @@ enum FiringOutcome {
     FAILED
     "A webhook call that could not prove it was allowed to make one."
     UNAUTHENTICATED
+    "Every workflow this trigger reaches is switched off in its workspace."
+    WORKFLOW_DISABLED
 }
 
 type TriggerFiringPage {

@@ -16,6 +16,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
+import java.util.concurrent.CompletableFuture
 
 /**
  * Who is asking, and what they are allowed to ask for.
@@ -406,7 +407,29 @@ class OrknuxTools(
     fun handles(name: String): Boolean = name.startsWith(PREFIX)
 
     /**
-     * Runs one call and answers as JSON.
+     * Runs one call and answers as JSON when it is ready.
+     *
+     * The shape for a caller that has a request open and would rather not spend
+     * a thread holding it: everything here answers straight away except
+     * `orknux_news`, whose whole purpose is to wait, and which waits without a
+     * thread. See [NewsTools].
+     *
+     * Never fails: a call that threw comes back as a refusal to read, the same
+     * as it does through [run].
+     */
+    fun runAsync(scope: OrknuxScope, name: String, arguments: String): CompletableFuture<String> = try {
+        when (name) {
+            "orknux_news" -> newsTools.news(scope, arguments)
+                .exceptionally { failure -> refuse(failure.cause?.message ?: "That could not be done") }
+
+            else -> CompletableFuture.completedFuture(run(scope, name, arguments))
+        }
+    } catch (failure: Exception) {
+        CompletableFuture.completedFuture(refuse(failure.message ?: "That could not be done"))
+    }
+
+    /**
+     * Runs one call and answers as JSON, on this thread.
      *
      * Never throws: a model that asked for something impossible is told so and
      * can try something else, which beats ending the conversation.
@@ -424,8 +447,13 @@ class OrknuxTools(
              * touches its comments, which are lazy, so those calls need a
              * transaction around them - and a transaction cannot be
              * started by one private method calling another in here.
+             *
+             * Waited out here, which is what the callers of this method want:
+             * a conversation asks its tools one at a time and has nowhere to
+             * be until the answer comes back. A caller with a request to hold
+             * open uses [runAsync] instead and spends no thread on it.
              */
-            "orknux_news" -> newsTools.news(scope, arguments)
+            "orknux_news" -> newsTools.news(scope, arguments).join()
             "orknux_issues" -> issueTools.list(scope, arguments)
             "orknux_issue" -> issueTools.one(scope, arguments)
             "orknux_issue_labels" -> issueTools.labels(scope)
@@ -688,6 +716,19 @@ class OrknuxTools(
             else -> matches.single()
         }
 
+        /*
+         * The switch means a workflow does not start by itself, and a tool call
+         * is by itself: nobody is looking at the workflow when this arrives.
+         * Somebody who wants it running again can say so with
+         * orknux_set_workflow_enabled, which is why the refusal names it.
+         */
+        if (!chosen.enabled) {
+            return refuse(
+                "${chosen.workflow.name} is switched off in this workspace, so it is not started by a tool call. " +
+                    "Turn it back on with orknux_set_workflow_enabled first.",
+            )
+        }
+
         val started = runs.startExecution(
             StartExecutionInput(
                 workspaceId = scope.workspaceId,
@@ -714,6 +755,13 @@ class OrknuxTools(
         val id = number(arguments, "id") ?: return refuse("Which run? Give its id.")
         val original = runs.execution(id)?.takeIf { it.workspaceId == scope.workspaceId }
             ?: return refuse("There is no run $id here")
+
+        // Off for the same reason it is off above: repeating a run is still a
+        // start, and this one is asked for by a tool rather than by a person.
+        val assignment = assignments.findByWorkspaceIdAndWorkflowId(scope.workspaceId, original.workflowId)
+        if (assignment != null && !assignment.enabled) {
+            return refuse("${original.workflowName} is switched off in this workspace, so its runs are not repeated")
+        }
 
         val started = runs.startExecution(
             StartExecutionInput(

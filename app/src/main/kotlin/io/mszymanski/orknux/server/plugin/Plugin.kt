@@ -82,6 +82,17 @@ class Plugin(
     @Column(name = "declared_functions", nullable = false, columnDefinition = "text")
     var declaredFunctions: String = "[]",
 
+    /**
+     * What the plugin answered when asked what it has to be told, as JSON.
+     *
+     * The plugin's half of the bargain: it says what it needs and a workspace says
+     * what those come to. Kept on the plugin rather than beside the settings
+     * because it is the plugin's statement, and it is replaced wholesale every time
+     * the plugin is loaded — the same way its functions are.
+     */
+    @Column(name = "declared_parameters", nullable = false, columnDefinition = "text")
+    var declaredParameters: String = "[]",
+
     @Column(name = "uploaded_at", nullable = false)
     var uploadedAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -113,6 +124,8 @@ data class PluginView(
     val sizeBytes: Double,
     val apiVersion: Int,
     val declaredFunctions: List<PluginFunctionView>,
+    /** What it says it has to be told before it can work. */
+    val declaredParameters: List<PluginParameterView>,
     val sha256: String,
     val uploadedAt: String,
     val uploadedBy: String,
@@ -134,6 +147,21 @@ data class PluginFunctionView(
 )
 
 data class PluginFunctionParamView(val name: String, val type: String)
+
+/**
+ * One thing a plugin says it has to be told, as the screen shows it.
+ *
+ * [secret] is the plugin's own claim about what it is asking for, not a promise
+ * about how it is kept: the server refuses to store a secret parameter as a
+ * literal, so the only way to fill one in is to point at a variable.
+ */
+data class PluginParameterView(
+    val name: String,
+    val description: String?,
+    val type: String,
+    val required: Boolean,
+    val secret: Boolean,
+)
 
 /**
  * The plugin API versions this server knows.
@@ -161,7 +189,10 @@ object PluginApiVersions {
  * application's JSON mapper, and a view of a row should not be reaching for a
  * bean of its own to build itself.
  */
-fun Plugin.view(declared: List<PluginFunctionView>): PluginView = PluginView(
+fun Plugin.view(
+    declared: List<PluginFunctionView>,
+    parameters: List<PluginParameterView> = emptyList(),
+): PluginView = PluginView(
     id = requireNotNull(id).toString(),
     key = key,
     name = name,
@@ -171,6 +202,7 @@ fun Plugin.view(declared: List<PluginFunctionView>): PluginView = PluginView(
     sizeBytes = sizeBytes.toDouble(),
     apiVersion = apiVersion,
     declaredFunctions = declared,
+    declaredParameters = parameters,
     sha256 = sha256,
     uploadedAt = uploadedAt.toString(),
     uploadedBy = uploadedBy,

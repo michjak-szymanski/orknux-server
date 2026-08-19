@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.plugin
 
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
+import io.mszymanski.orknux.workflow.script.DeclaredParameter
 import org.springframework.stereotype.Component
 import tools.jackson.databind.ObjectMapper
 
@@ -104,6 +105,73 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
     }
 
     /**
+     * Checks what a plugin says it has to be told, and returns it as JSON to keep.
+     *
+     * Held to the same naming rule as everything else a plugin declares, and to a
+     * narrower set of types: a parameter is filled in either by typing a value or
+     * by pointing at one of the workspace's variables, and a variable holds a
+     * scalar. Allowing a map here would mean a parameter that can be typed but
+     * never referenced, which is a difference nobody could see on the screen and
+     * everybody would trip over.
+     *
+     * @throws PluginDeclarationInvalidException if anything about it is wrong.
+     */
+    fun validatedParameters(declared: List<DeclaredParameter>): String {
+        val names = mutableSetOf<String>()
+
+        val array = mapper.createArrayNode()
+        declared.forEach { parameter ->
+            if (!IDENTIFIER.matches(parameter.name)) {
+                throw PluginDeclarationInvalidException("\"${parameter.name}\" is not a usable parameter name")
+            }
+            if (!names.add(parameter.name)) {
+                throw PluginDeclarationInvalidException("it declares the parameter ${parameter.name} more than once")
+            }
+
+            val type = valueType(parameter.type)
+            if (type == null || type !in SETTABLE) {
+                throw PluginDeclarationInvalidException(
+                    "the parameter ${parameter.name} is a \"${parameter.type}\". A parameter is either typed in " +
+                        "or points at one of the workspace's variables, so it has to be one of " +
+                        "${parameterTypes().joinToString(", ")}.",
+                )
+            }
+
+            val node = array.addObject()
+            node.put("name", parameter.name)
+            parameter.description?.let { node.put("description", it) }
+            node.put("type", type.name)
+            node.put("required", parameter.required)
+            node.put("secret", parameter.secret)
+        }
+        return mapper.writeValueAsString(array)
+    }
+
+    /** What was kept about the parameters, as the screen wants it. */
+    fun readParameters(json: String): List<PluginParameterView> = runCatching {
+        val array = mapper.readTree(json)
+        (0 until array.size()).map { at ->
+            val node = array.get(at)
+            PluginParameterView(
+                name = node.get("name").asString(),
+                description = node.get("description")?.asString(),
+                type = node.get("type").asString(),
+                // A declaration written before these existed has neither, and the
+                // safe reading of silence is "not required, not a secret".
+                required = node.get("required")?.asBoolean() ?: false,
+                secret = node.get("secret")?.asBoolean() ?: false,
+            )
+        }
+    }.getOrElse { emptyList() }
+
+    /**
+     * The types a parameter may be, as a plugin should write them.
+     *
+     * Narrower than [usableTypes] on purpose; see [validatedParameters] for why.
+     */
+    fun parameterTypes(): List<String> = SETTABLE.map { it.name.lowercase() }
+
+    /**
      * The type names a plugin may use, as it should write them.
      *
      * Derived from the enum rather than listed again, so the template hands out
@@ -162,6 +230,14 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
     private companion object {
         /** The same rule a workspace's own function names are held to. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
+
+        /**
+         * What a parameter may be: exactly what a workspace variable can hold.
+         *
+         * Written in the order they read best on a form rather than in the enum's
+         * order, since this is also what the template offers.
+         */
+        val SETTABLE = listOf(ValueType.STRING, ValueType.NUMBER, ValueType.BOOLEAN)
     }
 }
 

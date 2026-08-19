@@ -3,6 +3,10 @@ package io.mszymanski.orknux.server.plugin
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.script.PluginInspection
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.springframework.http.HttpHeaders
@@ -41,9 +45,10 @@ import java.time.OffsetDateTime
  * file, and a multipart form is what a browser produces from a file picker.
  * Listing and unloading are GraphQL like everything else.
  *
- * What this does *not* do: run anything, parse anything, or look for an entry
- * point. A plugin here is text that has been loaded and can be listed and
- * removed. Deciding what a plugin exposes, and calling it, is separate work.
+ * The plugin is loaded and questioned as it arrives - what it calls itself, what
+ * it offers, what it has to be told - and refused if it cannot answer. What each
+ * workspace answers its parameters with is not decided here: see
+ * [WorkspacePluginAPI], further down, for whose decision that is.
  */
 @RestController
 class PluginUploadAPI(
@@ -97,6 +102,16 @@ class PluginUploadAPI(
                     .replace(
                         "@VALUE_TYPE_UNION@",
                         declarations.usableTypes().joinToString(" | ") { "'$it'" },
+                    )
+                    /*
+                     * Narrower than the union above, and deliberately so: a
+                     * parameter is answered either by typing a value or by pointing
+                     * at one of a workspace's variables, and a variable holds a
+                     * scalar. The template offers exactly what the loader accepts.
+                     */
+                    .replace(
+                        "@PARAMETER_TYPE_UNION@",
+                        declarations.parameterTypes().joinToString(" | ") { "'$it'" },
                     ),
             )
     }
@@ -174,6 +189,7 @@ class PluginUploadAPI(
 
         val apiVersion = inspected.apiVersion
         val declared = declarations.validated(inspected.functions)
+        val parameters = declarations.validatedParameters(inspected.parameters)
 
         val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
 
@@ -186,6 +202,7 @@ class PluginUploadAPI(
             this.sizeBytes = file.size
             this.apiVersion = apiVersion
             this.declaredFunctions = declared
+            this.declaredParameters = parameters
             this.sha256 = digest(source)
             this.uploadedAt = OffsetDateTime.now()
             this.uploadedBy = currentUser()
@@ -198,6 +215,7 @@ class PluginUploadAPI(
             sizeBytes = file.size,
             apiVersion = apiVersion,
             declaredFunctions = declared,
+            declaredParameters = parameters,
             sha256 = digest(source),
             uploadedBy = currentUser(),
         )
@@ -210,7 +228,10 @@ class PluginUploadAPI(
 
         return ResponseEntity.ok(
             mapOf(
-                "plugin" to saved.view(declarations.read(saved.declaredFunctions)),
+                "plugin" to saved.view(
+                    declarations.read(saved.declaredFunctions),
+                    declarations.readParameters(saved.declaredParameters),
+                ),
                 "replaced" to (existing != null),
                 "provides" to provided,
             ),
@@ -303,6 +324,21 @@ class PluginUploadAPI(
               abstract apiVersion(): number;
               /** What this plugin offers. Defaults to none. */
               functions(): OrknuxFunction[];
+              /** What this plugin has to be told before it can work. Defaults to none. */
+              parameters(): OrknuxParameter[];
+              /**
+               * What a workspace set those parameters to, keyed by name.
+               *
+               * Frozen, and put there by the server for the length of one call. A
+               * parameter nothing usable is set for is absent rather than null, so
+               * `this.settings.token === undefined` is the question to ask.
+               *
+               * This is the whole of what a plugin knows about the workspace it is
+               * running for. Nothing reaches a plugin that a workspace did not
+               * point at, which is what makes the parameter list a readable answer
+               * to "what can this thing get at?".
+               */
+              readonly settings: Readonly<Record<string, string | number | boolean>>;
             }
 
             /** The shape of a value crossing between a workflow and a plugin. */
@@ -320,6 +356,36 @@ class PluginUploadAPI(
                 returnType: OrknuxValueType;
                 /** What it does. Stays here; the server calls back into it. */
                 run: (...args: never[]) => unknown;
+              });
+            }
+
+            /** What a parameter may be: exactly what a workspace variable can hold. */
+            type OrknuxParameterType = @PARAMETER_TYPE_UNION@;
+
+            declare class OrknuxParameter {
+              constructor(declaration: {
+                /** An identifier: letters, digits and underscores. */
+                name: string;
+                /** Optional; shown under it on the form somebody fills in. */
+                description?: string;
+                type: OrknuxParameterType;
+                /**
+                 * Whether the plugin can work without it. Defaults to true, because
+                 * a parameter nobody needs is one nobody should be asked for.
+                 *
+                 * A workspace that has not answered a required one is marked as
+                 * such in its plugin list and against the parameter itself.
+                 */
+                required?: boolean;
+                /**
+                 * Whether this is asking for something that should not be typed
+                 * into a form. Defaults to false.
+                 *
+                 * Saying true refuses a typed-in value: the only way to answer it
+                 * is to point at one of the workspace's variables, which is where
+                 * this installation keeps things it encrypts.
+                 */
+                secret?: boolean;
               });
             }
 
@@ -353,6 +419,26 @@ class PluginUploadAPI(
               }
 
               /**
+               * What this plugin has to be told before it can work.
+               *
+               * Each workspace answers these once, either by typing a value or by
+               * pointing at one of its own variables, and what they come to arrives as
+               * `this.settings`. Declaring them is also how a workspace can see what
+               * this plugin is able to reach: nothing gets in that is not on this list.
+               *
+               * Defaults to none, so a plugin that needs nothing says nothing.
+               */
+              parameters(): OrknuxParameter[] {
+                return [
+                  new OrknuxParameter({
+                    name: 'teamDomain',
+                    description: 'The mail domain this workspace treats as its own.',
+                    type: 'string',
+                  }),
+                ];
+              }
+
+              /**
                * What this plugin offers.
                *
                * Each one is checked as it is constructed — a missing name, return type
@@ -369,17 +455,25 @@ class PluginUploadAPI(
                     returnType: 'boolean',
 
                     /*
-                     * Nothing here can reach out yet. Looking a user up in the directory,
-                     * and asking which workspace this is running in, are methods the
-                     * server has still to hand over — until then a function can only work
-                     * with what it was passed.
+                     * `this.settings` is what the workspace answered, and it is all a
+                     * function has beyond what it was passed. Reaching out — looking a
+                     * user up in the directory, asking which workspace this is — is
+                     * something the server has still to hand over.
+                     *
+                     * Written as an arrow function so `this` is the plugin. A method
+                     * would work too; both are called with the plugin as `this`.
                      */
                     run: (email: string): boolean => {
                       if (typeof email !== 'string' || email.length === 0) {
                         return false;
                       }
-                      // Replace with a real check once the directory lookup exists.
-                      return email.endsWith('@example.com');
+                      const domain = this.settings.teamDomain;
+                      if (typeof domain !== 'string') {
+                        // Required, so a workspace that has not set it is already
+                        // marked as needing to. Answering no is the safe reading.
+                        return false;
+                      }
+                      return email.endsWith('@' + domain);
                     },
                   }),
                 ];
@@ -402,7 +496,9 @@ class PluginAPI(
     @QueryMapping
     fun plugins(): List<PluginView> {
         access.requireAdmin()
-        return plugins.findAllByOrderByNameAsc().map { it.view(declarations.read(it.declaredFunctions)) }
+        return plugins.findAllByOrderByNameAsc().map {
+            it.view(declarations.read(it.declaredFunctions), declarations.readParameters(it.declaredParameters))
+        }
     }
 
     /**
@@ -431,6 +527,98 @@ class PluginAPI(
         plugins.delete(plugin)
         return true
     }
+}
+
+/**
+ * A workspace's side of a plugin: what it has been told, and what it has not.
+ *
+ * Separate from [PluginAPI] because the audience is: listing and unloading are an
+ * administrator's, while answering what a plugin needs belongs to whoever runs the
+ * workspace it will run for. The same plugin, two decisions, two sets of people.
+ *
+ * A plugin declaring no parameters still appears here. "This one needs nothing"
+ * is an answer worth being able to read, and a plugin that grows a parameter
+ * later should not appear out of nowhere.
+ */
+@Controller
+class WorkspacePluginAPI(
+    private val plugins: PluginRepository,
+    private val parameters: PluginParameters,
+    private val workspaces: WorkspaceRepository,
+    private val access: WorkspaceAccess,
+    private val auditRecorder: WorkspaceAuditRecorder,
+) {
+
+    /** Every loaded plugin, with what this workspace has set it to. */
+    @QueryMapping
+    fun workspacePlugins(@Argument workspaceId: Long): List<WorkspacePluginView> {
+        requireWorkspaceAccess(workspaceId)
+        return plugins.findAllByOrderByNameAsc().map { parameters.viewOf(it, workspaceId) }
+    }
+
+    /**
+     * Answers one parameter, with a value or with one of the workspace's variables.
+     *
+     * Answers with the whole plugin rather than the one parameter, because setting
+     * one changes whether the plugin is still marked as needing something - and a
+     * screen that had to work that out for itself would eventually disagree with
+     * the server about it.
+     */
+    @MutationMapping
+    @Transactional
+    fun setPluginParameter(
+        @Argument workspaceId: Long,
+        @Argument pluginId: Long,
+        @Argument name: String,
+        @Argument literal: String?,
+        @Argument variableId: Long?,
+    ): WorkspacePluginView {
+        requireWorkspaceAccess(workspaceId)
+        val plugin = plugins.findByIdOrNull(pluginId) ?: throw PluginNotFoundException(pluginId)
+
+        parameters.set(plugin, workspaceId, name, literal?.trim()?.ifEmpty { null }, variableId, currentUser())
+
+        /*
+         * What it was set to is not recorded, only that it was. A literal is as
+         * likely to be a hostname as the one piece of this that should never have
+         * been typed in, and the audit log is read by more people than the
+         * variables screen is.
+         */
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.INTEGRATION,
+            "Plugin ${plugin.key}: parameter $name set",
+        )
+        return parameters.viewOf(plugin, workspaceId)
+    }
+
+    /** Unsets one parameter. A required one is marked as missing again. */
+    @MutationMapping
+    @Transactional
+    fun clearPluginParameter(
+        @Argument workspaceId: Long,
+        @Argument pluginId: Long,
+        @Argument name: String,
+    ): WorkspacePluginView {
+        requireWorkspaceAccess(workspaceId)
+        val plugin = plugins.findByIdOrNull(pluginId) ?: throw PluginNotFoundException(pluginId)
+
+        parameters.clear(plugin, workspaceId, name)
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.INTEGRATION,
+            "Plugin ${plugin.key}: parameter $name cleared",
+        )
+        return parameters.viewOf(plugin, workspaceId)
+    }
+
+    private fun requireWorkspaceAccess(workspaceId: Long) {
+        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+    }
+
+    private fun currentUser(): String =
+        SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
 
 class PluginNotFoundException(id: Long) : RuntimeException("There is no plugin $id")
@@ -492,6 +680,12 @@ class PluginExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is PluginIdInvalidException,
             is PluginInUseException,
             is PluginFunctionInUseException,
+            is PluginParameterUnknownException,
+            is PluginParameterAmbiguousException,
+            is PluginParameterEmptyException,
+            is PluginParameterNotSecretException,
+            is PluginParameterNotValueException,
+            is PluginParameterVariableElsewhereException,
             -> ErrorType.BAD_REQUEST
 
             is PluginNotFoundException -> ErrorType.NOT_FOUND

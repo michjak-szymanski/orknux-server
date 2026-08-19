@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
+import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
 import io.mszymanski.orknux.connector.connection.MailDelivery
@@ -20,6 +22,7 @@ import io.mszymanski.orknux.workflow.execution.PermanentFailure
 import io.mszymanski.orknux.workflow.execution.StepResult
 import io.mszymanski.orknux.workflow.execution.StepStatus
 import io.mszymanski.orknux.workflow.script.ScriptResult
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
 import org.springframework.core.Ordered
@@ -53,6 +56,9 @@ class ActionNodeRunner(
     private val actions: WorkflowActionRepository,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val pluginRunner: PluginRunner,
+    private val plugins: PluginRepository,
+    private val pluginParameters: PluginParameters,
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val mapper: ObjectMapper,
@@ -338,7 +344,19 @@ class ActionNodeRunner(
         // looked for among the mappings.
         val arguments = function.params.map { byName[it.name] ?: "null" } + externals.of(function)
 
-        return when (val result = scripts.call(function.source, function.name, arguments, contextFor(action))) {
+        /*
+         * A plugin's function is not this workspace's JavaScript, and its source
+         * column holds a note saying so rather than code. It runs in the plugin's
+         * own sandbox, out of the plugin's own text, and it is handed what this
+         * workspace answered the plugin's parameters with.
+         */
+        val result = if (function.scope == FunctionScope.PLUGIN) {
+            runPlugin(function, action, arguments)
+        } else {
+            scripts.call(function.source, function.name, arguments, contextFor(action))
+        }
+
+        return when (result) {
             is ScriptResult.Returned -> StepResult(
                 StepStatus.COMPLETED,
                 // Under the name the node gave it, if it gave one. Unnamed, the
@@ -350,6 +368,40 @@ class ActionNodeRunner(
 
             is ScriptResult.Failed -> throw ActionFailedException("${function.name} ${result.reason}")
         }
+    }
+
+    /**
+     * Runs a function one of the plugins declared.
+     *
+     * A required parameter nobody answered stops the run before the plugin is
+     * loaded, and stops it permanently: what is missing is a piece of
+     * configuration, and configuration does not appear because something was tried
+     * a second time. The workspace's plugin page marks the same parameters, so the
+     * sentence here and the red mark there are the same fact.
+     */
+    private fun runPlugin(function: WorkflowFunction, action: WorkflowAction, arguments: List<String>): ScriptResult {
+        val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
+            ?: return ScriptResult.Failed("is declared by a plugin that is no longer loaded", 0)
+
+        val missing = pluginParameters.missingFor(plugin, action.workspaceId)
+        if (missing.isNotEmpty()) {
+            throw ActionFailedException(
+                "${function.name} cannot run: the ${plugin.key} plugin has not been told " +
+                    missing.joinToString(", ") + ". Set it on this workspace's plugins page.",
+                permanent = true,
+            )
+        }
+
+        // The name the plugin gave it, not the prefixed one a workspace picks it
+        // by: the prefix exists so two plugins can both declare `send`, and the
+        // plugin never agreed to answer to it.
+        val declared = function.name.removePrefix("${plugin.key}_")
+        return pluginRunner.call(
+            plugin.source,
+            declared,
+            arguments,
+            pluginParameters.settingsFor(plugin, action.workspaceId),
+        )
     }
 
     /** What this step was told to pass, as the planner wrote it down. */

@@ -58,6 +58,14 @@ type Query {
     installationSettings: InstallationSettings!
     "The plugins loaded into this installation, by name. Administrators only."
     plugins: [Plugin!]!
+    """
+    Every loaded plugin, with what this workspace has told it.
+
+    Not an administrator's query, unlike `plugins`: loading a plugin is an
+    installation-wide decision, while answering what one needs is a decision
+    about the workspace it will run for.
+    """
+    workspacePlugins(workspaceId: ID!): [WorkspacePlugin!]!
     "What was attached to one chat, oldest first."
     chatAttachments(chatId: ID!): [ChatAttachment!]!
     "The admin default connections, ordered by name. Administrators only."
@@ -199,6 +207,26 @@ type Mutation {
     `POST /api/plugins` rather than described as a mutation.
     """
     unloadPlugin(id: ID!): Boolean!
+    """
+    Answers one of a plugin's parameters, for one workspace.
+
+    Exactly one of `literal` and `variableId`: a value typed in, or one of the
+    workspace's variables read when the plugin runs. A parameter the plugin
+    declared as a secret refuses a literal, because a literal is stored as typed
+    and shown back on the page.
+
+    Answers with the whole plugin, so the marks on it and on its parameters come
+    from the server rather than from a screen working them out again.
+    """
+    setPluginParameter(
+        workspaceId: ID!,
+        pluginId: ID!,
+        name: String!,
+        literal: String,
+        variableId: ID
+    ): WorkspacePlugin!
+    "Unsets one parameter. A required one is marked as missing again."
+    clearPluginParameter(workspaceId: ID!, pluginId: ID!, name: String!): WorkspacePlugin!
     "Turns attachments on or off for the whole installation. Administrators only."
     setAttachmentsEnabled(enabled: Boolean!): InstallationSettings!
     "Turns the chat on or off for the whole installation. Administrators only."
@@ -1668,6 +1696,13 @@ type Plugin {
     plugin claims it brings.
     """
     declaredFunctions: [PluginFunctionDeclaration!]!
+    """
+    What this plugin says it has to be told before it can work.
+
+    The declaration only. What a workspace set them to is on `WorkspacePlugin`,
+    because the answers belong to a workspace and the question does not.
+    """
+    declaredParameters: [PluginParameterDeclaration!]!
     "Of the source text, so an unchanged re-upload is recognisable."
     sha256: String!
     "ISO-8601 offset date-time."
@@ -1693,6 +1728,66 @@ type PluginFunctionDeclaration {
 type PluginFunctionParam {
     name: String!
     type: String!
+}
+
+"""
+One thing a plugin says it has to be told before it can work.
+
+Not a function's parameter. A function's is filled in by whoever calls it, node
+by node; this is filled in once by a workspace and is the same for every call -
+the address a plugin talks to, the token it talks with.
+"""
+type PluginParameterDeclaration {
+    name: String!
+    description: String
+    "One of the types a workspace variable can hold: STRING, NUMBER or BOOLEAN."
+    type: String!
+    "Whether the plugin can work without it. A required one left unanswered is marked."
+    required: Boolean!
+    """
+    Whether the plugin says it is asking for something that should not be typed
+    into a form. One of these can only be answered by pointing at a variable.
+    """
+    secret: Boolean!
+}
+
+"""
+A plugin as one workspace sees it: what it asked for, and what this workspace
+answered.
+"""
+type WorkspacePlugin {
+    plugin: Plugin!
+    parameters: [PluginParameterSetting!]!
+    """
+    The required parameters this workspace has not answered, by name.
+
+    Empty when the plugin has everything it asked for. Non-empty is what the red
+    mark beside it in the list is drawn from, and it holds exactly the names the
+    parameters below are marked on.
+    """
+    missing: [String!]!
+}
+
+"One of a plugin's parameters, and what this workspace set it to."
+type PluginParameterSetting {
+    name: String!
+    description: String
+    type: String!
+    required: Boolean!
+    secret: Boolean!
+    "What somebody typed. Null when this points at a variable, or is unanswered."
+    literal: String
+    "Which of the workspace's variables this reads. Null when it was typed in."
+    variableId: ID
+    """
+    The name of that variable, and never what it holds.
+
+    A workspace's secrets are read on the variables screen, where reading one is
+    recorded as something somebody did. This page is not a way around that.
+    """
+    variableName: String
+    "Required, and nothing usable is set for it. What the mark against it is drawn from."
+    missing: Boolean!
 }
 
 "A file somebody attached to a chat. The bytes are wherever the storage put them."

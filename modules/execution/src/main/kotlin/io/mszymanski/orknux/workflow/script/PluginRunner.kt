@@ -15,7 +15,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Loads a plugin and asks it what it is.
+ * Loads a plugin, asks it what it is, and runs what it declared.
  *
  * A deliberate copy of [ScriptRunner] rather than a generalisation of it, and the
  * duplication is the point. Plugins are going to be given authority a workspace's
@@ -30,6 +30,11 @@ import java.util.concurrent.TimeUnit
  * prototype rather than by probing for keys, so "this is not a plugin" is answered
  * before anything is called, and a method left unimplemented fails with the base
  * class saying which one — rather than the server guessing why a key was missing.
+ *
+ * **A plugin knows only what it was told.** Its parameters arrive as `this.settings`
+ * and are the whole of what it can see of the workspace it is running for. There is
+ * no clock, no host, no way to ask — so what a plugin can reach is a list somebody
+ * filled in, which is the point of it having to declare them.
  */
 @Service
 class PluginRunner(private val properties: PluginProperties) {
@@ -73,6 +78,79 @@ class PluginRunner(private val properties: PluginProperties) {
         // Closing a cancelled context races with the call that was inside it.
         PluginInspection.Unreadable(failure.message ?: "could not be loaded")
     }
+
+    /**
+     * Runs one function the plugin declared.
+     *
+     * @param arguments JSON for each argument, in the order the function declares
+     *   them, exactly as [ScriptRunner.call] takes them.
+     * @param settings what this workspace set the plugin's parameters to, as a JSON
+     *   object of name to value. It arrives frozen as `this.settings`, and it is
+     *   the only thing a plugin is told about the workspace it is running for.
+     *
+     * The plugin is constructed for the call and thrown away with the context, so
+     * one run cannot leave anything behind for the next — including the settings,
+     * which differ per workspace and must not survive into another one's run.
+     */
+    fun call(
+        source: String,
+        functionName: String,
+        arguments: List<String>,
+        settings: String = "{}",
+    ): ScriptResult {
+        val started = System.nanoTime()
+        return try {
+            newContext().use { polyglot ->
+                val cancel = watchdog.schedule(
+                    { runCatching { polyglot.close(true) } },
+                    properties.timeoutMillis,
+                    TimeUnit.MILLISECONDS,
+                )
+                try {
+                    ScriptResult.Returned(invoke(polyglot, source, functionName, arguments, settings), millis(started))
+                } finally {
+                    cancel.cancel(false)
+                }
+            }
+        } catch (failure: PolyglotException) {
+            ScriptResult.Failed(describe(failure, doing = "running"), millis(started))
+        } catch (failure: ScriptContractException) {
+            ScriptResult.Failed(failure.message ?: "did not return", millis(started))
+        } catch (failure: IllegalStateException) {
+            ScriptResult.Failed(failure.message ?: "could not be run", millis(started))
+        }
+    }
+
+    private fun invoke(
+        polyglot: Context,
+        source: String,
+        functionName: String,
+        arguments: List<String>,
+        settings: String,
+    ): String? {
+        polyglot.eval("js", CONTRACT)
+
+        val bindings = polyglot.getBindings("js")
+        // Put in before the plugin is constructed: the contract's helper reads it
+        // while it is defining `settings` on the instance.
+        bindings.putMember(SETTINGS, settings)
+
+        val exported = polyglot.eval(module(source)).getMember("default")
+            ?: throw ScriptContractException("$functionName's plugin has no default export")
+
+        bindings.putMember(PLUGIN, bindings.getMember(CONSTRUCT).execute(exported))
+        bindings.putMember(WANTED, functionName)
+        bindings.putMember(ARGUMENTS, "[${arguments.joinToString(",")}]")
+        polyglot.eval("js", CALL)
+
+        val error = bindings.getMember(ERROR)
+        if (error != null && !error.isNull) throw ScriptContractException(error.asString())
+
+        val result = bindings.getMember(RESULT)
+        return if (result == null || result.isNull) null else result.asString()
+    }
+
+    private fun millis(started: Long): Long = (System.nanoTime() - started) / 1_000_000
 
     private fun read(polyglot: Context, source: String): PluginInspection {
         // The contract first: the plugin is evaluated against a sandbox that already
@@ -122,7 +200,46 @@ class PluginRunner(private val properties: PluginProperties) {
             )
         }
 
-        return PluginInspection.Read(id = id.asString().trim(), apiVersion = version.asInt(), functions = functions)
+        /*
+         * What the plugin needs to be told before it can do anything. Read here
+         * rather than discovered on the first call, because the point of declaring
+         * them is that a workspace can be shown what a plugin will be given before
+         * it is given anything.
+         */
+        val wanted = plugin.invokeMember("parameters")
+        if (!wanted.hasArrayElements()) {
+            return PluginInspection.Unreadable("parameters() did not answer with an array")
+        }
+        if (wanted.arraySize > MAX_PARAMETERS) {
+            return PluginInspection.Unreadable("parameters() declared more than $MAX_PARAMETERS parameters")
+        }
+
+        val parameters = (0 until wanted.arraySize).map { at ->
+            val one = wanted.getArrayElement(at)
+            // Every element passed through OrknuxParameter, which has already
+            // refused anything without a name or a type.
+            DeclaredParameter(
+                name = text(one, "name") ?: return PluginInspection.Unreadable("a parameter has no name"),
+                description = text(one, "description"),
+                type = text(one, "type") ?: return PluginInspection.Unreadable("a parameter has no type"),
+                required = flag(one, "required", default = true),
+                secret = flag(one, "secret", default = false),
+            )
+        }
+
+        return PluginInspection.Read(
+            id = id.asString().trim(),
+            apiVersion = version.asInt(),
+            functions = functions,
+            parameters = parameters,
+        )
+    }
+
+    /** A member that has to be a boolean to be worth reading. */
+    private fun flag(holder: Value, member: String, default: Boolean): Boolean {
+        val value = holder.getMember(member) ?: return default
+        if (!value.isBoolean) return default
+        return value.asBoolean()
     }
 
     /** A member that has to be a string to be worth reading. */
@@ -132,13 +249,20 @@ class PluginRunner(private val properties: PluginProperties) {
         return value.asString().trim().ifEmpty { null }
     }
 
-    private fun describe(failure: PolyglotException): String = when {
-        failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms to load"
-        failure.isResourceExhausted -> "ran more than ${properties.statementLimit} statements while loading"
+    /**
+     * What went wrong, said in terms of what the sandbox was doing at the time.
+     *
+     * [doing] is the difference between "took too long to load" and "took too long
+     * to run", and whoever reads the sentence needs to know which of the two they
+     * are looking at.
+     */
+    private fun describe(failure: PolyglotException, doing: String = "loading"): String = when {
+        failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms while $doing"
+        failure.isResourceExhausted -> "ran more than ${properties.statementLimit} statements while $doing"
         // A guest exception here is usually the contract refusing something, and its
         // message says what — so it is passed on rather than summarised.
-        failure.isGuestException -> failure.message ?: "threw while loading"
-        else -> failure.message ?: "could not be loaded"
+        failure.isGuestException -> failure.message ?: "threw while $doing"
+        else -> failure.message ?: "could not be run"
     }
 
     /**
@@ -180,8 +304,69 @@ class PluginRunner(private val properties: PluginProperties) {
     private companion object {
         const val CONSTRUCT = "__orknuxConstruct"
 
+        /** What the workspace set the plugin's parameters to, as JSON, on its way in. */
+        const val SETTINGS = "__orknuxSettings"
+
+        const val PLUGIN = "__orknuxPlugin"
+        const val WANTED = "__orknuxWanted"
+        const val ARGUMENTS = "__orknuxPluginArguments"
+        const val RESULT = "__orknuxPluginResult"
+        const val ERROR = "__orknuxPluginError"
+
         /** More than a plugin has any business offering, and a bound on the answer. */
         const val MAX_FUNCTIONS = 100
+
+        /**
+         * More than a plugin has any business asking for.
+         *
+         * Lower than the function bound on purpose: every one of these is something
+         * a person has to sit down and fill in, and a plugin asking for fifty pieces
+         * of configuration is asking the wrong question.
+         */
+        const val MAX_PARAMETERS = 50
+
+        /**
+         * Runs one of the plugin's declared functions and leaves JSON behind.
+         *
+         * The plugin is asked for its declarations again rather than the function
+         * being looked up by name on the instance: what the plugin offers is what
+         * `functions()` answers, and a method that happens to share a name with a
+         * declaration is not the same thing as the declaration's `run`.
+         *
+         * Called with the plugin as `this`, so a `run` written as a method reaches
+         * `this.settings`. One written as an arrow function inside `functions()`
+         * already closes over the same instance, so both spellings see the same
+         * parameters.
+         */
+        val CALL = """
+            (function () {
+              globalThis.$RESULT = null;
+              globalThis.$ERROR = null;
+              try {
+                var plugin = globalThis.$PLUGIN;
+                var declared = plugin.functions();
+                var wanted = null;
+                for (var at = 0; at < declared.length; at++) {
+                  if (declared[at].name === globalThis.$WANTED) { wanted = declared[at]; break; }
+                }
+                if (wanted === null) {
+                  globalThis.$ERROR = 'the plugin no longer declares ' + globalThis.$WANTED;
+                  return;
+                }
+                var args = JSON.parse(globalThis.$ARGUMENTS);
+                Promise.resolve(wanted.run.apply(plugin, args)).then(
+                  function (value) {
+                    globalThis.$RESULT = value === undefined ? null : JSON.stringify(value);
+                  },
+                  function (failure) {
+                    globalThis.$ERROR = String((failure && failure.message) || failure);
+                  }
+                );
+              } catch (failure) {
+                globalThis.$ERROR = String((failure && failure.message) || failure);
+              }
+            })();
+        """.trimIndent()
 
         /**
          * What a plugin extends, and what refuses anything that does not.
@@ -210,6 +395,37 @@ class PluginRunner(private val properties: PluginProperties) {
 
               functions() {
                 return [];
+              }
+
+              parameters() {
+                return [];
+              }
+            };
+
+            globalThis.OrknuxParameter = class OrknuxParameter {
+              constructor(declared) {
+                if (declared === null || typeof declared !== 'object') {
+                  throw new Error('an OrknuxParameter needs a declaration');
+                }
+
+                this.name = declared.name;
+                this.description = declared.description === undefined ? null : declared.description;
+                this.type = declared.type;
+                this.required = declared.required === undefined ? true : declared.required;
+                this.secret = declared.secret === undefined ? false : declared.secret;
+
+                if (typeof this.name !== 'string' || this.name.length === 0) {
+                  throw new Error('an OrknuxParameter needs a name');
+                }
+                if (typeof this.type !== 'string') {
+                  throw new Error(this.name + ' needs a type');
+                }
+                if (typeof this.required !== 'boolean') {
+                  throw new Error(this.name + ' says required is neither true nor false');
+                }
+                if (typeof this.secret !== 'boolean') {
+                  throw new Error(this.name + ' says secret is neither true nor false');
+                }
               }
             };
 
@@ -247,7 +463,25 @@ class PluginRunner(private val properties: PluginProperties) {
               if (!(exported.prototype instanceof globalThis.OrknuxPlugin)) {
                 throw new Error('the default export must extend OrknuxPlugin');
               }
-              return new exported();
+              var plugin = new exported();
+
+              /*
+               * What this workspace set the plugin's parameters to, put on the
+               * instance rather than passed to the constructor: a plugin that writes
+               * its own constructor would have to remember to forward them, and one
+               * that forgot would be handed nothing with no sign of why.
+               *
+               * Frozen and not configurable, so a run cannot rewrite what it was
+               * given and hand the altered version to whatever it calls next. Empty
+               * while the plugin is only being asked what it is.
+               */
+              Object.defineProperty(plugin, 'settings', {
+                value: Object.freeze(JSON.parse(globalThis.$SETTINGS || '{}')),
+                writable: false,
+                enumerable: true,
+                configurable: false,
+              });
+              return plugin;
             };
         """.trimIndent()
     }
@@ -260,6 +494,7 @@ sealed interface PluginInspection {
         val id: String,
         val apiVersion: Int,
         val functions: List<DeclaredFunction>,
+        val parameters: List<DeclaredParameter> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */
@@ -275,6 +510,27 @@ data class DeclaredFunction(
 )
 
 data class DeclaredParam(val name: String, val type: String)
+
+/**
+ * One thing a plugin says it has to be told before it can work.
+ *
+ * Not a function's parameter: a function's is filled in by whoever calls it, node
+ * by node, while this is filled in once by the workspace and is the same for every
+ * call. A plugin that needs an address to talk to, or a token to talk with, is
+ * asking for one of these.
+ *
+ * [secret] is the plugin saying it is asking for something that should not be
+ * typed into a form and stored in the clear. What the server does about that is
+ * the server's decision, not the plugin's.
+ */
+data class DeclaredParameter(
+    val name: String,
+    val description: String?,
+    /** As the plugin wrote it. Whether it names a type this server has is decided elsewhere. */
+    val type: String,
+    val required: Boolean,
+    val secret: Boolean,
+)
 
 @ConfigurationProperties(prefix = "orknux.plugin")
 data class PluginProperties(

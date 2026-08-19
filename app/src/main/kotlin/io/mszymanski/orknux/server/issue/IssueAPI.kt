@@ -61,6 +61,7 @@ class IssueAPI(
     private val newsDesk: IssueNewsDesk,
     private val attachments: IssueAttachmentRepository,
     private val links: IssueLinkRepository,
+    private val observers: IssueObserverRepository,
     private val store: AttachmentStore,
     private val installation: InstallationSettings,
 ) {
@@ -361,10 +362,20 @@ class IssueAPI(
          * trips to discover that fourteen of them brought nothing.
          */
         val files = attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(issue.id))
-        return describe(issue, files, links.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)))
+        return describe(
+            issue,
+            files,
+            links.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)),
+            observers.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)),
+        )
     }
 
-    private fun describe(issue: Issue, files: List<IssueAttachment>, addresses: List<IssueLink>) = IssueView(
+    private fun describe(
+        issue: Issue,
+        files: List<IssueAttachment>,
+        addresses: List<IssueLink>,
+        watching: List<IssueObserver>,
+    ) = IssueView(
         id = requireNotNull(issue.id),
         workspaceId = issue.workspaceId,
         number = issue.number,
@@ -376,6 +387,7 @@ class IssueAPI(
         labels = issue.labels.sorted(),
         attachments = files.filter { it.commentId == null }.map(::describeFile),
         links = addresses.map(::describeLink),
+        observers = watching.map { describeObserver(issue.workspaceId, it) },
         comments = issue.comments.map { comment ->
             IssueCommentView(
                 id = requireNotNull(comment.id),
@@ -410,16 +422,27 @@ class IssueAPI(
         val held = issue.assignee ?: return null
         val kind = held.kind ?: return null
         val id = held.id ?: return null
-        return when (kind) {
-            AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1)
-                ?.let { AssigneeView(kind, id, it.displayName, it.username) }
+        return resolve(issue.workspaceId, kind, id)
+            ?: AssigneeView(kind, id, "No longer here", kind.name.lowercase())
+    }
 
-            AssigneeKind.AGENT -> agents.findByIdOrNull(id.toLongOrNull() ?: -1)
-                ?.let { AssigneeView(kind, id, it.name, "agent") }
+    /**
+     * A kind and an id as the name and the second line a box shows, or null
+     * where it names nothing here.
+     *
+     * The same lookup serves the assignee and the observers, because the two
+     * are the same question asked about different rows - and one that answered
+     * them separately is one that would drift the moment either grew a kind.
+     */
+    private fun resolve(workspaceId: Long, kind: AssigneeKind, id: String): AssigneeView? = when (kind) {
+        AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1)
+            ?.let { AssigneeView(kind, id, it.displayName, it.username) }
 
-            AssigneeKind.MODEL -> models.models(issue.workspaceId).firstOrNull { it.id.toString() == id }
-                ?.let { AssigneeView(kind, id, it.name, it.providerName) }
-        } ?: AssigneeView(kind, id, "No longer here", kind.name.lowercase())
+        AssigneeKind.AGENT -> agents.findByIdOrNull(id.toLongOrNull() ?: -1)
+            ?.let { AssigneeView(kind, id, it.name, "agent") }
+
+        AssigneeKind.MODEL -> models.models(workspaceId).firstOrNull { it.id.toString() == id }
+            ?.let { AssigneeView(kind, id, it.name, it.providerName) }
     }
 
     private fun describeFile(attachment: IssueAttachment) = IssueAttachmentView(
@@ -527,6 +550,156 @@ class IssueAPI(
     /** What to call a link where one line is all there is: the page's own order. */
     private fun nameOf(link: IssueLink) =
         link.title ?: GitHubAddress.shortNameOf(link.url) ?: link.url
+
+    /**
+     * Asking to hear about an issue.
+     *
+     * Two permissions on one mutation, the shape `createUserToken` already
+     * uses: nothing named means yourself, and naming somebody else needs the
+     * administrator role. Two mutations would be the same two rules written
+     * twice, and the second one is where they would drift apart.
+     *
+     * Adding somebody is told to them. Being made an observer is the moment the
+     * issue starts concerning you, and everything that arrives afterwards
+     * arrives without explanation otherwise - while adding yourself is silent,
+     * because you were looking at the page when you did it.
+     */
+    @MutationMapping
+    @Transactional
+    fun observeIssue(
+        @Argument id: Long,
+        @Argument observerKind: AssigneeKind?,
+        @Argument observerId: String?,
+    ): IssueView {
+        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
+        requireWorkspaceAccess(held.workspaceId)
+
+        val (kind, who) = observerAsked(held.workspaceId, observerKind, observerId)
+        val issueId = requireNotNull(held.id)
+        // Twice is the same subscription, and the unique index says so - but a
+        // second press of the button is not an error worth showing anybody.
+        if (observers.findByIssueIdAndKindAndObserverId(issueId, kind, who) == null) {
+            observers.save(IssueObserver(issueId = issueId, kind = kind, observerId = who, addedBy = currentUser()))
+            val name = resolve(held.workspaceId, kind, who)
+            audit.record(
+                held.workspaceId,
+                WorkspaceAuditCategory.WORKSPACE,
+                "Issue #${held.number}: ${name?.name ?: who} is now an observer",
+            )
+            newsDesk.observing(held, currentUser(), readersOf(held.workspaceId, kind, who))
+        }
+        return describe(held)
+    }
+
+    /**
+     * Taking somebody off again, under the same two rules.
+     *
+     * Not the link rule, deliberately. A link somebody added is part of the
+     * record and only theirs to remove; an observer is a subscription, and one
+     * an administrator put there is one an administrator can take away - which
+     * is what "an administrator can add or remove somebody else" means.
+     */
+    @MutationMapping
+    @Transactional
+    fun unobserveIssue(
+        @Argument id: Long,
+        @Argument observerKind: AssigneeKind?,
+        @Argument observerId: String?,
+    ): IssueView {
+        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
+        requireWorkspaceAccess(held.workspaceId)
+
+        val (kind, who) = observerAsked(held.workspaceId, observerKind, observerId)
+        observers.findByIssueIdAndKindAndObserverId(requireNotNull(held.id), kind, who)?.let {
+            observers.delete(it)
+            val name = resolve(held.workspaceId, kind, who)
+            audit.record(
+                held.workspaceId,
+                WorkspaceAuditCategory.WORKSPACE,
+                "Issue #${held.number}: ${name?.name ?: who} is no longer an observer",
+            )
+        }
+        return describe(held)
+    }
+
+    /**
+     * Who the caller asked about, and whether they are allowed to ask.
+     *
+     * Absent means yourself, which is the common case and the one that needs no
+     * permission at all. A person who is you is still yourself however it was
+     * spelled - the page sends the row it has rather than nothing - so the
+     * administrator check is on being somebody else, not on having named
+     * anybody.
+     *
+     * An agent is never yourself. Something acting for an agent reaches the
+     * tracker through the tools rather than through this, so an agent named
+     * here is always somebody putting an agent on an issue - which is deciding
+     * for somebody else, and needs the role.
+     */
+    private fun observerAsked(
+        workspaceId: Long,
+        kind: AssigneeKind?,
+        id: String?,
+    ): Pair<AssigneeKind, String> {
+        val me = users.findByUsername(currentUser())
+        if (kind == null || id.isNullOrBlank()) {
+            val mine = me ?: throw IssueObserverInvalidException(currentUser())
+            return AssigneeKind.USER to requireNotNull(mine.id).toString()
+        }
+
+        if (kind == AssigneeKind.MODEL) throw IssueObserverInvalidException("A model")
+        val itIsMe = kind == AssigneeKind.USER && me?.id?.toString() == id
+        if (!itIsMe) access.requireAdmin()
+
+        // Nothing is trusted from the caller past its kind, exactly as an
+        // assignee is not: an id that names no agent here is a mistake worth
+        // reporting now rather than a subscription for a number.
+        val known = when (kind) {
+            AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1) != null
+            AssigneeKind.AGENT -> agents.findByIdOrNull(id.toLongOrNull() ?: -1)?.workspaceId == workspaceId
+            AssigneeKind.MODEL -> false
+        }
+        if (!known) throw IssueObserverInvalidException("$kind $id")
+        return kind to id
+    }
+
+    /** One observer as the news desk addresses them, or nobody if they have gone. */
+    private fun readersOf(workspaceId: Long, kind: AssigneeKind, id: String): List<NewsReader> {
+        val name = when (kind) {
+            AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1)?.username
+            AssigneeKind.AGENT -> agents.findByIdOrNull(id.toLongOrNull() ?: -1)?.name
+            AssigneeKind.MODEL -> null
+        } ?: return emptyList()
+        return listOf(NewsReader(kind, name, id))
+    }
+
+    /**
+     * An observer as the page shows them.
+     *
+     * Resolved every read, like the assignee: a renamed agent reads correctly
+     * afterwards and somebody who has been removed reads as gone rather than as
+     * a number nobody recognises.
+     */
+    private fun describeObserver(workspaceId: Long, watching: IssueObserver): IssueObserverView {
+        val who = resolve(workspaceId, watching.kind, watching.observerId)
+        return IssueObserverView(
+            kind = watching.kind,
+            id = watching.observerId,
+            name = who?.name ?: "No longer here",
+            hint = who?.hint ?: watching.kind.name.lowercase(),
+            addedBy = watching.addedBy,
+            addedAt = watching.addedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            /*
+             * Whether this row is the person reading, answered here for the
+             * reason a comment's `mine` is: the page draws one button for
+             * yourself and another for everybody else, and comparing names in
+             * the browser is how the button and the refusal stop agreeing.
+             */
+            mine = watching.kind == AssigneeKind.USER &&
+                users.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.username
+                    .equals(currentUser(), ignoreCase = true),
+        )
+    }
 
     /**
      * Says which issue - or which of its comments - these files belong to.
@@ -641,6 +814,16 @@ data class IssueView(
     val attachments: List<IssueAttachmentView>,
     /** Addresses hung on the issue, oldest first. */
     val links: List<IssueLinkView>,
+    /**
+     * Whoever asked to hear about it, oldest first.
+     *
+     * Only the people explicitly added. The reporter and the assignee already
+     * hear about everything and have a place of their own on the page, and
+     * showing them here as rows nobody can take off would be a list where half
+     * the crosses do nothing - besides which the assignee changes, so an
+     * implicit observer would appear and disappear without anybody choosing it.
+     */
+    val observers: List<IssueObserverView>,
     val comments: List<IssueCommentView>,
     /** When somebody last said something here, or null if nobody has. */
     val lastCommentAt: String?,
@@ -715,4 +898,25 @@ data class IssueInput(
     val labels: List<String>?,
     val assigneeKind: AssigneeKind?,
     val assigneeId: String?,
+)
+
+/**
+ * Somebody who asked to hear about an issue, as the page shows them.
+ *
+ * The same shape an assignee is shown in, because it is the same question -
+ * who is this, and what kind of thing are they - with the two facts a
+ * subscription adds: who put them here, and whether the person reading is
+ * looking at themselves.
+ */
+data class IssueObserverView(
+    val kind: AssigneeKind,
+    val id: String,
+    val name: String,
+    /** The second line: a username, or what kind of thing it is. */
+    val hint: String,
+    /** Themselves, in the ordinary case, or the administrator who decided. */
+    val addedBy: String,
+    val addedAt: String,
+    /** Whether this is the person reading, so the page knows which button to draw. */
+    val mine: Boolean,
 )

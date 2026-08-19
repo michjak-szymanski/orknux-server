@@ -34,6 +34,7 @@ class IssueNewsDesk(
     private val users: AppUserRepository,
     private val agents: AgentRepository,
     private val models: ModelService,
+    private val observers: IssueObserverRepository,
 ) {
 
     /*
@@ -210,9 +211,57 @@ class IssueNewsDesk(
         bells.toList().forEach { it.complete(true) }
     }
 
-    /** Whoever has it and whoever filed it: the two people an issue concerns. */
+    /**
+     * Somebody now hears about this one, and is told so.
+     *
+     * Sent to whoever was just added rather than to the issue's audience: the
+     * rest of the room already knows the issue exists, and this says nothing
+     * about the issue. [write] drops the actor, so adding yourself is silent -
+     * which is right, since you were looking at the page when you did it.
+     */
+    @Transactional
+    fun observing(issue: Issue, actor: String, told: List<NewsReader>) {
+        write(issue, IssueNewsKind.OBSERVING, actor, says = null, to = told)
+    }
+
+    /**
+     * Everybody an issue concerns: whoever has it, whoever filed it, and
+     * whoever asked to hear.
+     *
+     * The three are unioned rather than kept apart, and [write] drops the
+     * duplicates - so somebody who filed an issue and then observed it, or was
+     * observing before it was handed to them, is told once. Nothing here reads
+     * the status: an issue that has been closed is exactly the issue an
+     * observer wants to hear about when it is reopened, and a subscription that
+     * lapsed the moment the work looked finished would go quiet just before the
+     * one event worth having it for.
+     */
     private fun watchers(issue: Issue): List<NewsReader> =
-        listOfNotNull(audienceOf(issue), NewsReader(AssigneeKind.USER, issue.reporter))
+        listOfNotNull(audienceOf(issue), NewsReader(AssigneeKind.USER, issue.reporter)) + observersOf(issue)
+
+    /**
+     * Whoever asked to hear about this one, as names the news can be addressed
+     * to.
+     *
+     * Resolved on every read, like the assignee: an observer whose row has gone
+     * is dropped rather than written to, since news addressed to a name nobody
+     * can say is news nobody reads. A person is named by their username and not
+     * by the name on their card, so a reporter who is also an observer collapses
+     * to one reader.
+     */
+    private fun observersOf(issue: Issue): List<NewsReader> {
+        val id = issue.id ?: return emptyList()
+        return observers.findByIssueIdOrderByAddedAtAscIdAsc(id).mapNotNull { watching ->
+            val name = when (watching.kind) {
+                AssigneeKind.USER -> users.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.username
+                AssigneeKind.AGENT -> agents.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.name
+                // Never stored, and refused on the way in - but an enum has to
+                // be answered exhaustively, and "nobody" is the honest answer.
+                AssigneeKind.MODEL -> null
+            } ?: return@mapNotNull null
+            NewsReader(watching.kind, name, watching.observerId)
+        }
+    }
 
     /**
      * The assignee as something that can be matched against a caller.

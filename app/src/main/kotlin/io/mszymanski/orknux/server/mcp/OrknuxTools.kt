@@ -242,6 +242,15 @@ class OrknuxTools(
                         ToolParameterSpec("title", "One line saying what it is.", required = true),
                         ToolParameterSpec("description", "The detail; markdown is rendered.", required = false),
                         ToolParameterSpec("labels", "Labels to file it under, comma separated.", required = false),
+                        ToolParameterSpec(
+                            "observers",
+                            "Who should hear about it, comma separated - people or agents, by name. They are " +
+                                "told it exists and hear everything said on it afterwards, without being given " +
+                                "the work. Name whoever should see this. Left out, the workspace's " +
+                                "administrators are told, because an issue nobody hears about is a report " +
+                                "nobody read.",
+                            required = false,
+                        ),
                     ),
                 ),
             )

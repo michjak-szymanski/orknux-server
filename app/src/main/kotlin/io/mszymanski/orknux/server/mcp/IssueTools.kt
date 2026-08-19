@@ -6,8 +6,11 @@ import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.Issue
 import io.mszymanski.orknux.server.issue.IssueComment
 import io.mszymanski.orknux.server.issue.IssueNewsDesk
+import io.mszymanski.orknux.server.issue.IssueObserver
+import io.mszymanski.orknux.server.issue.IssueObserverRepository
 import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.issue.IssueStatus
+import io.mszymanski.orknux.server.issue.NewsReader
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.user.AppUserRepository
 import org.springframework.data.domain.PageRequest
@@ -37,6 +40,7 @@ class IssueTools(
     private val users: AppUserRepository,
     private val agents: AgentRepository,
     private val newsDesk: IssueNewsDesk,
+    private val observers: IssueObserverRepository,
     private val models: ModelService,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
@@ -151,6 +155,9 @@ class IssueTools(
                 "status" to held.status,
                 "reporter" to held.reporter,
                 "assignee" to nameOf(held),
+                // Worth reading before writing a comment: it says who the next
+                // thing said here will actually reach.
+                "observers" to observerNames(held),
                 "labels" to held.labels.sorted(),
                 "comments" to held.comments.map {
                     mapOf("author" to it.author, "said" to it.content, "at" to it.createdAt.toString())
@@ -172,11 +179,36 @@ class IssueTools(
      * deciding who should look at a thing is somebody else's judgement, and an
      * assistant that assigned its own findings to a person would be handing
      * out work.
+     *
+     * Observed by somebody, though, and that is the other half of the same
+     * thought. Assigning is handing out work; observing is saying "this exists,
+     * you should see it", which is precisely what an assistant that has found
+     * something is entitled to say. An issue filed with neither reached an
+     * audience of one - the assistant itself, whose own doing is not news to it
+     * - so ten careful reports about security went to nobody at all, and the
+     * silence was how anybody found out.
      */
     @Transactional
     fun open(scope: OrknuxScope, arguments: String): String {
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not open them")
         val title = text(arguments, "title") ?: return refuse("What should the issue be called?")
+
+        val named = text(arguments, "observers")
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        val found = named.map { it to observerNamed(scope, it) }
+        val missing = found.filter { it.second == null }.map { it.first }
+        /*
+         * Names that match nothing are reported rather than filed around. A
+         * report that says it went to somebody who was never told is worse than
+         * one that says it went nowhere, because only the second gets fixed.
+         */
+        if (missing.isNotEmpty()) {
+            return refuse("There is nobody called ${missing.joinToString(", ")} in this workspace to observe an issue")
+        }
+        val watching = found.mapNotNull { it.second }.ifEmpty { administrators() }
 
         val made = issues.save(
             Issue(
@@ -194,14 +226,70 @@ class IssueTools(
                 lastModifiedBy = currentUser(),
             ),
         )
+        watching.forEach {
+            observers.save(
+                IssueObserver(
+                    issueId = requireNotNull(made.id),
+                    kind = it.kind,
+                    observerId = requireNotNull(it.id),
+                    addedBy = currentUser(),
+                ),
+            )
+        }
+        newsDesk.observing(made, currentUser(), watching)
+
         return mapper.writeValueAsString(
             mapOf(
                 "issue" to made.number,
                 "title" to made.title,
+                // Said back plainly, so a report that reached nobody reads as
+                // one that reached nobody rather than as a success.
+                "observers" to watching.map { it.name },
                 "url" to issueLink(scope.workspaceId, made.number),
             ),
         )
     }
+
+    /**
+     * Somebody in this workspace by the name an assistant would write.
+     *
+     * People by username or by the name on their card, agents by their own -
+     * one lookup over both, the way the assignee box searches both, because
+     * "put Michal on this" does not come with a kind attached. Never a model:
+     * observing is a statement about who reads, and nothing reads a model's
+     * news.
+     */
+    private fun observerNamed(scope: OrknuxScope, name: String): NewsReader? {
+        val person = users.findAll().firstOrNull {
+            it.username.equals(name, ignoreCase = true) || it.displayName.equals(name, ignoreCase = true)
+        }
+        if (person != null) return NewsReader(AssigneeKind.USER, person.username, requireNotNull(person.id).toString())
+
+        val agent = agents.findNamed(scope.workspaceId, name) ?: return null
+        return NewsReader(AssigneeKind.AGENT, agent.name, requireNotNull(agent.id).toString())
+    }
+
+    /**
+     * Who hears about a finding nobody was named for.
+     *
+     * The argument against a default is the honest one: a subscription nobody
+     * asked for is a subscription somebody has to go and cancel, and a machine
+     * guessing who cares is a machine deciding for people. The argument for it
+     * is what actually happened. An assistant filed ten security issues,
+     * assigned them to nobody because handing out work is not its judgement,
+     * wrote carefully on each, and told no one who could act - and the way that
+     * came to light was somebody noticing the silence. A default that can be
+     * overridden by naming anybody costs an administrator one click to undo;
+     * having no default cost a fortnight of reports nobody read.
+     *
+     * Whoever is asking is left out. Observing an issue you filed yourself
+     * subscribes you to your own doing, which the news desk drops anyway.
+     */
+    private fun administrators(): List<NewsReader> =
+        users.findAll()
+            .filter { person -> person.roles.any { it.administers } }
+            .filterNot { it.username.equals(currentUser(), ignoreCase = true) }
+            .map { NewsReader(AssigneeKind.USER, it.username, requireNotNull(it.id).toString()) }
 
     /**
      * Saying something on an issue, under whoever is asking.
@@ -315,6 +403,23 @@ class IssueTools(
             AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1)?.displayName
             AssigneeKind.AGENT -> agents.findByIdOrNull(id.toLongOrNull() ?: -1)?.name
             AssigneeKind.MODEL -> models.models(issue.workspaceId).firstOrNull { it.id.toString() == id }?.name
+        }
+    }
+
+    /**
+     * Who is watching this one, as names.
+     *
+     * Resolved on every read, like the assignee: somebody who has been removed
+     * is dropped rather than read as an id nobody recognises.
+     */
+    private fun observerNames(issue: Issue): List<String> {
+        val id = issue.id ?: return emptyList()
+        return observers.findByIssueIdOrderByAddedAtAscIdAsc(id).mapNotNull { watching ->
+            when (watching.kind) {
+                AssigneeKind.USER -> users.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.displayName
+                AssigneeKind.AGENT -> agents.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.name
+                AssigneeKind.MODEL -> null
+            }
         }
     }
 

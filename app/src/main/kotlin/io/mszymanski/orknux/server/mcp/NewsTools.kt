@@ -187,6 +187,7 @@ class NewsTools(
                 if (item.says == "CLOSED") "closed" else "reopened"
             IssueNewsKind.COMMENT -> "commented"
             IssueNewsKind.MENTIONED -> "mentioned you"
+            IssueNewsKind.OBSERVING -> "made you an observer"
         },
         "issue" to item.issueNumber,
         "title" to item.issueTitle,

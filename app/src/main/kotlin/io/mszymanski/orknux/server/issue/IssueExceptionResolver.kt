@@ -26,6 +26,14 @@ class IssueExceptionResolver : DataFetcherExceptionResolverAdapter() {
         val errorType = when (exception) {
             is IssueLinkInvalidException,
             is IssueLinkNotYoursException,
+            is IssueObserverInvalidException,
+            /*
+             * A refused move is the caller's to fix and says how, which is what
+             * makes it a bad request rather than a failure: an administrator
+             * told the assignee is in the way can change it and press the
+             * button again.
+             */
+            is IssueMoveRefusedException,
             -> ErrorType.BAD_REQUEST
 
             is IssueLinkNotFoundException -> ErrorType.NOT_FOUND

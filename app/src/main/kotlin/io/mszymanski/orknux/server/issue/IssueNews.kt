@@ -28,6 +28,18 @@ enum class IssueNewsKind {
 
     /** Somebody wrote your name in a comment. */
     MENTIONED,
+
+    /**
+     * You are now hearing about this one.
+     *
+     * Its own kind rather than silence, because being made an observer is the
+     * moment the issue first concerns you and everything after it arrives
+     * without explanation otherwise. It covers both ways it happens - an issue
+     * filed naming you, and somebody adding you to one that already existed -
+     * since what the reader needs to know is the same either way: this exists,
+     * and from here on you will hear about it.
+     */
+    OBSERVING,
 }
 
 /**

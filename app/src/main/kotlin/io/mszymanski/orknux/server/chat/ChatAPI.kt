@@ -31,6 +31,7 @@ class ChatAPI(
     private val access: WorkspaceAccess,
     private val agents: AgentRepository,
     private val settings: InstallationSettings,
+    private val ownership: ChatOwnership,
 ) {
 
     @QueryMapping
@@ -187,11 +188,14 @@ class ChatAPI(
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 
-    /** A chat is one person's, so seeing the workspace is not enough. */
-    private fun requireOwn(session: ChatSession) {
-        requireWorkspaceAccess(session.workspaceId)
-        if (session.userId != currentUser()) throw ChatSessionNotFoundException(requireNotNull(session.id))
-    }
+    /**
+     * A chat is one person's, so seeing the workspace is not enough.
+     *
+     * Asked of [ChatOwnership] rather than answered here, because the stream and
+     * the files sent with a message have to give the same answer to the same
+     * question.
+     */
+    private fun requireOwn(session: ChatSession) = ownership.requireOwn(session)
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
         val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)

@@ -24,16 +24,19 @@ class ChatAttachments(
     /**
      * Says which chat these belong to, and hands back the ones that do.
      *
-     * Only files of the chat's own workspace: an id from anywhere else is
-     * dropped rather than argued with, since the message it came with is
-     * already on its way.
+     * Only files of the chat's own workspace, and only ones its owner uploaded:
+     * an id from anywhere else is dropped rather than argued with, since the
+     * message it came with is already on its way. The uploader is asked as well
+     * as the workspace because a file waiting in somebody's composer has no
+     * chat to protect it yet, and an id guessed from there would otherwise be
+     * readable by pulling it into a chat of one's own.
      */
     @Transactional
     fun attach(session: ChatSession, ids: List<Long>): List<ChatAttachment> {
         if (ids.isEmpty()) return emptyList()
 
         return ids.mapNotNull { attachments.findByIdOrNull(it) }
-            .filter { it.workspaceId == session.workspaceId }
+            .filter { it.workspaceId == session.workspaceId && it.uploadedBy == session.userId }
             .onEach { it.chatSessionId = session.id }
     }
 

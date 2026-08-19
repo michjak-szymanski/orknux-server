@@ -35,6 +35,20 @@ have failed.
 
 ### Fixed
 
+- **The files sent into a chat are as private as the chat.** A chat belongs to
+  whoever started it, but the documents attached to one were checked against the
+  workspace: anybody who could see the workspace could list the attachments on
+  somebody else's conversation and download them. They are now checked against
+  the chat, and a file still waiting in a composer belongs to whoever uploaded
+  it until the message carrying it is sent. An issue's files are unchanged -
+  those belong to the people working the issue, which is the whole workspace.
+- **A refusal no longer names the workspace it is protecting.** "You do not have
+  access to workspace "frontend"" answered a question nobody may ask: any id
+  that happened to belong to another workspace handed over its name, and GraphQL
+  reports errors with a 200, so trying every id in turn is a script. It now says
+  only that the thing does not exist or is not the caller's, and arrives as not
+  found rather than forbidden - which is what the REST side has always answered
+  to the same refusal.
 - The `@` mention list appeared at the bottom of the whole editor box rather
   than at the mention. In the comment box, which sits low on the page, that put
   it off the bottom of the window with only the first two names reachable.

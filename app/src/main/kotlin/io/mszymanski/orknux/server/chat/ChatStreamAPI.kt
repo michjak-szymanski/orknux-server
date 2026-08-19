@@ -4,15 +4,10 @@ import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ModelChatClient
-import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
-import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.attachment.ChatAttachments
 import io.mszymanski.orknux.server.attachment.InstallationSettings
 import org.slf4j.LoggerFactory
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.MediaType
-import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -58,8 +53,7 @@ class ChatStreamAPI(
     private val client: ModelChatClient,
     private val titles: ChatTitles,
     private val conversation: AgentConversation,
-    private val workspaces: WorkspaceRepository,
-    private val access: WorkspaceAccess,
+    private val ownership: ChatOwnership,
     private val attachments: ChatAttachments,
     private val settings: InstallationSettings,
     private val mapper: ObjectMapper,
@@ -133,13 +127,7 @@ class ChatStreamAPI(
         }
     }
 
-    private fun requireOwn(session: ChatSession) {
-        val workspace = workspaces.findByIdOrNull(session.workspaceId)
-            ?: throw WorkspaceNotFoundException(session.workspaceId)
-        access.requireVisible(workspace)
-        val user = SecurityContextHolder.getContext().authentication?.name ?: "system"
-        if (session.userId != user) throw ChatSessionNotFoundException(requireNotNull(session.id))
-    }
+    private fun requireOwn(session: ChatSession) = ownership.requireOwn(session)
 
     private companion object {
         val log = LoggerFactory.getLogger(ChatStreamAPI::class.java)

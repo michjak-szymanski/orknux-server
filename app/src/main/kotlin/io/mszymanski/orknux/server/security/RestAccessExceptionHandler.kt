@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.attachment.AttachmentNotFoundException
 import io.mszymanski.orknux.server.attachment.AttachmentTooLargeException
 import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
@@ -33,8 +34,17 @@ class RestAccessExceptionHandler {
      * A workspace somebody may not see is reported exactly as one that is not
      * there, the way it is everywhere else here: "you may not see this" confirms
      * that this is somebody's, which is a fact worth not handing out.
+     *
+     * An attachment is answered the same way and for the same reason - a file
+     * on a chat that is not the caller's is refused as one that is not there -
+     * and it was arriving as a 500, which says the server broke when what
+     * happened is that somebody asked for a document of somebody else's.
      */
-    @ExceptionHandler(WorkspaceNotFoundException::class, WorkspaceForbiddenException::class)
+    @ExceptionHandler(
+        WorkspaceNotFoundException::class,
+        WorkspaceForbiddenException::class,
+        AttachmentNotFoundException::class,
+    )
     fun notFound(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.NOT_FOUND)
             .body(mapOf("error" to (failure.message ?: "That is not here")))

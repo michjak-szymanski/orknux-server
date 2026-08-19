@@ -139,11 +139,11 @@ class WorkspaceVisibilityTest(
 
         forbidden(
             """query { workspaceWorkflows(workspaceId: $frontendId) { totalElements } }""",
-            """You do not have access to workspace "frontend"""",
+            "That does not exist, or you do not have access to it",
         )
         forbidden(
             """mutation { createWorkflow(input: { workspaceId: $frontendId, name: "Sneaky" }) { id } }""",
-            """You do not have access to workspace "frontend"""",
+            "That does not exist, or you do not have access to it",
         )
 
         assertThat(workflows.findAll()).isEmpty()
@@ -157,11 +157,11 @@ class WorkspaceVisibilityTest(
 
         forbidden(
             """mutation { setWorkflowEnabled(id: ${assignment.id}, enabled: false) { enabled } }""",
-            """You do not have access to workspace "frontend"""",
+            "That does not exist, or you do not have access to it",
         )
         forbidden(
             """mutation { removeWorkflow(id: ${assignment.id}) }""",
-            """You do not have access to workspace "frontend"""",
+            "That does not exist, or you do not have access to it",
         )
 
         assertThat(assignments.findAll()).hasSize(1)
@@ -180,8 +180,28 @@ class WorkspaceVisibilityTest(
 
         forbidden(
             """query { workspaceAudit(workspaceId: $frontendId) { totalElements } }""",
-            """You do not have access to workspace "frontend"""",
+            "That does not exist, or you do not have access to it",
         )
+    }
+
+    /**
+     * A refusal used to read "You do not have access to workspace "frontend"",
+     * which answers a question nobody may ask: the name of a workspace the
+     * caller is not in, handed over by any id that happens to belong to it.
+     * GraphQL reports errors with a 200, so trying every id in turn is a script.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `a refusal never names the workspace it is protecting`() {
+        graphQlTester.document("""query { workspaceWorkflows(workspaceId: $frontendId) { totalElements } }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).doesNotContain("frontend")
+                // Answered as absent rather than as forbidden, which is what the
+                // REST side has always said to the same exception.
+                assertThat(errors.single().errorType.toString()).isEqualTo("NOT_FOUND")
+            }
     }
 
     private fun entry(workspaceId: Long, name: String) = WorkspaceAudit(

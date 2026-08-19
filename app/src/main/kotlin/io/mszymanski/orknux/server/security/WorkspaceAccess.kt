@@ -47,7 +47,7 @@ class WorkspaceAccess(
     }
 
     fun requireVisible(workspace: Workspace) {
-        if (!canSee(workspace)) throw WorkspaceForbiddenException(workspace.name)
+        if (!canSee(workspace)) throw WorkspaceForbiddenException()
     }
 
     fun requireAdmin() {
@@ -56,6 +56,25 @@ class WorkspaceAccess(
 
 }
 
-class WorkspaceForbiddenException(name: String) : RuntimeException("You do not have access to workspace \"$name\"")
+/**
+ * Says no without saying what was asked for.
+ *
+ * It used to name the workspace, which meant that every query taking an id -
+ * an action, a condition, an agent, a skill, a tool, a run - had three answers
+ * for an arbitrary number, and the middle one handed over the name of the
+ * workspace the caller is not in. GraphQL reports errors with a 200, so trying
+ * every number in turn is a script rather than an afternoon, and what comes
+ * back is a directory of who else is on this installation and what their
+ * workspaces are called.
+ *
+ * The MCP surface has always answered this way and says why: a run in another
+ * workspace is answered exactly as one that does not exist, because "that is
+ * not yours" confirms it is somebody's. What is left here still says whether
+ * an id is real, which is the smaller half of the same leak - closing that one
+ * means each of those queries answering null the way `workspace(id)` already
+ * does, rather than refusing.
+ */
+class WorkspaceForbiddenException :
+    RuntimeException("That does not exist, or you do not have access to it")
 
 class AdminRequiredException : RuntimeException("This action requires the administrator role")

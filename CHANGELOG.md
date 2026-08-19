@@ -33,6 +33,45 @@ have failed.
   takes you to the run it made. It uses the draft, deliberately: the point is to
   try what you are looking at before committing to it.
 
+### Changed
+
+- **A workflow switched off now stays off.** The switch on the workflows list
+  was written down, audited and shown, and nothing that starts a run ever read
+  it: a workflow somebody had turned off still answered its trigger, still ran
+  on its schedule, and still started when an agent asked for it by name. It now
+  means what it says. Off is off for everything that starts by itself - a
+  trigger, the clock, a tool call - and the trigger's own log says so, with a
+  new **Workflow switched off** outcome naming the workflow it left alone,
+  rather than a silence indistinguishable from a trigger that never fired.
+  Pressing Run yourself still works, in the editor and in the list, because
+  switching a misbehaving workflow off and going in to fix it is the ordinary
+  way this is used, and refusing to try the graph would leave you turning it
+  back on - live, half-fixed - just to test it. The editor says **Switched
+  off** beside the workflow's name so that is a decision rather than a
+  surprise, and the list stops promising a next run for one that will not have
+  one.
+  **On upgrade**: nothing to configure, but a workflow left switched off some
+  time ago and quietly running anyway will stop the moment this is installed.
+  If something you rely on goes quiet, its workflow is off - the workflows list
+  shows which, and the trigger's firing log will say it turned the firing down.
+- **An OIDC bearer token is now checked against who it was issued for, and this
+  one can lock people out.** Only the issuer was checked, so any token the
+  provider minted was accepted here - including one issued to a different
+  application registered in the same Keycloak realm or Entra tenant. Roles come
+  from a claim, so a group called `admins` in that other application's token made
+  its holder an administrator here. A token must now name this installation in
+  its `aud` claim.
+  **On upgrade**: browser sign-in is unaffected, and so is any provider that
+  writes the client id into the tokens it mints for this application. Bearer
+  calls stop working where it writes something else - Keycloak names `account`
+  unless an audience mapper is configured against this client, and Entra names
+  the application's App ID URI rather than its client id. What an operator sees
+  is a 401 on API calls that worked yesterday, with `The aud claim is not valid`
+  in the server log. Either configure the provider to name this client, or set
+  `orknux.security.oidc.audiences` (`ORKNUX_OIDC_AUDIENCES`) to what the tokens
+  actually carry - it takes a list, and a token has to match one of them rather
+  than all.
+
 ### Fixed
 
 - **The files sent into a chat are as private as the chat.** A chat belongs to

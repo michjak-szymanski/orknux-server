@@ -100,6 +100,18 @@ data class OidcProperties(
      */
     val clientSecret: String = "",
 
+    /**
+     * Which audiences a bearer token may name, where the client id is not the one.
+     *
+     * Empty means the client id, which is what the provider writes into a token minted
+     * for this application and what an ID token always carries. It is set when the
+     * provider says something else: Keycloak's access tokens name `account` unless an
+     * audience mapper is configured against this client, and Entra's name the
+     * application's App ID URI rather than its client id. Naming one of these is enough -
+     * a token has to match one, not all of them.
+     */
+    val audiences: List<String> = emptyList(),
+
     /** What to ask the provider for. `openid` is required; the rest is what is read. */
     val scopes: List<String> = listOf("openid", "profile", "email", "groups"),
 )

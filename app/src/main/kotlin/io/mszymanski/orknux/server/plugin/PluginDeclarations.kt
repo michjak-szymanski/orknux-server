@@ -156,8 +156,19 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 name = node.get("name").asString(),
                 description = node.get("description")?.asString(),
                 type = node.get("type").asString(),
-                // A declaration written before these existed has neither, and the
-                // safe reading of silence is "not required, not a secret".
+                /*
+                 * A declaration written before these existed has neither, and
+                 * the safe reading of silence is "not required, not a secret".
+                 *
+                 * Deliberately the opposite of what the contract's own
+                 * constructor does, which defaults `required` to true. The two
+                 * are answering different questions: a plugin author who omits
+                 * it means the parameter matters, while a stored row that omits
+                 * it is one written before parameters existed, and marking that
+                 * as missing something would put a red mark on a plugin that
+                 * never asked for anything. Anything the constructor wrote has
+                 * the key, so this only ever reads the old shape.
+                 */
                 required = node.get("required")?.asBoolean() ?: false,
                 secret = node.get("secret")?.asBoolean() ?: false,
             )

@@ -29,6 +29,14 @@ spring:
             initialize-schema: never
   application:
     name: orknux-server
+  mvc:
+    async:
+      # How long a request that answered with a promise may stay open before the
+      # container gives up on it. The container's own default is thirty seconds,
+      # which is shorter than the five minutes `orknux_news` may be asked to
+      # wait - so a wait would have been cut off by the machinery that makes it
+      # cost nothing. Longer than the longest wait, with slack.
+      request-timeout: ${ORKNUX_ASYNC_REQUEST_TIMEOUT:330s}
   datasource:
     url: ${ORKNUX_DB_URL:jdbc:postgresql://localhost:5432/orknux}
     username: ${ORKNUX_DB_USERNAME:orknux}
@@ -116,6 +124,14 @@ orknux:
     # Where the interface is served from, when it is not this server. Comma
     # separated; empty allows none, which is right once they share an origin.
     allowed-origins: ${ORKNUX_ALLOWED_ORIGINS:http://localhost:5173}
+  webhook:
+    # The most a webhook caller may send. This endpoint is open to the internet
+    # by necessity - a build server cannot sign in - and the body it posts is
+    # kept several times over on the way to becoming a run's input, so its size
+    # is the one thing an anonymous caller must not get to choose. A megabyte is
+    # far past any real webhook; raise it where a sender genuinely posts more.
+    # Anything larger is refused with 413 and never reaches a trigger.
+    max-body-size: ${ORKNUX_WEBHOOK_MAX_BODY_SIZE:1MB}
   security:
     # Sees the Admin section and every workspace.
     # LDAP or OIDC. One at a time, deliberately: both would mean an LDAP password
@@ -128,6 +144,24 @@ orknux:
     # instead, validated per request. Same provider, same claims, same roles.
     auth-method: ${ORKNUX_AUTH_METHOD:LDAP}
     admin-role: ${ORKNUX_ADMIN_ROLE:ROLE_ADMINS}
+    sign-in:
+      # How hard somebody may try. Sign-in is the one door anybody may knock on,
+      # and a known username could be tried at whatever rate the network allowed
+      # - which under LDAP landed on the directory as well.
+      #
+      # A wrong password costs nothing until the allowance is spent, then a pause
+      # that doubles up to the ceiling and stops there. Nothing here locks
+      # anybody out: the pause has an end, a successful sign-in clears the
+      # record, and so does going quiet for forget-after. Both counts are kept,
+      # because per username alone does not slow a list of names and per address
+      # alone does not slow a botnet.
+      per-username: ${ORKNUX_SIGN_IN_PER_USERNAME:5}
+      # Higher, since an address is not a person: an office behind one router is
+      # one address.
+      per-address: ${ORKNUX_SIGN_IN_PER_ADDRESS:20}
+      first-wait: ${ORKNUX_SIGN_IN_FIRST_WAIT:2s}
+      longest-wait: ${ORKNUX_SIGN_IN_LONGEST_WAIT:5m}
+      forget-after: ${ORKNUX_SIGN_IN_FORGET_AFTER:15m}
     oidc:
       # The claim carrying group or role membership. There is no standard one:
       # Keycloak and Okta usually say groups, Entra says groups or roles. Each value
@@ -149,6 +183,12 @@ orknux:
       issuer: ${ORKNUX_OIDC_ISSUER:}
       client-id: ${ORKNUX_OIDC_CLIENT_ID:}
       client-secret: ${ORKNUX_OIDC_CLIENT_SECRET:}
+      # Which audiences a bearer token may name. Empty means the client id, which is
+      # what a provider writes into a token minted for this application. Set it when
+      # the provider says something else: Keycloak names account unless an audience
+      # mapper is configured against this client, Entra names the App ID URI. A token
+      # has to match one of these, not all of them.
+      audiences: ${ORKNUX_OIDC_AUDIENCES:}
       scopes: ${ORKNUX_OIDC_SCOPES:openid,profile,email,groups}
     # Which of the identity provider's names grants which of this installation's
     # roles. The key is what the provider says — an LDAP group DN or its common

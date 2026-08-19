@@ -12,9 +12,14 @@ import org.springframework.security.oauth2.core.user.OAuth2UserAuthority
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository
 import org.springframework.security.oauth2.client.registration.ClientRegistrations
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository
+import org.springframework.security.oauth2.core.OAuth2TokenValidator
 import org.springframework.security.oauth2.jwt.Jwt
+import org.springframework.security.oauth2.jwt.JwtClaimNames
+import org.springframework.security.oauth2.jwt.JwtClaimValidator
 import org.springframework.security.oauth2.jwt.JwtDecoder
-import org.springframework.security.oauth2.jwt.JwtDecoders
+import org.springframework.security.oauth2.jwt.JwtIssuerValidator
+import org.springframework.security.oauth2.jwt.JwtValidators
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
 
 /**
@@ -71,15 +76,54 @@ class OidcSecurityConfig {
     }
 
     /**
-     * How a bearer token is validated: against the same issuer the browser flow uses.
+     * How a bearer token is validated: against the same issuer the browser flow uses,
+     * and against this application's own name.
      *
-     * Same provider, same keys, same claims — a token and a session are the same
+     * Same provider, same keys, same claims - a token and a session are the same
      * statement about somebody, and validating them differently would eventually mean
      * disagreeing about who they are.
+     *
+     * The issuer alone is not enough, which is what this used to check and nothing more.
+     * A realm or a tenant serves several applications, and every token it mints carries
+     * this issuer and a signature from these keys - so a token issued to some other
+     * application registered beside this one would have been accepted here as an identity.
+     * Roles come from a claim, so a group named `admins` over there would have administered
+     * here. The `aud` claim is where the provider wrote down who the token was for, so
+     * that is what is read.
      */
     @Bean
-    fun jwtDecoder(properties: SecurityProperties): JwtDecoder =
-        JwtDecoders.fromIssuerLocation(properties.oidc.issuer)
+    fun jwtDecoder(properties: SecurityProperties): JwtDecoder {
+        val issuer = properties.oidc.issuer
+        val decoder = NimbusJwtDecoder.withIssuerLocation(issuer).build()
+        decoder.setJwtValidator(
+            JwtValidators.createDefaultWithValidators(
+                JwtIssuerValidator(issuer),
+                audienceValidator(properties.oidc),
+            ),
+        )
+        return decoder
+    }
+
+    /**
+     * A token is meant for this application if `aud` names it.
+     *
+     * Written against the claim rather than with Spring's own `JwtAudienceValidator`
+     * because that one holds a single name, and two of them side by side would demand a
+     * token carry both at once. An installation that lists more than one audience means
+     * any of them will do, not all of them.
+     */
+    private fun audienceValidator(oidc: OidcProperties): OAuth2TokenValidator<Jwt> {
+        val accepted = oidc.audiences.ifEmpty { listOf(oidc.clientId) }.filter { it.isNotBlank() }
+        require(accepted.isNotEmpty()) {
+            "orknux.security.oidc.client-id is not set, and this installation is configured to sign " +
+                "in with OIDC. It is what a bearer token has to name as its audience, unless " +
+                "orknux.security.oidc.audiences says otherwise."
+        }
+
+        return JwtClaimValidator<Collection<String>>(JwtClaimNames.AUD) { audience ->
+            audience != null && audience.any { it in accepted }
+        }
+    }
 
     /**
      * The browser flow's authorities.

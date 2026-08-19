@@ -293,8 +293,10 @@ class IssueObserverTest(
         val parsed = mapper.readValue(answer, Map::class.java)
         assertThat(parsed["observers"]).isEqualTo(listOf("alice"))
         // The failure this exists for: filed, assigned to nobody, and reaching
-        // somebody who can act on it regardless.
-        assertThat(readAs("alice").map { it["what"] }).containsExactly("made you an observer")
+        // somebody who can act on it regardless. It reads as "opened" rather than
+        // as "made you an observer" because at this moment the news is the issue,
+        // not the subscription.
+        assertThat(readAs("alice").map { it["what"] }).containsExactly("opened")
         assertThat(observers.findAll().map { it.observerId }).containsExactly(aliceId.toString())
     }
 
@@ -310,8 +312,44 @@ class IssueObserverTest(
         // Named observers replace the default rather than adding to it: saying
         // who should hear is saying who should hear.
         assertThat(mapper.readValue(answer, Map::class.java)["observers"]).isEqualTo(listOf("bob"))
-        assertThat(readAs("bob").map { it["what"] }).containsExactly("made you an observer")
+        assertThat(readAs("bob").map { it["what"] }).containsExactly("opened")
         assertThat(readAs("alice")).isEmpty()
+    }
+
+    /**
+     * Issue #97.
+     *
+     * Filing used to tell the assignee and nobody else, so an observer named at
+     * the moment an issue was created heard only that they had been made an
+     * observer - a sentence about a subscription, arriving in place of the one
+     * about the thing worth looking at. Somebody added to an issue that already
+     * exists still hears that, which is when it is the true sentence.
+     */
+    @Test
+    fun `an observer named while filing hears that the issue was opened`() {
+        asUser("claude") {
+            issueTools.open(
+                OrknuxScope(workspaceId = workspaceId, mayWrite = true),
+                """{"title": "The export writes an empty file", "observers": "Bob"}""",
+            )
+        }
+
+        val told = readAs("bob")
+        assertThat(told.map { it["what"] }).containsExactly("opened")
+        assertThat(told.single()["title"]).isEqualTo("The export writes an empty file")
+    }
+
+    /** And added afterwards, it is still the subscription that is the news. */
+    @Test
+    @WithMockUser(username = "alice", roles = ["ADMINS"])
+    fun `somebody put on an issue that already exists is told they now observe it`() {
+        val id = file()
+
+        graphQlTester.document(
+            """mutation { observeIssue(id: $id, observerKind: USER, observerId: "$bobId") { observers { name } } }""",
+        ).execute().path("observeIssue.observers[0].name").entity(String::class.java).isEqualTo("Bob")
+
+        assertThat(readAs("bob").map { it["what"] }).containsExactly("made you an observer")
     }
 
     @Test

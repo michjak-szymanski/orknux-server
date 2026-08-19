@@ -236,7 +236,11 @@ class IssueTools(
                 ),
             )
         }
-        newsDesk.observing(made, currentUser(), watching)
+        // Opened rather than observing: at creation the news worth having is
+        // that the issue exists. "You are now an observer" is the right sentence
+        // for somebody added to an issue that was already there, and that is where
+        // it still gets said.
+        newsDesk.opened(made, currentUser())
 
         return mapper.writeValueAsString(
             mapOf(

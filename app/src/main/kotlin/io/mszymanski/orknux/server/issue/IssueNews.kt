@@ -17,6 +17,9 @@ import java.time.OffsetDateTime
 
 /** What happened to an issue, in the three kinds worth interrupting somebody for. */
 enum class IssueNewsKind {
+    /** It was filed, and you are one of the people it concerns. */
+    OPENED,
+
     /** It was given to you, or taken away from you. */
     ASSIGNED,
 

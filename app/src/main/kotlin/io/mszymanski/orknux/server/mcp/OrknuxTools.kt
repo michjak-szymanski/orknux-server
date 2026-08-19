@@ -2,10 +2,12 @@ package io.mszymanski.orknux.server.mcp
 
 import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
 import org.springframework.data.repository.findByIdOrNull
 import io.mszymanski.orknux.server.security.WebProperties
+import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionService
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
@@ -106,6 +108,15 @@ class OrknuxTools(
     @param:Lazy private val runs: ExecutionService,
     private val agents: AgentRepository,
     private val functions: WorkflowFunctionRepository,
+    /**
+     * For the names of the variables a function is handed, and nothing else.
+     *
+     * Their values are never read here. What a model writing a function needs is
+     * that `agentName` arrives after the declared parameters and under that name -
+     * a list of ids tells it that there is one and leaves it guessing which entry
+     * in the declaration that is.
+     */
+    private val variables: WorkspaceVariableRepository,
     private val issueTools: IssueTools,
     private val newsTools: NewsTools,
     private val web: WebProperties,
@@ -659,12 +670,29 @@ class OrknuxTools(
                 /*
                  * Named, not valued. An external is a workspace value and often
                  * a secret; what a model needs to write the code is that the
-                 * function is handed one, and in which position.
+                 * function is handed one, under which name and in which position.
+                 *
+                 * In the function's own order, not the repository's: they are
+                 * passed positionally, so the order is half of what is being said.
                  */
-                "externals" to chosen.externals.map { it.variableId },
+                "externals" to externalsOf(chosen),
                 "url" to functionLink(scope.workspaceId, chosen.id),
             ),
         )
+    }
+
+    /**
+     * The variables a function is handed, by name, in the order it is handed them.
+     *
+     * One read for all of them rather than one each, and anything that has been
+     * deleted out from under the function is left out - a name it never had is
+     * worse than a gap, since the model would write the code to take it.
+     */
+    private fun externalsOf(function: WorkflowFunction): List<Map<String, Any?>> {
+        val named = variables.findAllById(function.externals.map { it.variableId }).associateBy { it.id }
+        return function.externals.mapNotNull { external ->
+            named[external.variableId]?.let { mapOf("name" to it.name, "type" to it.type.name) }
+        }
     }
 
     /**

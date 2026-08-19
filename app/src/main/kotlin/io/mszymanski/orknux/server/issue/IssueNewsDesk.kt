@@ -52,6 +52,29 @@ class IssueNewsDesk(
      */
     private val bells = ConcurrentHashMap.newKeySet<CompletableFuture<Boolean>>()
 
+    /**
+     * It was filed. Everybody it concerns hears, except the person it was
+     * handed to.
+     *
+     * Two calls rather than one, and the assignee's exclusion here is why:
+     * "assigned to you" is a more useful sentence than "opened" for the one
+     * person expected to do something about it, so [assigned] still says that
+     * and this says the other thing to everybody else. [write] drops the actor,
+     * so whoever filed it is not told about their own doing.
+     *
+     * Before this, filing an issue told the assignee and nobody else - so an
+     * assistant opening an issue and naming the people who should know wrote
+     * into an empty room, which is the whole point of having observers.
+     */
+    @Transactional
+    fun opened(issue: Issue, actor: String) {
+        val holder = audienceOf(issue)
+        val told = watchers(issue).filterNot { reader ->
+            holder != null && reader.kind == holder.kind && reader.name.equals(holder.name, ignoreCase = true)
+        }
+        write(issue, IssueNewsKind.OPENED, actor, says = null, to = told)
+    }
+
     /** It was given to somebody. Only the new owner is told. */
     @Transactional
     fun assigned(issue: Issue, actor: String) {

@@ -187,6 +187,11 @@ class NewsTools(
                 if (item.says == "CLOSED") "closed" else "reopened"
             IssueNewsKind.COMMENT -> "commented"
             IssueNewsKind.MENTIONED -> "mentioned you"
+            // Reads as what happened, not as what you now are: an assistant
+            // told "opened" knows there is something new to look at, where
+            // "made you an observer" describes a subscription and buries the
+            // issue behind it.
+            IssueNewsKind.OPENED -> "opened"
             IssueNewsKind.OBSERVING -> "made you an observer"
         },
         "issue" to item.issueNumber,

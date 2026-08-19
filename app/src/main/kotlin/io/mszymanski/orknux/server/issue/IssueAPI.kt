@@ -199,6 +199,7 @@ class IssueAPI(
         )
         audit.record(workspaceId, WorkspaceAuditCategory.WORKSPACE, "Issue #${made.number} \"$title\" opened")
         newsDesk.assigned(made, currentUser())
+        newsDesk.opened(made, currentUser())
         return describe(made)
     }
 

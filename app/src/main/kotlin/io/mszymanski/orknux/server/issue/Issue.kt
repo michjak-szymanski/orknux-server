@@ -281,3 +281,6 @@ class IssueCommentNotYoursException :
 
 class IssueAssigneeInvalidException(what: String) :
     RuntimeException("$what is not something in this workspace to assign an issue to")
+
+class IssueAssigneeKindMissingException(id: String) :
+    RuntimeException("An assignee is a kind and an id together; $id arrived without a kind")

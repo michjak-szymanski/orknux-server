@@ -1,0 +1,103 @@
+package io.mszymanski.orknux.server.transfer
+
+import graphql.GraphQLError
+import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.security.WorkspaceAccess
+import org.springframework.graphql.data.method.annotation.Argument
+import org.springframework.graphql.data.method.annotation.MutationMapping
+import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.graphql.execution.DataFetcherExceptionResolverAdapter
+import org.springframework.graphql.execution.ErrorType
+import org.springframework.stereotype.Component
+import org.springframework.stereotype.Controller
+
+/**
+ * Export and import for the components a workspace can move between installations.
+ *
+ * The envelope crosses this boundary as a string rather than as a GraphQL type,
+ * and deliberately: it is a file format, versioned by the integer inside it, and
+ * a second description of it in the schema would be a second thing to keep in
+ * step. What the schema does describe is the *plan* — which is not the format,
+ * but this installation's answer about one file and one workspace.
+ *
+ * Both directions check the workspace first. An import is a write, so it is
+ * checked like one: the same `requireVisible` an editor's save goes through.
+ */
+@Controller
+class ComponentTransferAPI(
+    private val exporter: ComponentExporter,
+    private val importer: ComponentImporter,
+    private val access: WorkspaceAccess,
+) {
+
+    /** What the Export control downloads: a file name and the JSON to put in it. */
+    @QueryMapping
+    fun exportComponent(
+        @Argument workspaceId: Long,
+        @Argument kind: ComponentKind,
+        @Argument id: Long,
+        @Argument depth: ExportDepth?,
+    ): ComponentExportView {
+        access.requireVisible(workspaceId)
+        val chosen = depth ?: ExportDepth.DEEP
+        return ComponentExportView(
+            fileName = exporter.fileNameFor(workspaceId, kind, id),
+            json = exporter.export(workspaceId, kind, id, chosen),
+        )
+    }
+
+    /**
+     * What an import would do, before it does it.
+     *
+     * A query rather than a mutation because it writes nothing — but it takes
+     * the whole file, so it is checked against the workspace exactly as the
+     * mutation is. Somebody who cannot see a workspace cannot find out what it
+     * already holds by asking what would collide.
+     */
+    @QueryMapping
+    fun componentImportPlan(@Argument workspaceId: Long, @Argument envelope: String): ImportPlan {
+        access.requireVisible(workspaceId)
+        return importer.plan(workspaceId, envelope)
+    }
+
+    /**
+     * Imports the file, or nothing at all.
+     *
+     * Answers the same plan the preview showed, filled in with what was actually
+     * done — so a client that skipped the preview still gets told what it caused,
+     * and one that showed it can compare.
+     */
+    @MutationMapping
+    fun importComponents(@Argument workspaceId: Long, @Argument envelope: String): ImportPlan {
+        access.requireVisible(workspaceId)
+        return importer.apply(workspaceId, envelope)
+    }
+}
+
+/** The download: the suggested name, and the bytes. */
+data class ComponentExportView(val fileName: String, val json: String)
+
+@Component
+class ComponentTransferExceptionResolver : DataFetcherExceptionResolverAdapter() {
+
+    override fun resolveToSingleError(exception: Throwable, environment: DataFetchingEnvironment): GraphQLError? {
+        val errorType = when (exception) {
+            is EnvelopeUnreadableException,
+            is EnvelopeVersionUnknownException,
+            is EnvelopeInvalidException,
+            is ImportNotPossibleException,
+            -> ErrorType.BAD_REQUEST
+
+            is ComponentNotExportableException -> ErrorType.NOT_FOUND
+
+            else -> return null
+        }
+
+        return GraphQLError.newError()
+            .errorType(errorType)
+            .message(exception.message)
+            .path(environment.executionStepInfo.path)
+            .location(environment.field.sourceLocation)
+            .build()
+    }
+}

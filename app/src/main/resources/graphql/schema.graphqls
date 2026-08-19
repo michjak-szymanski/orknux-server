@@ -183,6 +183,25 @@ type Query {
     memoryAuthors(catalogId: ID!): [String!]!
     "The workspace's objects: the shapes its workflows pass around."
     workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20): ObjectPage!
+    """
+    One component as the JSON somebody downloads.
+
+    `DEEP` carries everything it reaches — the objects a function is typed
+    against, the conditions a composite combines — so the file lands somewhere it
+    can be opened. `SHALLOW` carries the one thing, for a workspace that already
+    has the rest.
+
+    No ids travel, and no secrets: a variable a function is handed appears under
+    `requires` by name and shape, and the target workspace supplies its own.
+    """
+    exportComponent(workspaceId: ID!, kind: ComponentKind!, id: ID!, depth: ExportDepth = DEEP): ComponentExport!
+    """
+    What importing this file into this workspace would do, before it is done.
+
+    Writes nothing. Checked against the workspace exactly as the mutation is, so
+    it cannot be used to find out what a workspace one cannot see already holds.
+    """
+    componentImportPlan(workspaceId: ID!, envelope: String!): ComponentImportPlan!
     "The workspace's catalogs, by name, each with what it holds."
     variableCatalogs(workspaceId: ID!): [VariableCatalog!]!
     """
@@ -236,6 +255,16 @@ type Query {
 
 type Mutation {
     """
+    Creates everything an export holds, or nothing at all.
+
+    One transaction. A name already taken here is renamed rather than replaced,
+    and everything else in the same file that pointed at it points at the new
+    name. A reference the file does not carry and this workspace does not have —
+    a variable especially, since values never travel — refuses the whole import,
+    saying which. Answers the same plan `componentImportPlan` showed.
+    """
+    importComponents(workspaceId: ID!, envelope: String!): ComponentImportPlan!
+    """
     Takes a plugin out of the installation. Administrators only.
 
     Loading one is not here: a plugin arrives as a file, so it is uploaded to
@@ -279,7 +308,10 @@ type Mutation {
     deleteIssue(id: ID!): Boolean!
     """
     Moves an issue to another workspace, comments, labels, links, observers and
-    files with it. Administrators only.
+    files with it. Needs a role that administers both workspaces, which an
+    installation administrator holds everywhere: administering only the source
+    would be leave to push an issue into somebody else's tracker, and only the
+    destination, leave to pull one out of it.
 
     Its number changes: numbers are per workspace, so it is given one that is
     free where it is going, and the one it had is free for the next issue filed
@@ -315,13 +347,13 @@ type Mutation {
     """
     Adds an observer, who then hears everything the reporter and the assignee
     hear. Naming nobody means yourself, which anybody in the workspace may do;
-    naming somebody else needs the administrator role. A model cannot observe -
-    there is nowhere for a model to read its news.
+    naming somebody else needs a role that administers this workspace. A model
+    cannot observe - there is nowhere for a model to read its news.
     """
     observeIssue(id: ID!, observerKind: AssigneeKind, observerId: ID): Issue!
     """
     Takes an observer off again, under the same two rules: yourself always, and
-    somebody else with the administrator role.
+    somebody else with a role that administers this workspace.
     """
     unobserveIssue(id: ID!, observerKind: AssigneeKind, observerId: ID): Issue!
     "Gives an internal user a password. Administrators only."
@@ -348,7 +380,11 @@ type Mutation {
     "Refused for the built-in administrator role, and while a workspace still uses it."
     deleteRole(id: ID!): Boolean!
     createWorkspace(input: CreateWorkspaceInput!): Workspace!
-    "Saves the workspace settings form: name, description and the roles that open it."
+    """
+    Saves the workspace settings form. Name and description for anybody who
+    administers this workspace; the two role lists for an installation
+    administrator only, since whoever edits them decides who else gets in.
+    """
     updateWorkspace(id: ID!, input: UpdateWorkspaceInput!): Workspace!
     deleteWorkspace(id: ID!): Boolean!
     "Creates the workflow definition and assigns it to the workspace."
@@ -569,6 +605,19 @@ type Workspace {
     "The roles that open this workspace. Empty means administrators only."
     roles: [Role!]!
     """
+    The roles that also administer it - name, description, observers on its issues
+    and moving an issue in or out. A subset of `roles`; empty means installation
+    administrators only, which is what every workspace starts as.
+    """
+    adminRoles: [Role!]!
+    """
+    Whether the caller administers this workspace. True for an installation
+    administrator everywhere, and for anybody holding one of `adminRoles` here -
+    so it can differ between two workspaces for the same person, which is the
+    whole point of the role.
+    """
+    administered: Boolean!
+    """
     The model used for the workspace's own small jobs — naming a chat from what
     was said. Null means those jobs do not happen.
     """
@@ -605,6 +654,13 @@ input UpdateWorkspaceInput {
     description: String
     "The roles that open this workspace. Null leaves them alone; empty means administrators only."
     roleIds: [ID!]
+    """
+    The roles that also administer it, which has to be a subset of `roleIds`. Null
+    leaves them alone; empty means installation administrators only. Only an
+    installation administrator may change either list - a workspace administrator
+    editing the name sends back what they were shown, and that is not a change.
+    """
+    adminRoleIds: [ID!]
 }
 
 "A slice of workspaces, ordered by name."
@@ -2736,6 +2792,88 @@ type ObjectPage {
     totalPages: Int!
 }
 
+"""
+What can be exported and imported as JSON.
+
+The self-contained half of the catalogue: everything here reaches only other
+things on this list. Agents and workflows are not on it — they reach models and
+connections, which hold credentials, and that needs the import to ask a question
+this one never has to.
+"""
+enum ComponentKind {
+    OBJECT
+    FUNCTION
+    CONDITION
+    TOOL
+    SKILL
+}
+
+"How much of what a component reaches travels with it."
+enum ExportDepth {
+    "The one component. For a workspace that already has what it points at."
+    SHALLOW
+    "Everything it reaches, so the file lands somewhere it can be opened."
+    DEEP
+}
+
+"One file, ready to download."
+type ComponentExport {
+    "What to call it: `normaliseOrder.orkx.json`."
+    fileName: String!
+    "The envelope itself, formatted."
+    json: String!
+}
+
+"What the import will do about one thing the envelope mentions."
+enum ImportDisposition {
+    "Created here under the name the file gave it."
+    CREATE
+    """
+    Created under a different name, because that one was taken. Never a
+    replacement: everything else in the same file that pointed at it points at
+    the new name instead.
+    """
+    RENAME
+    "Already here by that name, and pointed at rather than created."
+    REUSE
+    """
+    Pointed at, not carried, and not here. The import is refused while any of
+    these remain.
+    """
+    MISSING
+}
+
+type ComponentImportEntry {
+    "Null for a variable, which is pointed at and never created."
+    kind: ComponentKind
+    "The name in the file."
+    name: String!
+    "The name it will have here; different from `name` when it was renamed."
+    targetName: String!
+    disposition: ImportDisposition!
+    "Why, in words to show unchanged."
+    detail: String!
+}
+
+"""
+What an import would do, shown before it is done — and answered again afterwards.
+
+A button that silently creates nine things is worse than one that lists them
+first, so the dialog reads this and the mutation returns the same shape.
+"""
+type ComponentImportPlan {
+    "The version the file claims. One it does not know is refused, not read."
+    formatVersion: Int!
+    "What wrote it. Quoted in messages; nothing branches on it."
+    producedBy: String
+    depth: ExportDepth!
+    "False while anything is MISSING; Import is refused."
+    importable: Boolean!
+    entries: [ComponentImportEntry!]!
+    "Empty when importable; otherwise what has to be fixed here first."
+    problems: [String!]!
+}
+
 "What a role lets somebody do, beyond the workspaces it is assigned to."
 enum RoleScope {
     "Sees the Admin section and every workspace, whatever else is assigned."
@@ -3043,7 +3181,11 @@ input IssueInput {
     description: String
     status: IssueStatus
     labels: [String!]
-    "Both together, or neither: absent leaves the assignee alone."
+    """
+    Both together, or neither. Absent leaves the assignee alone; an empty
+    assigneeId clears it, whatever kind is sent beside it; a kind on its own
+    names nobody and is ignored; an id without a kind is refused.
+    """
     assigneeKind: AssigneeKind
     assigneeId: ID
 }

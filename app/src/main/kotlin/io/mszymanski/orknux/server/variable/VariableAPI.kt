@@ -144,8 +144,7 @@ class VariableAPI(
 
     @QueryMapping
     fun variable(@Argument id: Long): VariableView? {
-        val variable = variables.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(variable.workspaceId)
+        val variable = variables.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(variable)
     }
 

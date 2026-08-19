@@ -38,8 +38,7 @@ class AgentAPI(
 
     @QueryMapping
     fun agent(@Argument id: Long): AgentView? {
-        val agent = agents.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(agent.workspaceId)
+        val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(agent)
     }
 

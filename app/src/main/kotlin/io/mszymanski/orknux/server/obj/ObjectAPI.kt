@@ -42,8 +42,7 @@ class ObjectAPI(
 
     @QueryMapping
     fun workflowObject(@Argument id: Long): ObjectView? {
-        val held = objects.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(held.workspaceId)
+        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(held)
     }
 

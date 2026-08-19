@@ -67,8 +67,7 @@ class FunctionAPI(
 
     @QueryMapping
     fun function(@Argument id: Long): FunctionView? {
-        val function = functions.findByIdOrNull(id) ?: return null
-        requireReadable(function)
+        val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: return null
         return describe(function)
     }
 
@@ -232,13 +231,10 @@ class FunctionAPI(
      * of them — so the check is that the caller has one at all. Anyone who can
      * reach a workspace can already list these through it.
      */
-    private fun requireReadable(function: WorkflowFunction) {
+    private fun readable(function: WorkflowFunction): Boolean {
         val workspaceId = function.workspaceId
-        if (workspaceId != null) {
-            requireWorkspaceAccess(workspaceId)
-            return
-        }
-        if (access.roles().isEmpty()) throw FunctionNotFoundException(requireNotNull(function.id))
+        if (workspaceId != null) return access.canSee(workspaceId)
+        return access.roles().isNotEmpty()
     }
 
     /**

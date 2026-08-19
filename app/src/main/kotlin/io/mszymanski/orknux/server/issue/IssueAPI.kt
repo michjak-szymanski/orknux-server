@@ -138,7 +138,7 @@ class IssueAPI(
     @QueryMapping
     @Transactional(readOnly = true)
     fun workspaceIssue(@Argument workspaceId: Long, @Argument number: Int): IssueView? {
-        requireWorkspaceAccess(workspaceId)
+        if (!access.canSee(workspaceId)) return null
         return issues.findByWorkspaceIdAndNumber(workspaceId, number)?.let(::describe)
     }
 

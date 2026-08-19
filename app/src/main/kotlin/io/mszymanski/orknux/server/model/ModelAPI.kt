@@ -45,11 +45,8 @@ class ModelAPI(
     }
 
     @QueryMapping
-    fun modelProvider(@Argument id: Long): ModelProviderView? {
-        val provider = models.provider(id) ?: return null
-        requireWorkspaceAccess(provider.workspaceId)
-        return provider
-    }
+    fun modelProvider(@Argument id: Long): ModelProviderView? =
+        models.provider(id)?.takeIf { access.canSee(it.workspaceId) }
 
     @QueryMapping("models")
     fun workspaceModels(@Argument workspaceId: Long): List<LlmModelView> {
@@ -58,11 +55,8 @@ class ModelAPI(
     }
 
     @QueryMapping
-    fun model(@Argument id: Long): LlmModelView? {
-        val model = models.model(id) ?: return null
-        requireWorkspaceAccess(model.workspaceId)
-        return model
-    }
+    fun model(@Argument id: Long): LlmModelView? =
+        models.model(id)?.takeIf { access.canSee(it.workspaceId) }
 
     /**
      * A query, because asking a provider what it offers writes nothing: the
@@ -70,15 +64,18 @@ class ModelAPI(
      */
     @QueryMapping
     fun discoveredModels(@Argument providerId: Long): List<DiscoveredModelView> {
-        val provider = models.provider(providerId) ?: throw ModelProviderNotFoundException(providerId)
-        requireWorkspaceAccess(provider.workspaceId)
+        // Another workspace's provider is answered as one that does not exist,
+        // since a list cannot be null and a refusal would confirm the id is real.
+        models.provider(providerId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ModelProviderNotFoundException(providerId)
         return models.discoverModels(providerId)
     }
 
     @QueryMapping
     fun modelUsage(@Argument id: Long, @Argument days: Int): ModelUsageResponse {
-        val model = models.model(id) ?: throw ModelNotFoundException(id)
-        requireWorkspaceAccess(model.workspaceId)
+        // The same reason as `discoveredModels`: usage is not nullable, so a model
+        // the caller cannot see is missing rather than forbidden.
+        models.model(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ModelNotFoundException(id)
         return ModelUsageResponse(models.usage(id, days))
     }
 

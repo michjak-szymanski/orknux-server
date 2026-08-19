@@ -31,11 +31,8 @@ class McpServerAPI(
     }
 
     @QueryMapping
-    fun mcpServer(@Argument id: Long): McpServerView? {
-        val server = servers.mcpServer(id) ?: return null
-        requireWorkspaceAccess(server.workspaceId)
-        return server
-    }
+    fun mcpServer(@Argument id: Long): McpServerView? =
+        servers.mcpServer(id)?.takeIf { access.canSee(it.workspaceId) }
 
     @MutationMapping
     fun createMcpServer(@Argument input: CreateMcpServerInput): McpServerView {

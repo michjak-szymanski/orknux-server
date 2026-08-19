@@ -1,5 +1,14 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.action.ActionSubtype
+import io.mszymanski.orknux.server.action.ActionType
+import io.mszymanski.orknux.server.action.WorkflowAction
+import io.mszymanski.orknux.server.action.WorkflowActionRepository
+import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentType
+import io.mszymanski.orknux.server.issue.Issue
+import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAudit
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
@@ -36,6 +45,9 @@ class WorkspaceVisibilityTest(
     @Autowired val workflows: WorkflowRepository,
     @Autowired val assignments: WorkspaceWorkflowRepository,
     @Autowired val roles: RoleRepository,
+    @Autowired val actions: WorkflowActionRepository,
+    @Autowired val agents: AgentRepository,
+    @Autowired val issues: IssueRepository,
 ) {
 
     private var backendId: Long = 0
@@ -43,6 +55,9 @@ class WorkspaceVisibilityTest(
 
     @BeforeEach
     fun seed() {
+        issues.deleteAll()
+        agents.deleteAll()
+        actions.deleteAll()
         assignments.deleteAll()
         workflows.deleteAll()
         audit.deleteAll()
@@ -203,6 +218,92 @@ class WorkspaceVisibilityTest(
                 assertThat(errors.single().errorType.toString()).isEqualTo("NOT_FOUND")
             }
     }
+
+    /**
+     * The other half of the same leak.
+     *
+     * A refusal that no longer names the workspace still answers a real id
+     * differently from an arbitrary one, so walking the numbers still maps out
+     * what exists here and roughly how much of it there is. Answering null makes
+     * an entity in a workspace the caller cannot see indistinguishable from one
+     * that was never created.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `an entity in a hidden workspace reads as one that is not there`() {
+        val mine = requireNotNull(actions.save(action(backendId, "Mine")).id)
+        val theirs = requireNotNull(actions.save(action(frontendId, "Theirs")).id)
+
+        graphQlTester.document("""query { action(id: $mine) { name } }""")
+            .execute().path("action.name").entity(String::class.java).isEqualTo("Mine")
+
+        graphQlTester.document("""query { action(id: $theirs) { name } }""")
+            .execute().path("action").valueIsNull()
+    }
+
+    /**
+     * The two answers have to be the same answer, not merely both empty: an
+     * error for one and null for the other is still a yes and a no.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `an id that is not yours answers exactly as an id that is not real`() {
+        val theirs = requireNotNull(agents.save(agent(frontendId)).id)
+
+        val notYours = graphQlTester.document("""query { agent(id: $theirs) { name } }""").execute()
+        val notReal = graphQlTester.document("""query { agent(id: 999999) { name } }""").execute()
+
+        notYours.path("agent").valueIsNull()
+        notReal.path("agent").valueIsNull()
+    }
+
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `an agent in a visible workspace is still returned`() {
+        val mine = requireNotNull(agents.save(agent(backendId)).id)
+
+        graphQlTester.document("""query { agent(id: $mine) { name } }""")
+            .execute().path("agent.name").entity(String::class.java).isEqualTo("Helper")
+    }
+
+    /**
+     * The issue query takes a workspace id rather than the issue's own, so the
+     * whole query answers null rather than refusing - otherwise the workspace id
+     * itself is the number to walk.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `an issue in a hidden workspace reads as one that is not there`() {
+        issues.save(issue(backendId, "Mine"))
+        issues.save(issue(frontendId, "Theirs"))
+
+        graphQlTester.document("""query { workspaceIssue(workspaceId: $backendId, number: 1) { title } }""")
+            .execute().path("workspaceIssue.title").entity(String::class.java).isEqualTo("Mine")
+
+        graphQlTester.document("""query { workspaceIssue(workspaceId: $frontendId, number: 1) { title } }""")
+            .execute().path("workspaceIssue").valueIsNull()
+    }
+
+    private fun action(workspaceId: Long, name: String) = WorkflowAction(
+        workspaceId = workspaceId,
+        name = name,
+        type = ActionType.EXECUTE,
+        subtype = ActionSubtype.HTTP_REQUEST,
+        url = "https://example.test/",
+    )
+
+    private fun agent(workspaceId: Long) = Agent(
+        workspaceId = workspaceId,
+        name = "Helper",
+        type = AgentType.LLM,
+    )
+
+    private fun issue(workspaceId: Long, title: String) = Issue(
+        workspaceId = workspaceId,
+        number = 1,
+        title = title,
+        reporter = "alice",
+    )
 
     private fun entry(workspaceId: Long, name: String) = WorkspaceAudit(
         workspaceId = workspaceId,

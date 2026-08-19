@@ -9,11 +9,16 @@ import io.mszymanski.orknux.connector.connection.ConnectionUrlInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerAddressInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerNameInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerNameTakenException
+import io.mszymanski.orknux.connector.proxy.ProxyRuleNameInvalidException
+import io.mszymanski.orknux.connector.proxy.ProxyRuleNameTakenException
+import io.mszymanski.orknux.connector.proxy.ProxyRulePatternInvalidException
+import io.mszymanski.orknux.connector.proxy.ProxyRuleProxyInvalidException
 import org.springframework.graphql.execution.DataFetcherExceptionResolverAdapter
 import org.springframework.graphql.execution.ErrorType
 import org.springframework.stereotype.Component
 import io.mszymanski.orknux.connector.connection.ConnectionNotFoundException as ModuleConnectionNotFound
 import io.mszymanski.orknux.connector.connection.McpServerNotFoundException as ModuleMcpServerNotFound
+import io.mszymanski.orknux.connector.proxy.ProxyRuleNotFoundException as ModuleProxyRuleNotFound
 
 /**
  * What the connection module refuses is the caller's to fix: a duplicate name is
@@ -31,12 +36,17 @@ class IntegrationExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is McpServerNameTakenException,
             is McpServerNameInvalidException,
             is McpServerAddressInvalidException,
+            is ProxyRuleNameTakenException,
+            is ProxyRuleNameInvalidException,
+            is ProxyRulePatternInvalidException,
+            is ProxyRuleProxyInvalidException,
             -> ErrorType.BAD_REQUEST
 
             is ConnectionNotFoundException,
             is McpServerNotFoundException,
             is ModuleConnectionNotFound,
             is ModuleMcpServerNotFound,
+            is ModuleProxyRuleNotFound,
             -> ErrorType.NOT_FOUND
 
             else -> return null

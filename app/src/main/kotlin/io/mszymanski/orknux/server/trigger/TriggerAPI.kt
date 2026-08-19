@@ -53,8 +53,7 @@ class TriggerAPI(
 
     @QueryMapping
     fun trigger(@Argument id: Long): TriggerView? {
-        val trigger = triggers.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(trigger.workspaceId)
+        val trigger = triggers.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(trigger)
     }
 
@@ -103,8 +102,10 @@ class TriggerAPI(
      */
     @QueryMapping
     fun triggerFirings(@Argument triggerId: Long, @Argument page: Int?, @Argument size: Int?): TriggerFiringPage {
-        val trigger = triggers.findByIdOrNull(triggerId) ?: throw TriggerNotFoundException(triggerId)
-        requireWorkspaceAccess(trigger.workspaceId)
+        // Somebody else's trigger reads as a trigger that is not there: the page
+        // cannot be null, so the two answers are made the same one instead.
+        triggers.findByIdOrNull(triggerId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw TriggerNotFoundException(triggerId)
         return TriggerFiringPage(
             firings.findByTriggerIdOrderByAtDesc(triggerId, pageRequest(page, size, Sort.by("at").descending())),
             ::describe,

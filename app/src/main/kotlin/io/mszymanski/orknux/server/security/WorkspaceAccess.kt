@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.security
 
 import io.mszymanski.orknux.server.workspace.Workspace
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.security.authentication.AnonymousAuthenticationToken
 import org.springframework.security.core.GrantedAuthority
 import org.springframework.security.core.context.SecurityContextHolder
@@ -17,6 +19,7 @@ import org.springframework.stereotype.Service
 @Service
 class WorkspaceAccess(
     private val resolver: RoleResolver,
+    private val workspaces: WorkspaceRepository,
 ) {
 
     fun roles(): Set<String> {
@@ -45,6 +48,15 @@ class WorkspaceAccess(
         val held = heldRoles().mapNotNull { it.id }.toSet()
         return workspace.roles.any { it.id in held }
     }
+
+    /**
+     * The same question asked about the workspace an entity says it belongs to.
+     *
+     * A workspace that is not there and one the caller may not see answer alike,
+     * which is what lets a query holding an id return null for both rather than
+     * confirming, by refusing, that the id was a real one.
+     */
+    fun canSee(workspaceId: Long): Boolean = workspaces.findByIdOrNull(workspaceId)?.let { canSee(it) } == true
 
     fun requireVisible(workspace: Workspace) {
         if (!canSee(workspace)) throw WorkspaceForbiddenException()

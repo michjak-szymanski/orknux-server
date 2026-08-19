@@ -39,11 +39,8 @@ class WorkspaceConnectionAPI(
     }
 
     @QueryMapping
-    fun workspaceConnection(@Argument id: Long): WorkspaceConnectionView? {
-        val connection = connections.workspaceConnection(id) ?: return null
-        requireWorkspaceAccess(connection.workspaceId)
-        return connection
-    }
+    fun workspaceConnection(@Argument id: Long): WorkspaceConnectionView? =
+        connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
 
     @MutationMapping
     fun createWorkspaceConnection(@Argument input: CreateWorkspaceConnectionInput): WorkspaceConnectionView {

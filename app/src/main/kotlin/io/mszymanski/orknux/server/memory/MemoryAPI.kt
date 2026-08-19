@@ -43,8 +43,7 @@ class MemoryAPI(
 
     @QueryMapping
     fun memoryCatalog(@Argument id: Long): MemoryCatalogView? {
-        val catalog = catalogs.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(catalog)
     }
 
@@ -56,8 +55,7 @@ class MemoryAPI(
     @QueryMapping
     fun memory(@Argument id: Long): MemoryView? {
         val memory = memories.findByIdOrNull(id) ?: return null
-        val catalog = catalogs.findByIdOrNull(memory.catalogId) ?: return null
-        requireWorkspaceAccess(catalog.workspaceId)
+        catalogs.findByIdOrNull(memory.catalogId)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(memory)
     }
 
@@ -76,8 +74,11 @@ class MemoryAPI(
         @Argument page: Int?,
         @Argument size: Int?,
     ): MemoryPage {
-        val catalog = catalogs.findByIdOrNull(catalogId) ?: throw MemoryCatalogNotFoundException(catalogId)
-        requireWorkspaceAccess(catalog.workspaceId)
+        // A page is not something the schema lets us answer null for, so a
+        // catalog in a workspace the caller cannot see is refused exactly as one
+        // that is not there rather than with a different error.
+        catalogs.findByIdOrNull(catalogId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw MemoryCatalogNotFoundException(catalogId)
 
         val order = when (sort ?: MemorySort.LAST_MODIFIED) {
             MemorySort.LAST_MODIFIED -> Sort.by(Sort.Direction.DESC, "lastModifiedAt")
@@ -98,8 +99,8 @@ class MemoryAPI(
     /** The names the author filter offers, which are the ones actually present. */
     @QueryMapping
     fun memoryAuthors(@Argument catalogId: Long): List<String> {
-        val catalog = catalogs.findByIdOrNull(catalogId) ?: throw MemoryCatalogNotFoundException(catalogId)
-        requireWorkspaceAccess(catalog.workspaceId)
+        catalogs.findByIdOrNull(catalogId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw MemoryCatalogNotFoundException(catalogId)
         return memories.authors(catalogId)
     }
 

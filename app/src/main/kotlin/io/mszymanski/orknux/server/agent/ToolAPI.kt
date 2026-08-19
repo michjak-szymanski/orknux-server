@@ -43,8 +43,7 @@ class ToolAPI(
 
     @QueryMapping
     fun tool(@Argument id: Long): ToolView? {
-        val tool = tools.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(tool.workspaceId)
+        val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(tool)
     }
 

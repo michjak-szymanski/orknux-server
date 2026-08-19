@@ -62,8 +62,7 @@ class WorkflowExecutionAPI(
     /** What one run did: the graph as it ran, per-node outcome, and its log. */
     @QueryMapping
     fun execution(@Argument id: Long): RunDetailView? {
-        val run = runs.execution(id) ?: return null
-        requireWorkspaceAccess(run.workspaceId)
+        val run = runs.execution(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return RunDetailView(run, edgesOf(run.workflowId), temporal.forExecution(run.id))
     }
 

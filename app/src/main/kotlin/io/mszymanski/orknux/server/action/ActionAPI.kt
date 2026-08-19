@@ -46,8 +46,7 @@ class ActionAPI(
 
     @QueryMapping
     fun action(@Argument id: Long): ActionView? {
-        val action = actions.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(action.workspaceId)
+        val action = actions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(action)
     }
 

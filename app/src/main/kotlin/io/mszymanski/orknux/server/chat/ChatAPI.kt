@@ -53,8 +53,9 @@ class ChatAPI(
 
     @QueryMapping
     fun chatSession(@Argument id: Long): ChatSessionView? {
-        val session = chats.session(id) ?: return null
-        requireOwn(session)
+        // Somebody else's chat reads as one that is not there, which is the same
+        // answer ChatOwnership gives everywhere else and for the same reason.
+        val session = chats.session(id)?.takeIf(ownership::owns) ?: return null
         return describe(session)
     }
 

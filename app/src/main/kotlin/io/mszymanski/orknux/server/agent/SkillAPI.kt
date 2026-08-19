@@ -128,8 +128,7 @@ class SkillAPI(
 
     @QueryMapping
     fun skill(@Argument id: Long): SkillView? {
-        val skill = skills.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(skill.workspaceId)
+        val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(skill)
     }
 

@@ -47,8 +47,7 @@ class ConditionAPI(
 
     @QueryMapping
     fun condition(@Argument id: Long): ConditionView? {
-        val condition = conditions.findByIdOrNull(id) ?: return null
-        requireWorkspaceAccess(condition.workspaceId)
+        val condition = conditions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
         return describe(condition)
     }
 

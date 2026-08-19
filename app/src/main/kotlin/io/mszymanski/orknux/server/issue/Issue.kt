@@ -72,12 +72,19 @@ class Issue(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null,
 
+    /**
+     * Which workspace holds it - not fixed, though it very nearly is.
+     *
+     * An administrator can move an issue that was filed in the wrong place, and
+     * doing that changes both this and the number together: see [IssueMoveAPI]
+     * for what travels with it and what the move refuses to do.
+     */
     @Column(name = "workspace_id", nullable = false)
-    val workspaceId: Long,
+    var workspaceId: Long,
 
     /** Its number in this workspace: what "#3" means, and what people say. */
     @Column(nullable = false)
-    val number: Int,
+    var number: Int,
 
     @Column(nullable = false, length = 200)
     var title: String,

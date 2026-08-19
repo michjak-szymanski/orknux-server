@@ -30,8 +30,15 @@ class IssueAttachment(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null,
 
+    /**
+     * Whose it is, and so both who may open it and where on the disk it sits.
+     *
+     * It changes when an administrator moves the issue, together with the
+     * location beneath - the two say the same thing twice and a row where they
+     * disagreed would be a file filed under a workspace that cannot reach it.
+     */
     @Column(name = "workspace_id", nullable = false)
-    val workspaceId: Long,
+    var workspaceId: Long,
 
     /**
      * The issue it belongs to; null while the issue is still being written.
@@ -64,7 +71,7 @@ class IssueAttachment(
      * sort of thing that invites somebody to ask for a different one.
      */
     @Column(name = "location", nullable = false, length = 1000)
-    val location: String,
+    var location: String,
 
     @Column(name = "uploaded_at", nullable = false)
     val uploadedAt: OffsetDateTime = OffsetDateTime.now(),

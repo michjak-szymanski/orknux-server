@@ -24,6 +24,20 @@ interface AttachmentStore {
     fun open(location: String): InputStream
 
     fun remove(location: String)
+
+    /**
+     * Files bytes that are already here under a different workspace.
+     *
+     * Here rather than in the caller because where a workspace's files sit is
+     * this storage's business and nowhere else's - a caller that read the bytes
+     * back and put them again would work, and would read a hundred megabytes
+     * through the application to write it a directory across. An issue moved
+     * between workspaces is the only thing that asks for this, and it asks
+     * because the folder is what decides who may open the file.
+     *
+     * @return where the bytes are now, which the row has to be told.
+     */
+    fun move(location: String, workspaceId: Long): String
 }
 
 /**
@@ -57,6 +71,32 @@ class FilesystemAttachmentStore(private val settings: InstallationSettings) : At
     override fun remove(location: String) {
         runCatching { Files.deleteIfExists(resolve(location)) }
             .onFailure { log.warn("Attachment {} could not be removed", location, it) }
+    }
+
+    /**
+     * The same bytes, in the other workspace's folder.
+     *
+     * The stored name is kept rather than minted again, so the extension the
+     * upload worked out and anything holding the file by name still read the
+     * same. A rename on the same disk, which is what makes this cheap enough to
+     * do inside the transaction that moves the row.
+     *
+     * Failures are not swallowed the way a removal's are. A file that could not
+     * be deleted is a wasted block; a file that could not be moved and whose
+     * row was updated anyway is an attachment nobody can open again, so this
+     * throws and lets the move be abandoned.
+     */
+    override fun move(location: String, workspaceId: Long): String {
+        val from = resolve(location)
+        val stored = from.fileName.toString()
+        val folder = root().resolve(workspaceId.toString())
+        Files.createDirectories(folder)
+
+        val target = folder.resolve(stored)
+        if (from != target) Files.move(from, target, StandardCopyOption.REPLACE_EXISTING)
+
+        log.debug("Attachment {} moved to workspace {}", stored, workspaceId)
+        return "$workspaceId/$stored"
     }
 
     /**

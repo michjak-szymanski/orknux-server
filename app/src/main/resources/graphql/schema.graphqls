@@ -2462,6 +2462,12 @@ enum IssueOrder {
     TITLE
     "By when it last changed, which is what \"what is happening\" means."
     UPDATED
+    """
+    By when somebody last said something on it. Not the same as UPDATED, which
+    closing, relabelling and assigning all move. An issue nobody has replied to
+    has no answer here and sorts last, whichever way round.
+    """
+    LAST_COMMENT
 }
 
 "What kind of thing an issue is assigned to."
@@ -2550,6 +2556,8 @@ type Issue {
     "Addresses hung on the issue, oldest first."
     links: [IssueLink!]!
     comments: [IssueComment!]!
+    "When somebody last said something here, or null if nobody has. Not lastModifiedAt, which closing and relabelling also move."
+    lastCommentAt: String
     "ISO-8601 offset date-time."
     createdAt: String!
     lastModifiedAt: String!

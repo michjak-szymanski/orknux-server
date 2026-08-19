@@ -126,6 +126,16 @@ class Issue(
 
     @Column(name = "last_modified_by", nullable = false, length = 120)
     var lastModifiedBy: String = "system",
+
+    /**
+     * When somebody last said something here, or null if nobody has.
+     *
+     * Not the same as [lastModifiedAt], which closing, relabelling or assigning
+     * all move - so a list sorted by that puts the housekeeping at the top.
+     * Somebody scanning for where the talking is wants this one.
+     */
+    @Column(name = "last_comment_at")
+    var lastCommentAt: OffsetDateTime? = null,
 )
 
 @Entity

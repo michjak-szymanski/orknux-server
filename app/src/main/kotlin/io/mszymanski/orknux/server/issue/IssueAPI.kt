@@ -46,6 +46,7 @@ enum class IssueOrder {
     NUMBER,
     TITLE,
     UPDATED,
+    LAST_COMMENT,
 }
 
 @Controller
@@ -93,6 +94,7 @@ class IssueAPI(
             IssueOrder.NUMBER -> "number"
             IssueOrder.TITLE -> "title"
             IssueOrder.UPDATED -> "lastModifiedAt"
+            IssueOrder.LAST_COMMENT -> "lastCommentAt"
         }
         val direction = if (ascending == true) Sort.Direction.ASC else Sort.Direction.DESC
         /*
@@ -103,7 +105,16 @@ class IssueAPI(
          * and the query fails rather than sorting badly.
          */
         val sorted = Sort.by(
-            Sort.Order(direction, by).let { if (by == "title") it.ignoreCase() else it },
+            Sort.Order(direction, by)
+                .let { if (by == "title") it.ignoreCase() else it }
+                /*
+                 * An issue nobody has replied to has no last comment, and
+                 * Postgres sorts nulls first when the order is descending -
+                 * which would open a list sorted by conversation with every
+                 * issue that has none. Last, either way round: an absent answer
+                 * is not the newest one.
+                 */
+                .let { if (by == "lastCommentAt") it.nullsLast() else it },
         )
         val asked = PageRequest.of(page ?: 0, (size ?: 20).coerceIn(1, 100), sorted)
         val wanted = search?.trim().orEmpty()
@@ -295,6 +306,7 @@ class IssueAPI(
         if (said.isEmpty()) throw IssueCommentEmptyException()
 
         held.comments.add(IssueComment(author = currentUser(), content = said))
+        held.lastCommentAt = OffsetDateTime.now()
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         /*
@@ -381,6 +393,7 @@ class IssueAPI(
                 mine = comment.author == currentUser(),
             )
         },
+        lastCommentAt = issue.lastCommentAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         createdAt = issue.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedAt = issue.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = issue.lastModifiedBy,
@@ -629,6 +642,8 @@ data class IssueView(
     /** Addresses hung on the issue, oldest first. */
     val links: List<IssueLinkView>,
     val comments: List<IssueCommentView>,
+    /** When somebody last said something here, or null if nobody has. */
+    val lastCommentAt: String?,
     val createdAt: String,
     val lastModifiedAt: String,
     val lastModifiedBy: String,

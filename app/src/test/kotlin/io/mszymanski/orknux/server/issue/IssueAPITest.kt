@@ -124,6 +124,44 @@ class IssueAPITest(
             .verify()
     }
 
+    /**
+     * Sorting by where the talking is, which is not sorting by last change.
+     *
+     * Closing an issue, relabelling it and assigning it all move the change
+     * time, so a tracker sorted that way puts the housekeeping at the top.
+     */
+    @Test
+    fun `sorting by last comment puts the newest conversation first, and silence last`() {
+        val quiet = file("Nobody has replied to this one")
+        val first = file("Said something a while ago")
+        val second = file("Said something just now")
+
+        graphQlTester.document("""mutation { commentOnIssue(id: $first, content: "Looking at it") { id } }""")
+            .execute().path("commentOnIssue.id").hasValue()
+        graphQlTester.document("""mutation { commentOnIssue(id: $second, content: "Me too") { id } }""")
+            .execute().path("commentOnIssue.id").hasValue()
+
+        // Newest conversation first; the issue nobody has replied to is last
+        // rather than first, which is where Postgres puts a null descending.
+        val newest = graphQlTester
+            .document("""{ workspaceIssues(workspaceId: $workspaceId, order: LAST_COMMENT) { content { id lastCommentAt } } }""")
+            .execute()
+        newest.path("workspaceIssues.content[0].id").entity(Long::class.java).isEqualTo(second)
+        newest.path("workspaceIssues.content[1].id").entity(Long::class.java).isEqualTo(first)
+        newest.path("workspaceIssues.content[2].id").entity(Long::class.java).isEqualTo(quiet)
+        newest.path("workspaceIssues.content[2].lastCommentAt").valueIsNull()
+
+        // And the other way round the silent one is still last: an absent
+        // answer is not the oldest one either.
+        val oldest = graphQlTester
+            .document(
+                """{ workspaceIssues(workspaceId: $workspaceId, order: LAST_COMMENT, ascending: true) { content { id } } }""",
+            )
+            .execute()
+        oldest.path("workspaceIssues.content[0].id").entity(Long::class.java).isEqualTo(first)
+        oldest.path("workspaceIssues.content[2].id").entity(Long::class.java).isEqualTo(quiet)
+    }
+
     @Test
     fun `a comment can be changed by whoever wrote it, and says that it was`() {
         val id = file("The reply is late")

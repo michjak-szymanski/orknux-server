@@ -217,6 +217,7 @@ class IssueTools(
         val said = text(arguments, "content") ?: return refuse("What should the comment say?")
 
         held.comments.add(IssueComment(author = currentUser(), content = said.trim()))
+        held.lastCommentAt = OffsetDateTime.now()
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)

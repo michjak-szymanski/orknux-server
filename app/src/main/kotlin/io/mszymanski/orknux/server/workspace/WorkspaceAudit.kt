@@ -27,6 +27,18 @@ enum class WorkspaceAuditCategory {
 
     /** What happens inside a chat: files attached to a message, and the like. */
     CHAT,
+
+    /**
+     * Commands run on a machine over SSH, and the shells they ran on.
+     *
+     * Its own category rather than folded into AGENT or INTEGRATION, because
+     * this is the one thing on the platform that acts outside it. "It is up to
+     * the administrator to secure the box" is only a fair thing to say if the
+     * administrator can go to one place and read every command that was run on
+     * it, and a filter that finds them among everything else is what makes that
+     * one place.
+     */
+    SHELL,
 }
 
 @Entity

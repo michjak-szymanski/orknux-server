@@ -29,6 +29,8 @@
         <slack.version>1.45.3</slack.version>
         <graaljs.version>25.0.4.1</graaljs.version>
         <db-scheduler.version>15.6.0</db-scheduler.version>
+        <sshd.version>2.18.0</sshd.version>
+        <eddsa.version>0.3.0</eddsa.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 

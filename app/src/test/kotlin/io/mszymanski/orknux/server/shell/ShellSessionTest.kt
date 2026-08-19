@@ -1,0 +1,388 @@
+package io.mszymanski.orknux.server.shell
+
+import io.mszymanski.orknux.connector.model.ToolCall
+import io.mszymanski.orknux.connector.shell.Shell
+import io.mszymanski.orknux.connector.shell.ShellRepository
+import io.mszymanski.orknux.connector.shell.ShellService
+import io.mszymanski.orknux.connector.shell.ShellSessionRepository
+import io.mszymanski.orknux.connector.shell.ShellSessionSweeper
+import io.mszymanski.orknux.connector.shell.ShellSessionState
+import io.mszymanski.orknux.connector.shell.ShellStatus
+import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentType
+import io.mszymanski.orknux.server.chat.AgentTools
+import io.mszymanski.orknux.server.workspace.Workspace
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.apache.sshd.common.config.keys.PublicKeyEntry
+import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter
+import org.apache.sshd.common.util.security.SecurityUtils
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterAll
+import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.security.test.context.support.WithMockUser
+import org.testcontainers.containers.GenericContainer
+import org.testcontainers.containers.wait.strategy.Wait
+import tools.jackson.databind.ObjectMapper
+import java.io.ByteArrayOutputStream
+import java.security.KeyPair
+import java.time.Duration
+import java.time.OffsetDateTime
+
+/**
+ * The shell bridge, against a real SSH server.
+ *
+ * A container running OpenSSH rather than a stubbed transport, because the thing
+ * most likely to be wrong here is the conversation itself - a key in the wrong
+ * format, an exec channel that never closes, a working directory that is not
+ * where the command actually ran - and a stub that answers what the code asks
+ * for cannot tell you about any of them. Testcontainers is already how this
+ * suite gets a database and a directory; this is the same argument a third time.
+ *
+ * The key is generated per run and handed to the container as an authorised key,
+ * so nothing is checked in and nothing on the developer's machine is touched.
+ */
+@SpringBootTest(
+    properties = [
+        // The sweep is driven by hand here. Left on its own timer it would run
+        // in the middle of a test and check hosts these tests are asserting the
+        // status of.
+        "orknux.shell.sweep-initial-delay=1h",
+        // Short enough that a command which will not finish does not hold the
+        // suite for a minute.
+        "orknux.shell.command-timeout=5s",
+        // Small enough to reach with one line of output rather than 64 KiB of it.
+        "orknux.shell.max-output-bytes=512",
+    ],
+)
+@WithMockUser(username = "alice", roles = ["ADMINS"])
+class ShellSessionTest(
+    @Autowired val shells: ShellRepository,
+    @Autowired val sessions: ShellSessionRepository,
+    @Autowired val service: ShellService,
+    @Autowired val sweeper: ShellSessionSweeper,
+    @Autowired val tools: AgentTools,
+    @Autowired val agents: AgentRepository,
+    @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val mapper: ObjectMapper,
+) {
+
+    private var shellId: Long = 0
+    private lateinit var granted: Agent
+    private lateinit var refused: Agent
+
+    @BeforeEach
+    fun reset() {
+        sessions.deleteAll()
+        shells.deleteAll()
+        agents.deleteAll()
+        audit.deleteAll()
+        workspaces.deleteAll()
+
+        val workspaceId = requireNotNull(workspaces.save(Workspace(name = "operations")).id)
+        granted = agents.save(
+            Agent(workspaceId = workspaceId, name = "sre", type = AgentType.LLM, shellAccess = true),
+        )
+        refused = agents.save(
+            Agent(workspaceId = workspaceId, name = "writer", type = AgentType.LLM, shellAccess = false),
+        )
+
+        shellId = requireNotNull(
+            shells.save(
+                Shell(
+                    name = "box",
+                    host = server.host,
+                    port = server.getMappedPort(SSH_PORT),
+                    username = ACCOUNT,
+                    privateKey = privateKey,
+                ),
+            ).id,
+        )
+    }
+
+    @Test
+    fun `a session opens and reports the operating system it landed on`() {
+        val opened = mapper.readTree(call(granted, "shell_open_session"))
+
+        assertThat(opened.path("error").isMissingNode).isTrue()
+        assertThat(opened.path("sessionId").stringValue()).isNotBlank()
+        // What `uname` said, not a word this code chose. The container is Linux
+        // and the value carries its kernel, which is the useful half.
+        assertThat(opened.path("operatingSystem").stringValue()).startsWith("Linux")
+        assertThat(opened.path("shell").stringValue()).isEqualTo("box")
+    }
+
+    @Test
+    fun `a command runs in the session's own directory`() {
+        val sessionId = openSession(granted)
+
+        // `pwd` is the whole assertion: the directory the command ran in is the
+        // one the session was given, and not the account's home.
+        val where = mapper.readTree(run(granted, sessionId, "pwd"))
+        assertThat(where.path("stdout").stringValue().trim()).isEqualTo(where.path("workingDirectory").stringValue())
+
+        // And it persists between commands, which is the reason a session exists
+        // at all rather than a single "run this somewhere" tool.
+        run(granted, sessionId, "echo hello > note.txt")
+        val read = mapper.readTree(run(granted, sessionId, "cat note.txt"))
+        assertThat(read.path("exitCode").intValue()).isEqualTo(0)
+        assertThat(read.path("stdout").stringValue().trim()).isEqualTo("hello")
+    }
+
+    @Test
+    fun `closing a session destroys its directory`() {
+        val sessionId = openSession(granted)
+        val directory = mapper.readTree(run(granted, sessionId, "pwd")).path("workingDirectory").stringValue()
+
+        val closed = mapper.readTree(call(granted, "shell_close_session", """{"sessionId":"$sessionId"}"""))
+        assertThat(closed.path("closed").booleanValue()).isTrue()
+
+        // Asked of the machine rather than of our own bookkeeping. A row saying
+        // closed over a directory that is still there is exactly the leak this
+        // whole design is arranged to prevent.
+        val second = openSession(granted)
+        val look = mapper.readTree(run(granted, second, "test -d '$directory'; echo gone:$?"))
+        assertThat(look.path("stdout").stringValue()).contains("gone:1")
+
+        assertThat(sessions.findById(sessionId).get().state).isEqualTo(ShellSessionState.CLOSED)
+    }
+
+    @Test
+    fun `a command that exits non-zero comes back as a result rather than an error`() {
+        val sessionId = openSession(granted)
+
+        val answer = mapper.readTree(run(granted, sessionId, "grep nothing-is-here /etc/hostname"))
+
+        // No error key at all. `grep` finding nothing exits 1, and a model told
+        // "that failed" would apologise for a search that worked perfectly.
+        assertThat(answer.path("error").isMissingNode).isTrue()
+        assertThat(answer.path("exitCode").intValue()).isEqualTo(1)
+        assertThat(answer.path("stdout").stringValue()).isEmpty()
+    }
+
+    @Test
+    fun `a command that will not finish is stopped, and says so`() {
+        val sessionId = openSession(granted)
+
+        val answer = mapper.readTree(run(granted, sessionId, "sleep 60"))
+
+        // No exit code, because there was none - and the wording does not claim
+        // the process was killed, because closing a channel does not kill one.
+        assertThat(answer.path("exitCode").isNull).isTrue()
+        assertThat(answer.path("timedOut").stringValue()).contains("may still be running")
+    }
+
+    @Test
+    fun `output longer than the limit is cut, and says so`() {
+        val sessionId = openSession(granted)
+
+        val answer = mapper.readTree(run(granted, sessionId, "yes orknux | head -n 400"))
+
+        assertThat(answer.path("exitCode").intValue()).isEqualTo(0)
+        assertThat(answer.path("stdout").stringValue().length).isLessThanOrEqualTo(512)
+        assertThat(answer.path("truncated").stringValue()).contains("the rest was dropped")
+    }
+
+    @Test
+    fun `an agent without the switch cannot reach the shells`() {
+        // Not offered them, which is the first half: an agent handed a tool it
+        // may not call spends a round trip finding out.
+        assertThat(tools.specsFor(refused).map { it.name }).doesNotContain("shell_open_session")
+        assertThat(tools.specsFor(granted).map { it.name })
+            .contains("shell_open_session", "shell_run_command", "shell_close_session")
+
+        // And refused when it names one anyway, which is the half that matters:
+        // a model that invented the name is stopped by the thing that would
+        // otherwise have done the work.
+        val answer = mapper.readTree(call(refused, "shell_open_session"))
+        assertThat(answer.path("error").stringValue()).contains("has not been given access to the shells")
+        assertThat(sessions.findAll()).isEmpty()
+    }
+
+    @Test
+    fun `every command an agent runs is written down`() {
+        val sessionId = openSession(granted)
+        run(granted, sessionId, "id -un")
+        call(granted, "shell_close_session", """{"sessionId":"$sessionId"}""")
+
+        val written = audit.findAll().filter { it.category.name == "SHELL" }.map { it.message }
+
+        assertThat(written).anySatisfy { assertThat(it).contains("opened on box by sre") }
+        // The command itself, and what it did. An entry saying a command was
+        // attempted and nothing saying how it went is the one an administrator
+        // would least trust.
+        assertThat(written).anySatisfy { assertThat(it).contains("sre ran on box: id -un").contains("exit 0") }
+        assertThat(written).anySatisfy { assertThat(it).contains("closed by sre after 1 commands") }
+        assertThat(audit.findAll().filter { it.category.name == "SHELL" }).allSatisfy {
+            // Under the agent's own name rather than a person's: nobody is at a
+            // screen when a workflow runs one of these.
+            assertThat(it.userId).isEqualTo("sre")
+        }
+    }
+
+    @Test
+    fun `two sessions on the same shell get directories of their own`() {
+        val first = openSession(granted)
+        val second = openSession(granted)
+
+        val here = mapper.readTree(run(granted, first, "pwd")).path("stdout").stringValue().trim()
+        val there = mapper.readTree(run(granted, second, "pwd")).path("stdout").stringValue().trim()
+
+        assertThat(here).isNotEqualTo(there)
+
+        // A file written in one is not visible from the other, which is what
+        // "its own directory" has to mean to be worth anything.
+        run(granted, first, "echo mine > only-here.txt")
+        val look = mapper.readTree(run(granted, second, "test -f only-here.txt; echo found:$?"))
+        assertThat(look.path("stdout").stringValue()).contains("found:1")
+    }
+
+    @Test
+    fun `a session nobody closed is swept, and its directory with it`() {
+        val sessionId = openSession(granted)
+        val directory = mapper.readTree(run(granted, sessionId, "pwd")).path("workingDirectory").stringValue()
+
+        // Aged rather than waited for. The default idle timeout is two hours,
+        // and a test that took two hours would be a test nobody runs.
+        val session = sessions.findById(sessionId).get()
+        session.lastUsedAt = OffsetDateTime.now().minus(Duration.ofHours(3))
+        sessions.save(session)
+
+        sweeper.sweep()
+
+        assertThat(sessions.findById(sessionId).get().state).isEqualTo(ShellSessionState.EXPIRED)
+
+        val check = openSession(granted)
+        val look = mapper.readTree(run(granted, check, "test -d '$directory'; echo gone:$?"))
+        assertThat(look.path("stdout").stringValue()).contains("gone:1")
+    }
+
+    @Test
+    fun `a host answering with a different key than the one it was first seen with is refused`() {
+        val shell = shells.findById(shellId).get()
+
+        // What a machine standing in for another one would look like. Stored by
+        // hand here rather than by swapping the container's key, which would
+        // test Docker's ability to restart rather than this code's.
+        shell.hostKey = "SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        shells.save(shell)
+
+        service.check(shellId)
+
+        val checked = shells.findById(shellId).get()
+        assertThat(checked.status).isEqualTo(ShellStatus.FAILED)
+        assertThat(checked.lastCheckMessage).contains("different host key")
+
+        // And the way out is a decision somebody makes, not one this makes for
+        // them: forgetting the old key lets the next connection record the new.
+        service.update(
+            shellId,
+            io.mszymanski.orknux.connector.shell.ShellInput(
+                name = checked.name,
+                host = checked.host,
+                port = checked.port,
+                username = checked.username,
+                forgetHostKey = true,
+            ),
+        )
+        service.check(shellId)
+        assertThat(shells.findById(shellId).get().status).isEqualTo(ShellStatus.CONNECTED)
+    }
+
+    @Test
+    fun `a check writes down what the machine is, and the key it was first seen with`() {
+        service.check(shellId)
+
+        val checked = shells.findById(shellId).get()
+        assertThat(checked.status).isEqualTo(ShellStatus.CONNECTED)
+        assertThat(checked.lastCheckMessage).contains("Connected to Linux")
+        // Trust on first use: nothing was known before, and what answered is
+        // what has to answer from now on.
+        assertThat(checked.hostKey).startsWith("SHA256:")
+    }
+
+    private fun openSession(agent: Agent): String =
+        mapper.readTree(call(agent, "shell_open_session")).path("sessionId").stringValue()
+
+    private fun run(agent: Agent, sessionId: String, command: String): String = call(
+        agent,
+        "shell_run_command",
+        mapper.writeValueAsString(mapOf("sessionId" to sessionId, "command" to command)),
+    )
+
+    /** Through the agent's own tool loop, which is the only way an agent has. */
+    private fun call(agent: Agent, name: String, arguments: String = "{}"): String =
+        tools.run(agent, ToolCall(id = "1", name = name, arguments = arguments))
+
+    companion object {
+
+        private const val SSH_PORT = 2222
+        private const val ACCOUNT = "orknux"
+
+        /** Ed25519 has one size; sshd wants it said anyway. */
+        private const val ED25519_BITS = 256
+
+        private lateinit var privateKey: String
+
+        /**
+         * A real OpenSSH server, given one authorised key and nothing else.
+         *
+         * Password authentication and sudo are both off, so the only way in is
+         * the key this generated - which means a test that connects has proved
+         * the key handling works rather than that something let it in.
+         */
+        private val server: GenericContainer<*> by lazy {
+            /*
+             * Generated through sshd's own Ed25519 support rather than the
+             * JDK's. They are not interchangeable: the JDK has had Ed25519
+             * since 15, and sshd reads and writes the net.i2p representation,
+             * so a JDK-generated key cannot be written in OpenSSH form by it.
+             * Which is the whole reason that library is a dependency, and
+             * generating the key the same way sshd will read it is what makes
+             * this a test of the path an administrator's key actually takes.
+             */
+            val pair = SecurityUtils.getOpenSSHEDDSAPrivateKeyEntryDecoder().generateKeyPair(ED25519_BITS)
+            privateKey = openSshPrivateKey(pair)
+
+            GenericContainer("linuxserver/openssh-server:version-10.3_p1-r0")
+                .withEnv("PUBLIC_KEY", PublicKeyEntry.toString(pair.public))
+                .withEnv("USER_NAME", ACCOUNT)
+                .withEnv("PASSWORD_ACCESS", "false")
+                .withEnv("SUDO_ACCESS", "false")
+                .withExposedPorts(SSH_PORT)
+                // The port opens before the authorised key is in place, so the
+                // wait is for what the image says when it has finished setting
+                // itself up. Waiting on the port loses that race about one run
+                // in five.
+                .waitingFor(
+                    Wait.forLogMessage(".*\\[ls\\.io-init\\] done\\..*", 1)
+                        .withStartupTimeout(Duration.ofMinutes(3)),
+                )
+        }
+
+        @JvmStatic
+        @BeforeAll
+        fun startServer() {
+            server.start()
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun stopServer() {
+            server.stop()
+        }
+
+        /** The key as somebody would paste it, which is the form being tested. */
+        private fun openSshPrivateKey(pair: KeyPair): String {
+            val written = ByteArrayOutputStream()
+            OpenSSHKeyPairResourceWriter.INSTANCE.writePrivateKey(pair, "orknux-test", null, written)
+            return written.toString(Charsets.UTF_8)
+        }
+    }
+}

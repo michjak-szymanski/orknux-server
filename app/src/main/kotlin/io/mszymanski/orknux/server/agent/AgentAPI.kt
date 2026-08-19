@@ -71,8 +71,8 @@ class AgentAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw AgentNameInvalidException()
 
-        val agent = agents.findByIdOrNull(id) ?: throw AgentNotFoundException(id)
-        requireWorkspaceAccess(agent.workspaceId)
+        val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw AgentNotFoundException(id)
         if (name != agent.name && agents.findByWorkspaceIdAndName(agent.workspaceId, name) != null) {
             throw AgentNameTakenException(name)
         }
@@ -82,6 +82,7 @@ class AgentAPI(
         val previousPrompt = agent.systemPrompt
         val previousServers = agent.mcpServers.toList()
         val previousOrknux = agent.orknuxAccess
+        val previousShell = agent.shellAccess
         val previousCatalogs = agent.memoryCatalogs.toList()
         val previousSkillCatalogs = agent.skillCatalogs.toList()
         val previousTools = agent.tools.toList()
@@ -107,6 +108,7 @@ class AgentAPI(
             agent.mcpServers = input.mcpServers.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
         }
         if (input.orknuxAccess != null) agent.orknuxAccess = input.orknuxAccess
+        if (input.shellAccess != null) agent.shellAccess = input.shellAccess
         if (input.memoryCatalogs != null) {
             agent.memoryCatalogs =
                 input.memoryCatalogs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
@@ -119,7 +121,15 @@ class AgentAPI(
             agent.tools = input.tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
         }
 
-        recordChanges(agent, previousName, previousDescription, previousPrompt, previousServers, previousOrknux)
+        recordChanges(
+            agent,
+            previousName,
+            previousDescription,
+            previousPrompt,
+            previousServers,
+            previousOrknux,
+            previousShell,
+        )
         if (agent.modelId != previousModel) {
             val named = agent.modelId?.let { models.model(it)?.name }
             auditRecorder.record(
@@ -179,8 +189,8 @@ class AgentAPI(
     @MutationMapping
     @Transactional
     fun setAgentEnabled(@Argument id: Long, @Argument enabled: Boolean): AgentView {
-        val agent = agents.findByIdOrNull(id) ?: throw AgentNotFoundException(id)
-        requireWorkspaceAccess(agent.workspaceId)
+        val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw AgentNotFoundException(id)
         agent.enabled = enabled
         auditRecorder.record(
             agent.workspaceId,
@@ -201,8 +211,7 @@ class AgentAPI(
      * workflows are using it while there is still something to change.
      */
     fun deleteAgent(@Argument id: Long): Boolean {
-        val agent = agents.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(agent.workspaceId)
+        val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         agents.delete(agent)
         auditRecorder.record(agent.workspaceId, WorkspaceAuditCategory.AGENT, "Agent ${agent.name} deleted")
         return true
@@ -216,6 +225,7 @@ class AgentAPI(
         previousPrompt: String?,
         previousServers: List<String>,
         previousOrknux: Boolean,
+        previousShell: Boolean,
     ) {
         if (agent.name != previousName) {
             auditRecorder.record(agent.workspaceId, WorkspaceAuditCategory.AGENT, "Agent $previousName renamed to ${agent.name}")
@@ -240,8 +250,25 @@ class AgentAPI(
                 "MCP Server $server removed from ${agent.name}",
             )
         }
-        // Worth a line of its own: this is the grant that lets an agent start
-        // workflows, which is the widest thing an agent can be given here.
+        /*
+         * The widest grant on this screen, and the only one that reaches outside
+         * the application at all. Its own line for that reason: somebody reading
+         * the log later needs to know when an agent first became able to run
+         * commands on a machine, not merely that its settings were saved.
+         */
+        if (agent.shellAccess != previousShell) {
+            auditRecorder.record(
+                agent.workspaceId,
+                WorkspaceAuditCategory.AGENT,
+                if (agent.shellAccess) {
+                    "Shell access granted to ${agent.name}"
+                } else {
+                    "Shell access withdrawn from ${agent.name}"
+                },
+            )
+        }
+        // Worth a line of its own too: this is the grant that lets an agent start
+        // workflows, which is the widest thing an agent can be given inside.
         if (agent.orknuxAccess != previousOrknux) {
             auditRecorder.record(
                 agent.workspaceId,
@@ -282,6 +309,8 @@ data class UpdateAgentInput(
     val mcpServers: List<String>? = null,
     /** Whether it may ask orknux about orknux; null leaves the grant alone. */
     val orknuxAccess: Boolean? = null,
+    /** Whether it may open a shell on a machine; null leaves the grant alone. */
+    val shellAccess: Boolean? = null,
     /** Same rule: null leaves it alone, an empty list clears it. */
     val memoryCatalogs: List<String>? = null,
     /** Which skill catalogs it may draw on; null leaves the grant alone. */
@@ -306,6 +335,8 @@ data class AgentView(
     val mcpServers: List<String>,
     /** Whether it may ask orknux about orknux. */
     val orknuxAccess: Boolean,
+    /** Whether it may open a shell on one of the installation's machines. */
+    val shellAccess: Boolean,
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
@@ -324,6 +355,7 @@ data class AgentView(
         modelName = modelName,
         mcpServers = agent.mcpServers.toList(),
         orknuxAccess = agent.orknuxAccess,
+        shellAccess = agent.shellAccess,
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),

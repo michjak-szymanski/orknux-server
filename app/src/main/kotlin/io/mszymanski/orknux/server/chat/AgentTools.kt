@@ -10,6 +10,7 @@ import io.mszymanski.orknux.server.agent.WorkspaceToolCaller
 import io.mszymanski.orknux.server.mcp.OrknuxScope
 import io.mszymanski.orknux.server.mcp.OrknuxTools
 import io.mszymanski.orknux.server.memory.MemoryTool
+import io.mszymanski.orknux.server.shell.ShellTools
 import io.mszymanski.orknux.server.memory.ToolDescriptor
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -34,6 +35,7 @@ class AgentTools(
     private val workspaceTools: WorkspaceToolCaller,
     private val mcpTools: McpToolCaller,
     private val orknux: OrknuxTools,
+    private val shells: ShellTools,
     private val mapper: ObjectMapper,
 ) {
 
@@ -54,6 +56,11 @@ class AgentTools(
         // workspace: the grant is the authorisation, and the workspace is the
         // boundary — there is no session here to ask about anything wider.
         if (agent.orknuxAccess) addAll(orknux.specs(scopeFor(agent)))
+
+        // The machines, for an agent granted them. Unnamed and plural, which is
+        // the design: an agent asks for a shell, not for a particular host, and
+        // which one it gets is decided when the session opens.
+        if (agent.shellAccess) addAll(shells.specs())
 
         // The workspace's own code, under its own names. A tool named like a
         // built-in is skipped rather than shadowing it: two tools answering to
@@ -107,6 +114,15 @@ class AgentTools(
             } else {
                 mapper.writeValueAsString(mapOf("error" to "This agent has not been given access to orknux"))
             }
+        } else if (shells.handles(call.name)) {
+            /*
+             * The shells, checked by name for the same reason orknux is checked
+             * by prefix: a model that guessed the name of a tool it was never
+             * offered is refused by the thing that would otherwise run it, and
+             * not only by the menu it was never shown. ShellTools checks the
+             * grant itself and says so in the words the model needs.
+             */
+            shells.run(agent, call.name, call.arguments)
         } else when (call.name) {
             "skill_list" -> mapper.writeValueAsString(mapOf("skills" to skills.list(agent)))
 

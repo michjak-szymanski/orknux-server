@@ -17,6 +17,46 @@ have failed.
 
 ### Added
 
+- **An agent can run commands on a machine.** A new Admin -> Shell page holds
+  shells: an SSH target with a host, a port, a user and a private key. An agent
+  granted them opens a session, is told the session's id and what the operating
+  system is, gets an empty working directory of its own on that machine, runs
+  commands in it, and closes the session - at which point the directory and
+  everything in it is destroyed. The switch on the agent is Shells, plural,
+  because from where an agent sits the question is "can I run a command
+  somewhere" rather than "may I run one on build-box-3"; which machine a session
+  lands on is decided when it opens, and the answer names it.
+
+  **What contains this is the machine, and nothing in the application.** There is
+  no list of forbidden commands and no classifier deciding which are safe,
+  deliberately: reading a shell command and saying what it will do is not a
+  problem that can be solved, and a denylist that is nearly right is worse than
+  none because it tells an administrator they are protected while
+  `sh -c "$(curl ...)"` walks past it. Point a shell at a virtual machine or a
+  container you are willing to lose, give the account the least privilege that is
+  useful, and read the audit log - every command an agent runs is written down
+  there under the agent's own name, with what it exited with.
+
+  Nothing is held open between commands. A session is a row in the database and a
+  directory on the far side, and each command opens its own connection, so a
+  restart or a crash loses a socket and nothing else. A session nobody closed is
+  swept after two hours idle and its directory removed, which also catches the
+  ones a previous process would have swept had it lived. A command that has not
+  finished in a minute is stopped and says so - and says plainly that the process
+  may still be running, because closing a channel does not kill one. Output past
+  64 KiB is cut and says so. A non-zero exit is a result rather than an error, and
+  comes back to the agent as one: `grep` finding nothing exits 1, and an
+  assistant told "that failed" would apologise for a search that worked.
+
+  Private keys and their passphrases are encrypted at rest with every other
+  credential on the platform, and no query can read one back. The host each shell
+  was first seen with is remembered as a fingerprint and checked on every
+  connection afterwards, so a machine answering with a different key is refused
+  rather than handed the key quietly; rebuilding a machine means ticking "forget
+  the host key" on purpose. The status on each row is a real connection - the
+  handshake, the key accepted and a command actually run - so a host that answers
+  on port 22 and refuses every account reads as unreachable rather than as fine.
+
 - **One address can be reached through a proxy without sending everything through
   it.** A new Admin -> Networking page holds proxy rules: a regular expression
   matched against the request URL, the proxy that URL goes through, an optional

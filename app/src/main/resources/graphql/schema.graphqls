@@ -83,6 +83,16 @@ type Query {
     beside the screen, so it cannot drift from what a real call would do.
     """
     proxyRoute(url: String!): ProxyRoute!
+    """
+    The machines this installation can run commands on, by name. Administrators
+    only.
+
+    Never carries a private key or its passphrase; `privateKeySet` and
+    `passphraseSet` are all that is said about either.
+    """
+    shells: [Shell!]!
+    "One shell. Administrators only, and still without its key."
+    shell(id: ID!): Shell
     connection(id: ID!): Connection
     "The connections one workspace holds, ordered by name."
     workspaceConnections(workspaceId: ID!): [WorkspaceConnection!]!
@@ -437,6 +447,34 @@ type Mutation {
     """
     moveProxyRule(id: ID!, up: Boolean!): [ProxyRule!]!
     deleteProxyRule(id: ID!): Boolean!
+    "Adds a machine this installation can run commands on. Administrators only."
+    createShell(input: ShellInput!): Shell!
+    """
+    A null private key leaves the stored one alone; an empty one clears it. The
+    same rule holds for the passphrase.
+
+    Changing the host or the port forgets the stored host key, since it is no
+    longer about the machine this shell now names.
+    """
+    updateShell(id: ID!, input: ShellInput!): Shell!
+    "Turns a shell on or off without opening it."
+    setShellEnabled(id: ID!, enabled: Boolean!): Shell!
+    """
+    Asks a shell now whether it answers, rather than waiting for the sweep.
+
+    The check is a real connection: the handshake, the key accepted, and a
+    command actually run. A host that answers on port 22 and refuses every
+    account is a failure, which is the case worth catching.
+    """
+    checkShell(id: ID!): Shell!
+    """
+    Removes a shell.
+
+    Any sessions still open on it are closed first and their directories
+    removed. A machine that will not answer is removed anyway - a page nobody
+    can tidy up because the host is already gone would be worse.
+    """
+    deleteShell(id: ID!): Boolean!
     "Adds a connection that belongs to this workspace alone."
     createWorkspaceConnection(input: CreateWorkspaceConnectionInput!): WorkspaceConnection!
     """
@@ -842,6 +880,14 @@ type Agent {
     one of the workspace's own and never appears among them.
     """
     orknuxAccess: Boolean!
+    """
+    Whether it may open a shell on one of the installation's machines and run
+    commands there.
+
+    Plural and unnamed: an agent asks for a shell rather than for a particular
+    host, and which one a session lands on is decided when it opens.
+    """
+    shellAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -1093,6 +1139,8 @@ input UpdateAgentInput {
     mcpServers: [String!]
     "Whether it may ask orknux about orknux; null leaves the grant alone."
     orknuxAccess: Boolean
+    "Whether it may open a shell on a machine; null leaves the grant alone."
+    shellAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."
@@ -1122,6 +1170,14 @@ enum WorkspaceAuditCategory {
     OBJECT
     "What happens inside a chat: files attached to a message, and the like."
     CHAT
+    """
+    Commands run on a machine over SSH, and the shells they ran on.
+
+    Its own category because this is the one thing on the platform that acts
+    outside it, and "the administrator secures the machine" is only a fair
+    bargain if they can afterwards read every command that was run on it.
+    """
+    SHELL
 }
 
 type WorkspaceAuditEntry {
@@ -1275,6 +1331,84 @@ type ProxyRoute {
     refusedBecause: String
     "What the same guard thinks of the matched rule's own proxy address."
     proxyProblem: String
+}
+
+"""
+A machine this installation can run commands on, over SSH.
+
+Installation-wide and administrators only, because a host belongs to the
+infrastructure this process sits in rather than to the team whose agent asked
+about it.
+
+What contains a shell is the machine on the other end and nothing in this
+application. There is no list of forbidden commands and no classifier deciding
+which are safe: reading a shell command and saying what it will do is not a
+solvable problem, and a denylist that is nearly right is worse than none because
+it says an administrator is protected when they are not. The design is a virtual
+machine or a container the administrator chose, an account with exactly the
+privileges they meant to give away, and an audit entry for every command run.
+"""
+type Shell {
+    id: ID!
+    name: String!
+    host: String!
+    port: Int!
+    "The account on the far side. Which account it is is the whole of the privilege question."
+    username: String!
+    "Whether a private key is stored. The key itself is never returned."
+    privateKeySet: Boolean!
+    "Whether the key has a passphrase. It is never returned either."
+    passphraseSet: Boolean!
+    """
+    The host key this shell was first seen with, as a `SHA256:` fingerprint, or
+    null until the first connection succeeds.
+
+    Trust on first use: what answered the first time is what has to answer from
+    now on, and a different key is refused rather than accepted quietly. Compare
+    it by eye with `ssh-keygen -lf` on the machine itself.
+    """
+    hostKey: String
+    enabled: Boolean!
+    status: ShellStatus!
+    "What the last check found, in words worth showing."
+    lastCheckMessage: String
+    lastCheckedAt: String
+    createdAt: String!
+    lastModifiedAt: String!
+}
+
+"What the last check of a shell found."
+enum ShellStatus {
+    "No private key is stored, so there is nothing to connect with."
+    NOT_CONFIGURED
+    "Configured, but nothing has reached the machine yet."
+    NOT_CHECKED
+    CONNECTED
+    FAILED
+}
+
+input ShellInput {
+    name: String!
+    host: String!
+    port: Int! = 22
+    username: String!
+    """
+    The private key, in OpenSSH or PEM form. Null leaves the stored one alone;
+    an empty string clears it. Never read back.
+    """
+    privateKey: String
+    "The key's passphrase, if it has one. Same rule as the key."
+    keyPassphrase: String
+    "Defaults to on for a new shell; omitting it on an update leaves it as it is."
+    enabled: Boolean
+    """
+    Forgets the host key this shell was first seen with, so the next connection
+    trusts whatever answers and records that instead.
+
+    What to tick after rebuilding a machine, and the only way past a key
+    mismatch - which is the point of having one.
+    """
+    forgetHostKey: Boolean
 }
 
 "A connection as one workspace holds it, with that workspace's credentials."

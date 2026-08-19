@@ -76,9 +76,27 @@ reactor and does not have the problem.
 ## Schema
 
 Flyway owns the schema and `ddl-auto` is `validate`, so every change is a new
-`app/src/main/resources/db/migration/V<n>__<name>.sql` — one history for every
-module, because there is one database. Never edit a migration that has run.
-Entity and migration are changed together, or the application will not start.
+`app/src/main/resources/db/migration/postgresql/V<n>__<name>.sql` — one history
+for every module, because there is one database. Never edit a migration that has
+run. Entity and migration are changed together, or the application will not start.
+
+**Every schema change is written twice.** There are two databases: the numbered
+Postgres history above, and a single squashed baseline for SQLite in
+`app/src/main/resources/db/migration/sqlite/V1__baseline.sql`. SQLite has no
+history to replay onto, so a new table, column or index goes into the baseline as
+though it had always been there rather than as a second migration file. Write the
+SQLite spelling: `INTEGER` rather than `BIGINT` for a key, because that is the
+only column SQLite fills in by itself, `TIMESTAMP` rather than `TIMESTAMPTZ`, and
+`BLOB` rather than `BYTEA`. `SqliteSchemaTest` starts the whole application on a
+real SQLite file and is what notices when only one of the two was written; it
+notices through `ddl-auto: validate`, which compares tables and columns and says
+nothing about a `CHECK` constraint, so `SqliteCheckConstraintTest` reads both
+files and covers that half - a value a `CHECK` allows on Postgres has to be
+allowed on SQLite too.
+
+The whole suite runs against either: `./mvnw test` on Postgres,
+`./mvnw test -Dorknux.test.database=sqlite` on SQLite. Run both when the schema
+moved.
 
 Module tables carry no foreign keys across a module boundary, so a deleted workspace
 is reported to the module rather than cascaded.

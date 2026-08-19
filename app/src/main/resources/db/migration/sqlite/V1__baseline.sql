@@ -1,0 +1,1125 @@
+-- The whole schema, in one file, for SQLite.
+--
+-- Postgres has ninety-eight migrations behind it and this has one. That is
+-- deliberate rather than lazy. A migration is a record of how a schema changed,
+-- and it is only worth replaying where somebody has a database that was built
+-- by the earlier ones. Nobody has a SQLite installation older than this file, so
+-- there is nothing here to replay onto - and translating the ninety-eight would
+-- mean carrying the parts of that history SQLite cannot express at all: thirty
+-- three constraints dropped and put back by an ALTER it has no equivalent for,
+-- and a backfill in V70 written in Postgres string functions. Squashing the
+-- history removes the need for any of it, because a table that is created once
+-- is created correctly.
+--
+-- What it costs is that the two schemas can drift. Every future change has to be
+-- written twice - a numbered migration under postgresql, the same change under
+-- sqlite - and SqliteSchemaTest is what notices when only one of them was, with
+-- SqliteCheckConstraintTest covering the CHECK constraints that schema validation
+-- looks straight through.
+--
+-- Generated from the Postgres schema after all ninety-eight had run, so the two
+-- start out saying the same thing. The differences that remain are the ones
+-- SQLite forces: an identity column has to be INTEGER rather than BIGINT
+-- because that is the only column SQLite will fill in by itself, TIMESTAMPTZ
+-- becomes TIMESTAMP because SQLite has no zoned type, and BYTEA becomes BLOB.
+
+CREATE TABLE agent
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(255) not null,
+    type                         varchar(16) not null,
+    description                  varchar(500),
+    system_prompt                text,
+    enabled                      boolean not null default true,
+    model_id                     integer,
+    icon                         varchar(40),
+    orknux_access                boolean not null default false,
+    shell_access                 boolean not null default false,
+    constraint uk_agent_workspace_name UNIQUE (workspace_id, name),
+    constraint ck_agent_type CHECK (((type) = 'LLM')),
+    constraint agent_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_granted_tool
+(
+    agent_id                     integer not null,
+    position                     integer not null,
+    name                         varchar(120) not null,
+    primary key (agent_id, position),
+    constraint agent_granted_tool_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_mcp_server
+(
+    agent_id                     integer not null,
+    position                     integer not null,
+    name                         varchar(255) not null,
+    primary key (agent_id, position),
+    constraint agent_mcp_server_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_memory_catalog
+(
+    agent_id                     integer not null,
+    position                     integer not null,
+    name                         varchar(120) not null,
+    primary key (agent_id, position),
+    constraint agent_memory_catalog_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_skill
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    description                  varchar(500),
+    content                      text not null,
+    enabled                      boolean not null default true,
+    last_modified_at             timestamp not null,
+    last_modified_by             varchar(120) not null,
+    catalog_id                   integer not null,
+    constraint uk_agent_skill_name UNIQUE (workspace_id, name),
+    constraint agent_skill_catalog_id_fkey FOREIGN KEY (catalog_id) REFERENCES skill_catalog(id),
+    constraint agent_skill_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_skill_catalog
+(
+    agent_id                     integer not null,
+    position                     integer not null,
+    name                         varchar(120) not null,
+    primary key (agent_id, position),
+    constraint agent_skill_catalog_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_tool
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    description                  varchar(500),
+    source                       text not null,
+    enabled                      boolean not null default true,
+    last_modified_at             timestamp not null,
+    last_modified_by             varchar(120) not null,
+    typescript                   text not null,
+    constraint uk_agent_tool_name UNIQUE (workspace_id, name),
+    constraint agent_tool_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE app_user
+(
+    id                           integer not null primary key autoincrement,
+    username                     varchar(120) not null,
+    display_name                 varchar(200) not null,
+    type                         varchar(16) not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default 'system',
+    password_hash                varchar(100),
+    email                        varchar(320),
+    email_chosen                 boolean not null default false
+);
+
+CREATE TABLE app_user_role
+(
+    user_id                      integer not null,
+    role_id                      integer not null,
+    primary key (user_id, role_id),
+    constraint app_user_role_role_id_fkey FOREIGN KEY (role_id) REFERENCES security_role(id) ON DELETE CASCADE,
+    constraint app_user_role_user_id_fkey FOREIGN KEY (user_id) REFERENCES app_user(id) ON DELETE CASCADE
+);
+
+CREATE TABLE app_user_token
+(
+    id                           integer not null primary key autoincrement,
+    user_id                      integer not null,
+    name                         varchar(120) not null,
+    token_hash                   varchar(64) not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_used_at                 timestamp,
+    constraint app_user_token_user_id_fkey FOREIGN KEY (user_id) REFERENCES app_user(id) ON DELETE CASCADE
+);
+
+CREATE TABLE chat_attachment
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    chat_session_id              integer,
+    filename                     varchar(255) not null,
+    content_type                 varchar(120) not null,
+    size_bytes                   integer not null,
+    location                     varchar(1000) not null,
+    uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
+    uploaded_by                  varchar(120) not null default '',
+    constraint chat_attachment_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE,
+    constraint chat_attachment_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE chat_session
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    conversation_id              varchar(36) not null,
+    title                        varchar(200) not null,
+    user_id                      varchar(120) not null,
+    model_id                     integer,
+    pinned                       boolean not null default false,
+    created_at                   timestamp not null,
+    last_message_at              timestamp,
+    agent_id                     integer,
+    constraint uk_chat_session_conversation UNIQUE (conversation_id),
+    constraint chat_session_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
+    constraint chat_session_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
+    constraint chat_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE connection
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(255) not null,
+    type                         varchar(24) not null,
+    url                          varchar(1000) not null,
+    constraint uk_connection_name UNIQUE (name),
+    constraint ck_connection_type CHECK (((type) IN ('SLACK', 'SLACK_SOCKET_MODE', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK')))
+);
+
+CREATE TABLE execution_log
+(
+    id                           integer not null primary key autoincrement,
+    execution_id                 integer not null,
+    node_key                     varchar(64),
+    logged_at                    timestamp not null,
+    level                        varchar(16) not null,
+    message                      varchar(2000) not null,
+    sequence_no                  integer not null,
+    constraint ck_execution_log_level CHECK (((level) IN ('INFO', 'SUCCESS', 'ERROR'))),
+    constraint execution_log_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES workflow_execution(id) ON DELETE CASCADE
+);
+
+CREATE TABLE execution_step
+(
+    id                           integer not null primary key autoincrement,
+    execution_id                 integer not null,
+    node_key                     varchar(64) not null,
+    kind                         varchar(16) not null,
+    name                         varchar(255) not null,
+    description                  varchar(500),
+    status                       varchar(16) not null,
+    position_x                   float not null,
+    position_y                   float not null,
+    step_order                   integer not null,
+    started_at                   timestamp,
+    finished_at                  timestamp,
+    input                        text,
+    output                       text,
+    error                        varchar(1000),
+    action_id                    integer,
+    condition_id                 integer,
+    wait_until                   timestamp,
+    mappings                     text,
+    agent_id                     integer,
+    output_name                  varchar(60),
+    branch                       varchar(8),
+    carried_over                 boolean not null default false,
+    constraint uk_execution_step UNIQUE (execution_id, node_key),
+    constraint ck_execution_step_branch CHECK (((branch IS NULL) OR ((branch) IN ('YES', 'NO')))),
+    constraint ck_execution_step_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT'))),
+    constraint ck_execution_step_status CHECK (((status) IN ('PENDING', 'RUNNING', 'WAITING', 'COMPLETED', 'FAILED', 'SKIPPED'))),
+    constraint execution_step_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES workflow_execution(id) ON DELETE CASCADE
+);
+
+CREATE TABLE installation_setting
+(
+    name                         varchar(120) not null,
+    value                        varchar(500) not null,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default '',
+    primary key (name)
+);
+
+CREATE TABLE issue_news
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    issue_id                     integer not null,
+    issue_number                 integer not null,
+    issue_title                  varchar(200) not null,
+    kind                         varchar(16) not null,
+    actor                        varchar(120) not null,
+    says                         text,
+    audience_kind                varchar(16) not null,
+    audience_id                  varchar(120),
+    audience_name                varchar(120) not null,
+    at                           timestamp not null default CURRENT_TIMESTAMP,
+    constraint issue_news_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE,
+    constraint issue_news_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE issue_news_read
+(
+    workspace_id                 integer not null,
+    reader_kind                  varchar(16) not null,
+    reader_name                  varchar(120) not null,
+    last_id                      integer not null,
+    at                           timestamp not null default CURRENT_TIMESTAMP,
+    primary key (workspace_id, reader_kind, reader_name),
+    constraint issue_news_read_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE llm_model
+(
+    id                           integer not null primary key autoincrement,
+    provider_id                  integer not null,
+    name                         varchar(120) not null,
+    model_id                     varchar(200) not null,
+    kind                         varchar(16) not null default 'CHAT',
+    context_window               integer,
+    max_output                   integer,
+    enabled                      boolean not null default true,
+    token_limit                  integer,
+    reset_interval               varchar(16) not null default 'MONTHLY',
+    requests_per_minute          integer,
+    input_cost_per_million       numeric(12,4),
+    output_cost_per_million      numeric(12,4),
+    voice                        varchar(80),
+    constraint uk_llm_model_name UNIQUE (provider_id, name),
+    constraint ck_llm_model_kind CHECK (((kind) IN ('CHAT', 'EMBEDDING', 'COMPLETION', 'TRANSCRIPTION', 'SPEECH'))),
+    constraint ck_llm_model_reset CHECK (((reset_interval) IN ('DAILY', 'WEEKLY', 'MONTHLY', 'NEVER'))),
+    constraint llm_model_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES model_provider(id) ON DELETE CASCADE
+);
+
+CREATE TABLE mcp_server
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(255) not null,
+    address                      varchar(1000) not null,
+    auth_type                    varchar(16) not null default 'NONE',
+    secret                       varchar(4000),
+    constraint uk_mcp_server_workspace_name UNIQUE (workspace_id, name),
+    constraint ck_mcp_server_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC')))
+);
+
+CREATE TABLE mcp_server_header
+(
+    mcp_server_id                integer not null,
+    position                     integer not null,
+    name                         varchar(255) not null,
+    value                        varchar(1000) not null,
+    primary key (mcp_server_id, position),
+    constraint mcp_server_header_mcp_server_id_fkey FOREIGN KEY (mcp_server_id) REFERENCES mcp_server(id) ON DELETE CASCADE
+);
+
+CREATE TABLE memory
+(
+    id                           integer not null primary key autoincrement,
+    catalog_id                   integer not null,
+    title                        varchar(200) not null,
+    content                      text not null,
+    created_at                   timestamp not null,
+    created_by                   varchar(120) not null,
+    last_modified_at             timestamp not null,
+    last_modified_by             varchar(120) not null,
+    constraint memory_catalog_id_fkey FOREIGN KEY (catalog_id) REFERENCES memory_catalog(id) ON DELETE CASCADE
+);
+
+CREATE TABLE memory_catalog
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    created_at                   timestamp not null,
+    created_by                   varchar(120) not null,
+    constraint uk_memory_catalog_name UNIQUE (workspace_id, name)
+);
+
+CREATE TABLE model_provider
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    endpoint                     varchar(1000) not null,
+    secret                       varchar(4000),
+    type                         varchar(24) not null default 'OPENAI',
+    auth_method                  varchar(16) not null default 'API_KEY',
+    api_version                  varchar(32),
+    deployment_name              varchar(120),
+    region                       varchar(64),
+    tenant_id                    varchar(120),
+    client_id                    varchar(120),
+    scope                        varchar(300),
+    status                       varchar(16) not null default 'NOT_CONFIGURED',
+    last_check_message           varchar(500),
+    last_checked_at              timestamp,
+    constraint uk_model_provider_name UNIQUE (workspace_id, name),
+    constraint ck_model_provider_auth CHECK (((auth_method) IN ('API_KEY', 'ENTRA_ID'))),
+    constraint ck_model_provider_status CHECK (((status) IN ('NOT_CONFIGURED', 'NOT_CHECKED', 'CONNECTED', 'FAILED'))),
+    constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'GOOGLE_AI', 'OLLAMA', 'CUSTOM')))
+);
+
+CREATE TABLE model_usage_day
+(
+    id                           integer not null primary key autoincrement,
+    model_id                     integer not null,
+    day                          date not null,
+    requests                     integer not null default 0,
+    input_tokens                 integer not null default 0,
+    output_tokens                integer not null default 0,
+    latency_millis_total         integer not null default 0,
+    constraint uk_model_usage_day UNIQUE (model_id, day),
+    constraint model_usage_day_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE CASCADE
+);
+
+CREATE TABLE object_property
+(
+    object_id                    integer not null,
+    position                     integer not null,
+    name                         varchar(64) not null,
+    kind                         varchar(16) not null,
+    ref_object_id                integer,
+    element_kind                 varchar(16),
+    primary key (object_id, position),
+    constraint object_property_object_id_fkey FOREIGN KEY (object_id) REFERENCES workflow_object(id) ON DELETE CASCADE,
+    constraint object_property_ref_object_id_fkey FOREIGN KEY (ref_object_id) REFERENCES workflow_object(id)
+);
+
+CREATE TABLE password_reset
+(
+    id                           integer not null primary key autoincrement,
+    user_id                      integer not null,
+    token_hash                   varchar(64) not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    expires_at                   timestamp not null,
+    used_at                      timestamp,
+    constraint password_reset_user_id_fkey FOREIGN KEY (user_id) REFERENCES app_user(id) ON DELETE CASCADE
+);
+
+CREATE TABLE plugin
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(200) not null,
+    filename                     varchar(255) not null,
+    source                       text not null,
+    size_bytes                   integer not null,
+    api_version                  integer not null,
+    sha256                       varchar(64) not null,
+    uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
+    uploaded_by                  varchar(120) not null default '',
+    declared_functions           text not null default '[]',
+    plugin_key                   varchar(32) not null,
+    typescript                   text,
+    declared_parameters          text not null default '[]'
+);
+
+CREATE TABLE plugin_parameter
+(
+    id                           integer not null primary key autoincrement,
+    plugin_id                    integer not null,
+    workspace_id                 integer not null,
+    name                         varchar(64) not null,
+    literal_value                text,
+    variable_id                  integer,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default '',
+    constraint plugin_parameter_one_source CHECK ((((literal_value IS NOT NULL) AND (variable_id IS NULL)) OR ((literal_value IS NULL) AND (variable_id IS NOT NULL)) OR ((literal_value IS NULL) AND (variable_id IS NULL)))),
+    constraint plugin_parameter_plugin_id_fkey FOREIGN KEY (plugin_id) REFERENCES plugin(id) ON DELETE CASCADE,
+    constraint plugin_parameter_variable_id_fkey FOREIGN KEY (variable_id) REFERENCES workspace_variable(id) ON DELETE SET NULL,
+    constraint plugin_parameter_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE proxy_rule
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(120) not null,
+    pattern                      varchar(1000) not null,
+    proxy_host                   varchar(255) not null,
+    proxy_port                   integer not null,
+    username                     varchar(255),
+    password                     varchar(4000),
+    enabled                      boolean not null default true,
+    position                     integer not null default 0,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP
+);
+
+CREATE TABLE scheduled_tasks
+(
+    task_name                    text not null,
+    task_instance                text not null,
+    task_data                    blob,
+    execution_time               timestamp not null,
+    picked                       boolean not null,
+    picked_by                    text,
+    last_success                 timestamp,
+    last_failure                 timestamp,
+    consecutive_failures         integer,
+    last_heartbeat               timestamp,
+    version                      integer not null,
+    priority                     integer,
+    primary key (task_name, task_instance)
+);
+
+CREATE TABLE security_role
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(120) not null,
+    description                  varchar(500),
+    builtin                      boolean not null default false,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default 'system'
+);
+
+CREATE TABLE security_role_scope
+(
+    role_id                      integer not null,
+    scope                        varchar(16) not null,
+    primary key (role_id, scope),
+    constraint ck_security_role_scope CHECK (((scope) IN ('ADMIN', 'USER'))),
+    constraint security_role_scope_role_id_fkey FOREIGN KEY (role_id) REFERENCES security_role(id) ON DELETE CASCADE
+);
+
+CREATE TABLE shell
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(120) not null,
+    host                         varchar(255) not null,
+    port                         integer not null default 22,
+    username                     varchar(255) not null,
+    private_key                  text,
+    key_passphrase               varchar(4000),
+    enabled                      boolean not null default true,
+    host_key                     varchar(500),
+    status                       varchar(20) not null default 'NOT_CHECKED',
+    last_check_message           varchar(500),
+    last_checked_at              timestamp,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP
+);
+
+CREATE TABLE shell_session
+(
+    id                           varchar(64) not null,
+    shell_id                     integer not null,
+    agent_id                     integer,
+    agent_name                   varchar(120) not null,
+    workspace_id                 integer,
+    directory                    varchar(500) not null,
+    operating_system             varchar(200),
+    state                        varchar(16) not null default 'OPEN',
+    opened_at                    timestamp not null default CURRENT_TIMESTAMP,
+    last_used_at                 timestamp not null default CURRENT_TIMESTAMP,
+    closed_at                    timestamp,
+    command_count                integer not null default 0,
+    primary key (id),
+    constraint shell_session_shell_id_fkey FOREIGN KEY (shell_id) REFERENCES shell(id) ON DELETE CASCADE
+);
+
+CREATE TABLE skill_catalog
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    created_at                   timestamp not null,
+    created_by                   varchar(120) not null,
+    constraint uk_skill_catalog_name UNIQUE (workspace_id, name),
+    constraint skill_catalog_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE spring_ai_chat_memory
+(
+    conversation_id              varchar(36) not null,
+    content                      text not null,
+    type                         varchar(10) not null,
+    "timestamp"                  timestamp not null,
+    sequence_id                  integer not null,
+    constraint spring_ai_chat_memory_type_check CHECK (((type) IN ('USER', 'ASSISTANT', 'SYSTEM', 'TOOL')))
+);
+
+CREATE TABLE spring_session
+(
+    primary_id                   char(36) not null,
+    session_id                   char(36) not null,
+    creation_time                integer not null,
+    last_access_time             integer not null,
+    max_inactive_interval        integer not null,
+    expiry_time                  integer not null,
+    principal_name               varchar(100),
+    primary key (primary_id)
+);
+
+CREATE TABLE spring_session_attributes
+(
+    session_primary_id           char(36) not null,
+    attribute_name               varchar(200) not null,
+    attribute_bytes              blob not null,
+    primary key (session_primary_id, attribute_name),
+    constraint spring_session_attributes_fk FOREIGN KEY (session_primary_id) REFERENCES spring_session(primary_id) ON DELETE CASCADE
+);
+
+CREATE TABLE trigger_firing
+(
+    id                           integer not null primary key autoincrement,
+    trigger_id                   integer not null,
+    workspace_id                 integer not null,
+    at                           timestamp not null,
+    outcome                      varchar(32) not null,
+    detail                       text,
+    runs_started                 integer not null default 0,
+    constraint trigger_firing_trigger_id_fkey FOREIGN KEY (trigger_id) REFERENCES workflow_trigger(id) ON DELETE CASCADE
+);
+
+CREATE TABLE variable_catalog
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    created_by                   varchar(120) not null default '',
+    constraint uk_variable_catalog_name UNIQUE (workspace_id, name),
+    constraint variable_vault_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(255) not null,
+    description                  varchar(500),
+    status                       varchar(16) not null default 'DRAFT',
+    constraint uk_workflow_name UNIQUE (name),
+    constraint ck_workflow_status CHECK (((status) IN ('DRAFT', 'PUBLISHED')))
+);
+
+CREATE TABLE workflow_action
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    type                         varchar(16) not null,
+    subtype                      varchar(24) not null,
+    connection_id                integer,
+    connection_action            varchar(32),
+    content                      text,
+    target                       varchar(16),
+    target_name                  varchar(120),
+    url                          varchar(1000),
+    method                       varchar(8),
+    headers                      text,
+    function_id                  integer,
+    condition_expression         varchar(500),
+    timeout_seconds              integer,
+    retry_interval_seconds       integer,
+    duration_seconds             integer,
+    condition_id                 integer,
+    icon                         varchar(40),
+    email_to                     varchar(1000),
+    email_cc                     varchar(1000),
+    email_subject                varchar(500),
+    email_reply_to               varchar(320),
+    constraint uk_workflow_action_name UNIQUE (workspace_id, name),
+    constraint ck_workflow_action_shape CHECK (((((type) = 'EXECUTE') AND ((subtype) = 'OUTGOING_CONNECTION') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'SEND_EMAIL') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'HTTP_REQUEST') AND (url IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'FUNCTION') AND (function_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'INLINE_CONDITION') AND (condition_expression IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'CONDITION') AND (condition_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'TIME') AND (duration_seconds IS NOT NULL)))),
+    constraint ck_workflow_action_subtype CHECK (((subtype) IN ('OUTGOING_CONNECTION', 'SEND_EMAIL', 'HTTP_REQUEST', 'FUNCTION', 'INLINE_CONDITION', 'CONDITION', 'TIME'))),
+    constraint ck_workflow_action_type CHECK (((type) IN ('EXECUTE', 'WAIT'))),
+    constraint workflow_action_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE SET NULL,
+    constraint workflow_action_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE SET NULL,
+    constraint workflow_action_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_action_mapping
+(
+    action_id                    integer not null,
+    position                     integer not null,
+    argument                     varchar(64) not null,
+    expression                   varchar(500) not null,
+    primary key (action_id, position),
+    constraint workflow_action_mapping_action_id_fkey FOREIGN KEY (action_id) REFERENCES workflow_action(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_condition
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(120) not null,
+    type                         varchar(16) not null,
+    property                     varchar(32),
+    check_by                     varchar(16),
+    negate                       boolean not null default false,
+    function_id                  integer,
+    icon                         varchar(40),
+    constraint uk_workflow_condition_name UNIQUE (workspace_id, name),
+    constraint ck_workflow_condition_shape CHECK (((((type) IN ('ANY_OF', 'ALL_OF')) AND (property IS NULL) AND (check_by IS NULL)) OR (((type) = 'FUNCTION') AND (function_id IS NOT NULL) AND (property IS NULL) AND (check_by IS NULL)) OR (((type) IN ('SLACK', 'JIRA', 'TIME')) AND (property IS NOT NULL) AND (check_by IS NOT NULL)))),
+    constraint ck_workflow_condition_type CHECK (((type) IN ('SLACK', 'JIRA', 'TIME', 'FUNCTION', 'ANY_OF', 'ALL_OF'))),
+    constraint workflow_condition_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id),
+    constraint workflow_condition_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_condition_member
+(
+    condition_id                 integer not null,
+    position                     integer not null,
+    member_id                    integer not null,
+    primary key (condition_id, position),
+    constraint workflow_condition_member_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE CASCADE,
+    constraint workflow_condition_member_member_id_fkey FOREIGN KEY (member_id) REFERENCES workflow_condition(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_condition_value
+(
+    condition_id                 integer not null,
+    position                     integer not null,
+    value                        varchar(500) not null,
+    primary key (condition_id, position),
+    constraint workflow_condition_value_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_edge
+(
+    id                           integer not null primary key autoincrement,
+    workflow_id                  integer not null,
+    source_key                   varchar(64) not null,
+    target_key                   varchar(64) not null,
+    branch                       varchar(8),
+    constraint uk_workflow_edge UNIQUE (workflow_id, source_key, target_key),
+    constraint workflow_edge_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_execution
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    workflow_id                  integer not null,
+    workflow_name                varchar(255) not null,
+    status                       varchar(16) not null,
+    trigger_type                 varchar(16) not null,
+    started_at                   timestamp not null,
+    finished_at                  timestamp,
+    input                        text,
+    error                        varchar(1000),
+    stopped_at_node_key          varchar(64),
+    stopped_reason               varchar(500),
+    carried                      text,
+    started_from                 integer,
+    constraint ck_execution_status CHECK (((status) IN ('RUNNING', 'COMPLETED', 'FAILED'))),
+    constraint ck_execution_trigger CHECK (((trigger_type) IN ('WEBHOOK', 'MANUAL', 'SCHEDULE', 'API'))),
+    constraint fk_workflow_execution_started_from FOREIGN KEY (started_from) REFERENCES workflow_execution(id) ON DELETE SET NULL
+);
+
+CREATE TABLE workflow_function
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer,
+    name                         varchar(120) not null,
+    description                  varchar(500),
+    source                       text not null,
+    return_type                  varchar(16) not null,
+    last_modified_at             timestamp not null,
+    last_modified_by             varchar(120) not null,
+    scope                        varchar(16) not null default 'WORKSPACE',
+    plugin_id                    integer,
+    typescript                   text,
+    return_object_id             integer,
+    constraint uk_workflow_function_name UNIQUE (workspace_id, name),
+    constraint ck_workflow_function_owner CHECK (((((scope) = 'WORKSPACE') AND (workspace_id IS NOT NULL) AND (plugin_id IS NULL)) OR (((scope) = 'PLUGIN') AND (workspace_id IS NULL) AND (plugin_id IS NOT NULL)))),
+    constraint ck_workflow_function_return CHECK (((return_type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY', 'NONE'))),
+    constraint ck_workflow_function_return_object CHECK (((((return_type) = 'OBJECT') AND (return_object_id IS NOT NULL)) OR (((return_type) != 'OBJECT') AND (return_object_id IS NULL)))),
+    constraint ck_workflow_function_scope CHECK (((scope) IN ('WORKSPACE', 'PLUGIN'))),
+    constraint workflow_function_plugin_id_fkey FOREIGN KEY (plugin_id) REFERENCES plugin(id) ON DELETE CASCADE,
+    constraint workflow_function_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_function_external
+(
+    function_id                  integer not null,
+    variable_id                  integer not null,
+    position                     integer not null,
+    primary key (function_id, position),
+    constraint workflow_function_external_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE,
+    constraint workflow_function_external_variable_id_fkey FOREIGN KEY (variable_id) REFERENCES workspace_variable(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE workflow_function_param
+(
+    function_id                  integer not null,
+    position                     integer not null,
+    name                         varchar(64) not null,
+    type                         varchar(16) not null,
+    object_id                    integer,
+    primary key (function_id, position),
+    constraint ck_workflow_function_param_object CHECK (((((type) = 'OBJECT') AND (object_id IS NOT NULL)) OR (((type) != 'OBJECT') AND (object_id IS NULL)))),
+    constraint ck_workflow_function_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY'))),
+    constraint workflow_function_param_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_node
+(
+    id                           integer not null primary key autoincrement,
+    workflow_id                  integer not null,
+    node_key                     varchar(64) not null,
+    kind                         varchar(16) not null,
+    name                         varchar(255) not null,
+    description                  varchar(500),
+    position_x                   float not null,
+    position_y                   float not null,
+    trigger_id                   integer,
+    action_id                    integer,
+    condition_id                 integer,
+    agent_id                     integer,
+    output_name                  varchar(60),
+    icon                         varchar(40),
+    object_id                    integer,
+    yes_label                    varchar(40),
+    no_label                     varchar(40),
+    orientation                  varchar(16),
+    constraint uk_workflow_node UNIQUE (workflow_id, node_key),
+    constraint ck_workflow_node_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT'))),
+    constraint workflow_node_action_id_fkey FOREIGN KEY (action_id) REFERENCES workflow_action(id) ON DELETE SET NULL,
+    constraint workflow_node_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
+    constraint workflow_node_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE SET NULL,
+    constraint workflow_node_object_id_fkey FOREIGN KEY (object_id) REFERENCES workflow_object(id) ON DELETE SET NULL,
+    constraint workflow_node_trigger_id_fkey FOREIGN KEY (trigger_id) REFERENCES workflow_trigger(id) ON DELETE SET NULL,
+    constraint workflow_node_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_node_mapping
+(
+    workflow_node_id             integer not null,
+    position                     integer not null,
+    name                         varchar(64) not null,
+    expression                   text not null,
+    mode                         varchar(16) not null default 'VALUE',
+    source_node_key              varchar(64),
+    primary key (workflow_node_id, position),
+    constraint workflow_node_mapping_workflow_node_id_fkey FOREIGN KEY (workflow_node_id) REFERENCES workflow_node(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_object
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(64) not null,
+    description                  text,
+    created_at                   timestamp not null,
+    created_by                   varchar(255) not null,
+    last_modified_at             timestamp not null,
+    last_modified_by             varchar(255) not null,
+    constraint uk_workflow_object_name UNIQUE (workspace_id, name),
+    constraint workflow_object_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_publication
+(
+    workflow_id                  integer not null,
+    published_at                 timestamp not null default CURRENT_TIMESTAMP,
+    published_by                 varchar(120) not null default 'system',
+    graph                        jsonb not null,
+    primary key (workflow_id),
+    constraint workflow_publication_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_trigger
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(255) not null,
+    type                         varchar(24) not null,
+    connection_id                integer,
+    action                       varchar(32),
+    cron                         varchar(120),
+    timezone                     varchar(64),
+    enabled                      boolean not null default true,
+    last_fired_at                timestamp,
+    payload                      text,
+    condition_id                 integer,
+    icon                         varchar(40),
+    webhook_path                 varchar(120),
+    object_id                    integer,
+    auth_type                    varchar(16) not null default 'NONE',
+    auth_function_id             integer,
+    constraint uk_workflow_trigger_name UNIQUE (workspace_id, name),
+    constraint ck_workflow_trigger_action CHECK (((action IS NULL) OR ((action) IN ('MENTION', 'REPLY', 'MESSAGE', 'ISSUE_CREATED', 'ISSUE_UPDATED')))),
+    constraint ck_workflow_trigger_auth CHECK ((((auth_type) IN ('NONE', 'FUNCTION')) AND (((auth_type) != 'FUNCTION') OR (auth_function_id IS NOT NULL)))),
+    constraint ck_workflow_trigger_shape CHECK (((((type) = 'INCOMING_CONNECTION') AND (connection_id IS NOT NULL) AND (action IS NOT NULL)) OR (((type) = 'SCHEDULED') AND (cron IS NOT NULL)) OR (((type) = 'WEBHOOK') AND (webhook_path IS NOT NULL) AND (object_id IS NOT NULL)))),
+    constraint ck_workflow_trigger_type CHECK (((type) IN ('INCOMING_CONNECTION', 'SCHEDULED', 'WEBHOOK'))),
+    constraint workflow_trigger_auth_function_id_fkey FOREIGN KEY (auth_function_id) REFERENCES workflow_function(id),
+    constraint workflow_trigger_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id),
+    constraint workflow_trigger_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(255) not null,
+    description                  varchar(500),
+    ldap_group                   varchar(255),
+    companion_model_id           integer,
+    transcription_model_id       integer,
+    speech_model_id              integer,
+    quick_chat_model_id          integer,
+    quick_chat_may_write         boolean not null default false,
+    constraint uk_workspace_name UNIQUE (name),
+    constraint workspace_quick_chat_model_id_fkey FOREIGN KEY (quick_chat_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
+    constraint workspace_speech_model_id_fkey FOREIGN KEY (speech_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
+    constraint workspace_transcription_model_id_fkey FOREIGN KEY (transcription_model_id) REFERENCES llm_model(id) ON DELETE SET NULL
+);
+
+CREATE TABLE workspace_audit
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer,
+    old_workspace_name           varchar(255),
+    new_workspace_name           varchar(255),
+    operation_type               varchar(16),
+    date                         timestamp not null,
+    user_id                      varchar(255) not null,
+    category                     varchar(16) not null,
+    message                      varchar(500) not null,
+    constraint ck_workspace_audit_category CHECK (((category) IN ('WORKSPACE', 'WORKFLOW', 'AGENT', 'INTEGRATION', 'MODEL', 'MEMORY', 'OBJECT', 'CHAT', 'SHELL'))),
+    constraint ck_workspace_audit_operation_type CHECK (((operation_type) IN ('ADD', 'REMOVE', 'RENAME')))
+);
+
+CREATE TABLE workspace_connection
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    connection_id                integer,
+    name                         varchar(255) not null,
+    type                         varchar(24) not null,
+    url                          varchar(1000) not null,
+    url_override                 varchar(1000),
+    auth_type                    varchar(16) not null default 'NONE',
+    secret                       varchar(4000),
+    last_check_status            varchar(16),
+    last_check_message           varchar(500),
+    last_checked_at              timestamp,
+    app_token                    varchar(4000),
+    smtp_port                    integer,
+    smtp_username                varchar(320),
+    smtp_from                    varchar(320),
+    smtp_security                varchar(16) not null default 'STARTTLS',
+    constraint uk_workspace_connection_name UNIQUE (workspace_id, name),
+    constraint ck_workspace_connection_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
+    constraint ck_workspace_connection_check CHECK (((last_check_status IS NULL) OR ((last_check_status) IN ('CONNECTED', 'FAILED')))),
+    constraint ck_workspace_connection_smtp_security CHECK (((smtp_security) IN ('NONE', 'STARTTLS', 'TLS'))),
+    constraint ck_workspace_connection_type CHECK (((type) IN ('SLACK', 'SLACK_SOCKET_MODE', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK'))),
+    constraint team_connection_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES connection(id) ON DELETE SET NULL
+);
+
+CREATE TABLE workspace_connection_header
+(
+    workspace_connection_id      integer not null,
+    position                     integer not null,
+    name                         varchar(255) not null,
+    value                        varchar(1000) not null,
+    primary key (workspace_connection_id, position),
+    constraint team_connection_header_team_connection_id_fkey FOREIGN KEY (workspace_connection_id) REFERENCES workspace_connection(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    number                       integer not null,
+    title                        varchar(200) not null,
+    description                  text,
+    status                       varchar(16) not null default 'OPEN',
+    reporter                     varchar(120) not null,
+    assignee_kind                varchar(16),
+    assignee_id                  varchar(120),
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default 'system',
+    last_comment_at              timestamp,
+    constraint workspace_issue_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue_attachment
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    issue_id                     integer,
+    comment_id                   integer,
+    filename                     varchar(255) not null,
+    content_type                 varchar(120) not null,
+    size_bytes                   integer not null,
+    location                     varchar(1000) not null,
+    uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
+    uploaded_by                  varchar(120) not null default '',
+    constraint workspace_issue_attachment_comment_id_fkey FOREIGN KEY (comment_id) REFERENCES workspace_issue_comment(id) ON DELETE CASCADE,
+    constraint workspace_issue_attachment_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE,
+    constraint workspace_issue_attachment_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue_comment
+(
+    id                           integer not null primary key autoincrement,
+    issue_id                     integer not null,
+    author                       varchar(120) not null,
+    content                      text not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    edited_at                    timestamp,
+    constraint workspace_issue_comment_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue_label
+(
+    issue_id                     integer not null,
+    label                        varchar(60) not null,
+    primary key (issue_id, label),
+    constraint workspace_issue_label_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue_link
+(
+    id                           integer not null primary key autoincrement,
+    issue_id                     integer not null,
+    url                          varchar(2000) not null,
+    title                        varchar(200),
+    added_at                     timestamp not null default CURRENT_TIMESTAMP,
+    added_by                     varchar(120) not null default '',
+    constraint workspace_issue_link_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_issue_observer
+(
+    id                           integer not null primary key autoincrement,
+    issue_id                     integer not null,
+    observer_kind                varchar(16) not null,
+    observer_id                  varchar(120) not null,
+    added_at                     timestamp not null default CURRENT_TIMESTAMP,
+    added_by                     varchar(120) not null default '',
+    constraint workspace_issue_observer_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_role
+(
+    workspace_id                 integer not null,
+    role_id                      integer not null,
+    primary key (workspace_id, role_id),
+    constraint workspace_role_role_id_fkey FOREIGN KEY (role_id) REFERENCES security_role(id) ON DELETE CASCADE,
+    constraint workspace_role_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_variable
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    catalog_id                   integer not null,
+    name                         varchar(64) not null,
+    type                         varchar(16) not null,
+    value                        varchar(4096),
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default '',
+    kind                         varchar(16) not null default 'SECRET',
+    description                  varchar(500),
+    created_by                   varchar(120) not null default '',
+    constraint uk_workspace_variable_name UNIQUE (catalog_id, name),
+    constraint ck_workspace_variable_kind CHECK (((kind) IN ('VALUE', 'SECRET'))),
+    constraint ck_workspace_variable_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN'))),
+    constraint workspace_variable_vault_id_fkey FOREIGN KEY (catalog_id) REFERENCES variable_catalog(id) ON DELETE RESTRICT,
+    constraint workspace_variable_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_workflow
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    workflow_id                  integer not null,
+    enabled                      boolean not null default true,
+    constraint uk_workspace_workflow UNIQUE (workspace_id, workflow_id),
+    constraint team_workflow_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+    constraint team_workflow_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
+);
+
+
+CREATE INDEX idx_agent_workspace_id ON agent (workspace_id);
+CREATE INDEX idx_agent_skill_workspace ON agent_skill (workspace_id);
+CREATE INDEX idx_skill_catalog ON agent_skill (catalog_id);
+CREATE INDEX idx_agent_tool_workspace ON agent_tool (workspace_id);
+CREATE UNIQUE INDEX app_user_username_key ON app_user (lower((username)));
+CREATE UNIQUE INDEX app_user_token_hash_key ON app_user_token (token_hash);
+CREATE INDEX app_user_token_user_idx ON app_user_token (user_id);
+CREATE INDEX idx_chat_attachment_session ON chat_attachment (chat_session_id);
+CREATE INDEX idx_chat_attachment_workspace ON chat_attachment (workspace_id);
+CREATE INDEX idx_chat_session_owner ON chat_session (workspace_id, user_id, last_message_at DESC);
+CREATE INDEX idx_execution_log_execution ON execution_log (execution_id, sequence_no);
+CREATE INDEX idx_execution_step_execution ON execution_step (execution_id, step_order);
+CREATE INDEX issue_news_audience_idx ON issue_news (workspace_id, audience_kind, audience_name, id);
+CREATE INDEX idx_llm_model_provider ON llm_model (provider_id);
+CREATE INDEX idx_mcp_server_workspace_id ON mcp_server (workspace_id);
+CREATE INDEX idx_memory_catalog ON memory (catalog_id);
+CREATE INDEX idx_memory_modified ON memory (catalog_id, last_modified_at DESC);
+CREATE INDEX idx_memory_catalog_workspace ON memory_catalog (workspace_id);
+CREATE INDEX idx_model_provider_workspace ON model_provider (workspace_id);
+CREATE INDEX idx_model_usage_day_model ON model_usage_day (model_id, day);
+CREATE INDEX idx_object_property_ref ON object_property (ref_object_id);
+CREATE UNIQUE INDEX password_reset_hash_key ON password_reset (token_hash);
+CREATE INDEX password_reset_user_idx ON password_reset (user_id);
+CREATE UNIQUE INDEX uk_plugin_key ON plugin (plugin_key);
+CREATE UNIQUE INDEX plugin_parameter_unique_idx ON plugin_parameter (plugin_id, workspace_id, name);
+CREATE INDEX plugin_parameter_workspace_idx ON plugin_parameter (workspace_id, plugin_id);
+CREATE UNIQUE INDEX proxy_rule_name_key ON proxy_rule (name);
+CREATE INDEX proxy_rule_position_idx ON proxy_rule ("position", id);
+CREATE INDEX execution_time_idx ON scheduled_tasks (execution_time);
+CREATE INDEX last_heartbeat_idx ON scheduled_tasks (last_heartbeat);
+CREATE INDEX priority_execution_time_idx ON scheduled_tasks (priority DESC, execution_time);
+CREATE UNIQUE INDEX ux_security_role_name ON security_role (lower((name)));
+CREATE INDEX shell_choice_idx ON shell (enabled, status, name);
+CREATE UNIQUE INDEX shell_name_key ON shell (name);
+CREATE INDEX shell_session_agent_idx ON shell_session (agent_id, state);
+CREATE INDEX shell_session_open_idx ON shell_session (state, last_used_at);
+CREATE INDEX spring_ai_chat_memory_conversation_id_sequence_id_idx ON spring_ai_chat_memory (conversation_id, sequence_id);
+CREATE INDEX spring_ai_chat_memory_conversation_id_timestamp_idx ON spring_ai_chat_memory (conversation_id, "timestamp");
+CREATE UNIQUE INDEX spring_session_ix1 ON spring_session (session_id);
+CREATE INDEX spring_session_ix2 ON spring_session (expiry_time);
+CREATE INDEX spring_session_ix3 ON spring_session (principal_name);
+CREATE INDEX idx_trigger_firing_trigger ON trigger_firing (trigger_id, at DESC);
+CREATE INDEX idx_variable_catalog_workspace ON variable_catalog (workspace_id);
+CREATE INDEX idx_workflow_action_workspace ON workflow_action (workspace_id);
+CREATE INDEX idx_workflow_condition_workspace ON workflow_condition (workspace_id);
+CREATE INDEX idx_workflow_edge_workflow ON workflow_edge (workflow_id);
+CREATE INDEX idx_workflow_execution_workflow ON workflow_execution (workflow_id, started_at DESC);
+CREATE INDEX idx_workflow_execution_workspace ON workflow_execution (workspace_id, started_at DESC);
+CREATE INDEX idx_workflow_function_plugin ON workflow_function (plugin_id);
+CREATE INDEX idx_workflow_function_workspace ON workflow_function (workspace_id);
+CREATE UNIQUE INDEX uk_workflow_function_plugin_name ON workflow_function (name) WHERE ((scope) = 'PLUGIN');
+CREATE INDEX idx_workflow_function_external_variable ON workflow_function_external (variable_id);
+CREATE INDEX idx_workflow_node_action ON workflow_node (action_id) WHERE (action_id IS NOT NULL);
+CREATE INDEX idx_workflow_node_agent ON workflow_node (agent_id);
+CREATE INDEX idx_workflow_node_condition ON workflow_node (condition_id) WHERE (condition_id IS NOT NULL);
+CREATE INDEX idx_workflow_node_trigger ON workflow_node (trigger_id) WHERE (trigger_id IS NOT NULL);
+CREATE INDEX idx_workflow_node_workflow ON workflow_node (workflow_id);
+CREATE INDEX idx_workflow_trigger_connection ON workflow_trigger (connection_id, action) WHERE enabled;
+CREATE INDEX idx_workflow_trigger_workspace ON workflow_trigger (workspace_id);
+CREATE UNIQUE INDEX uk_workflow_trigger_webhook_path ON workflow_trigger (webhook_path) WHERE (webhook_path IS NOT NULL);
+CREATE INDEX idx_workspace_audit_category ON workspace_audit (category);
+CREATE INDEX idx_workspace_audit_workspace_id ON workspace_audit (workspace_id);
+CREATE INDEX idx_workspace_connection_workspace_id ON workspace_connection (workspace_id);
+CREATE UNIQUE INDEX workspace_issue_number_key ON workspace_issue (workspace_id, number);
+CREATE INDEX workspace_issue_status_idx ON workspace_issue (workspace_id, status);
+CREATE INDEX workspace_issue_attachment_comment_idx ON workspace_issue_attachment (comment_id);
+CREATE INDEX workspace_issue_attachment_issue_idx ON workspace_issue_attachment (issue_id, uploaded_at);
+CREATE INDEX workspace_issue_attachment_workspace_idx ON workspace_issue_attachment (workspace_id);
+CREATE INDEX workspace_issue_comment_issue_idx ON workspace_issue_comment (issue_id, created_at);
+CREATE INDEX workspace_issue_link_issue_idx ON workspace_issue_link (issue_id, added_at);
+CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (issue_id, observer_kind, observer_id);
+CREATE INDEX idx_workspace_variable_catalog ON workspace_variable (catalog_id);
+CREATE INDEX idx_workspace_variable_workspace ON workspace_variable (workspace_id);
+CREATE INDEX idx_workspace_workflow_workspace_id ON workspace_workflow (workspace_id);
+
+
+-- The rows a migration put there rather than a table's shape, which is all of
+-- one migration: V69 gives the installation its built-in role. Everything else
+-- the ninety-eight insert is a backfill of data an older installation already
+-- had, and a database created by this file has none of it to fill.
+INSERT INTO security_role (name, description, builtin)
+VALUES ('Administrators',
+        'Sees the Admin section and every workspace, whatever else is assigned. Built in: this role cannot be edited or removed.',
+        1);
+
+INSERT INTO security_role_scope (role_id, scope)
+SELECT id, 'ADMIN'
+FROM security_role
+WHERE builtin;

@@ -38,7 +38,22 @@ spring:
       # cost nothing. Longer than the longest wait, with slack.
       request-timeout: ${ORKNUX_ASYNC_REQUEST_TIMEOUT:330s}
   datasource:
+    # Which database this installation keeps its state in, said the only way that
+    # cannot disagree with itself: the URL. Postgres and SQLite are both
+    # supported, and everything downstream - the driver, the Hibernate dialect,
+    # which set of migrations Flyway reads - is worked out from this one line
+    # rather than configured beside it.
+    #
+    #   jdbc:postgresql://host:5432/orknux   a server, and what a deployment wants
+    #   jdbc:sqlite:/var/lib/orknux/orknux.db   a file, and nothing else to run
+    #
+    # SQLite is for the installation of one, or few: it is a file on a disk, so
+    # there is no second container and no password, but it is also one writer at
+    # a time and it lives on whichever machine holds that file. Read **The
+    # database** in the README before choosing it - some things this server does
+    # are weaker there, and the list is short but real.
     url: ${ORKNUX_DB_URL:jdbc:postgresql://localhost:5432/orknux}
+    # Both empty under SQLite; a file has nobody to authenticate to.
     username: ${ORKNUX_DB_USERNAME:orknux}
     password: ${ORKNUX_DB_PASSWORD:orknux}
   jpa:
@@ -49,7 +64,12 @@ spring:
     # Off only where something else owns the schema; the application expects it
     # to be at the version this build ships.
     enabled: ${ORKNUX_DB_MIGRATE:true}
-    locations: classpath:db/migration
+    # One directory per database, chosen by Flyway from the connection it is
+    # given. They are not two spellings of one history: Postgres has every
+    # migration since the first release, and SQLite has a single baseline that
+    # says what they all add up to. See db/migration/sqlite/V1__baseline.sql for
+    # why, and what it costs.
+    locations: classpath:db/migration/{vendor}
   ldap:
     urls: ${ORKNUX_LDAP_URLS:ldap://localhost:389}
     base: ${ORKNUX_LDAP_BASE:dc=orknux,dc=io}

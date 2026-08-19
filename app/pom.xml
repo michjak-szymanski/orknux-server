@@ -65,6 +65,30 @@
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <!--
+             The second database. SQLite is a file rather than a server, which is
+             the whole of its appeal for somebody who wants to run this without
+             also running Postgres. Its schema is a baseline of its own under
+             db/migration/sqlite - see the note there for why.
+        -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>${sqlite.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <!--
+             Hibernate keeps the SQLite dialect in its community module rather
+             than the core: best effort, not covered by its own CI. That is worth
+             knowing when something behaves oddly here and not on Postgres.
+
+             Compiled against rather than merely present, because OrknuxSqliteDialect
+             extends it.
+        -->
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-community-dialects</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-graphql</artifactId>

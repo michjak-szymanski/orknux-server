@@ -17,6 +17,30 @@ have failed.
 
 ### Added
 
+- **Orknux runs on SQLite**, as well as Postgres. Which one an installation uses
+  is `ORKNUX_DB_URL` and nothing else - `jdbc:sqlite:/var/lib/orknux/orknux.db`
+  instead of `jdbc:postgresql://...` - and the driver, the dialect and the
+  migrations all follow from it. The username and password are ignored, because
+  a file has nobody to authenticate to. It exists for the installation that
+  wants to run this and nothing else: no second container, no database server to
+  keep, and a backup that is one file.
+
+  **Postgres is still what a deployment should use**, and nothing about an
+  existing installation changes. SQLite takes one writer at a time, so requests
+  that write queue behind each other rather than run together; the file is the
+  installation, so it means exactly one server process and no second node; and a
+  timestamp is stored without its time zone, since SQLite has no zoned type -
+  the moment is kept, the original offset is not. Everything the test suite
+  covers works on both, and the suite is run against both. The README's **The
+  database** section is the full list of what differs, and it is worth reading
+  before choosing.
+
+  Two things to know when pointing it at a file. The directory has to exist -
+  the server creates the database, not the folder holding it, and says which
+  path is missing rather than failing with a connection error. And a running
+  installation writes `-wal` and `-shm` files beside the database, so a copy
+  taken for a backup has to include them, or be taken with the server stopped.
+
 - **An agent can run commands on a machine.** A new Admin -> Shell page holds
   shells: an SSH target with a host, a port, a user and a private key. An agent
   granted them opens a session, is told the session's id and what the operating
@@ -111,6 +135,14 @@ have failed.
   `deploy/README.md` has the whole of it.
 
 ### Changed
+
+- **The migrations moved into a directory per database**, from
+  `db/migration` to `db/migration/postgresql`, with the SQLite schema alongside
+  in `db/migration/sqlite`. Nothing changes for an existing Postgres
+  installation: the migrations are the same files with the same versions and the
+  same checksums, and Flyway records neither the path nor the folder. It matters
+  only to anyone writing one - a schema change now has to be written twice, once
+  as a numbered Postgres migration and once folded into the SQLite baseline.
 
 - **An id that is not yours reads as one that is not real, whether you read it
   or change it.** A by-id query now answers null for

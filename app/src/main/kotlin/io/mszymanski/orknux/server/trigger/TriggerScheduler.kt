@@ -5,6 +5,9 @@ import com.github.kagkarlsson.scheduler.task.helper.RecurringTask
 import com.github.kagkarlsson.scheduler.task.helper.Tasks
 import com.github.kagkarlsson.scheduler.task.schedule.Schedules
 import org.slf4j.LoggerFactory
+import io.mszymanski.orknux.server.database.SqliteJdbcCustomization
+import io.mszymanski.orknux.server.database.isSqlite
+import io.mszymanski.orknux.server.database.jdbcUrlOf
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
@@ -103,6 +106,10 @@ class TriggerSchedulerConfig {
         .threads(properties.threads)
         .pollingInterval(properties.pollingInterval)
         .registerShutdownHook()
+        // db-scheduler has a dialect for every database it supports and none for
+        // SQLite, so on SQLite it is handed one. See SqliteJdbcCustomization for
+        // what the default gets wrong there.
+        .also { builder -> if (isSqlite(jdbcUrlOf(dataSource))) builder.jdbcCustomization(SqliteJdbcCustomization()) }
         .build()
         .also {
             it.start()

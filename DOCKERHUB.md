@@ -17,11 +17,11 @@ only to this.
 
 ## What it needs
 
-Postgres, something to sign in against (a directory, or an OIDC provider), and
-Temporal. With the default configuration the application **refuses to start**
-when Temporal is not reachable — deliberately, so a deployment brought up before
-its Temporal restarts until that service answers rather than accepting work it
-cannot run.
+A database - Postgres, or SQLite and no second container - something to sign in
+against (a directory, or an OIDC provider), and Temporal. With the default
+configuration the application **refuses to start** when Temporal is not reachable
+— deliberately, so a deployment brought up before its Temporal restarts until
+that service answers rather than accepting work it cannot run.
 
 ```yaml
 services:
@@ -85,14 +85,33 @@ right length, and whether every stored secret can be read with it.
 
 ## Database
 
-Postgres. The schema is Flyway's, and JPA runs with `ddl-auto: validate`, so the
+Postgres or SQLite. Which one is decided by `ORKNUX_DB_URL` and nothing else —
+the driver, the dialect and the migrations all follow from it.
+
+Postgres is what a deployment should use: it takes more than one writer, and it
+is what this is tested against by default. SQLite is a single file with nothing
+else to run, for an installation of one or a few. It means one writer at a time,
+one machine, no time zone kept on a timestamp, and a backup that is a file copy
+taken while nothing is writing. The README's **The database** section is the full
+list.
+
+Under SQLite the username and password are ignored. Give the file a path on a
+volume that outlives the container, and make sure the directory exists — the
+server creates the file, not the directory it sits in, and says so by name if it
+is missing.
+
+```
+ORKNUX_DB_URL: jdbc:sqlite:/data/orknux.db
+```
+
+The schema is Flyway's either way, and JPA runs with `ddl-auto: validate`, so the
 migrations are the only thing that ever changes it.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_DB_URL` | JDBC URL of the database. | `jdbc:postgresql://localhost:5432/orknux` | **Yes** in a deployment — the default points at localhost |
-| `ORKNUX_DB_USERNAME` | The user it connects as. | `orknux` | **Yes** in a deployment |
-| `ORKNUX_DB_PASSWORD` | That user's password. | `orknux` | **Yes** in a deployment |
+| `ORKNUX_DB_URL` | JDBC URL of the database, and what picks which database. `jdbc:postgresql://host:5432/orknux` or `jdbc:sqlite:/data/orknux.db`. | `jdbc:postgresql://localhost:5432/orknux` | **Yes** in a deployment — the default points at localhost |
+| `ORKNUX_DB_USERNAME` | The user it connects as. Ignored under SQLite. | `orknux` | **Yes** in a Postgres deployment |
+| `ORKNUX_DB_PASSWORD` | That user's password. Ignored under SQLite. | `orknux` | **Yes** in a Postgres deployment |
 | `ORKNUX_DB_MIGRATE` | Whether Flyway migrates on start. Turn off only where something else owns the schema; the application expects it to be at the version this build ships. | `true` | No |
 
 ## Signing in

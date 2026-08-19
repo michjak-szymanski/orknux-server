@@ -8,9 +8,9 @@
 
 Orknux is a fully open source, workspace based, agent orchestration platform.
 
-A Kotlin/Spring Boot GraphQL API over Postgres, signed in against a directory or
-an OIDC provider. One deployable, built from modules that cannot reach into each
-other:
+A Kotlin/Spring Boot GraphQL API over Postgres or SQLite, signed in against a
+directory or an OIDC provider. One deployable, built from modules that cannot
+reach into each other:
 
 ```
 orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, Teams, SMTP
@@ -123,7 +123,9 @@ deployment brought up before its Temporal restarts until that service answers.
 
 Flyway migrates the schema on start; JPA runs with `ddl-auto: validate`, so the
 migrations are the only thing that changes the database. One process means one
-database and one migration history, in `app/src/main/resources/db/migration`.
+database and one migration history, in
+`app/src/main/resources/db/migration/postgresql`. **The database** below says what
+the other one is.
 
 Sign in with a directory user from `docker/ldap/bootstrap.ldif`: 
 
@@ -135,11 +137,87 @@ Sign in with a directory user from `docker/ldap/bootstrap.ldif`:
 These are development fixtures. The LDAP admin is `cn=admin,dc=orknux,dc=io` /
 `admin`, and Postgres is `orknux` / `orknux`.
 
+## The database
+
+Postgres or SQLite, chosen by the connection URL and nothing else:
+
+```
+ORKNUX_DB_URL=jdbc:postgresql://localhost:5432/orknux     # a server
+ORKNUX_DB_URL=jdbc:sqlite:/var/lib/orknux/orknux.db       # a file
+```
+
+Everything downstream follows from that one line - the driver, the Hibernate
+dialect, and which migrations Flyway reads. Under SQLite the username and
+password are ignored, since a file has nobody to authenticate to.
+
+**Postgres is what a deployment should use.** It takes more than one writer, it
+is what the tests run against by default, and it is where any behaviour under
+load has actually been watched. SQLite is there for the installation of one or a
+few: a single file, nothing else to run, nothing to back up but that file.
+
+The schema is Flyway's either way, and JPA runs with `ddl-auto: validate`, so
+migrations are the only thing that ever changes it. The two are not two spellings
+of one history. Postgres has every migration since the first release, under
+`db/migration/postgresql`. SQLite has a single baseline saying what they all add
+up to, under `db/migration/sqlite`, because a third of the history is `ALTER`
+statements SQLite has no equivalent for and there is no SQLite installation old
+enough to need replaying onto. **A change to the schema has to be written twice**
+- a numbered migration for Postgres, the same change folded into the baseline for
+SQLite - and `SqliteSchemaTest` is what notices when only one of them was, with
+`SqliteCheckConstraintTest` covering the `CHECK` constraints that schema
+validation looks straight through.
+
+### What is different on SQLite
+
+Everything the test suite covers works: signing in, workspaces, issues, agents,
+workflows, executions, chat and its history, the MCP endpoint, attachments,
+sessions, password resets, proxy rules and the shells an agent runs commands on.
+The suite runs green against both. What differs is underneath.
+
+**One writer at a time.** This is the whole of it, and everything below is a
+consequence. SQLite takes a single write lock for the database, so two requests
+that both write are serialised rather than run together. WAL journalling is
+turned on so readers are not blocked by a writer, connections wait up to thirty
+seconds for their turn rather than failing, and transactions take the write lock
+when they open rather than discovering they need it later - without that last
+one, a transaction that read before it wrote fails immediately and is not
+retried. It is quick enough for a handful of people and it is not a database to
+run a busy installation on.
+
+**One machine.** The file is the installation. Two instances of the server
+pointed at one file over a network share will corrupt it - WAL does not work
+across a network filesystem - so SQLite means exactly one process, and with it no
+rolling restart and no second node.
+
+**No time zones.** SQLite has no zoned timestamp type, so a moment is stored as a
+moment and read back in the server's own zone. Instants are preserved and
+compare correctly; the original offset is not kept. Nothing in the interface
+shows an offset, so this is invisible until something outside reads the file.
+
+**Foreign keys are on because this turns them on.** SQLite has them off by
+default per connection, which would make every `ON DELETE CASCADE` in the schema
+a comment.
+
+**The scheduler needs telling about it.** db-scheduler ships a dialect for every
+database it supports and none for SQLite; left alone it writes an `OFFSET ...
+FETCH FIRST` clause SQLite refuses, fails every poll and fires no schedule ever.
+`SqliteJdbcCustomization` is what makes it work.
+
+**Sessions join the caller's transaction.** Spring Session would keep its own,
+independent of whatever asked - correct on Postgres, and on SQLite a deadlock
+against the request that called it. So on SQLite a session write rolls back with
+the request that made it.
+
+**Backups are a file copy, and only when nothing is writing.** There is no
+`pg_dump` equivalent here; copy the database and its `-wal` file together, or
+stop the server first.
+
 ## Tests
 
 ```
-./mvnw test                            # every module 
-./mvnw test -Dtest=IntegrationAPITest  # one class
+./mvnw test                                  # every module, on Postgres
+./mvnw test -Dtest=IntegrationAPITest        # one class
+./mvnw test -Dorknux.test.database=sqlite    # the same suite, on SQLite
 ```
 
 The tests are `@SpringBootTest` against **their own Postgres**, started as a
@@ -149,6 +227,11 @@ database you are developing against. The fixtures clear the tables they use, and
 database it takes the workspaces, models and chat history you were looking at.
 `TestDatabase` starts the container before any Spring context exists; Docker has
 to be running, LDAP still comes from compose.
+
+`-Dorknux.test.database=sqlite` runs the same tests against a SQLite file in
+`app/target` instead, and needs no Docker. It is a switch rather than a second
+suite on purpose: a suite that only ever exercises one database will not notice
+the day the other stops working.
 
 They run with `orknux.temporal.enabled=false`, so a workflow runs on the calling
 thread and no Temporal server is needed; the Temporal path has its own test,

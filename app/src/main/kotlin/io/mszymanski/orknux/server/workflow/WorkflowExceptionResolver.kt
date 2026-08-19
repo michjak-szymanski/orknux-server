@@ -25,6 +25,7 @@ import io.mszymanski.orknux.server.security.RoleNameInvalidException
 import io.mszymanski.orknux.server.security.RoleNameTakenException
 import io.mszymanski.orknux.server.security.RoleNotFoundException
 import io.mszymanski.orknux.server.issue.IssueAssigneeInvalidException
+import io.mszymanski.orknux.server.issue.IssueAssigneeKindMissingException
 import io.mszymanski.orknux.server.issue.IssueCommentEmptyException
 import io.mszymanski.orknux.server.issue.IssueCommentNotFoundException
 import io.mszymanski.orknux.server.issue.IssueAttachmentNotFoundException
@@ -44,6 +45,7 @@ import io.mszymanski.orknux.server.user.UserNotFoundException
 import io.mszymanski.orknux.server.action.FunctionSourceInvalidException
 import io.mszymanski.orknux.server.condition.ConditionCheckMismatchException
 import io.mszymanski.orknux.server.condition.ConditionCycleException
+import io.mszymanski.orknux.server.condition.ConditionFunctionElsewhereException
 import io.mszymanski.orknux.server.condition.ConditionFunctionNotBooleanException
 import io.mszymanski.orknux.server.condition.ConditionFunctionRequiredException
 import io.mszymanski.orknux.server.condition.ConditionInUseException
@@ -159,6 +161,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is IssueCommentNotYoursException,
             is IssueAttachmentNotYoursException,
             is IssueAssigneeInvalidException,
+            is IssueAssigneeKindMissingException,
             is UserExternallyManagedException,
             is PasswordTooShortException,
             is PasswordWrongException,
@@ -179,6 +182,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ConditionCycleException,
             is ConditionInUseException,
             is ConditionFunctionRequiredException,
+            is ConditionFunctionElsewhereException,
             is ConditionFunctionNotBooleanException,
             -> ErrorType.BAD_REQUEST
 

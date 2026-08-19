@@ -45,10 +45,51 @@ class WorkspaceAccess(
      */
     fun canSee(workspace: Workspace): Boolean {
         if (isAdmin()) return true
-        if (workspace.roles.isEmpty()) return false
+        if (workspace.roles.isEmpty() && workspace.adminRoles.isEmpty()) return false
         val held = heldRoles().mapNotNull { it.id }.toSet()
-        return workspace.roles.any { it.id in held }
+        // The administering set as well as the opening one. It is meant to be a
+        // subset of it - the API refuses a save where it is not - so this reads as
+        // belt and braces, and it is: a role that administers a workspace it cannot
+        // see is a state no screen can produce and no check should have to survive.
+        return (workspace.roles + workspace.adminRoles).any { it.id in held }
     }
+
+    /**
+     * Whether the caller may *administer* this workspace, not merely see it.
+     *
+     * The same question one level up, decided in the same class and read off the
+     * same roles, which is the point: there is one notion of administering a
+     * workspace and it lives here. A resolver that wants it asks; it does not grow
+     * its own.
+     *
+     * What it grants is deliberately small - the workspace's own name and
+     * description, putting somebody else on one of its issues as an observer, and
+     * moving an issue in or out of it. It grants nothing installation-wide:
+     * connections, proxy rules, shells, users, roles and the installation settings
+     * are still [requireAdmin], and so are creating and deleting a workspace, since
+     * neither is something a workspace can decide about itself.
+     *
+     * **It does not include the workspace's role list.** A workspace administrator
+     * who could edit it would decide who else gets in and could take the role off
+     * everybody else, including whoever gave it to them - contained to their own
+     * workspace, but real, and not something to hand out by implication. Widening
+     * this later is a line of code; narrowing it once somebody has arranged their
+     * installation around it is taking something away. So the first version makes
+     * the smaller promise, and the role list stays an installation administrator's.
+     *
+     * An installation administrator administers every workspace without being named
+     * on any of them, exactly as they see every workspace without being named on any
+     * of them.
+     */
+    fun canAdminister(workspace: Workspace): Boolean {
+        if (isAdmin()) return true
+        if (workspace.adminRoles.isEmpty()) return false
+        val held = heldRoles().mapNotNull { it.id }.toSet()
+        return workspace.adminRoles.any { it.id in held }
+    }
+
+    fun canAdminister(workspaceId: Long): Boolean =
+        workspaces.findByIdOrNull(workspaceId)?.let { canAdminister(it) } == true
 
     /**
      * The same question asked about the workspace an entity says it belongs to.
@@ -97,6 +138,27 @@ class WorkspaceAccess(
         if (!isAdmin()) throw AdminRequiredException()
     }
 
+    /**
+     * The workspace behind an id, for a caller who has to administer it.
+     *
+     * Two refusals, and the difference between them is on purpose. A workspace the
+     * caller cannot see answers as not there, the same as [requireVisible] does and
+     * for the same reason - saying "you may not administer that" about an id would
+     * confirm the id, and walking the numbers is a script. A workspace they *can*
+     * see but do not administer says so plainly, because they already know it
+     * exists and what they need is the name of the thing they are missing.
+     */
+    fun requireAdministers(workspaceId: Long): Workspace {
+        val workspace = requireVisible(workspaceId)
+        if (!canAdminister(workspace)) throw WorkspaceAdminRequiredException(workspace.name)
+        return workspace
+    }
+
+    fun requireAdministers(workspace: Workspace) {
+        requireVisible(workspace)
+        if (!canAdminister(workspace)) throw WorkspaceAdminRequiredException(workspace.name)
+    }
+
 }
 
 /**
@@ -121,3 +183,17 @@ class WorkspaceForbiddenException :
     RuntimeException("That does not exist, or you do not have access to it")
 
 class AdminRequiredException : RuntimeException("This action requires the administrator role")
+
+/**
+ * Says which workspace, unlike [WorkspaceForbiddenException], and can afford to.
+ *
+ * This is only ever thrown at somebody who can already see the workspace and read
+ * its name off the top of the page, so naming it leaks nothing and saves them
+ * guessing which of the two they are in. What they are told is the thing to go and
+ * ask for: a role that administers *this* workspace, which is not the installation
+ * administrator role and not a role that administers a different one.
+ */
+class WorkspaceAdminRequiredException(name: String) : RuntimeException(
+    "This action needs a role that administers $name. Being able to see a workspace is not the same " +
+        "as leading it, and a role that administers another workspace does not administer this one.",
+)

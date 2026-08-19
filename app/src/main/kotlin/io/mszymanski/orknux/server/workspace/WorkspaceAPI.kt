@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.workspace
 
 import io.mszymanski.orknux.connector.connection.WorkspaceLifecycleService
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleNotFoundException
 import io.mszymanski.orknux.server.security.RoleRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -13,6 +14,7 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.graphql.data.method.annotation.SchemaMapping
 import org.springframework.stereotype.Controller
 import io.mszymanski.orknux.connector.model.ModelKind
 import org.springframework.transaction.annotation.Transactional
@@ -75,15 +77,39 @@ class WorkspaceAPI(
         )
     }
 
-    /** Backs the workspace settings form: name, description and directory group in one save. */
+    /**
+     * Backs the workspace settings form: name, description and the role lists.
+     *
+     * Two callers with two different rights, and the split is the point of the
+     * workspace administrator role. Whoever administers *this* workspace may change
+     * its name and its description - that is what the role is for, and it is what
+     * was asked for. Only an installation administrator may change either role
+     * list, and a workspace administrator who sends one is refused unless it is the
+     * list that is already there.
+     *
+     * Refused rather than quietly ignored, and unchanged rather than absent, for
+     * the same reason: the settings form loads the lists and posts back what it
+     * loaded, so a workspace administrator who touched only the name is sending the
+     * current lists and means nothing by it. Somebody who has actually changed one
+     * is doing the thing the role does not cover, and being told so beats saving
+     * everything except the part they came for.
+     *
+     * Why they may not: whoever edits the list decides who else gets into the
+     * workspace, and can take the role off everybody else - the person who gave it
+     * to them included. That is contained to one workspace and may be exactly what
+     * an installation wants, but it is a bigger promise than "changing settings",
+     * and it is the one that cannot be walked back. Widening this later is a line
+     * of code; narrowing it after somebody has arranged their installation around
+     * it is taking something away.
+     */
     @MutationMapping
     @Transactional
     fun updateWorkspace(@Argument id: Long, @Argument input: UpdateWorkspaceInput): Workspace {
-        access.requireAdmin()
         val newName = input.name.trim()
         if (newName.isEmpty()) throw WorkspaceNameInvalidException()
 
         val workspace = repository.findByIdOrNull(id) ?: throw WorkspaceNotFoundException(id)
+        access.requireAdministers(workspace)
         val previousName = workspace.name
         if (newName != previousName && repository.findByName(newName) != null) {
             throw WorkspaceNameTakenException(newName)
@@ -91,6 +117,7 @@ class WorkspaceAPI(
 
         val previousDescription = workspace.description
         val previousRoles = workspace.roles.mapNotNull { it.id }.toSet()
+        val previousAdminRoles = workspace.adminRoles.mapNotNull { it.id }.toSet()
 
         workspace.name = newName
         workspace.description = input.description?.trim()?.ifEmpty { null }
@@ -99,11 +126,30 @@ class WorkspaceAPI(
          * taking every role off a workspace is a decision somebody may make, and it
          * means administrators only.
          */
-        input.roleIds?.let { wanted ->
-            workspace.roles = wanted.distinct()
-                .map { roleId -> roles.findByIdOrNull(roleId) ?: throw RoleNotFoundException(roleId) }
-                .toMutableSet()
-        }
+        val wantedRoles = input.roleIds?.let(::resolve)
+        val wantedAdminRoles = input.adminRoleIds?.let(::resolve)
+
+        // The installation administrator's half, checked before anything is
+        // assigned: sending the list that is already there is not an edit, so a
+        // workspace administrator saving the form they were shown goes through.
+        val changesRoles = wantedRoles != null && wantedRoles.mapNotNull { it.id }.toSet() != previousRoles
+        val changesAdminRoles =
+            wantedAdminRoles != null && wantedAdminRoles.mapNotNull { it.id }.toSet() != previousAdminRoles
+        if (changesRoles || changesAdminRoles) access.requireAdmin()
+
+        wantedRoles?.let { workspace.roles = it.toMutableSet() }
+        wantedAdminRoles?.let { workspace.adminRoles = it.toMutableSet() }
+
+        /*
+         * A role that administers a workspace it cannot open is nothing, so the two
+         * lists are checked against each other after both have been applied rather
+         * than as each arrives — a save that adds a role and marks it administering
+         * in one go is the ordinary case, and checking them one at a time would
+         * refuse it depending on the order the fields happened to be read in.
+         */
+        val opens = workspace.roles.mapNotNull { it.id }.toSet()
+        val stranded = workspace.adminRoles.filter { it.id !in opens }
+        if (stranded.isNotEmpty()) throw WorkspaceAdminRoleNotAssignedException(stranded.map { it.name }.sorted())
 
         if (newName != previousName) {
             auditRecorder.record(
@@ -128,11 +174,43 @@ class WorkspaceAPI(
                 },
             )
         }
+        val nowAdminRoles = workspace.adminRoles.mapNotNull { it.id }.toSet()
+        if (nowAdminRoles != previousAdminRoles) {
+            // Named for the same reason the list above is, and more so: who may
+            // administer a workspace is the line somebody will want to read out of
+            // the log a year later, when the question is how it came to be theirs.
+            val named = workspace.adminRoles.map { it.name }.sorted()
+            auditRecorder.record(
+                id,
+                WorkspaceAuditCategory.WORKSPACE,
+                if (named.isEmpty()) {
+                    "Workspace administrators cleared: installation administrators only"
+                } else {
+                    "Workspace administered by ${named.joinToString(", ")}"
+                },
+            )
+        }
         if (workspace.description != previousDescription) {
             auditRecorder.record(id, WorkspaceAuditCategory.WORKSPACE, "Workspace description updated")
         }
         return workspace
     }
+
+    /** Ids to roles, refusing the whole save on one that names nothing. */
+    private fun resolve(ids: List<Long>): List<Role> = ids.distinct()
+        .map { roleId -> roles.findByIdOrNull(roleId) ?: throw RoleNotFoundException(roleId) }
+
+    /**
+     * Whether the caller administers this workspace, for the interface to paint with.
+     *
+     * A field on the workspace rather than a flag on the session, because that is
+     * what the answer depends on: somebody can lead one workspace and merely work in
+     * another, and a single boolean about the person could not say so. It is how the
+     * settings page knows whether to offer the name and description at all, and it
+     * is true for an installation administrator everywhere.
+     */
+    @SchemaMapping(typeName = "Workspace")
+    fun administered(workspace: Workspace): Boolean = access.canAdminister(workspace)
 
     /**
      * Chooses the model the workspace uses for its own small jobs.
@@ -293,6 +371,15 @@ data class UpdateWorkspaceInput(
     val description: String? = null,
     /** The roles that open this workspace. Null leaves them alone; empty means administrators only. */
     val roleIds: List<Long>? = null,
+    /**
+     * The roles that also administer it, which has to be a subset of [roleIds].
+     *
+     * Null leaves them alone; empty means installation administrators only, which is
+     * what every workspace has until somebody decides otherwise. Only an installation
+     * administrator may change this - a workspace administrator sending back the list
+     * they were shown is not changing it and is not refused.
+     */
+    val adminRoleIds: List<Long>? = null,
 )
 
 data class WorkspacePage(
@@ -316,6 +403,19 @@ class WorkspaceNotFoundException(id: Long) : RuntimeException("No workspace with
 class WorkspaceNameTakenException(name: String) : RuntimeException("A workspace named \"$name\" already exists")
 
 class WorkspaceNameInvalidException : RuntimeException("A workspace name is required")
+
+/**
+ * A role was told to administer a workspace it is not assigned to.
+ *
+ * Refused rather than assigned quietly, because what it would produce is a role
+ * that administers a workspace nobody holding it can open - a permission that
+ * looks granted on the settings page and does nothing at all. The sentence names
+ * the roles, since the fix is to add them above and save again.
+ */
+class WorkspaceAdminRoleNotAssignedException(names: List<String>) : RuntimeException(
+    "${names.joinToString(", ")} cannot administer this workspace without being assigned to it. " +
+        "Add them to the roles that open it, then mark them as administering.",
+)
 
 /** A model chosen for a workspace has to be one of that workspace's own. */
 class ModelNotTranscriptionException(name: String) : RuntimeException(

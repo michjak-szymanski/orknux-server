@@ -210,15 +210,18 @@ class IssueMoveTest(
 
     @Test
     @WithMockUser(username = "bob", roles = ["SUPPORT"])
-    fun `somebody who is not an administrator cannot move an issue`() {
+    fun `somebody who cannot even see the workspace is told the issue is not there`() {
         // Filed through the repository, since bob cannot see either workspace
         // and this is about the move rather than about the filing.
         val moving = requireNotNull(
             issues.save(Issue(workspaceId = supportId, number = 1, title = "The invoice is late", reporter = "alice")).id,
         )
 
+        // Not "you need a role": an issue in a workspace bob cannot see reads as
+        // one that is not there, so walking the ids says nothing about what
+        // exists here.
         move(moving, billingId)
-            .errors().expect { it.message == "This action requires the administrator role" }
+            .errors().expect { it.message == "No issue with id $moving" }
             .verify()
 
         assertThat(requireNotNull(issues.findByIdOrNull(moving)).workspaceId).isEqualTo(supportId)

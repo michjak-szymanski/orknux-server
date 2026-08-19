@@ -15,7 +15,12 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
 
     override fun resolveToSingleError(exception: Throwable, environment: DataFetchingEnvironment): GraphQLError? {
         val errorType = when (exception) {
-            is WorkspaceNameTakenException, is WorkspaceNameInvalidException -> ErrorType.BAD_REQUEST
+            is WorkspaceNameTakenException,
+            is WorkspaceNameInvalidException,
+            // Bad request rather than forbidden: it is not that the caller may
+            // not, it is that what they sent does not hold together.
+            is WorkspaceAdminRoleNotAssignedException,
+            -> ErrorType.BAD_REQUEST
             is WorkspaceNotFoundException -> ErrorType.NOT_FOUND
             else -> return null
         }

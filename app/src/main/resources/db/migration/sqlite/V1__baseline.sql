@@ -1013,6 +1013,18 @@ CREATE TABLE workspace_role
     constraint workspace_role_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+-- The roles that administer a workspace, as against the ones above that only
+-- open it. Meant to be a subset of workspace_role; the API enforces that on
+-- save, since a role administering a workspace it cannot see is nothing.
+CREATE TABLE workspace_admin_role
+(
+    workspace_id                 integer not null,
+    role_id                      integer not null,
+    primary key (workspace_id, role_id),
+    constraint workspace_admin_role_role_id_fkey FOREIGN KEY (role_id) REFERENCES security_role(id) ON DELETE CASCADE,
+    constraint workspace_admin_role_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workspace_variable
 (
     id                           integer not null primary key autoincrement,

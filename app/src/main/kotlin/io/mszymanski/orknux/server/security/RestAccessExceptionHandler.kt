@@ -49,8 +49,8 @@ class RestAccessExceptionHandler {
         ResponseEntity.status(HttpStatus.NOT_FOUND)
             .body(mapOf("error" to (failure.message ?: "That is not here")))
 
-    @ExceptionHandler(AdminRequiredException::class)
-    fun forbidden(failure: AdminRequiredException): ResponseEntity<Map<String, String>> =
+    @ExceptionHandler(AdminRequiredException::class, WorkspaceAdminRequiredException::class)
+    fun forbidden(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(mapOf("error" to (failure.message ?: "That requires the administrator role")))
 

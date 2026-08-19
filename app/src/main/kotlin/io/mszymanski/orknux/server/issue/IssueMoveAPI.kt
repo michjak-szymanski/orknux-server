@@ -7,8 +7,6 @@ import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
-import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
@@ -40,15 +38,20 @@ import java.time.OffsetDateTime
  * number, which is per workspace and has to be one that is free where it is
  * going, and its news, which is a record of what was announced where and when.
  *
- * Administrators only. Seeing both workspaces is not enough - a move takes an
- * issue out of one team's tracker and puts it in another's, and the number it
- * had is immediately free for the next issue filed there, so it is not
- * something to be undone by moving it back.
+ * Administrators of both workspaces, and seeing them is not enough - a move
+ * takes an issue out of one team's tracker and puts it in another's, and the
+ * number it had is immediately free for the next issue filed there, so it is
+ * not something to be undone by moving it back.
+ *
+ * Both, not either. Administering only the source would be leave to push an
+ * issue into a tracker somebody else leads; administering only the destination
+ * would be leave to pull one out of theirs. Each workspace answers for what
+ * enters and leaves it, and an installation administrator administers every
+ * workspace, so nothing changes for them.
  */
 @Controller
 class IssueMoveAPI(
     private val issues: IssueRepository,
-    private val workspaces: WorkspaceRepository,
     private val agents: AgentRepository,
     private val models: ModelService,
     private val attachments: IssueAttachmentRepository,
@@ -63,20 +66,27 @@ class IssueMoveAPI(
     /**
      * Takes an issue to another workspace, or says why it cannot go.
      *
-     * The administrator check comes before anything is looked up, so that
-     * somebody without the role is told they need it rather than told the
-     * workspace they named does not exist - which is the answer the visibility
-     * check would give and would send them looking for the wrong problem.
+     * Which workspaces have to be administered is what decides the order here,
+     * and it is no longer one check before everything: the role is per
+     * workspace now, so there is nothing to ask until the issue says which
+     * workspace it is in.
+     *
+     * Each of the three refusals is the one that says least. An issue nobody
+     * can see reads as not there, so walking the ids tells you nothing. A
+     * workspace the caller cannot see reads as not there too, for the reason
+     * `WorkspaceAccess.requireVisible` gives. And one they can see but do not
+     * administer says exactly that, naming the workspace, because by then they
+     * are looking at it and what they need is the name of the thing they are
+     * missing - which was the point of checking the role first in the version
+     * before this.
      */
     @MutationMapping
     @Transactional
     fun moveIssue(@Argument id: Long, @Argument workspaceId: Long): IssueView {
-        access.requireAdmin()
-
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        val destination = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        val source = workspaces.findByIdOrNull(held.workspaceId)
-            ?: throw WorkspaceNotFoundException(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
+        val source = access.requireAdministers(held.workspaceId)
+        val destination = access.requireAdministers(workspaceId)
 
         if (destination.id == source.id) {
             throw IssueMoveRefusedException("Issue #${held.number} is already in ${source.name}")

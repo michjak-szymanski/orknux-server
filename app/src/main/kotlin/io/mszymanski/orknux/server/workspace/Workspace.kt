@@ -44,6 +44,28 @@ class Workspace(
     var roles: MutableSet<Role> = mutableSetOf(),
 
     /**
+     * The roles that also *administer* this workspace. Empty means installation
+     * administrators only, which is what every workspace had before this existed.
+     *
+     * Meant to be a subset of [roles]: administering a workspace one cannot see is
+     * nothing, so `WorkspaceAPI.updateWorkspace` refuses a set that is not, and
+     * `WorkspaceAccess.canSee` counts these too in case a database was edited by
+     * hand.
+     *
+     * Per workspace, which is the whole of the idea — one role can lead the support
+     * workspace and merely work in the backend one. Eagerly fetched for the same
+     * reason [roles] is: the access check needs them on every call, and the set is
+     * smaller still.
+     */
+    @ManyToMany(fetch = FetchType.EAGER)
+    @JoinTable(
+        name = "workspace_admin_role",
+        joinColumns = [JoinColumn(name = "workspace_id")],
+        inverseJoinColumns = [JoinColumn(name = "role_id")],
+    )
+    var adminRoles: MutableSet<Role> = mutableSetOf(),
+
+    /**
      * The model used for the small jobs nobody asks for — naming a chat from
      * what was said, first among them.
      *

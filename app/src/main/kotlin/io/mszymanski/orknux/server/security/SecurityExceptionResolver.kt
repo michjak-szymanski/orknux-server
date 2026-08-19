@@ -22,6 +22,10 @@ class SecurityExceptionResolver : DataFetcherExceptionResolverAdapter() {
         val errorType = when (exception) {
             is WorkspaceForbiddenException -> ErrorType.NOT_FOUND
             is AdminRequiredException -> ErrorType.FORBIDDEN
+            // Forbidden rather than not-found, and it names the workspace: it is
+            // only ever thrown at somebody already looking at that workspace, so
+            // there is nothing left to give away and a lot left to explain.
+            is WorkspaceAdminRequiredException -> ErrorType.FORBIDDEN
             else -> return null
         }
 

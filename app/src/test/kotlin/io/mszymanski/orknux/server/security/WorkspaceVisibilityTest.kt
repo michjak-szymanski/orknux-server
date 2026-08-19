@@ -134,9 +134,16 @@ class WorkspaceVisibilityTest(
             """mutation { createWorkspace(input: { name: "platform" }) { id } }""",
             "This action requires the administrator role",
         )
+        /*
+         * Renaming asks the smaller question, since a role can administer this
+         * workspace without administering the installation - and bob's does not.
+         * Making and removing a workspace stay installation-wide: neither is
+         * something a workspace can decide about itself.
+         */
         forbidden(
             """mutation { updateWorkspace(id: $backendId, input: { name: "core" }) { id } }""",
-            "This action requires the administrator role",
+            "This action needs a role that administers backend. Being able to see a workspace is not the " +
+                "same as leading it, and a role that administers another workspace does not administer this one.",
         )
         forbidden(
             """mutation { deleteWorkspace(id: $backendId) }""",

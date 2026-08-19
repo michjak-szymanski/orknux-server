@@ -32,7 +32,8 @@ import tools.jackson.databind.ObjectMapper
  * assigned them to no one because handing out work is not its judgement, wrote
  * carefully on each, and reached an audience of itself. What these pin down is
  * that an observer closes that hole and that the two rules on it hold: anybody
- * may watch, only an administrator may make somebody else watch.
+ * may watch, only somebody who administers the workspace may make somebody else
+ * watch.
  *
  * The dedup test is the one worth reading twice. The reporter, the assignee and
  * the observers are three lists that overlap, and a person on two of them who
@@ -173,7 +174,7 @@ class IssueObserverTest(
 
     @Test
     @WithMockUser(username = "bob", roles = ["SUPPORT"])
-    fun `somebody without the administrator role cannot put anybody else on the list`() {
+    fun `somebody who does not administer the workspace cannot put anybody else on the list`() {
         val id = issues.save(
             Issue(workspaceId = workspaceId, number = 1, title = "The reply is late", reporter = "alice"),
         ).id
@@ -182,7 +183,10 @@ class IssueObserverTest(
             """mutation { observeIssue(id: $id, observerKind: USER, observerId: "$aliceId") { id } }""",
         ).execute()
             .errors().satisfy { found ->
-                assertThat(found.first().message).isEqualTo("This action requires the administrator role")
+                // Names the workspace, which is safe here: bob is looking at it,
+                // so there is nothing left to give away and a role to go and ask
+                // for.
+                assertThat(found.first().message).startsWith("This action needs a role that administers support")
             }
 
         // Themselves, though, which is the whole point of the other half of the rule.

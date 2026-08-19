@@ -13,6 +13,106 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **A node can be duplicated in the workflow editor**, with `Ctrl+D` or the
+  button beside Add. The copy carries the definition it points at, its icon and
+  facing, and its mappings deep-copied so the two nodes' parameters are
+  independent. Its name steps to `X copy`, and so does its output name - that
+  one matters, because references resolve by field name, and two nodes both
+  offering `reply` means somebody's `reply` silently reads whichever the graph
+  lists first. Edges are not copied. The key is rebindable in Preferences beside
+  the other five.
+
+- **An edge can be dragged by either end onto another handle.** Reconnecting,
+  not bending: a line's shape is not something a workflow can hold, so
+  waypoints would either change the saved document or live only in this
+  browser, where they would not be an edit at all - not undoable, not visible to
+  anybody else. Dropping onto nothing snaps back, and onto wiring that already
+  exists is refused as quietly as drawing a duplicate.
+
+- **Open definition opens in the editor's left panel** for triggers, actions and
+  conditions, rather than leaving the graph you were editing. Agent and object
+  definitions still open their own page: neither has a panel-sized editor to
+  put there.
+
+- **The browser tab says what is open** - the workflow, the issue, the agent -
+  with the product name last, so a narrow tab strip keeps the half that tells
+  two tabs apart. A page whose entity has not arrived says its section rather
+  than an id.
+
+- **A link from a function's external parameters to the workspace's variables**,
+  which the hint there described without offering. It opens a tab, because this
+  editor does not warn before losing unsaved code.
+
+- **An issue being opened is news.** Filing one told the assignee and nobody
+  else, so an assistant that filed a finding and named who should know wrote
+  into an empty room. Everybody it concerns now hears, except the person it was
+  handed to, who is told it is theirs instead.
+
+### Changed
+
+- **A workspace id you cannot see now reads as one that does not exist.** The
+  last of what 0.5.0 closed for entities: the create paths, the workspace model
+  setters, the graph editor and plugin parameters all answered two ways, so
+  walking the numbers counted the workspaces on an installation. Both answers
+  are now "no workspace with that id". **The cost is real**: somebody who
+  mistypes a workspace id is told it does not exist rather than that it is not
+  theirs. An administrator, who can see every workspace, still gets the true
+  answer.
+
+- **Voice mode moved into the message composer**, beside the microphone, and is
+  drawn as a waveform rather than a speaker. A speaker means "read this aloud";
+  voice mode is something you enter.
+
+- **Switching workspace keeps your place where that means anything.** A list
+  page stays a list page in the workspace you switched to; a page about one
+  particular thing falls back to its list, because issue #4 in another workspace
+  is a different issue or none at all.
+
+- **The Orknux logo goes to orknux.ai**, in a new tab. It led nowhere before.
+
+- **Clicking a model provider row opens it**, rather than only the settings
+  icon. The models on that page open the same way.
+
+- **A new variable stays where it was added** until the page is opened again,
+  rather than sorting itself away from under the cursor. Renaming one does the
+  same.
+
+- **The Docker Hub description is published by CI**, from `DOCKERHUB.md`, after
+  the images. It was pasted into a web form by hand, which is how it came to be
+  eleven variables out of date while being correct in git - and Docker Hub is
+  the copy an operator plans an upgrade from. The build now fails if the file
+  passes the 25,000 bytes Docker Hub accepts, because the tool that publishes it
+  truncates silently.
+
+### Fixed
+
+- **The preferences page could not reach its own end.** 611 pixels of it were
+  unreachable at 900 tall, with nothing on the screen able to scroll, so every
+  shortcut below Turn Node could not be seen or rebound. The shell's "no
+  sidebar" flag also hands a page an overflow it is expected to manage itself,
+  and this page did not manage it.
+
+- **The trigger picker's list was clipped to 68 pixels** in a 240 pixel field,
+  cutting option names to `Se` and `Sla`. Each picker was still wrapped in a box
+  meant for the `select` elements these replaced, and collapsed inside it.
+
+- **Accepting a suggested function change dropped half of it.** The assistant
+  wrote the new parameter into the declaration and the accept sent only the
+  source, so the save was refused for taking more arguments than the function
+  was handed. The parameter list is now read from the code being accepted.
+
+- **A variable created while a page was open is now offered by it**, rather than
+  after a reload.
+
+- **The node panel could not be scrolled.** A dialog is `height: fit-content` in
+  the browser's own stylesheet, which over-constrained a panel that sets both
+  top and bottom, so a webhook trigger's form rendered at 1149 pixels in an 844
+  pixel slot with Save unreachable.
+
 ## 0.6.0
 
 ### Added

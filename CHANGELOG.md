@@ -42,7 +42,11 @@ have failed.
   taken for a backup has to include them, or be taken with the server stopped.
 
 - **An agent can run commands on a machine.** A new Admin -> Shell page holds
-  shells: an SSH target with a host, a port, a user and a private key. An agent
+  shells: an SSH target with a host, a port, a user and a private key. Adding one
+  and editing one happen on a page of their own, at `/admin/shell/new` and
+  `/admin/shell/<id>`, the same as a user or a model provider - a half-written
+  machine can be left and come back to, and the private key being pasted into it
+  is not one stray click on a backdrop away from being lost. An agent
   granted them opens a session, is told the session's id and what the operating
   system is, gets an empty working directory of its own on that machine, runs
   commands in it, and closes the session - at which point the directory and

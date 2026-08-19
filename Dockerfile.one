@@ -1,0 +1,174 @@
+# syntax=docker/dockerfile:1
+
+# The whole of Orknux in one container: the interface, the server, and a SQLite
+# file for a database.
+#
+# `docker run orknux/orknux-one` is the whole command. Nothing is supplied, so
+# everything is invented on the first start - the database file, the encryption
+# key, and one administrator whose password is printed in the log - and kept in
+# a volume so the second start is the same installation rather than a new one.
+#
+# What it is for is trying Orknux, developing against it, and demonstrating it.
+# What it is not for is a deployment: there is no Temporal, so a run is not
+# durable and is not retried; there is no directory and no OIDC, so nothing about
+# sign-in beyond the internal account can be exercised; and SQLite means one
+# writer at a time and one process. `deploy/compose.yaml` is the deployment, and
+# DOCKERHUB-ONE.md says all of this plainly to whoever pulls this.
+#
+# Three build stages, and the first two are the two images this merges: the
+# interface's bundle and the server's jar. The interface's own nginx
+# configuration is copied in rather than rewritten, so there is one description
+# of what /api, /graphql and /mcp mean.
+
+# ---------------------------------------------------------------------------
+# The interface bundle.
+# ---------------------------------------------------------------------------
+FROM node:22-bookworm-slim AS ui
+
+WORKDIR /ui
+
+# The lockfile first, on its own layer: dependencies change far less often than
+# the code, so a source edit does not reinstall them.
+COPY orknux-ui/package.json orknux-ui/package-lock.json ./
+RUN npm ci --no-fund --no-audit
+
+COPY orknux-ui/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# The server jar. Identical to the one in ./Dockerfile, deliberately: this image
+# ships the same artefact rather than a differently built one, so a bug found
+# here is a bug there.
+# ---------------------------------------------------------------------------
+FROM eclipse-temurin:25-jdk AS server
+
+WORKDIR /build
+
+COPY mvnw ./
+COPY .mvn .mvn
+COPY pom.xml ./
+COPY app/pom.xml app/
+COPY modules/connection/pom.xml modules/connection/
+COPY modules/execution/pom.xml modules/execution/
+
+RUN chmod +x mvnw && ./mvnw -B -ntp dependency:go-offline
+
+COPY app/src app/src
+COPY modules/connection/src modules/connection/src
+COPY modules/execution/src modules/execution/src
+
+# Tests are not run here, for the same reason ./Dockerfile does not run them:
+# the suite brings up Postgres through Testcontainers and needs a Docker daemon
+# this build does not have. CI runs them as their own job, and this image is
+# only built once they pass.
+RUN ./mvnw -B -ntp package -DskipTests
+
+# ---------------------------------------------------------------------------
+# The image itself.
+# ---------------------------------------------------------------------------
+FROM eclipse-temurin:25-jre AS runtime
+
+# nginx to serve the bundle and forward the API, envsubst to render the server
+# block, curl for the healthcheck. --no-install-recommends because the
+# recommended set of a web server on a base image is most of a web server's
+# ecosystem, and none of it is used here.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends nginx-light gettext-base curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Not root. Nothing here needs to write outside its own data directory, and a
+# container that cannot install anything is one less thing an exploit can use.
+RUN groupadd --system orknux && useradd --system --gid orknux --create-home orknux
+
+# What the packaged nginx expects to own, given to the user that will run it.
+# /etc/nginx/conf.d is written to at startup - the server block is rendered from
+# a template there - and everything nginx buffers goes under /tmp instead of
+# /var/lib/nginx, which this configuration says and this makes true.
+COPY docker/one/nginx.conf /etc/nginx/nginx.conf
+COPY orknux-ui/docker/default.conf.template /etc/nginx/orknux-default.conf.template
+COPY orknux-ui/docker/proxy.conf /etc/nginx/orknux-proxy.conf
+RUN rm -f /etc/nginx/sites-enabled/default \
+    && mkdir -p /etc/nginx/conf.d /tmp/orknux-nginx \
+    && chown -R orknux:orknux /etc/nginx/conf.d /tmp/orknux-nginx
+
+COPY --from=ui --chown=orknux:orknux /ui/dist /usr/share/nginx/html
+
+WORKDIR /app
+COPY --from=server --chown=orknux:orknux /build/app/target/orknux-app-*.jar app.jar
+
+COPY docker/one/entrypoint.sh /usr/local/bin/orknux-one
+# Both, and not only the mode: this repository is worked on from Windows as well,
+# where git records neither the executable bit nor a LF line ending, and a script
+# with CRLF fails with "no such file or directory" naming an interpreter that is
+# plainly there.
+RUN sed -i 's/\r$//' /usr/local/bin/orknux-one && chmod +x /usr/local/bin/orknux-one
+
+# Everything this installation is. The database, the encryption key that is the
+# only thing able to read the credentials in it, the administrator password from
+# the first start, and any attachment anybody uploads.
+#
+# Created and owned here rather than left to the volume: a named volume on a path
+# the image does not already contain is created owned by root, and this container
+# is not root.
+RUN mkdir -p /var/lib/orknux && chown -R orknux:orknux /var/lib/orknux
+VOLUME /var/lib/orknux
+
+USER orknux
+
+# ---------------------------------------------------------------------------
+# What this image assumes, and what it therefore does not need to be told.
+#
+# Everything here is an ordinary Orknux setting and can be overridden the
+# ordinary way. They are defaults of this image rather than of the server,
+# because they only make sense when the interface, the server and the database
+# are one container.
+# ---------------------------------------------------------------------------
+
+# A file, and nothing else to run.
+ENV ORKNUX_DB_URL=jdbc:sqlite:/var/lib/orknux/orknux.db
+
+# nginx has 8080, the port anybody publishes, so the server takes the one behind
+# it. Only nginx is exposed: the server is reachable on the loopback address
+# inside this container and nowhere else.
+ENV ORKNUX_PORT=8081
+ENV ORKNUX_SERVER_URL=http://127.0.0.1:8081
+
+# The inline engine. Temporal is a service, this image runs one process, and the
+# alternative is a ~200MB Go binary and a schema to apply on every start. What it
+# costs is written down in DOCKERHUB-ONE.md and it is not small: no retries, no
+# resumption, and a wait longer than five minutes fails by design.
+ENV ORKNUX_TEMPORAL_ENABLED=false
+# No Temporal, so no history to link out to. Empty offers no links rather than
+# offering ones that go nowhere.
+ENV ORKNUX_TEMPORAL_UI_URL=""
+
+# The interface is served from this origin, so no other origin is allowed one.
+ENV ORKNUX_ALLOWED_ORIGINS=""
+
+# Where a mailed password reset link would point. There is no relay configured
+# here so none is ever sent, but a wrong address is worse than an obvious one.
+ENV ORKNUX_BASE_URL=http://localhost:8080
+
+# In the volume, with everything else this installation is.
+ENV ORKNUX_ATTACHMENTS_LOCATION=/var/lib/orknux/attachments
+
+# Where the entrypoint keeps the key and the first password. Not read by the
+# server - it is this image's own idea, and it is here so that moving the data
+# means changing one thing.
+ENV ORKNUX_DATA=/var/lib/orknux
+
+# Containers get a share of the host, not the host: this lets the JVM see the
+# cgroup limit rather than the machine's memory and size its heap to the wrong
+# number.
+ENV JAVA_OPTS="-XX:MaxRAMPercentage=75"
+
+EXPOSE 8080
+
+# Through nginx and answered by the server, so a healthy container means both
+# halves are up. /api/auth/method is the one endpoint open by design - the
+# sign-in screen has to read it before anybody has signed in - so this needs no
+# credentials. The start period is generous: a first start migrates the schema.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s \
+    CMD curl -fsS http://localhost:8080/api/auth/method >/dev/null || exit 1
+
+ENTRYPOINT ["/usr/local/bin/orknux-one"]

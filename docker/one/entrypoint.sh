@@ -1,0 +1,188 @@
+#!/bin/sh
+#
+# What has to be true before an Orknux with nothing supplied can be signed into.
+#
+# `docker run orknux/orknux-one` is meant to be the whole command. That means
+# three things have to be invented here, because nobody was asked for them: an
+# encryption key, a first administrator, and somewhere to put the database. The
+# first of those is the one that has to be right - see below.
+#
+# Everything is only ever created, never replaced. A file that is already in the
+# data directory is what this installation is, and a start that overwrote one
+# would be a start that destroyed something.
+
+set -eu
+
+DATA="${ORKNUX_DATA:-/var/lib/orknux}"
+
+note() { printf '%s\n' "$*"; }
+banner() {
+    printf '\n================================================================\n'
+    printf '%s\n' "$*"
+    printf '================================================================\n\n'
+}
+
+# ---------------------------------------------------------------------------
+# Where the database is.
+#
+# Read back out of the connection URL rather than assumed, so that overriding
+# ORKNUX_DB_URL to point at a Postgres - which this image supports, it simply
+# does not run one - does not leave this script guarding a file that is never
+# written. The server creates the database but not the directory holding it, and
+# says which path is missing rather than failing with a connection error, so the
+# directory is made here.
+# ---------------------------------------------------------------------------
+
+DB_FILE=""
+case "${ORKNUX_DB_URL:-}" in
+    jdbc:sqlite:*) DB_FILE="${ORKNUX_DB_URL#jdbc:sqlite:}" ;;
+esac
+
+mkdir -p "$DATA"
+if [ -n "$DB_FILE" ]; then
+    mkdir -p "$(dirname "$DB_FILE")"
+fi
+
+# Is this a database that already holds something? The answer decides whether
+# anything below may be invented: a key generated beside an existing database is
+# a key that cannot read it.
+existing_installation() {
+    [ -n "$DB_FILE" ] && [ -s "$DB_FILE" ]
+}
+
+# ---------------------------------------------------------------------------
+# The encryption key. The one thing in this script that can lose data.
+#
+# Every credential the server is trusted with - model provider keys, Slack
+# tokens, MCP secrets - is encrypted with it before it reaches the database.
+# Generating a *different* key on the next start does not fail loudly: the server
+# boots, reports itself healthy, and every stored credential is unreadable from
+# then on, discovered one at a time by whoever pressed Save on them. So the key
+# is written into the data directory, beside the database it protects, and the
+# two travel together or not at all.
+#
+# A key supplied in the environment always wins and is never written down - an
+# operator who keeps their own is keeping it somewhere better than this.
+# ---------------------------------------------------------------------------
+
+KEY_FILE="$DATA/secret.key"
+
+if [ -n "${ORKNUX_SECRET_KEY:-}" ]; then
+    note "Using the encryption key from ORKNUX_SECRET_KEY."
+elif [ -f "$KEY_FILE" ]; then
+    ORKNUX_SECRET_KEY="$(cat "$KEY_FILE")"
+    export ORKNUX_SECRET_KEY
+    note "Using the encryption key kept at $KEY_FILE."
+else
+    if existing_installation; then
+        # The database survived and the key did not, which is what happens when
+        # only part of the data directory was restored, or when the database was
+        # bind-mounted from one place and the rest of the directory from another.
+        # Generating one here would encrypt new credentials with a key that
+        # cannot read the old ones, so the server would come up half working. It
+        # still starts - the database is worth more than the credentials - but
+        # nobody gets to find this out later.
+        banner "There is a database at $DB_FILE but no $KEY_FILE.
+A new key is being generated, and every credential stored with the old one is
+unreadable from now on. They are not corrupted and they are not recoverable:
+they have to be entered again, by hand. Admin -> Doctor lists which.
+If the old key still exists somewhere, stop this container, put it back at
+$KEY_FILE, and start again before anybody saves anything."
+    fi
+    ( umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "$KEY_FILE" )
+    ORKNUX_SECRET_KEY="$(cat "$KEY_FILE")"
+    export ORKNUX_SECRET_KEY
+    note "Generated an encryption key and kept it at $KEY_FILE. It belongs with the database; back the two up together."
+fi
+
+# ---------------------------------------------------------------------------
+# The first administrator.
+#
+# An account is made by an administrator, or written down when a directory
+# vouches for somebody at the door. This image has neither, so without the
+# bootstrap variables it would come up with no way in at all.
+#
+# A generated password rather than a documented one. A default written in a
+# README is a password every copy of this image shares and most of them keep,
+# which on anything reachable is the same as no password; this one is different
+# per installation and is printed where the person who started the container is
+# already looking. It is also kept in the data directory, because a password
+# shown once and scrolled past is a password somebody has to reinstall to get
+# back - and because the server only ever *creates* this account, so a value
+# that changed between starts would silently stop matching.
+# ---------------------------------------------------------------------------
+
+ADMIN_FILE="$DATA/admin-password"
+
+if [ -n "${ORKNUX_BOOTSTRAP_ADMIN_PASSWORD:-}" ]; then
+    ORKNUX_BOOTSTRAP_ADMIN_USERNAME="${ORKNUX_BOOTSTRAP_ADMIN_USERNAME:-admin}"
+    export ORKNUX_BOOTSTRAP_ADMIN_USERNAME
+    note "Seeding the administrator named in ORKNUX_BOOTSTRAP_ADMIN_USERNAME / _PASSWORD."
+else
+    if [ ! -f "$ADMIN_FILE" ] && ! existing_installation; then
+        # Alphanumeric and 24 characters. Long past the twelve the product
+        # requires of any password, and nothing in it needs quoting - this gets
+        # copied out of a terminal into a form, and a password somebody has to
+        # escape is a password they mistype.
+        ( umask 077; LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 24 > "$ADMIN_FILE" )
+        FIRST_START=yes
+    fi
+
+    if [ -f "$ADMIN_FILE" ]; then
+        ORKNUX_BOOTSTRAP_ADMIN_USERNAME="${ORKNUX_BOOTSTRAP_ADMIN_USERNAME:-admin}"
+        ORKNUX_BOOTSTRAP_ADMIN_PASSWORD="$(cat "$ADMIN_FILE")"
+        export ORKNUX_BOOTSTRAP_ADMIN_USERNAME ORKNUX_BOOTSTRAP_ADMIN_PASSWORD
+
+        if [ "${FIRST_START:-}" = "yes" ]; then
+            banner "Sign in with
+
+    username   $ORKNUX_BOOTSTRAP_ADMIN_USERNAME
+    password   $ORKNUX_BOOTSTRAP_ADMIN_PASSWORD
+
+on whichever port 8080 was published as. This was generated for this
+installation and is kept at $ADMIN_FILE - read it back with
+\`docker exec <container> cat $ADMIN_FILE\`.
+Change it under the account itself, then delete that file. Nothing here will
+change it for you: the server only ever creates this account and never touches
+one that exists."
+        else
+            note "The administrator password from the first start is still at $ADMIN_FILE. Delete it once it has been changed."
+        fi
+    else
+        # No file, and a database that already holds something: the password was
+        # changed and the file deleted, exactly as asked. Nothing to seed, and
+        # nothing to say about it.
+        note "No bootstrap administrator: $ADMIN_FILE is gone and the database is not new."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# The interface.
+#
+# nginx serves the bundle and forwards /api, /graphql and /mcp to the server on
+# the loopback address, which is what keeps the browser on one origin and the
+# session cookie first-party. The server block is the interface image's own
+# template, rendered here the way that image's entrypoint renders it.
+#
+# Only ORKNUX_SERVER_URL is substituted. envsubst with no list would also expand
+# $uri and $host, which are nginx's variables and not the environment's - the
+# single-page fallback would become `try_files  / /index.html` and every deep
+# link would 404.
+# ---------------------------------------------------------------------------
+
+mkdir -p /tmp/orknux-nginx
+envsubst '${ORKNUX_SERVER_URL}' \
+    < /etc/nginx/orknux-default.conf.template \
+    > /etc/nginx/conf.d/default.conf
+
+# Started before the server rather than after it, and in daemon mode so this
+# script continues. nginx resolves the address in proxy_pass when it starts, and
+# 127.0.0.1 needs no resolving - so unlike the interface image, this one does not
+# have to wait for a back end, because the back end is in the same container.
+nginx -c /etc/nginx/nginx.conf
+note "The interface is being served on 8080; the server is starting on ${ORKNUX_PORT:-8081}."
+
+# `exec`, so the JVM is PID 1 and `docker stop` reaches it. Without it a shell
+# holds PID 1, the signal stops there, and the JVM is killed at the end of the
+# grace period with requests in flight.
+exec java $JAVA_OPTS -jar /app/app.jar

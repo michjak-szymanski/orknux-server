@@ -18,6 +18,10 @@ concurrency:
 
 env:
   IMAGE_NAME: orknux-server
+  # The all-in-one image: the interface, the server and a SQLite file in one
+  # container. Built from Dockerfile.one in this same repository, because it
+  # contains the server and the two would otherwise be released out of step.
+  IMAGE_NAME_ONE: orknux-one
 
 jobs:
   build:
@@ -31,20 +35,24 @@ jobs:
       # which would leave the reference ending mid-sentence with the last two
       # sections gone - and nothing red anywhere to say so. Checked here rather
       # than at publish time so it fails on the branch that grew the file,
-      # while somebody is still editing it.
-      - name: The Docker Hub description has to fit
+      # while somebody is still editing it. Both files, since this repository
+      # publishes two images and each has a description of its own.
+      - name: The Docker Hub descriptions have to fit
         run: |
           limit=25000
           comfortable=24000
-          size=$(wc -c < DOCKERHUB.md)
-          echo "DOCKERHUB.md is $size bytes of $limit."
-          if [ "$size" -gt "$limit" ]; then
-            echo "::error file=DOCKERHUB.md::$size bytes, and Docker Hub takes $limit. Shorten it by $((size - limit)) bytes, or move a section into README.md and link to it - do not let it be truncated, because the end is where the least-known settings are."
-            exit 1
-          fi
-          if [ "$size" -gt "$comfortable" ]; then
-            echo "::warning file=DOCKERHUB.md::$size bytes, $((limit - size)) short of the $limit Docker Hub allows. Adding another variable or two will break the build - worth shortening now rather than in the middle of a release."
-          fi
+          failed=0
+          for file in DOCKERHUB.md DOCKERHUB-ONE.md; do
+            size=$(wc -c < "$file")
+            echo "$file is $size bytes of $limit."
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error file=$file::$size bytes, and Docker Hub takes $limit. Shorten it by $((size - limit)) bytes, or move a section into README.md and link to it - do not let it be truncated, because the end is where the least-known settings are."
+              failed=1
+            elif [ "$size" -gt "$comfortable" ]; then
+              echo "::warning file=$file::$size bytes, $((limit - size)) short of the $limit Docker Hub allows. Adding another variable or two will break the build - worth shortening now rather than in the middle of a release."
+            fi
+          done
+          exit $failed
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -94,6 +102,36 @@ jobs:
 
       - name: Build the image and start it
         run: ./scripts/verify-image.sh
+
+  # And the all-in-one image, which has more to prove.
+  #
+  # `orknux-one`'s whole claim is that `docker run` with no arguments gives you
+  # something you can sign into: it invents its own encryption key, its own
+  # database and its own administrator on the way up. None of that is exercised
+  # by building it. The failure it can most easily have is silent — a second
+  # start that generates a second key boots perfectly and makes every stored
+  # credential unreadable — so the script starts it, signs in as the
+  # administrator it made up, writes something, restarts it and signs in again.
+  image-one:
+    name: Verify all-in-one image
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        # The interface is a submodule and this image builds its bundle from
+        # source. Without this the checkout leaves an empty directory and the
+        # build fails on a missing package.json.
+        with:
+          submodules: true
+
+      # `bash`, not `./`, because this repository is worked on from Windows as
+      # well and git there records no executable bit on a new file.
+      - name: Build the image and start it with nothing supplied
+        run: bash scripts/verify-one-image.sh
 
   publish:
     name: Publish image
@@ -174,3 +212,78 @@ jobs:
           password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
           repository: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           readme-filepath: ./DOCKERHUB.md
+
+  # The all-in-one image, published beside the other one and on the same terms.
+  #
+  # Its own job rather than another step in `publish`, so the two images do not
+  # hold each other up: a broken interface bundle should not stop the server
+  # image reaching the registry, and an image that fails to start should not stop
+  # the other one either. Same tags, same conditions, same credentials.
+  publish-one:
+    name: Publish all-in-one image
+    runs-on: ubuntu-latest
+    # The suite has to pass and this image has to start with nothing supplied.
+    needs: [build, image-one]
+    # Never from a pull request, and not at all where the registry credentials
+    # have not been set. See the job above for why skipped is the honest result.
+    if: github.event_name == 'push' && vars.DOCKERHUB_USERNAME != ''
+
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        # The interface is a submodule and this image builds its bundle.
+        with:
+          submodules: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # The same scheme as the server image, so a person can pin both to one
+      # version: latest follows main, a vX.Y.Z tag also publishes X.Y.Z and X.Y,
+      # and every build is tagged with its commit, which is the tag that never
+      # moves.
+      - name: Work out tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_ONE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=long
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.one
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # A cache scope of its own. This image builds a node bundle the other
+          # one does not, and sharing the default scope would have each build
+          # evicting the other's layers.
+          cache-from: type=gha,scope=one
+          cache-to: type=gha,mode=max,scope=one
+
+      # Last, and after the push, so a description that fails to update cannot
+      # stop the image being published. DOCKERHUB-ONE.md is where the caveats
+      # are written down - no durable runs, no directory, one writer - and those
+      # are the part somebody has to read before they mistake this for a
+      # deployment.
+      - name: Update the Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_ONE }}
+          readme-filepath: ./DOCKERHUB-ONE.md

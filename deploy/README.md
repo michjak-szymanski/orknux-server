@@ -17,6 +17,12 @@ The first start takes a minute or two: Temporal applies its own schema, and the
 server runs its way through ninety-odd Flyway migrations before it answers
 anything. `docker compose logs -f orknux-server` is where it says so.
 
+**If you only want to look at Orknux, there is one container that needs none of
+this**: `docker run -p 8080:8080 orknux/orknux-one`, no file to copy and no key
+to generate. It is not a deployment and it says so - see
+[One container instead](#one-container-instead-orknux-one) below for what it
+gives up, starting with runs that are not durable.
+
 ## The secret key, before anything else
 
 `ORKNUX_SECRET_KEY` is the one setting with no default, and the compose file
@@ -148,6 +154,70 @@ retries, no resumption, and a restart mid-run loses the run.
 The README's **The database** section in the source repository is the full list
 of what differs underneath.
 
+## One container instead: `orknux-one`
+
+The installation described in the paragraph above - SQLite, no Temporal, no
+directory - is small enough that it does not need a compose file at all, so it is
+published as an image of its own.
+
+```
+docker run -d --name orknux -p 8080:8080 -v orknux-data:/var/lib/orknux orknux/orknux-one
+docker logs orknux
+```
+
+The interface, the server and the database file are one container. nginx serves
+the bundle on `8080` and forwards `/api`, `/graphql` and `/mcp` to the server on
+the loopback address inside it, which is the same arrangement the two-image
+deployment has and the reason the browser stays on one origin.
+
+**Nothing has to be supplied and nothing is a documented default.** On the first
+start it writes a database, generates an encryption key, and creates one
+administrator whose password it generates and prints:
+
+| File in `/var/lib/orknux` | What it is |
+| --- | --- |
+| `orknux.db` | The database, and its `-wal` and `-shm` files while it is running. |
+| `secret.key` | The 32 bytes every stored credential is encrypted with. |
+| `admin-password` | What was printed on the first start. Mode `600`. |
+| `attachments/` | Chat attachments. |
+
+`docker exec orknux cat /var/lib/orknux/admin-password` reads the password back
+if the log has scrolled. Change it under the account and delete that file; the
+server only ever *creates* this account, so nothing puts a password back that
+somebody changed. `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` and
+`ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` choose them instead.
+
+**`/var/lib/orknux` is the whole installation, and the key in it is why the
+volume matters more here than usual.** Everything above lives in that one
+directory. Back it up as a directory, with the container stopped: the database
+without `secret.key` has credentials in it that nothing can read again, and no
+part of that failure is visible until somebody opens a provider or a Slack
+connection and finds it broken. Give the container `ORKNUX_SECRET_KEY` and it
+uses that instead and writes no key file, which is what to do if you already keep
+secrets somewhere better than a volume.
+
+**What it does not do** is the part to read before mistaking it for a deployment,
+and it is the whole of the trade this page has been describing in pieces:
+
+- **No durable runs.** Nothing is retried, nothing resumes, and a restart in the
+  middle of a run leaves that execution at RUNNING for ever, because there is no
+  engine left to finish it or fail it.
+- **A wait longer than five minutes fails by design**, with a message telling you
+  to enable Temporal. "Wait a day" cannot work there.
+- **Starting a run answers with a finished one**, so the API is a different shape
+  from a real deployment's.
+- **No LDAP and no OIDC**, so nothing about directory sign-in, group mapping or
+  SSO can be tried in it.
+- **SQLite**, with everything the section above lists.
+- **The bundled manual at `/docs` describes the product, not this container.** It
+  says runs are carried out by Temporal and retried, which is true of the
+  deployment this compose file brings up and not of that image. It is left
+  correct about the product rather than forked, and the difference is written
+  down in `DOCKERHUB-ONE.md` and here.
+
+Use it to try Orknux, to develop against, and to demonstrate it. Use this compose
+file for anything whose runs matter.
+
 ## Signing in without a directory
 
 Orknux keeps its own users - people it made up rather than people a provider
@@ -268,7 +338,8 @@ happens if you say nothing.
 
 ## Which images, and where the tags come from
 
-Both images are published from CI on every push to `main`:
+All three images - `orknux-server`, `orknux-ui` and the all-in-one `orknux-one` -
+are published from CI on every push to `main`, under one scheme:
 
 - `latest` follows `main`.
 - `X.Y.Z` and `X.Y` come from release tags.
@@ -288,6 +359,11 @@ Check what exists before reaching for a different one:
 
 - https://hub.docker.com/r/orknux/orknux-server/tags
 - https://hub.docker.com/r/orknux/orknux-ui/tags
+- https://hub.docker.com/r/orknux/orknux-one/tags
+
+`orknux-one` contains the other two and moves with them, so pin it to the same
+number. It takes no tag variable here because this file does not run it - it is
+the alternative to this file rather than a service in it.
 
 Both Orknux images are published for **linux/amd64 only**. They run on Apple
 Silicon under Docker Desktop's emulation, slowly. Postgres, Temporal and

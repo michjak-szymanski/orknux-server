@@ -53,6 +53,26 @@ data lives, and what to change before it is anything more than a demonstration.
 Read the part about `ORKNUX_SECRET_KEY` before you save a credential rather than
 after.
 
+### To look at Orknux
+
+One container, no file to copy and nothing to configure. The interface, the
+server and a SQLite file, with a key and an administrator generated on the first
+start and the password printed in the log:
+
+```
+docker run -d --name orknux -p 8080:8080 -v orknux-data:/var/lib/orknux orknux/orknux-one
+docker logs orknux                   # http://localhost:8080, and the password to use
+```
+
+**It is not a deployment.** There is no Temporal, so a run is not durable, is not
+retried and does not resume; a wait longer than five minutes fails by design;
+there is no directory and no OIDC; and SQLite means one writer, one process and
+one machine. [DOCKERHUB-ONE.md](DOCKERHUB-ONE.md) is the full list, and
+[deploy/README.md](deploy/README.md) says where the line between this and a
+deployment is. It is built from [Dockerfile.one](Dockerfile.one), which merges
+this repository's `Dockerfile` with the interface's own image rather than
+describing either again.
+
 ### To work on Orknux
 
 The compose file at the root of this repository is a different one. It brings up
@@ -106,6 +126,7 @@ from the table below; going to 8080 directly gets you the API, not the app.
 
 ```
 scripts/verify-image.sh           # builds it, starts it, asserts it works
+scripts/verify-one-image.sh       # the same for orknux-one, started with nothing
 ```
 
 The suite says the code behaves; this says the artefact runs. It builds the
@@ -120,6 +141,15 @@ separate service is reachable is not a property of this image. Worth knowing
 while reading a green run: with the default configuration the application
 **refuses to start** when Temporal is not up, which is deliberate — so a
 deployment brought up before its Temporal restarts until that service answers.
+
+`verify-one-image.sh` asks a different set of questions of `orknux-one`, because
+that image's claim is that it needs nothing: it is started with no environment
+and no configuration at all, and the script then checks that it generated an
+encryption key and kept it, that the administrator it made up and printed can
+actually sign in, that a signed-in call reads and writes, and that a restart is
+the same installation rather than a new one — same key, same account, same data.
+That last one is the failure worth a test: a second start that generated a second
+key would boot, look healthy, and make every stored credential unreadable.
 
 Flyway migrates the schema on start; JPA runs with `ddl-auto: validate`, so the
 migrations are the only thing that changes the database. One process means one

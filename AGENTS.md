@@ -258,10 +258,21 @@ CI does the rest: `.github/workflows/ci.yml` builds, runs the suite, runs
 `latest` follows `main`; a `v*` tag also publishes `X.Y.Z` and `X.Y`; every build
 is tagged `sha-<commit>`, which is the only tag that never moves.
 
-**`DOCKERHUB.md` is published by CI, and has a size limit.** It is the Docker
-Hub repository description, and the publish job pushes it after the images go
-up - last, and after the push, so a description that fails to update cannot stop
-a release. It used to be pasted into a web form by hand, which is how it came to
+**This repository publishes two images.** `orknux-server` from `Dockerfile`, and
+the all-in-one `orknux-one` from `Dockerfile.one` - the interface, the server and
+a SQLite file in one container, verified by `scripts/verify-one-image.sh` and
+described by `DOCKERHUB-ONE.md`. It builds the interface from the `orknux-ui`
+submodule, so its CI jobs check out with `submodules: true` and it reuses that
+image's own nginx template rather than carrying a second copy. Everything the
+image invents on a first start - the encryption key, the database, the
+administrator - is in `docker/one/entrypoint.sh`, and the key is the part to be
+careful with: generating a second one on a later start makes every stored
+credential unreadable without failing anything.
+
+**`DOCKERHUB.md` and `DOCKERHUB-ONE.md` are published by CI, and have a size
+limit.** They are the Docker Hub repository descriptions, one per image, and the
+publish jobs push them after the images go up - last, and after the push, so a
+description that fails to update cannot stop a release. It used to be pasted into a web form by hand, which is how it came to
 be eleven variables out of date while being correct in git; an operator planning
 an upgrade reads the one on Docker Hub, so that gap was the whole of the problem.
 

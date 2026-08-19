@@ -11,3 +11,19 @@ docs
 !README.md
 cp.txt
 compose.yaml
+logs
+
+# The interface, which Dockerfile.one builds from source in this same context.
+# Its installed dependency tree and its last local build are megabytes the
+# daemon would copy and the build would then overwrite anyway - `npm ci` in the
+# build stage installs from the lockfile, and `npm run build` writes dist/.
+#
+# Note what is deliberately *not* excluded: orknux-ui/src/docs/*.md. The manual
+# is imported by the bundle rather than fetched, so the interface loses its
+# documentation if those are dropped. The `*.md` rule above matches only the top
+# level - a pattern in a .dockerignore does not cross a slash - so they survive
+# it, and this comment exists so the next person to widen that rule to `**/*.md`
+# finds out here rather than from an empty /docs page.
+orknux-ui/node_modules
+orknux-ui/dist
+orknux-ui/*.tsbuildinfo

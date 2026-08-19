@@ -17,6 +17,37 @@ have failed.
 
 ### Added
 
+- **`orknux/orknux-one`: the whole thing in one container.** The interface, the
+  server and a SQLite file, published beside the other two images and under the
+  same tags. `docker run -p 8080:8080 -v orknux-data:/var/lib/orknux
+  orknux/orknux-one` is the whole command: it migrates a fresh database,
+  generates the encryption key, creates one administrator and prints the
+  password it made up. Everything it is lives in `/var/lib/orknux`, key
+  included, so a restart is the same installation and a backup is a copy of one
+  directory. **It is not a deployment, and the reasons are on its Docker Hub
+  page rather than left to be discovered**: no Temporal, so runs are not durable,
+  are not retried and do not resume, and a wait longer than five minutes fails by
+  design; no directory and no OIDC; and SQLite, with one writer at a time. The
+  manual it ships still describes runs as carried out by Temporal, which is true
+  of a deployment and not of that image - it is left correct about the product
+  and the difference is written down. CI starts it with nothing supplied, signs
+  in as the administrator it invented, writes, restarts it and signs in again,
+  because a generated password that does not work looks exactly like an image
+  that is fine until somebody tries it.
+
+- **An issue has a History tab**, beside the issue itself, holding what has
+  happened to it: opened, comments, the status moving, labels going on and
+  coming off, it changing hands, and observers arriving and leaving. Every line
+  names who did it, oldest first, and changes made through the MCP tools are in
+  the same list. Two of these were recorded nowhere before - a label changing
+  and an issue changing hands - so they now are, in a table of their own beside
+  the workspace audit log rather than instead of it: the audit log answers what
+  a workspace has done, this answers why one issue is closed. The tab is fetched
+  when it is opened, so an issue nobody presses it on costs what it always did.
+  An issue that existed before this release shows the line where recording
+  began, with what survived from before it - when it was opened, and everything
+  said on it - above that line rather than an empty list implying a quiet week.
+
 - **A node can be duplicated in the workflow editor**, with `Ctrl+D` or the
   button beside Add. The copy carries the definition it points at, its icon and
   facing, and its mappings deep-copied so the two nodes' parameters are

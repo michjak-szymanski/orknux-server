@@ -2942,6 +2942,8 @@ type RoleRef {
 
 "What kind of thing happened on an issue."
 enum NotificationKind {
+    "It was filed, and you are one of the people it concerns."
+    OPENED
     ASSIGNED
     STATUS
     COMMENT
@@ -2963,6 +2965,8 @@ type Notification {
     says: String
     "ISO-8601 offset date-time."
     at: String!
+    "Whether it was still unread when it was asked for. The bell counts these; the panel shows everything." 
+    unread: Boolean!
 }
 
 enum IssueStatus {

@@ -40,11 +40,24 @@ class NotificationAPI(
          * issue somewhere else is exactly the thing somebody has not got a page
          * open for, which is what a notification is for in the first place.
          */
+        /*
+         * What happened, not what is unread. Those were the same call, and the
+         * panel emptied itself: opening it is what marks the news read, so from
+         * the second look onwards there was nothing left to draw (issue #114).
+         *
+         * Each one says whether it had been read when it was asked for, so the
+         * panel can mark the new ones without the number and the list
+         * disagreeing - they are still two questions, and the number is still
+         * only the unread.
+         */
         return mine
-            .flatMap { workspaceId -> desk.waiting(workspaceId, NewsReader(AssigneeKind.USER, me)) }
-            .sortedByDescending { it.id ?: 0 }
+            .flatMap { workspaceId ->
+                val (told, readTo) = desk.history(workspaceId, NewsReader(AssigneeKind.USER, me))
+                told.map { it to ((it.id ?: 0) > readTo) }
+            }
+            .sortedByDescending { it.first.id ?: 0 }
             .take((limit ?: MANY).coerceIn(1, MANY))
-            .map(::NotificationView)
+            .map { (item, fresh) -> NotificationView(item, fresh) }
     }
 
     /** How many are waiting, which is all the bell itself needs to know. */
@@ -86,7 +99,7 @@ class NotificationAPI(
 }
 
 /** One thing that happened, as the bell shows it. */
-class NotificationView(item: IssueNewsItem) {
+class NotificationView(item: IssueNewsItem, val unread: Boolean) {
     val id: Long = item.id ?: 0
     val workspaceId: Long = item.workspaceId
     val issueNumber: Int = item.issueNumber

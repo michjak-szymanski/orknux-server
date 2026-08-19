@@ -122,6 +122,27 @@ interface IssueNewsRepository : JpaRepository<IssueNewsItem, Long> {
         @Param("name") name: String,
         @Param("after") after: Long,
     ): List<IssueNewsItem>
+
+    /**
+     * The same audience's news whether or not they have read it, newest first.
+     *
+     * [since] answers "what is new", which is what a number on a bell is. This
+     * answers "what happened", which is what the panel behind the bell is - and
+     * they are not the same question. Reading with [since] alone meant the panel
+     * emptied itself the moment it was opened, because opening it is what marks
+     * the news read, so it could only ever show something to somebody who had
+     * not looked yet.
+     */
+    @Query(
+        "select n from IssueNewsItem n where n.workspaceId = :workspaceId " +
+            "and n.audienceKind = :kind and lower(n.audienceName) = lower(:name) " +
+            "order by n.id desc",
+    )
+    fun latest(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("kind") kind: AssigneeKind,
+        @Param("name") name: String,
+    ): List<IssueNewsItem>
 }
 
 /** Who has read how far. */

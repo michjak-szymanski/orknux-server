@@ -133,6 +133,21 @@ class IssueNewsDesk(
     }
 
     /**
+     * Everything this reader has been told, newest first, with how far they had
+     * read when they asked.
+     *
+     * The bell shows this and counts [waiting]. They were the same call once,
+     * which is why the panel went empty: opening it marks the news read, so a
+     * panel drawn from what is unread has nothing left to draw the second time
+     * anybody looks. What happened does not stop having happened.
+     */
+    @Transactional(readOnly = true)
+    fun history(workspaceId: Long, reader: NewsReader): Pair<List<IssueNewsItem>, Long> {
+        val mark = reads.forReader(workspaceId, reader.kind, reader.name)
+        return news.latest(workspaceId, reader.kind, reader.name) to (mark?.lastId ?: 0)
+    }
+
+    /**
      * What this reader has not read, and how far they have now got.
      *
      * Reading marks it read. An assistant that had to say so afterwards would

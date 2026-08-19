@@ -315,6 +315,7 @@ files, no network and no threads. These bound what it can spend.
 | `ORKNUX_CONNECTION_CHECK_INITIAL_DELAY` | How long the first check waits. | `30s` | No |
 | `ORKNUX_CONNECTION_PROBE_TIMEOUT_SECONDS` | How long a check may take to find out whether anything is listening. | `5` | No |
 | `ORKNUX_CONNECTION_ALLOW_LINK_LOCAL` | Link-local addresses reach cloud instance metadata, so they are refused. Turning this on lets a workspace's connection reach them. Private and loopback addresses stay reachable either way, since internal services are the point. | `false` | No |
+| `ORKNUX_CONNECTION_ENTRA_AUTHORITY` | Where an Entra ID token is asked for. The worldwide cloud, which is where all but a few tenants live - a tenant in one of the sovereign clouds has an address of its own and cannot reach the default. | `https://login.microsoftonline.com` | No |
 | `ORKNUX_SLACK_ENABLED` | Opens one Socket Mode websocket per Slack connection holding an app-level token, and turns arriving mentions into workflow runs. | `true` | No |
 | `ORKNUX_SLACK_RECONCILE_SECONDS` | How often open sockets are compared with stored connections, so a token pasted into the settings form starts listening without a restart. | `30` | No |
 | `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | How long a connection Slack refused is left alone. Changing the token clears the wait, so a corrected credential is not held back by it. | `300` | No |

@@ -332,6 +332,12 @@ orknux:
     # Link-local addresses reach cloud instance metadata. Private and loopback
     # addresses stay reachable, since internal services are the point.
     allow-link-local: ${ORKNUX_CONNECTION_ALLOW_LINK_LOCAL:false}
+    # Where an Entra ID token is asked for. The worldwide cloud, which is where
+    # all but a few tenants live - the sovereign clouds answer on addresses of
+    # their own, and a tenant in one of those cannot reach this. Written down
+    # here rather than left to the default in the code, because a setting only
+    # reachable by a name Spring derives is a setting nobody can look up.
+    entra-authority: ${ORKNUX_CONNECTION_ENTRA_AUTHORITY:https://login.microsoftonline.com}
     check:
       # The same argument as the model providers: a status on the screen should
       # be one that was true recently, not whenever somebody last pressed a

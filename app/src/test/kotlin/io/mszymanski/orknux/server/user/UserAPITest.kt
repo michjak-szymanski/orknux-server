@@ -11,6 +11,8 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.authentication.TestingAuthenticationToken
 import org.springframework.security.authentication.event.AuthenticationSuccessEvent
+import org.springframework.security.core.authority.SimpleGrantedAuthority
+import org.springframework.security.ldap.userdetails.InetOrgPerson
 import org.springframework.security.test.context.support.WithMockUser
 
 /**
@@ -157,5 +159,127 @@ class UserAPITest(
             .execute()
             .path("users").entityList(Any::class.java).hasSize(1)
             .path("users[0].username").entity(String::class.java).isEqualTo("helpdesk")
+    }
+
+    @Test
+    fun `the directory's address is written down at the first sign-in`() {
+        detection.onSignIn(
+            AuthenticationSuccessEvent(
+                TestingAuthenticationToken(inetOrgPerson("gita", "gita@example.com"), "n/a", "ROLE_USERS"),
+            ),
+        )
+
+        val held = requireNotNull(users.findByUsername("gita"))
+        assertThat(held.email).isEqualTo("gita@example.com")
+        // Inherited, not typed: the directory may still refresh it.
+        assertThat(held.emailChosen).isFalse()
+    }
+
+    @Test
+    fun `an administrator sets somebody else's address`() {
+        val id = graphQlTester.document(
+            """mutation { createUser(input: { username: "helpdesk" }) { id email emailChosen } }""",
+        ).execute()
+            .path("createUser.email").valueIsNull()
+            .path("createUser.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { setUserEmail(id: $id, email: "  desk@example.com ") { email emailChosen } }""",
+        ).execute()
+            // Trimmed on the way in, so a stray space is not part of the address.
+            .path("setUserEmail.email").entity(String::class.java).isEqualTo("desk@example.com")
+            .path("setUserEmail.emailChosen").entity(Boolean::class.java).isEqualTo(true)
+
+        graphQlTester.document("""mutation { setUserEmail(id: $id, email: "not an address") { email } }""")
+            .execute()
+            .errors().expect { it.message?.contains("does not look like an email address") == true }
+            .verify()
+    }
+
+    @Test
+    @WithMockUser(username = "hana", roles = ["USERS"])
+    fun `somebody sets their own address without an id`() {
+        detection.onSignIn(AuthenticationSuccessEvent(TestingAuthenticationToken("hana", "n/a", "ROLE_USERS")))
+
+        graphQlTester.document("""mutation { setUserEmail(email: "hana@example.com") { email emailChosen } }""")
+            .execute()
+            .path("setUserEmail.email").entity(String::class.java).isEqualTo("hana@example.com")
+            .path("setUserEmail.emailChosen").entity(Boolean::class.java).isEqualTo(true)
+
+        // Cleared, and handed back to the provider to seed again.
+        graphQlTester.document("""mutation { setUserEmail(email: "") { email emailChosen } }""")
+            .execute()
+            .path("setUserEmail.email").valueIsNull()
+            .path("setUserEmail.emailChosen").entity(Boolean::class.java).isEqualTo(false)
+    }
+
+    @Test
+    @WithMockUser(username = "ivan", roles = ["USERS"])
+    fun `somebody without the administrator role cannot set another person's`() {
+        detection.onSignIn(AuthenticationSuccessEvent(TestingAuthenticationToken("ivan", "n/a", "ROLE_USERS")))
+        detection.onSignIn(AuthenticationSuccessEvent(TestingAuthenticationToken("jo", "n/a", "ROLE_USERS")))
+        val other = requireNotNull(users.findByUsername("jo"))
+
+        graphQlTester.document(
+            """mutation { setUserEmail(id: ${other.id}, email: "ivan@example.com") { email } }""",
+        ).execute()
+            .errors().expect { it.message?.contains("administrator role") == true }
+            .verify()
+
+        assertThat(users.findByUsername("jo")?.email).isNull()
+
+        // Their own row by id is still theirs, which is what the id is for.
+        val mine = requireNotNull(users.findByUsername("ivan"))
+        graphQlTester.document(
+            """mutation { setUserEmail(id: ${mine.id}, email: "ivan@example.com") { email } }""",
+        ).execute()
+            .path("setUserEmail.email").entity(String::class.java).isEqualTo("ivan@example.com")
+    }
+
+    @Test
+    fun `the directory refreshes an inherited address and leaves a chosen one alone`() {
+        detection.onSignIn(
+            AuthenticationSuccessEvent(
+                TestingAuthenticationToken(inetOrgPerson("kim", "kim@old.example.com"), "n/a", "ROLE_USERS"),
+            ),
+        )
+        val held = requireNotNull(users.findByUsername("kim"))
+
+        // Nobody has typed one, so what the directory now says is what is true.
+        detection.onSignIn(
+            AuthenticationSuccessEvent(
+                TestingAuthenticationToken(inetOrgPerson("kim", "kim@new.example.com"), "n/a", "ROLE_USERS"),
+            ),
+        )
+        assertThat(users.findByUsername("kim")?.email).isEqualTo("kim@new.example.com")
+
+        graphQlTester.document(
+            """mutation { setUserEmail(id: ${held.id}, email: "kim@chosen.example.com") { emailChosen } }""",
+        ).execute()
+            .path("setUserEmail.emailChosen").entity(Boolean::class.java).isEqualTo(true)
+
+        detection.onSignIn(
+            AuthenticationSuccessEvent(
+                TestingAuthenticationToken(inetOrgPerson("kim", "kim@new.example.com"), "n/a", "ROLE_USERS"),
+            ),
+        )
+        assertThat(users.findByUsername("kim")?.email).isEqualTo("kim@chosen.example.com")
+    }
+
+    /**
+     * A directory entry as the LDAP context mapper hands one over: the mail
+     * attribute on the principal, which is where sign-in reads an address from.
+     */
+    private fun inetOrgPerson(username: String, mail: String): InetOrgPerson {
+        val essence = InetOrgPerson.Essence()
+        essence.setUsername(username)
+        essence.setDn("uid=$username,ou=people,dc=example,dc=com")
+        // An inetOrgPerson insists on a name; the address is what is being tested.
+        essence.setCn(arrayOf(username))
+        essence.setSn(username)
+        essence.setMail(mail)
+        essence.setPassword("n/a")
+        essence.setAuthorities(listOf(SimpleGrantedAuthority("ROLE_USERS")))
+        return essence.createUserDetails() as InetOrgPerson
     }
 }

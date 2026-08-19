@@ -4,6 +4,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
 import org.springframework.security.authentication.event.AuthenticationSuccessEvent
 import org.springframework.security.core.userdetails.UserDetails
+import org.springframework.security.ldap.userdetails.InetOrgPerson
 import org.springframework.security.oauth2.core.oidc.user.OidcUser
 import org.springframework.stereotype.Component
 import org.springframework.transaction.annotation.Transactional
@@ -42,6 +43,18 @@ class UserDetection(private val users: AppUserRepository) {
             else -> null
         }
 
+        /*
+         * Both doors carry an address. LDAP's is the inetOrgPerson mail
+         * attribute, which the context mapper keeps on the principal; OIDC's is
+         * the email claim. Same field, so it is read here once rather than
+         * twice in two configurations.
+         */
+        val addressed = when (principal) {
+            is OidcUser -> principal.email?.takeIf { it.isNotBlank() }
+            is InetOrgPerson -> principal.mail?.takeIf { it.isNotBlank() }
+            else -> null
+        }
+
         val held = users.findByUsername(username)
         if (held == null) {
             users.save(
@@ -49,13 +62,29 @@ class UserDetection(private val users: AppUserRepository) {
                     username = username,
                     displayName = called ?: username,
                     type = UserType.EXTERNAL,
+                    email = addressed,
                 ),
             )
             log.info("First sign-in recorded for {}", username)
-        } else if (called != null && held.displayName != called) {
-            held.displayName = called
-            users.save(held)
+            return
         }
+
+        var changed = false
+        if (called != null && held.displayName != called) {
+            held.displayName = called
+            changed = true
+        }
+        /*
+         * The directory refreshes an address it gave, and leaves alone one
+         * somebody typed. Otherwise every sign-in would undo the edit, and the
+         * option to set an address here would last exactly until the next
+         * morning.
+         */
+        if (!held.emailChosen && addressed != null && held.email != addressed) {
+            held.email = addressed
+            changed = true
+        }
+        if (changed) users.save(held)
     }
 
     private companion object {

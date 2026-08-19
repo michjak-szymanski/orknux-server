@@ -131,6 +131,48 @@ class UserAPI(
         return true
     }
 
+    /**
+     * An address, set by whoever it belongs to or by an administrator.
+     *
+     * One mutation for both, the way [createUserToken] beside it already does
+     * it: an absent id means yourself, and a present one is somebody else and
+     * needs the administrator role. Two mutations would be the same two rules
+     * written twice, and the second one is where they would drift apart.
+     *
+     * Allowed for an external user, unlike everything else on this controller.
+     * The rest of what the provider says about somebody is refused here because
+     * the next sign-in would overwrite it - this is the one field that survives
+     * it, which is the whole point of [AppUser.emailChosen].
+     *
+     * An empty address clears it and hands the field back to the provider,
+     * rather than pinning an empty string that sign-in would then refuse to
+     * fill.
+     */
+    @MutationMapping
+    @Transactional
+    fun setUserEmail(@Argument id: Long?, @Argument email: String?): UserView {
+        val held = if (id == null) {
+            users.findByUsername(editor()) ?: throw UserNotFoundException(-1)
+        } else {
+            val found = users.findByIdOrNull(id) ?: throw UserNotFoundException(id)
+            if (!found.username.equals(editor(), ignoreCase = true)) access.requireAdmin()
+            found
+        }
+
+        val wanted = email?.trim().orEmpty()
+        if (wanted.isEmpty()) {
+            held.email = null
+            held.emailChosen = false
+        } else {
+            if (wanted.length > LONGEST_EMAIL || !EMAIL.matches(wanted)) throw EmailInvalidException(wanted)
+            held.email = wanted
+            held.emailChosen = true
+        }
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = editor()
+        return describe(users.save(held))
+    }
+
     /** The tokens somebody has, which never includes the secrets themselves. */
     @QueryMapping
     fun myTokens(): List<TokenView> {
@@ -199,12 +241,26 @@ class UserAPI(
          * cannot.
          */
         const val SHORTEST_PASSWORD = 12
+
+        /** As long as an address is allowed to be, and the column that holds it. */
+        const val LONGEST_EMAIL = 320
+
+        /**
+         * A name, an at sign, and a domain with a dot in it, and nothing else
+         * asked. The elaborate patterns refuse addresses that work - a plus in
+         * the name, a long suffix, a host somebody's employer invented - and
+         * refusing somebody's real address is a worse failure than accepting an
+         * odd-looking one. This catches the typo that matters: no at sign.
+         */
+        val EMAIL = Regex("[^\\s@]+@[^\\s@]+\\.[^\\s@]+")
     }
 
     private fun describe(user: AppUser) = UserView(
         id = requireNotNull(user.id),
         username = user.username,
         displayName = user.displayName,
+        email = user.email,
+        emailChosen = user.emailChosen,
         type = user.type,
         roles = user.roles.map { RoleRef(requireNotNull(it.id), it.name) }.sortedBy { it.name.lowercase() },
         editable = user.editable,
@@ -218,6 +274,10 @@ data class UserView(
     val id: Long,
     val username: String,
     val displayName: String,
+    /** Where to write to them, or null where nobody has said. */
+    val email: String?,
+    /** True where the address was typed rather than inherited from the provider. */
+    val emailChosen: Boolean,
     val type: UserType,
     val roles: List<RoleRef>,
     /** False for anybody the identity provider defines. */

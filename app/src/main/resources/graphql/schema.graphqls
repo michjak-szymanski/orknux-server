@@ -239,6 +239,13 @@ type Mutation {
     setUserPassword(id: ID!, password: String!): AppUser!
     "Changes your own, which needs the current one."
     changeMyPassword(currentPassword: String!, newPassword: String!): Boolean!
+    """
+    Sets an address. Yours when id is absent; anybody's, for an administrator.
+    An empty one clears it and lets the provider seed it again at the next sign-in.
+    Allowed for an external user, which is the point: sign-in stops overwriting an
+    address somebody has typed.
+    """
+    setUserEmail(id: ID, email: String): AppUser!
     "Mints a token. Yours when id is absent; anybody's, for an administrator."
     createUserToken(id: ID, name: String!): NewUserToken!
     deleteUserToken(id: ID!): Boolean!
@@ -2407,6 +2414,10 @@ type AppUser {
     id: ID!
     username: String!
     displayName: String!
+    "Where to write to them. Null where neither the provider nor anybody here has said."
+    email: String
+    "True where the address was typed here, so sign-in leaves it alone."
+    emailChosen: Boolean!
     type: UserType!
     roles: [RoleRef!]!
     "False for anybody the identity provider defines."

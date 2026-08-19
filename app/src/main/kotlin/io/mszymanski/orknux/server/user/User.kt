@@ -88,6 +88,30 @@ class AppUser(
     @Column(name = "password_hash", length = 100)
     var passwordHash: String? = null,
 
+    /**
+     * Where to write to them, when anywhere is known.
+     *
+     * Seeded from the provider at sign-in - LDAP's mail attribute, OIDC's email
+     * claim - and nullable because a directory need not supply one and because
+     * every row written before this column existed has none.
+     */
+    @Column(length = 320)
+    var email: String? = null,
+
+    /**
+     * Whether the address above was typed here rather than inherited.
+     *
+     * Sign-in refreshes what the provider says, and somebody who has typed
+     * their own address should not have it quietly replaced every time they
+     * arrive. A flag rather than a second column holding the provider's value:
+     * the only question ever asked is whether sign-in may overwrite this, and a
+     * shadow copy nobody reads would be a second answer to "what is their
+     * address". Clearing a chosen address puts this back to false, so the next
+     * sign-in seeds it again.
+     */
+    @Column(name = "email_chosen", nullable = false)
+    var emailChosen: Boolean = false,
+
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -172,6 +196,17 @@ class PasswordTooShortException(shortest: Int) :
     RuntimeException("A password needs at least $shortest characters")
 
 class PasswordWrongException : RuntimeException("That is not the current password")
+
+/**
+ * Something that is not an address was offered as one.
+ *
+ * Checked barely: a name, an at sign, and a domain with a dot in it. Anything
+ * stricter starts refusing addresses that work - a plus in the name, a long
+ * suffix, a host nobody has heard of - and an installation that will not accept
+ * somebody's real address is worse than one that accepts an odd-looking one.
+ */
+class EmailInvalidException(email: String) :
+    RuntimeException("\"$email\" does not look like an email address")
 
 /**
  * Somebody tried to give a password to a user the directory owns.

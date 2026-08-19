@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.server.ResponseStatusException
+import io.mszymanski.orknux.server.user.AppUserRepository
 import io.mszymanski.orknux.server.user.InternalAuthentication
 import org.springframework.security.authentication.AuthenticationManager
 
@@ -34,6 +35,7 @@ class SessionAPI(
     private val properties: SecurityProperties,
     private val resolver: RoleResolver,
     private val internal: InternalAuthentication,
+    private val users: AppUserRepository,
 ) {
 
     private val securityContextRepository = HttpSessionSecurityContextRepository()
@@ -103,7 +105,19 @@ class SessionAPI(
      */
     private fun sessionUser(authentication: Authentication): SessionUser {
         val user = SessionUser(authentication)
-        return user.copy(admin = resolver.administers(user.roles.toSet()))
+        /*
+         * The recorded address wins over the one on the principal. It started
+         * as that same directory attribute, so usually they agree - but where
+         * somebody has typed their own it is the answer, and the top bar
+         * showing the directory's while the preferences page shows theirs would
+         * be this installation disagreeing with itself about where their mail
+         * goes.
+         */
+        val recorded = users.findByUsername(user.username)?.email?.takeIf(String::isNotBlank)
+        return user.copy(
+            admin = resolver.administers(user.roles.toSet()),
+            email = recorded ?: user.email,
+        )
     }
 
     @DeleteMapping
@@ -127,7 +141,12 @@ data class SessionUser @JsonCreator constructor(
     @JsonProperty("roles") val roles: List<String>,
     /** Whether the caller holds the configured admin role. */
     @JsonProperty("admin") val admin: Boolean = false,
-    /** The directory's mail attribute, shown in the user menu; absent when unset. */
+    /**
+     * Where to write to them, shown in the user menu; absent when nobody has
+     * said. Their recorded address where there is one - which is the
+     * directory's until they change it - and the principal's otherwise, for the
+     * moment between arriving at the door and being written down.
+     */
     @JsonProperty("email") val email: String? = null,
 ) {
     constructor(authentication: Authentication) : this(

@@ -96,10 +96,12 @@ class IssueAttachmentAPI(
      */
     @GetMapping("/api/issue-attachments/{id}")
     fun download(@PathVariable id: Long): ResponseEntity<InputStreamResource> {
-        val attachment = attachments.findByIdOrNull(id) ?: throw IssueAttachmentNotFoundException(id)
-        val workspace = workspaces.findByIdOrNull(attachment.workspaceId)
-            ?: throw WorkspaceNotFoundException(attachment.workspaceId)
-        access.requireVisible(workspace)
+        // A file in a workspace the caller cannot see is answered as a file that
+        // is not there. The refusal used to say which, and this endpoint takes a
+        // plain number over HTTP, so the difference between the two answers was
+        // a way of counting what other teams have uploaded.
+        val attachment = attachments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueAttachmentNotFoundException(id)
 
         return downloads.serve(
             filename = attachment.filename,

@@ -45,8 +45,8 @@ class McpServerAPI(
     /** Backs the MCP server settings form; a null secret keeps the stored one. */
     @MutationMapping
     fun updateMcpServer(@Argument id: Long, @Argument input: UpdateMcpServerInput): McpServerView {
-        val server = servers.mcpServer(id) ?: throw McpServerNotFoundException(id)
-        requireWorkspaceAccess(server.workspaceId)
+        val server = servers.mcpServer(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw McpServerNotFoundException(id)
 
         val updated = servers.updateMcpServer(id, input)
         val message = if (server.name == updated.name) {
@@ -60,8 +60,7 @@ class McpServerAPI(
 
     @MutationMapping
     fun removeMcpServer(@Argument id: Long): Boolean {
-        val server = servers.mcpServer(id) ?: return false
-        requireWorkspaceAccess(server.workspaceId)
+        val server = servers.mcpServer(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         if (!servers.removeMcpServer(id)) return false
 
         auditRecorder.record(server.workspaceId, WorkspaceAuditCategory.INTEGRATION, "MCP Server ${server.name} removed")
@@ -71,8 +70,8 @@ class McpServerAPI(
     /** Hands the stored credentials to the settings form behind the "Reveal" action. */
     @MutationMapping
     fun revealMcpServerSecret(@Argument id: Long): String? {
-        val server = servers.mcpServer(id) ?: throw McpServerNotFoundException(id)
-        requireWorkspaceAccess(server.workspaceId)
+        val server = servers.mcpServer(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw McpServerNotFoundException(id)
 
         auditRecorder.record(
             server.workspaceId,

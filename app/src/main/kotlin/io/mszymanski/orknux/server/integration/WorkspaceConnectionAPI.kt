@@ -56,8 +56,8 @@ class WorkspaceConnectionAPI(
      */
     @MutationMapping
     fun updateWorkspaceConnection(@Argument id: Long, @Argument input: UpdateWorkspaceConnectionInput): WorkspaceConnectionView {
-        val connection = connections.workspaceConnection(id) ?: throw ConnectionNotFoundException(id)
-        requireWorkspaceAccess(connection.workspaceId)
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
 
         val updated = connections.updateWorkspaceConnection(id, input)
         auditRecorder.record(
@@ -86,8 +86,8 @@ class WorkspaceConnectionAPI(
         @Argument id: Long,
         @Argument addToExistingWorkspaces: Boolean? = null,
     ): ConnectionView {
-        val connection = connections.workspaceConnection(id) ?: throw ConnectionNotFoundException(id)
-        requireWorkspaceAccess(connection.workspaceId)
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
         // A default is everybody's, so making one is an administrator's to do.
         access.requireAdmin()
 
@@ -123,8 +123,7 @@ class WorkspaceConnectionAPI(
      */
     @MutationMapping
     fun disconnectWorkspaceConnection(@Argument id: Long): Boolean {
-        val connection = connections.workspaceConnection(id) ?: return false
-        requireWorkspaceAccess(connection.workspaceId)
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         if (!connections.disconnectWorkspaceConnection(id)) return false
 
         auditRecorder.record(
@@ -138,8 +137,8 @@ class WorkspaceConnectionAPI(
     /** Calls the service and keeps what came back, which is what status reports. */
     @MutationMapping
     fun testWorkspaceConnection(@Argument id: Long): WorkspaceConnectionView {
-        val connection = connections.workspaceConnection(id) ?: throw ConnectionNotFoundException(id)
-        requireWorkspaceAccess(connection.workspaceId)
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
 
         val checked = connections.testWorkspaceConnection(id)
         auditRecorder.record(
@@ -153,8 +152,8 @@ class WorkspaceConnectionAPI(
     /** Hands the stored credentials to the settings form behind the "Reveal" action. */
     @MutationMapping
     fun revealWorkspaceConnectionSecret(@Argument id: Long): String? {
-        val connection = connections.workspaceConnection(id) ?: throw ConnectionNotFoundException(id)
-        requireWorkspaceAccess(connection.workspaceId)
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
 
         auditRecorder.record(
             connection.workspaceId,

@@ -102,8 +102,8 @@ class VariableAPI(
     @MutationMapping
     @Transactional
     fun renameVariableCatalog(@Argument id: Long, @Argument name: String): VariableCatalogView {
-        val catalog = catalogs.findByIdOrNull(id) ?: throw VariableCatalogNotFoundException(id)
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw VariableCatalogNotFoundException(id)
 
         val trimmed = name.trim()
         if (trimmed.isEmpty()) throw VariableCatalogNameInvalidException()
@@ -131,8 +131,7 @@ class VariableAPI(
     @MutationMapping
     @Transactional
     fun deleteVariableCatalog(@Argument id: Long): Boolean {
-        val catalog = catalogs.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val held = variables.countByCatalogId(id)
         if (held > 0) throw VariableCatalogNotEmptyException(catalog.name, held)
@@ -185,8 +184,8 @@ class VariableAPI(
     @MutationMapping
     @Transactional
     fun updateVariable(@Argument id: Long, @Argument input: UpdateVariableInput): VariableView {
-        val variable = variables.findByIdOrNull(id) ?: throw VariableNotFoundException(id)
-        requireWorkspaceAccess(variable.workspaceId)
+        val variable = variables.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw VariableNotFoundException(id)
 
         // Moved first, so a name is checked against the catalog it is going to
         // rather than the one it is leaving.
@@ -229,8 +228,8 @@ class VariableAPI(
     @MutationMapping
     @Transactional
     fun revealVariable(@Argument id: Long): String? {
-        val variable = variables.findByIdOrNull(id) ?: throw VariableNotFoundException(id)
-        requireWorkspaceAccess(variable.workspaceId)
+        val variable = variables.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw VariableNotFoundException(id)
 
         auditRecorder.record(
             variable.workspaceId,
@@ -250,8 +249,7 @@ class VariableAPI(
     @MutationMapping
     @Transactional
     fun deleteVariable(@Argument id: Long): Boolean {
-        val variable = variables.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(variable.workspaceId)
+        val variable = variables.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val usedBy = functions.findByWorkspaceId(variable.workspaceId)
             .filter { function -> function.externals.any { it.variableId == variable.id } }

@@ -89,8 +89,8 @@ class ModelAPI(
 
     @MutationMapping
     fun updateModelProvider(@Argument id: Long, @Argument input: UpdateProviderInput): ModelProviderView {
-        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
-        requireWorkspaceAccess(provider.workspaceId)
+        val provider = models.provider(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ModelProviderNotFoundException(id)
 
         val updated = models.updateProvider(id, input)
         val message = if (provider.name == updated.name) {
@@ -104,8 +104,7 @@ class ModelAPI(
 
     @MutationMapping
     fun removeModelProvider(@Argument id: Long): Boolean {
-        val provider = models.provider(id) ?: return false
-        requireWorkspaceAccess(provider.workspaceId)
+        val provider = models.provider(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         if (!models.removeProvider(id)) return false
 
         auditRecorder.record(
@@ -118,8 +117,8 @@ class ModelAPI(
 
     @MutationMapping
     fun revealModelProviderSecret(@Argument id: Long): String? {
-        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
-        requireWorkspaceAccess(provider.workspaceId)
+        val provider = models.provider(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ModelProviderNotFoundException(id)
 
         auditRecorder.record(
             provider.workspaceId,
@@ -132,8 +131,8 @@ class ModelAPI(
     /** The Test Connection button: what comes back is what the provider said. */
     @MutationMapping
     fun testModelProvider(@Argument id: Long): ModelProviderView {
-        val provider = models.provider(id) ?: throw ModelProviderNotFoundException(id)
-        requireWorkspaceAccess(provider.workspaceId)
+        val provider = models.provider(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ModelProviderNotFoundException(id)
 
         val checked = models.testProvider(id)
         auditRecorder.record(
@@ -146,8 +145,8 @@ class ModelAPI(
 
     @MutationMapping
     fun createModel(@Argument input: CreateModelInput): LlmModelView {
-        val provider = models.provider(input.providerId) ?: throw ModelProviderNotFoundException(input.providerId)
-        requireWorkspaceAccess(provider.workspaceId)
+        val provider = models.provider(input.providerId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ModelProviderNotFoundException(input.providerId)
 
         val created = models.createModel(input)
         auditRecorder.record(
@@ -160,8 +159,7 @@ class ModelAPI(
 
     @MutationMapping
     fun updateModel(@Argument id: Long, @Argument input: UpdateModelInput): LlmModelView {
-        val model = models.model(id) ?: throw ModelNotFoundException(id)
-        requireWorkspaceAccess(model.workspaceId)
+        val model = models.model(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ModelNotFoundException(id)
 
         val updated = models.updateModel(id, input)
         val message = if (model.name == updated.name) {
@@ -179,8 +177,7 @@ class ModelAPI(
      */
     @MutationMapping
     fun updateModelQuotas(@Argument id: Long, @Argument input: ModelQuotasArgs): LlmModelView {
-        val model = models.model(id) ?: throw ModelNotFoundException(id)
-        requireWorkspaceAccess(model.workspaceId)
+        val model = models.model(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ModelNotFoundException(id)
 
         val updated = models.updateModelQuotas(
             id,
@@ -197,8 +194,7 @@ class ModelAPI(
 
     @MutationMapping
     fun setModelEnabled(@Argument id: Long, @Argument enabled: Boolean): LlmModelView {
-        val model = models.model(id) ?: throw ModelNotFoundException(id)
-        requireWorkspaceAccess(model.workspaceId)
+        val model = models.model(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ModelNotFoundException(id)
 
         val updated = models.setModelEnabled(id, enabled)
         val what = if (enabled) "activated" else "deactivated"
@@ -208,8 +204,7 @@ class ModelAPI(
 
     @MutationMapping
     fun removeModel(@Argument id: Long): Boolean {
-        val model = models.model(id) ?: return false
-        requireWorkspaceAccess(model.workspaceId)
+        val model = models.model(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         if (!models.removeModel(id)) return false
 
         auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.MODEL, "Model ${model.name} removed")

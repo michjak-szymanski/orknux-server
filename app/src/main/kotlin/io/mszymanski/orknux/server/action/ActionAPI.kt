@@ -95,8 +95,8 @@ class ActionAPI(
     @MutationMapping
     @Transactional
     fun updateAction(@Argument id: Long, @Argument input: UpdateActionInput): ActionView {
-        val action = actions.findByIdOrNull(id) ?: throw ActionNotFoundException(id)
-        requireWorkspaceAccess(action.workspaceId)
+        val action = actions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ActionNotFoundException(id)
 
         val previousName = action.name
         input.name?.trim()?.let { name ->
@@ -143,8 +143,7 @@ class ActionAPI(
     @MutationMapping
     @Transactional
     fun deleteAction(@Argument id: Long): Boolean {
-        val action = actions.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(action.workspaceId)
+        val action = actions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         actions.delete(action)
         auditRecorder.record(action.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Action ${action.name} deleted")

@@ -124,8 +124,8 @@ class MemoryAPI(
     @MutationMapping
     @Transactional
     fun renameMemoryCatalog(@Argument id: Long, @Argument name: String): MemoryCatalogView {
-        val catalog = catalogs.findByIdOrNull(id) ?: throw MemoryCatalogNotFoundException(id)
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw MemoryCatalogNotFoundException(id)
 
         val trimmed = name.trim()
         if (trimmed.isEmpty()) throw MemoryCatalogNameInvalidException()
@@ -147,8 +147,7 @@ class MemoryAPI(
     @MutationMapping
     @Transactional
     fun deleteMemoryCatalog(@Argument id: Long): Boolean {
-        val catalog = catalogs.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val held = memories.countByCatalogId(id)
         memories.deleteByCatalogId(id)
@@ -168,9 +167,8 @@ class MemoryAPI(
     @MutationMapping
     @Transactional
     fun createMemory(@Argument input: CreateMemoryInput): MemoryView {
-        val catalog = catalogs.findByIdOrNull(input.catalogId)
+        val catalog = catalogs.findByIdOrNull(input.catalogId)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw MemoryCatalogNotFoundException(input.catalogId)
-        requireWorkspaceAccess(catalog.workspaceId)
 
         val title = input.title.trim()
         val content = input.content.trim()
@@ -206,9 +204,11 @@ class MemoryAPI(
     @Transactional
     fun updateMemory(@Argument id: Long, @Argument input: UpdateMemoryInput): MemoryView {
         val memory = memories.findByIdOrNull(id) ?: throw MemoryNotFoundException(id)
-        val catalog = catalogs.findByIdOrNull(memory.catalogId)
-            ?: throw MemoryCatalogNotFoundException(memory.catalogId)
-        requireWorkspaceAccess(catalog.workspaceId)
+        // The number being walked here is the memory's, so a memory in a catalog
+        // the caller cannot see has to be refused the way an invented memory id
+        // already is, rather than by naming its catalog.
+        val catalog = catalogs.findByIdOrNull(memory.catalogId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw MemoryNotFoundException(id)
 
         val title = input.title.trim()
         val content = input.content.trim()
@@ -225,8 +225,8 @@ class MemoryAPI(
         val moved = input.catalogId != null && input.catalogId != memory.catalogId
         if (moved) {
             val destination = catalogs.findByIdOrNull(input.catalogId)
+                ?.takeIf { access.canSee(it.workspaceId) }
                 ?: throw MemoryCatalogNotFoundException(requireNotNull(input.catalogId))
-            requireWorkspaceAccess(destination.workspaceId)
             memory.catalogId = requireNotNull(destination.id)
             auditRecorder.record(
                 catalog.workspaceId,
@@ -247,9 +247,10 @@ class MemoryAPI(
     @Transactional
     fun deleteMemory(@Argument id: Long): Boolean {
         val memory = memories.findByIdOrNull(id) ?: return false
-        val catalog = catalogs.findByIdOrNull(memory.catalogId)
-            ?: throw MemoryCatalogNotFoundException(memory.catalogId)
-        requireWorkspaceAccess(catalog.workspaceId)
+        // False for a memory that is not there, and so false for one the caller
+        // cannot see: an error here would say the id was real.
+        val catalog = catalogs.findByIdOrNull(memory.catalogId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: return false
 
         memories.delete(memory)
         auditRecorder.record(

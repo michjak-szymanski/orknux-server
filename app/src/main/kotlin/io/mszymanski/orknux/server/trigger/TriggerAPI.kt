@@ -142,8 +142,8 @@ class TriggerAPI(
     @MutationMapping
     @Transactional
     fun updateTrigger(@Argument id: Long, @Argument input: UpdateTriggerInput): TriggerView {
-        val trigger = triggers.findByIdOrNull(id) ?: throw TriggerNotFoundException(id)
-        requireWorkspaceAccess(trigger.workspaceId)
+        val trigger = triggers.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw TriggerNotFoundException(id)
 
         val name = input.name.trim()
         if (name.isEmpty()) throw TriggerNameInvalidException()
@@ -201,8 +201,8 @@ class TriggerAPI(
     @MutationMapping
     @Transactional
     fun setTriggerEnabled(@Argument id: Long, @Argument enabled: Boolean): TriggerView {
-        val trigger = triggers.findByIdOrNull(id) ?: throw TriggerNotFoundException(id)
-        requireWorkspaceAccess(trigger.workspaceId)
+        val trigger = triggers.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw TriggerNotFoundException(id)
 
         trigger.enabled = enabled
         auditRecorder.record(
@@ -216,8 +216,7 @@ class TriggerAPI(
     @MutationMapping
     @Transactional
     fun deleteTrigger(@Argument id: Long): Boolean {
-        val trigger = triggers.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(trigger.workspaceId)
+        val trigger = triggers.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         triggers.delete(trigger)
         auditRecorder.record(trigger.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Trigger ${trigger.name} deleted")

@@ -253,8 +253,29 @@ class ModelProviderProbe(
 
     /** The client credentials grant itself. */
     private fun fetchEntraToken(provider: ModelProvider): EntraToken {
+        val address = "${properties.entraAuthority.trimEnd('/')}/${provider.tenantId}/oauth2/v2.0/token"
+
+        /*
+         * Asked where it is going, like every other outbound call here.
+         *
+         * The authority is an installation's setting rather than something a
+         * workspace member types, so whoever can point this somewhere is an
+         * administrator already - which made it the easiest one to leave out and
+         * the last one that was. It is still a POST carrying the application's
+         * client secret, and an address nobody vetted is an address that can be
+         * a link-local one, which is where a cloud instance hands out its own
+         * credentials. A secret posted there is gone.
+         *
+         * Before the form is built, so a call that will not be made does not
+         * assemble the secret to send. The reason is returned rather than
+         * logged, the way [ModelChatClient] returns its own: it travels out
+         * through the credential as the failure the provider check and the chat
+         * put in front of whoever configured this.
+         */
+        probe.vet(address)?.let { return EntraToken.Failed("The Entra ID authority cannot be called: $it") }
+
         val uri = try {
-            URI("${properties.entraAuthority.trimEnd('/')}/${provider.tenantId}/oauth2/v2.0/token")
+            URI(address)
         } catch (_: Exception) {
             return EntraToken.Failed("The tenant is not usable in a token URL")
         }

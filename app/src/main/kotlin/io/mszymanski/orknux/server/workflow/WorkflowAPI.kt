@@ -72,8 +72,8 @@ class WorkflowAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw WorkflowNameInvalidException()
 
-        val assignment = assignments.findByIdOrNull(id) ?: throw WorkflowNotFoundException(id)
-        requireWorkspaceAccess(assignment.workspaceId)
+        val assignment = assignments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw WorkflowNotFoundException(id)
 
         val workflow = assignment.workflow
         val previousName = workflow.name
@@ -97,8 +97,8 @@ class WorkflowAPI(
     @MutationMapping
     @Transactional
     fun setWorkflowEnabled(@Argument id: Long, @Argument enabled: Boolean): WorkspaceWorkflowView {
-        val assignment = assignments.findByIdOrNull(id) ?: throw WorkflowNotFoundException(id)
-        requireWorkspaceAccess(assignment.workspaceId)
+        val assignment = assignments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw WorkflowNotFoundException(id)
         assignment.enabled = enabled
         auditRecorder.record(
             assignment.workspaceId,
@@ -112,8 +112,7 @@ class WorkflowAPI(
     @MutationMapping
     @Transactional
     fun removeWorkflow(@Argument id: Long): Boolean {
-        val assignment = assignments.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(assignment.workspaceId)
+        val assignment = assignments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
         assignments.delete(assignment)
         auditRecorder.record(
             assignment.workspaceId,

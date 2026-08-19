@@ -81,8 +81,8 @@ class ConditionAPI(
     @MutationMapping
     @Transactional
     fun updateCondition(@Argument id: Long, @Argument input: UpdateConditionInput): ConditionView {
-        val condition = conditions.findByIdOrNull(id) ?: throw ConditionNotFoundException(id)
-        requireWorkspaceAccess(condition.workspaceId)
+        val condition = conditions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConditionNotFoundException(id)
 
         val previousName = condition.name
         input.name?.trim()?.let { name ->
@@ -123,8 +123,7 @@ class ConditionAPI(
     @MutationMapping
     @Transactional
     fun deleteCondition(@Argument id: Long): Boolean {
-        val condition = conditions.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(condition.workspaceId)
+        val condition = conditions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         // Anything pointing at a deleted condition would have nothing to ask.
         val users = buildList {

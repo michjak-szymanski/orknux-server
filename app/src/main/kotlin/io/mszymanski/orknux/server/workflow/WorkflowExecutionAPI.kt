@@ -110,8 +110,8 @@ class WorkflowExecutionAPI(
      */
     @MutationMapping
     fun rerunExecution(@Argument id: Long): RunDetailView {
-        val previous = runs.execution(id) ?: throw ExecutionNotFoundException(id)
-        requireWorkspaceAccess(previous.workspaceId)
+        val previous = runs.execution(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ExecutionNotFoundException(id)
 
         val started = runs.startExecution(
             StartExecutionInput(
@@ -160,8 +160,8 @@ class WorkflowExecutionAPI(
      */
     @MutationMapping
     fun rerunExecutionStep(@Argument id: Long, @Argument nodeKey: String): RunDetailView {
-        val previous = runs.execution(id) ?: throw ExecutionNotFoundException(id)
-        requireWorkspaceAccess(previous.workspaceId)
+        val previous = runs.execution(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ExecutionNotFoundException(id)
 
         val started = runs.startExecution(
             StartExecutionInput(

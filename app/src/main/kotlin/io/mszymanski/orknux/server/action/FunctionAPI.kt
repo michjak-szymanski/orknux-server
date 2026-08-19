@@ -130,7 +130,7 @@ class FunctionAPI(
     @MutationMapping
     @Transactional
     fun updateFunction(@Argument id: Long, @Argument input: UpdateFunctionInput): FunctionView {
-        val function = functions.findByIdOrNull(id) ?: throw FunctionNotFoundException(id)
+        val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: throw FunctionNotFoundException(id)
         val workspaceId = requireEditable(function)
 
         val previousName = function.name
@@ -210,7 +210,7 @@ class FunctionAPI(
     @MutationMapping
     @Transactional
     fun deleteFunction(@Argument id: Long): Boolean {
-        val function = functions.findByIdOrNull(id) ?: return false
+        val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: return false
         val workspaceId = requireEditable(function)
 
         // Anything pointing at a deleted function would have nothing to call,
@@ -244,13 +244,18 @@ class FunctionAPI(
      * thing that decides what it is, by being loaded again. Refused here and not
      * merely hidden in the interface, so the rule holds for anything calling the
      * API directly.
+     *
+     * Visibility is settled before this is reached, by the same [readable] the
+     * queries use, so that a function in a workspace the caller cannot see is
+     * answered exactly as one that is not there. Asking again here would move
+     * that answer back to a refusal, which is the thing that told a caller its
+     * id was a real one.
      */
     private fun requireEditable(function: WorkflowFunction): Long {
         val workspaceId = function.workspaceId
         if (function.scope != FunctionScope.WORKSPACE || workspaceId == null) {
             throw FunctionExternallyManagedException(function.name)
         }
-        requireWorkspaceAccess(workspaceId)
         return workspaceId
     }
 

@@ -85,8 +85,8 @@ class SkillAPI(
     @MutationMapping
     @Transactional
     fun renameSkillCatalog(@Argument id: Long, @Argument name: String): SkillCatalogView {
-        val catalog = catalogs.findByIdOrNull(id) ?: throw SkillCatalogNotFoundException(id)
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw SkillCatalogNotFoundException(id)
 
         val trimmed = name.trim()
         if (trimmed.isEmpty()) throw SkillCatalogNameInvalidException()
@@ -108,8 +108,7 @@ class SkillAPI(
     @MutationMapping
     @Transactional
     fun deleteSkillCatalog(@Argument id: Long): Boolean {
-        val catalog = catalogs.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(catalog.workspaceId)
+        val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val held = skills.countByCatalogId(id)
         skills.deleteByCatalogId(id)
@@ -166,8 +165,8 @@ class SkillAPI(
     @MutationMapping
     @Transactional
     fun updateSkill(@Argument id: Long, @Argument input: UpdateSkillInput): SkillView {
-        val skill = skills.findByIdOrNull(id) ?: throw SkillNotFoundException(id)
-        requireWorkspaceAccess(skill.workspaceId)
+        val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw SkillNotFoundException(id)
 
         val previousName = skill.name
         input.name?.trim()?.let { name ->
@@ -201,8 +200,8 @@ class SkillAPI(
     @MutationMapping
     @Transactional
     fun setSkillEnabled(@Argument id: Long, @Argument enabled: Boolean): SkillView {
-        val skill = skills.findByIdOrNull(id) ?: throw SkillNotFoundException(id)
-        requireWorkspaceAccess(skill.workspaceId)
+        val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw SkillNotFoundException(id)
 
         skill.enabled = enabled
         val what = if (enabled) "enabled" else "disabled"
@@ -224,8 +223,7 @@ class SkillAPI(
     @MutationMapping
     @Transactional
     fun deleteSkill(@Argument id: Long): Boolean {
-        val skill = skills.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(skill.workspaceId)
+        val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         skills.delete(skill)
         auditRecorder.record(skill.workspaceId, WorkspaceAuditCategory.AGENT, "Skill ${skill.name} deleted")

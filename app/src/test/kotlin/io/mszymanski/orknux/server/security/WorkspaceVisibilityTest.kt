@@ -164,20 +164,26 @@ class WorkspaceVisibilityTest(
         assertThat(workflows.findAll()).isEmpty()
     }
 
+    /**
+     * Still refused, and now refused in the words the absent case uses.
+     *
+     * It used to say "you do not have access to it", which is a different
+     * sentence from the one an invented id gets - and the difference is the
+     * whole answer. Toggling asserts against the made-up id rather than against
+     * a literal message, because what matters is that they match.
+     */
     @Test
     @WithMockUser(username = "bob", roles = ["BACKEND"])
     fun `a member cannot toggle or remove another workspace's workflow`() {
         val workflow = workflows.save(Workflow(name = "Frontend Deploy"))
         val assignment = assignments.save(WorkspaceWorkflow(workspaceId = frontendId, workflow = workflow))
 
-        forbidden(
-            """mutation { setWorkflowEnabled(id: ${assignment.id}, enabled: false) { enabled } }""",
-            "That does not exist, or you do not have access to it",
-        )
-        forbidden(
-            """mutation { removeWorkflow(id: ${assignment.id}) }""",
-            "That does not exist, or you do not have access to it",
-        )
+        answersAlike(requireNotNull(assignment.id)) {
+            """mutation { setWorkflowEnabled(id: $it, enabled: false) { enabled } }"""
+        }
+
+        graphQlTester.document("""mutation { removeWorkflow(id: ${assignment.id}) }""")
+            .execute().path("removeWorkflow").entity(Boolean::class.java).isEqualTo(false)
 
         assertThat(assignments.findAll()).hasSize(1)
     }
@@ -284,6 +290,66 @@ class WorkspaceVisibilityTest(
             .execute().path("workspaceIssue").valueIsNull()
     }
 
+    /**
+     * The mutation half of the same leak.
+     *
+     * A mutation has no null to answer with, so the invisible case throws
+     * whatever the absent case already threw - the same exception with the same
+     * words. Two errors that differed only in wording said "this id is real" as
+     * plainly as naming the workspace did, and the walk that maps an
+     * installation is the same walk either way.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `a mutation on an entity in a hidden workspace answers exactly as one on a made-up id`() {
+        val theirs = requireNotNull(agents.save(agent(frontendId)).id)
+
+        answersAlike(theirs) { """mutation { setAgentEnabled(id: $it, enabled: false) { enabled } }""" }
+        assertThat(agents.findAll().single().enabled).isTrue()
+    }
+
+    /** A second aggregate, so this is a rule rather than one file's habit. */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `commenting on a hidden issue answers exactly as commenting on one that is not there`() {
+        val theirs = requireNotNull(issues.save(issue(frontendId, "Theirs")).id)
+
+        answersAlike(theirs) { """mutation { commentOnIssue(id: $it, content: "Seen") { id } }""" }
+        // Nothing was written on it: a comment stamps the issue as it lands.
+        assertThat(issues.findAll().single().lastCommentAt).isNull()
+    }
+
+    /**
+     * A delete answers false for an id that is not there, so it answers false
+     * for one that is not the caller's. An error would have been the tell.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `deleting an entity in a hidden workspace answers as deleting nothing does`() {
+        val theirs = requireNotNull(actions.save(action(frontendId, "Theirs")).id)
+
+        graphQlTester.document("""mutation { deleteAction(id: $theirs) }""")
+            .execute().path("deleteAction").entity(Boolean::class.java).isEqualTo(false)
+        graphQlTester.document("""mutation { deleteAction(id: $INVENTED) }""")
+            .execute().path("deleteAction").entity(Boolean::class.java).isEqualTo(false)
+
+        assertThat(actions.findAll()).hasSize(1)
+    }
+
+    /**
+     * The half that matters most: refusing everything would satisfy all three
+     * of the above and leave nobody able to change anything.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `a mutation on an entity in a visible workspace still goes through`() {
+        val mine = requireNotNull(agents.save(agent(backendId)).id)
+
+        graphQlTester.document("""mutation { setAgentEnabled(id: $mine, enabled: false) { enabled } }""")
+            .execute().path("setAgentEnabled.enabled").entity(Boolean::class.java).isEqualTo(false)
+        assertThat(agents.findAll().single().enabled).isFalse()
+    }
+
     private fun action(workspaceId: Long, name: String) = WorkflowAction(
         workspaceId = workspaceId,
         name = name,
@@ -314,6 +380,38 @@ class WorkspaceVisibilityTest(
         userId = "alice",
     )
 
+    /**
+     * The single error a document produced, as the pair a caller can tell apart:
+     * what it said and what type it was. Comparing two of these is the whole
+     * question - not what the words are, but that they are the same words.
+     */
+    private fun refusal(document: String): Pair<String, String> {
+        var answer = "" to ""
+        graphQlTester.document(document)
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                answer = errors.single().message.orEmpty() to errors.single().errorType.toString()
+            }
+        return answer
+    }
+
+    /**
+     * Sends the same mutation twice - once with an id in a workspace the caller
+     * cannot see, once with an id nothing was ever saved under - and holds that
+     * the two were told the same thing.
+     *
+     * The number the caller sent is echoed back in the message, so the invented
+     * one is put through the same substitution before the two are compared.
+     * What is being held still is the sentence, not the id the caller already
+     * knew because they typed it.
+     */
+    private fun answersAlike(hidden: Long, mutation: (Long) -> String) {
+        val notYours = refusal(mutation(hidden))
+        val (message, type) = refusal(mutation(INVENTED))
+        assertThat(notYours).isEqualTo(message.replace("$INVENTED", "$hidden") to type)
+    }
+
     private fun forbidden(document: String, message: String) {
         graphQlTester.document(document)
             .execute()
@@ -321,5 +419,10 @@ class WorkspaceVisibilityTest(
             .satisfy { errors ->
                 assertThat(errors).singleElement().extracting { it.message }.isEqualTo(message)
             }
+    }
+
+    private companion object {
+        /** An id nothing was ever saved under, which is the answer to match. */
+        const val INVENTED = 999999L
     }
 }

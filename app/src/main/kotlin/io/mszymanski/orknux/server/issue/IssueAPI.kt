@@ -206,8 +206,8 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun updateIssue(@Argument id: Long, @Argument input: IssueInput): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         input.title?.trim()?.let {
             if (it.isEmpty()) throw IssueTitleInvalidException()
@@ -260,9 +260,10 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun editIssueComment(@Argument id: Long, @Argument content: String): IssueView {
-        val issue = issues.findAll().firstOrNull { held -> held.comments.any { it.id == id } }
+        val issue = issues.findAll()
+            .firstOrNull { held -> held.comments.any { it.id == id } }
+            ?.takeIf { access.canSee(it.workspaceId) }
             ?: throw IssueCommentNotFoundException(id)
-        requireWorkspaceAccess(issue.workspaceId)
 
         val comment = issue.comments.first { it.id == id }
         if (comment.author != currentUser()) throw IssueCommentNotYoursException()
@@ -278,8 +279,8 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun deleteIssue(@Argument id: Long): Boolean {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
         /*
          * The rows go with the issue because the database says so; the bytes do
          * not, and nothing would ever come looking for them again. An issue
@@ -300,8 +301,8 @@ class IssueAPI(
         @Argument content: String,
         @Argument attachmentIds: List<Long>?,
     ): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         val said = content.trim()
         if (said.isEmpty()) throw IssueCommentEmptyException()
@@ -497,8 +498,8 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun addIssueLink(@Argument id: Long, @Argument url: String, @Argument title: String?): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         val address = IssueLinks.clean(url)
         val added = links.save(
@@ -534,8 +535,11 @@ class IssueAPI(
     @Transactional
     fun removeIssueLink(@Argument id: Long): Boolean {
         val held = links.findByIdOrNull(id) ?: throw IssueLinkNotFoundException(id)
-        val issue = issues.findByIdOrNull(held.issueId) ?: throw IssueNotFoundException(held.issueId)
-        requireWorkspaceAccess(issue.workspaceId)
+        // The argument is a link's id, so a link on an issue the caller cannot
+        // see answers as a link that is not there. Naming the issue instead
+        // would say the number was real and whose it was.
+        val issue = issues.findByIdOrNull(held.issueId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueLinkNotFoundException(id)
         if (held.addedBy != currentUser()) throw IssueLinkNotYoursException()
 
         links.delete(held)
@@ -571,8 +575,8 @@ class IssueAPI(
         @Argument observerKind: AssigneeKind?,
         @Argument observerId: String?,
     ): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         val (kind, who) = observerAsked(held.workspaceId, observerKind, observerId)
         val issueId = requireNotNull(held.id)
@@ -606,8 +610,8 @@ class IssueAPI(
         @Argument observerKind: AssigneeKind?,
         @Argument observerId: String?,
     ): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         val (kind, who) = observerAsked(held.workspaceId, observerKind, observerId)
         observers.findByIssueIdAndKindAndObserverId(requireNotNull(held.id), kind, who)?.let {
@@ -736,8 +740,8 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun attachToIssue(@Argument id: Long, @Argument attachmentIds: List<Long>): IssueView {
-        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
 
         val tied = tie(held, attachmentIds, commentId = null)
         if (tied.isNotEmpty()) {
@@ -765,8 +769,8 @@ class IssueAPI(
     @MutationMapping
     @Transactional
     fun removeIssueAttachment(@Argument id: Long): Boolean {
-        val held = attachments.findByIdOrNull(id) ?: throw IssueAttachmentNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = attachments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueAttachmentNotFoundException(id)
         if (held.uploadedBy != currentUser()) throw IssueAttachmentNotYoursException()
 
         attachments.delete(held)

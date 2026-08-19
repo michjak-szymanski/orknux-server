@@ -77,8 +77,7 @@ class ToolAPI(
     @MutationMapping
     @Transactional
     fun updateTool(@Argument id: Long, @Argument input: UpdateToolInput): ToolView {
-        val tool = tools.findByIdOrNull(id) ?: throw ToolNotFoundException(id)
-        requireWorkspaceAccess(tool.workspaceId)
+        val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ToolNotFoundException(id)
 
         val previousName = tool.name
         input.name?.trim()?.let { name ->
@@ -115,8 +114,7 @@ class ToolAPI(
     @MutationMapping
     @Transactional
     fun setToolEnabled(@Argument id: Long, @Argument enabled: Boolean): ToolView {
-        val tool = tools.findByIdOrNull(id) ?: throw ToolNotFoundException(id)
-        requireWorkspaceAccess(tool.workspaceId)
+        val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ToolNotFoundException(id)
 
         tool.enabled = enabled
         val what = if (enabled) "enabled" else "disabled"
@@ -140,8 +138,7 @@ class ToolAPI(
     @MutationMapping
     @Transactional
     fun deleteTool(@Argument id: Long): Boolean {
-        val tool = tools.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(tool.workspaceId)
+        val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         tools.delete(tool)
         auditRecorder.record(tool.workspaceId, WorkspaceAuditCategory.AGENT, "Tool ${tool.name} deleted")

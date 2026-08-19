@@ -73,8 +73,8 @@ class ObjectAPI(
     @MutationMapping
     @Transactional
     fun updateObject(@Argument id: Long, @Argument input: UpdateObjectInput): ObjectView {
-        val held = objects.findByIdOrNull(id) ?: throw ObjectNotFoundException(id)
-        requireWorkspaceAccess(held.workspaceId)
+        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ObjectNotFoundException(id)
 
         val previousName = held.name
         input.name?.trim()?.let { name ->
@@ -108,8 +108,7 @@ class ObjectAPI(
     @MutationMapping
     @Transactional
     fun deleteObject(@Argument id: Long): Boolean {
-        val held = objects.findByIdOrNull(id) ?: return false
-        requireWorkspaceAccess(held.workspaceId)
+        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val users = objects.findByWorkspaceId(held.workspaceId)
             .filter { it.id != id && it.properties.any { property -> property.refObjectId == id } }

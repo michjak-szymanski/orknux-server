@@ -55,6 +55,12 @@ class WorkspaceAccess(
      * A workspace that is not there and one the caller may not see answer alike,
      * which is what lets a query holding an id return null for both rather than
      * confirming, by refusing, that the id was a real one.
+     *
+     * A mutation cannot answer null, so it asks this and then throws whatever it
+     * already throws for an id that is not there - the same exception with the
+     * same words, because a second message would be the difference all over
+     * again. Read it as the one question every resolver taking an id asks
+     * before it will admit the id exists.
      */
     fun canSee(workspaceId: Long): Boolean = workspaces.findByIdOrNull(workspaceId)?.let { canSee(it) } == true
 

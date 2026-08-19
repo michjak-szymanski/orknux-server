@@ -14,9 +14,7 @@ import io.mszymanski.orknux.connector.model.UpdateProviderInput
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
@@ -212,8 +210,7 @@ class ModelAPI(
     }
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        access.requireVisible(workspaceId)
     }
 }
 

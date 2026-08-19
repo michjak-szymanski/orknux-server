@@ -4,7 +4,6 @@ import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.attachment.InstallationSettings
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
@@ -199,8 +198,7 @@ class ChatAPI(
     private fun requireOwn(session: ChatSession) = ownership.requireOwn(session)
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        access.requireVisible(workspaceId)
     }
 }
 

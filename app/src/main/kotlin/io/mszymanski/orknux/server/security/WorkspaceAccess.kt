@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.security
 
 import io.mszymanski.orknux.server.workspace.Workspace
+import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.security.authentication.AnonymousAuthenticationToken
@@ -63,6 +64,30 @@ class WorkspaceAccess(
      * before it will admit the id exists.
      */
     fun canSee(workspaceId: Long): Boolean = workspaces.findByIdOrNull(workspaceId)?.let { canSee(it) } == true
+
+    /**
+     * The workspace behind an id the caller handed us, or the same refusal for one
+     * that is not there and one that is not theirs.
+     *
+     * The distinction used to be visible: an id nothing was saved under answered
+     * "No workspace with id 999" and one belonging to somebody else answered that
+     * access was refused. Two answers to the same question is a directory - walk
+     * the numbers and you learn how many workspaces this installation has and
+     * roughly where they start, without seeing inside any of them.
+     *
+     * So both answer as not there. This is deliberately the *narrower* half of
+     * what [canSee] does for an entity, and it costs something worth naming:
+     * somebody who mistypes a workspace id is told it does not exist rather than
+     * that it is not theirs. That is the honest answer for them anyway - they
+     * cannot see it, so from where they stand it does not exist - and an
+     * administrator, who can see every workspace, still gets the true not-found
+     * for a genuinely missing id.
+     */
+    fun requireVisible(workspaceId: Long): Workspace {
+        val workspace = workspaces.findByIdOrNull(workspaceId)
+        if (workspace == null || !canSee(workspace)) throw WorkspaceNotFoundException(workspaceId)
+        return workspace
+    }
 
     fun requireVisible(workspace: Workspace) {
         if (!canSee(workspace)) throw WorkspaceForbiddenException()

@@ -6,7 +6,6 @@ import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.action.ActionParamView
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -58,8 +57,7 @@ class WorkflowGraphAPI(
      */
     @QueryMapping
     fun actionParameterDefaults(@Argument workspaceId: Long, @Argument actionId: Long): List<NodeMappingView> {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
         val action = actions.findByIdOrNull(actionId) ?: throw ActionNotInCatalogueException(actionId)
         if (action.workspaceId != workspaceId) throw ActionNotInCatalogueException(actionId)
         return parameters.defaultsFor(action).map { NodeMappingView(it.name, it.expression, it.mode) }
@@ -421,8 +419,7 @@ class WorkflowGraphAPI(
 
     /** The workflow has to be assigned to a workspace the caller can see. */
     private fun requireAssignment(workspaceId: Long, workflowId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
         if (!assignments.existsByWorkspaceIdAndWorkflowId(workspaceId, workflowId)) {
             throw WorkflowNotFoundException(workflowId)
         }

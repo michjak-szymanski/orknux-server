@@ -152,13 +152,15 @@ class WorkspaceVisibilityTest(
         graphQlTester.document("""query { workspaceWorkflows(workspaceId: $backendId) { totalElements } }""")
             .execute().path("workspaceWorkflows.totalElements").entity(Int::class.java).isEqualTo(0)
 
+        // Both in the words an id nothing was saved under gets, which is the
+        // point: see the test below for why they have to be the same sentence.
         forbidden(
             """query { workspaceWorkflows(workspaceId: $frontendId) { totalElements } }""",
-            "That does not exist, or you do not have access to it",
+            "No workspace with id $frontendId",
         )
         forbidden(
             """mutation { createWorkflow(input: { workspaceId: $frontendId, name: "Sneaky" }) { id } }""",
-            "That does not exist, or you do not have access to it",
+            "No workspace with id $frontendId",
         )
 
         assertThat(workflows.findAll()).isEmpty()
@@ -410,6 +412,52 @@ class WorkspaceVisibilityTest(
         val notYours = refusal(mutation(hidden))
         val (message, type) = refusal(mutation(INVENTED))
         assertThat(notYours).isEqualTo(message.replace("$INVENTED", "$hidden") to type)
+    }
+
+    /**
+     * The last of the leak #67 closed for entities, closed here for the ids a
+     * caller supplies directly.
+     *
+     * A create path takes a workspace id and nothing else, so it cannot answer
+     * null the way a query can - it has to throw. What matters is that it throws
+     * the *same* thing either way: an id nothing was saved under and an id that
+     * is somebody else's have to be one answer, or walking the numbers still
+     * counts the workspaces on this installation.
+     *
+     * Asserted as one message rather than two assertions on purpose. Two
+     * different-but-both-refusing messages would pass a weaker test and leak
+     * exactly as much.
+     */
+    @Test
+    @WithMockUser(username = "bob", roles = ["BACKEND"])
+    fun `a workspace id that is not yours refuses as one that is not there`() {
+        val missing = frontendId + 10_000
+
+        val hidden = messageFrom("""mutation { createVariableCatalog(workspaceId: $frontendId, name: "keys") { id } }""")
+        val absent = messageFrom("""mutation { createVariableCatalog(workspaceId: $missing, name: "keys") { id } }""")
+
+        assertThat(hidden).isEqualTo("No workspace with id $frontendId")
+        assertThat(absent).isEqualTo("No workspace with id $missing")
+    }
+
+    /**
+     * And the same for a caller holding no workspace role at all, since that is
+     * the caller who would actually be walking the numbers.
+     */
+    @Test
+    @WithMockUser(username = "nobody", roles = ["USERS"])
+    fun `someone in no workspace is told nothing exists`() {
+        assertThat(messageFrom("""mutation { createVariableCatalog(workspaceId: $backendId, name: "keys") { id } }"""))
+            .isEqualTo("No workspace with id $backendId")
+    }
+
+    private fun messageFrom(document: String): String {
+        var message = ""
+        graphQlTester.document(document)
+            .execute()
+            .errors()
+            .satisfy { errors -> message = errors.single().message.orEmpty() }
+        return message
     }
 
     private fun forbidden(document: String, message: String) {

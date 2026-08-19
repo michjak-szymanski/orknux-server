@@ -5,7 +5,6 @@ import io.mszymanski.orknux.server.chat.ChatSessionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.core.io.InputStreamResource
 import org.springframework.data.repository.findByIdOrNull
@@ -50,8 +49,7 @@ class AttachmentAPI(
         @PathVariable workspaceId: Long,
         @RequestParam("files") files: List<MultipartFile>,
     ): ResponseEntity<Any> {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
         if (!settings.attachmentsEnabled()) throw AttachmentsDisabledException()
 
         val limit = settings.maxFileSizeMb() * 1024 * 1024

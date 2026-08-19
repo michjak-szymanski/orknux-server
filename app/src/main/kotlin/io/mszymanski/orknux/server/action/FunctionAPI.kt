@@ -10,7 +10,6 @@ import io.mszymanski.orknux.server.variable.VariableType
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
 import io.mszymanski.orknux.workflow.script.ScriptArity
@@ -492,8 +491,7 @@ class FunctionAPI(
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        access.requireVisible(workspaceId)
     }
 
     /** What an object is called, for an annotation that has to name it. */

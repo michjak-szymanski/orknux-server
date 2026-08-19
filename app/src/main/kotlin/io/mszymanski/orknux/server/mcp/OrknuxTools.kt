@@ -341,10 +341,20 @@ class OrknuxTools(
                     description =
                         "Offers a rewrite of a function's code, shown beside what is there now for them to accept " +
                             "or reject. It does not save anything: they decide, and you are told which they chose. " +
-                            "Send the whole function, not a fragment.",
+                            "Send the whole function, not a fragment. Its parameter list comes from the " +
+                            "declaration you write, so adding, removing or renaming a parameter is done by " +
+                            "writing it there.",
                     parameters = listOf(
                         ToolParameterSpec("function", "The function's name, or its id.", required = true),
-                        ToolParameterSpec("code", "The complete new source, in the language the function is in.", required = true),
+                        ToolParameterSpec(
+                            "code",
+                            "The complete new source, in the language the function is in. What its declaration " +
+                                "takes is what the function takes, so annotate every parameter with its type - " +
+                                "`string`, `number`, `boolean`, `Record<string, unknown>`, `unknown[]`, or the " +
+                                "name of one of this workspace's objects - and keep any workspace variables it " +
+                                "is handed last, in the same order and under the same names.",
+                            required = true,
+                        ),
                         ToolParameterSpec("note", "One line on what this changes and why.", required = false),
                     ),
                 ),

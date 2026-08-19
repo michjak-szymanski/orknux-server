@@ -6,7 +6,6 @@ import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelSpeechClient
 import io.mszymanski.orknux.connector.model.Speech
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
@@ -42,8 +41,7 @@ class SpeechAPI(
         @PathVariable workspaceId: Long,
         @RequestBody said: SpeechRequest,
     ): ResponseEntity<Any> {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
 
         val modelId = workspace.speechModelId
             ?: return refuse(HttpStatus.CONFLICT, "This workspace has no speech model.")

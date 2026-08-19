@@ -3,7 +3,6 @@ package io.mszymanski.orknux.server.workflow
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.monitoring.TemporalLinks
 import io.mszymanski.orknux.workflow.execution.ExecutionDetailView
@@ -16,7 +15,6 @@ import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
 import io.mszymanski.orknux.workflow.execution.GraphVersion
 import io.mszymanski.orknux.workflow.execution.ResumePoint
 import io.mszymanski.orknux.workflow.execution.StartExecutionInput
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
@@ -192,8 +190,7 @@ class WorkflowExecutionAPI(
         edges.findByWorkflowId(workflowId).map(::WorkflowEdgeView)
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        access.requireVisible(workspaceId)
     }
 }
 

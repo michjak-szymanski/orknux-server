@@ -3,9 +3,7 @@ package io.mszymanski.orknux.server.chat
 import io.mszymanski.orknux.connector.model.ModelTranscriptionClient
 import io.mszymanski.orknux.connector.model.Transcription
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.PathVariable
@@ -37,8 +35,7 @@ class TranscriptionAPI(
         @PathVariable workspaceId: Long,
         @RequestParam("audio") audio: MultipartFile,
     ): ResponseEntity<Map<String, Any>> {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
 
         val modelId = workspace.transcriptionModelId
             ?: return refuse(HttpStatus.CONFLICT, "This workspace has no transcription model.")

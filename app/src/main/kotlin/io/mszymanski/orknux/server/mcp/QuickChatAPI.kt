@@ -6,10 +6,8 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.slf4j.LoggerFactory
-import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.stereotype.Service
@@ -181,6 +179,21 @@ class QuickChat(
                     "declared parameters and standard JavaScript built-ins. If something needs a capability the " +
                     "sandbox lacks, say so instead of trying to smuggle it in. " +
                     /*
+                     * The signature is the declaration, and nothing else.
+                     *
+                     * Without this a model asked for a parameter wrote one into
+                     * the code and had the accept refused, because the function
+                     * went on declaring the list it had before. It is one tool
+                     * and one list now: what the declaration takes is what the
+                     * function takes, so the two cannot come apart.
+                     */
+                    "A function's parameters are the ones its declaration lists, so you can add, remove, rename " +
+                    "or retype one by writing the declaration you want and offering it with the same tool - the " +
+                    "parameter list is taken from it when they accept. Annotate every parameter: `string`, " +
+                    "`number`, `boolean`, `Record<string, unknown>`, `unknown[]`, or the name of one of this " +
+                    "workspace's objects. Any workspace variables the function is handed come after its own " +
+                    "parameters and must stay last, in the same order and under the same names. " +
+                    /*
                      * One offer at a time, and honest words when it lands. The
                      * transcript this guards against had three suggestions in
                      * flight, a model narrating a wait that was over, and a
@@ -251,8 +264,7 @@ class QuickChatAPI(
         @PathVariable workspaceId: Long,
         @RequestBody asked: QuickChatRequest,
     ): ResponseEntity<Any> {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        val workspace = access.requireVisible(workspaceId)
 
         val modelId = workspace.quickChatModelId
             ?: return refuse(HttpStatus.CONFLICT, "This workspace has no quick chat model.")

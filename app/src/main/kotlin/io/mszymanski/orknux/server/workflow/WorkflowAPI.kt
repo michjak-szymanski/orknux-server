@@ -3,7 +3,6 @@ package io.mszymanski.orknux.server.workflow
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
-import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
 import io.mszymanski.orknux.server.trigger.TriggerType
@@ -159,8 +158,7 @@ class WorkflowAPI(
     }
 
     private fun requireWorkspaceAccess(workspaceId: Long) {
-        val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
-        access.requireVisible(workspace)
+        access.requireVisible(workspaceId)
     }
 }
 

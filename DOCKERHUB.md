@@ -36,9 +36,22 @@ services:
       ORKNUX_LDAP_URLS: ldap://ldap:389
       ORKNUX_TEMPORAL_TARGET: temporal:7233
       ORKNUX_ALLOWED_ORIGINS: https://orknux.example.com
+      ORKNUX_ATTACHMENTS_LOCATION: /home/orknux/attachments
     volumes:
-      - orknux-data:/app/data      # only if attachments are on
+      - orknux-data:/home/orknux   # only if attachments are on
 ```
+
+The volume goes on the server user's home directory rather than somewhere
+tidier like `/app/data`, and that is not a style choice. This image runs as
+`orknux`, not root; a named volume mounted on a path the image does not already
+contain is created owned by root, and the server then cannot write a single
+attachment. `/home/orknux` exists in the image and belongs to that user, so the
+volume inherits the ownership. Move it if you like, but move it somewhere that
+user can write.
+
+A whole installation, with the database, the directory and Temporal alongside
+this, is [`deploy/compose.yaml`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/compose.yaml)
+in the source repository.
 
 ## Reading the tables
 

@@ -34,6 +34,31 @@ end, and talks only to this service.
 
 ## Running
 
+Two things go by that name here, and neither is a smaller version of the other.
+
+### To run Orknux
+
+One file, the published images, nothing built from source. It brings up the
+server, the interface, Postgres, a directory to sign in against and Temporal:
+
+```
+curl -O https://raw.githubusercontent.com/michjak-szymanski/orknux-server/main/deploy/compose.yaml
+export ORKNUX_SECRET_KEY="$(openssl rand -base64 32)"
+docker compose up -d                 # http://localhost:8080, sign in as alice / password
+```
+
+[deploy/README.md](deploy/README.md) is the whole of it: what each service is
+for and whether it is genuinely required, which image tags to pin to, where the
+data lives, and what to change before it is anything more than a demonstration.
+Read the part about `ORKNUX_SECRET_KEY` before you save a credential rather than
+after.
+
+### To work on Orknux
+
+The compose file at the root of this repository is a different one. It brings up
+only the dependencies, because the server itself is expected to be running from
+Maven on the host, and it publishes their ports so that it can:
+
 ```
 docker compose up -d                 # postgres, openldap and temporal
 ./mvnw spring-boot:run -pl app -am   # http://localhost:8080

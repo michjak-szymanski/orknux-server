@@ -1,0 +1,336 @@
+# A whole Orknux, from the published images.
+#
+# This is the file to copy if you have never seen this project. It runs the
+# images from Docker Hub - nothing here is built from source - and it brings up
+# everything an installation actually needs and nothing it does not:
+#
+#   postgres        the database. Flyway migrates it on the server's first start.
+#   ldap            somewhere to sign in against. Required, in the sense that
+#                   without a directory or an OIDC provider nobody can get in.
+#   temporal        what makes a run durable. Required with the configuration
+#                   below, and the server is pointed at it.
+#   orknux-server   the API and the engine.
+#   orknux-ui       what you open in a browser. It forwards /api, /graphql and
+#                   /mcp to the server, so the browser stays on one origin.
+#
+#   temporal-ui     optional, behind the `debug` profile. See the bottom.
+#
+# Two commands:
+#
+#   export ORKNUX_SECRET_KEY="$(openssl rand -base64 32)"
+#   docker compose -f compose.yaml up -d
+#
+# Then http://localhost:8080, and sign in as `alice` / `password`.
+#
+# The one variable with no default is deliberate; read the comment on it before
+# you decide it is in your way. Everything else has a working default, and the
+# whole list of knobs is at the bottom of this file.
+#
+# Read this alongside deploy/README.md, which says what to change before this
+# is anything other than a demonstration.
+
+name: orknux
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # The database.
+  #
+  # One Postgres, not two: Temporal keeps its own databases (`temporal` and
+  # `temporal_visibility`) in this same server, and creates them itself on first
+  # start. Orknux's schema is Flyway's, applied by the server as it boots, and
+  # JPA runs with `ddl-auto: validate` so the migrations are the only thing that
+  # ever changes it. That is why nothing here initialises a schema.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: orknux
+      POSTGRES_USER: orknux
+      POSTGRES_PASSWORD: ${ORKNUX_DB_PASSWORD:-orknux}
+    volumes:
+      # Postgres 18 declares the volume one level up from PGDATA, so this is the
+      # path that survives; naming .../data instead silently keeps nothing.
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orknux -d orknux"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    # Not published. Nothing outside this file has any business connecting to
+    # it, and a database on a laptop's 5432 is a database somebody else's tool
+    # will find. Add `ports: ["5432:5432"]` yourself if you want psql on it.
+
+  # ---------------------------------------------------------------------------
+  # Somewhere to sign in against.
+  #
+  # Orknux authenticates against a directory or against an OIDC provider - one
+  # or the other, never both, because both would mean an LDAP password for every
+  # account the OIDC provider governs. The default is LDAP, so a directory has
+  # to exist or the sign-in screen has nothing to ask.
+  #
+  # This one is a fixture. It is seeded below with two people whose passwords
+  # are written in this file, which is fine for finding out what Orknux is and
+  # is not fine for anything else. deploy/README.md says how to point the server
+  # at your own directory, or at an OIDC provider instead.
+  # ---------------------------------------------------------------------------
+  ldap:
+    image: osixia/openldap:1.5.0
+    restart: unless-stopped
+    # Without --copy-service the image ignores anything mounted into its
+    # bootstrap directory.
+    command: ["--copy-service"]
+    environment:
+      LDAP_ORGANISATION: Orknux
+      LDAP_DOMAIN: orknux.io
+      LDAP_ADMIN_PASSWORD: ${ORKNUX_LDAP_ADMIN_PASSWORD:-admin}
+    configs:
+      # Carried in this file rather than mounted from disk, so the file you
+      # copied is the whole of what you need. It is read once, when the data
+      # volume is empty; editing it later changes nothing until that volume goes.
+      - source: ldap-bootstrap
+        target: /container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=orknux,dc=io -D cn=admin,dc=orknux,dc=io -w ${ORKNUX_LDAP_ADMIN_PASSWORD:-admin} >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # Durable execution.
+  #
+  # This is what makes a run survive a restart, retry a step and be worth
+  # looking at afterwards. The server is configured to use it, so it is on the
+  # required path here rather than an extra.
+  #
+  # `auto-setup` applies the Temporal schema on every start and creates the
+  # `default` namespace, which is exactly what makes it a one-line dependency
+  # and also what makes it wrong for a serious deployment: there, run
+  # `temporalio/server` and apply the schema yourself with `temporal-sql-tool`,
+  # so a restart is never a migration.
+  #
+  # No dynamic configuration is mounted. The image ships an empty one and
+  # Orknux uses no custom search attributes, so the defaults are the right
+  # answer and there is nothing to keep in step.
+  # ---------------------------------------------------------------------------
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: orknux
+      POSTGRES_PWD: ${ORKNUX_DB_PASSWORD:-orknux}
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ---------------------------------------------------------------------------
+  # The API and the engine.
+  #
+  # Deliberately publishes no port. Everything a browser or a script needs is
+  # reachable through orknux-ui below, on one origin, which is what keeps the
+  # session cookie first-party. Publishing 8080 as well would give you two
+  # addresses for the same server and one of them would set a cookie the other
+  # cannot use.
+  # ---------------------------------------------------------------------------
+  orknux-server:
+    # `latest` follows main. Pin it: set ORKNUX_SERVER_TAG to a release (`0.1`,
+    # `0.1.0`) or to `sha-<commit>`, which never moves. Check what exists at
+    # https://hub.docker.com/r/orknux/orknux-server/tags before you pin - the
+    # release tags lag main.
+    image: orknux/orknux-server:${ORKNUX_SERVER_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ldap:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    environment:
+      # ---------------------------------------------------------------------
+      # The one that matters most.
+      #
+      # This encrypts every credential the server is trusted with - model
+      # provider keys, Slack tokens, MCP secrets - so that a copy of the
+      # database on its own is not enough to use them. 32 bytes, base64:
+      #
+      #     openssl rand -base64 32
+      #
+      # There is no default here on purpose. A key written into a file people
+      # copy is a key every installation shares, which is the same as having no
+      # key at all - so compose stops with the message below rather than
+      # starting a server that will look perfectly healthy and then fail the
+      # first time anything touches a credential.
+      #
+      # Keep it. Back it up somewhere other than the database it protects.
+      # Changing it or losing it makes every secret already stored unreadable -
+      # nothing recovers them, they have to be typed in again - so treat it as
+      # permanent from the moment you save the first credential. Admin ->
+      # Doctor tells you whether the key is set, the right length, and whether
+      # every stored secret can still be read with it.
+      # ---------------------------------------------------------------------
+      ORKNUX_SECRET_KEY: ${ORKNUX_SECRET_KEY:?generate one with `openssl rand -base64 32`, export it as ORKNUX_SECRET_KEY, and keep it - changing it later makes every credential already stored unreadable}
+
+      ORKNUX_DB_URL: jdbc:postgresql://postgres:5432/orknux
+      ORKNUX_DB_USERNAME: orknux
+      ORKNUX_DB_PASSWORD: ${ORKNUX_DB_PASSWORD:-orknux}
+
+      ORKNUX_AUTH_METHOD: ${ORKNUX_AUTH_METHOD:-LDAP}
+      ORKNUX_LDAP_URLS: ldap://ldap:389
+      ORKNUX_LDAP_BASE: dc=orknux,dc=io
+      ORKNUX_LDAP_BIND_DN: cn=admin,dc=orknux,dc=io
+      ORKNUX_LDAP_BIND_PASSWORD: ${ORKNUX_LDAP_ADMIN_PASSWORD:-admin}
+
+      ORKNUX_TEMPORAL_TARGET: temporal:7233
+      # Only used to link out to a run's history. Empty offers no links, which
+      # is the honest answer while the Temporal UI is not running. Set it to
+      # http://localhost:8233 when you bring up the `debug` profile.
+      ORKNUX_TEMPORAL_UI_URL: ${ORKNUX_TEMPORAL_UI_URL:-}
+
+      # Empty allows no cross-origin callers, which is correct here: the browser
+      # only ever talks to orknux-ui, and orknux-ui forwards. Fill this in only
+      # if you serve the interface from a different origin to the API.
+      ORKNUX_ALLOWED_ORIGINS: ${ORKNUX_ALLOWED_ORIGINS:-}
+
+      # Where attached files land. It must be an absolute path on the volume
+      # below - the default is relative to the working directory, which in a
+      # container means attachments written into a layer that goes when the
+      # container does.
+      ORKNUX_ATTACHMENTS_LOCATION: /home/orknux/attachments
+    volumes:
+      # Mounted at the server user's home, not at /app/data, and that is not a
+      # style choice. The image runs as `orknux` (uid 999); a named volume on a
+      # path the image does not already contain is created owned by root, and
+      # the server then cannot write a single attachment. /home/orknux exists in
+      # the image and belongs to that user, so the volume inherits it.
+      - orknux-data:/home/orknux
+    healthcheck:
+      # A TCP connect, because the image carries no curl and no wget. It proves
+      # the server is listening, not that it migrated - `docker compose logs
+      # orknux-server` is where Flyway says what it did.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # What you open.
+  #
+  # Static files served by nginx, with /api, /graphql and /mcp forwarded to the
+  # server. nginx resolves that name once, when it starts, so this waits for the
+  # server: an interface that comes up without a back end serves a sign-in
+  # screen that cannot sign anybody in.
+  #
+  # The manual is part of the bundle and is served at /docs, so an installation
+  # with no way out to the internet still has it.
+  # ---------------------------------------------------------------------------
+  orknux-ui:
+    image: orknux/orknux-ui:${ORKNUX_UI_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      orknux-server:
+        condition: service_started
+    environment:
+      ORKNUX_SERVER_URL: http://orknux-server:8080
+    ports:
+      # The only published port. Change the left half if 8080 is taken.
+      - "${ORKNUX_HTTP_PORT:-8080}:8080"
+
+  # ---------------------------------------------------------------------------
+  # Temporal's own web interface. Not required by anything - it is how a run
+  # that went wrong gets looked at. Left out of the default set so that starting
+  # Orknux does not also start a second, unauthenticated web interface onto the
+  # same data.
+  #
+  #   docker compose --profile debug up -d
+  #   ORKNUX_TEMPORAL_UI_URL=http://localhost:8233 docker compose up -d
+  #
+  # The second line is what makes a run in Orknux link out to its history here.
+  # ---------------------------------------------------------------------------
+  temporal-ui:
+    image: temporalio/ui:2.53.3
+    profiles: ["debug"]
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "${ORKNUX_TEMPORAL_UI_PORT:-8233}:8080"
+
+configs:
+  # Development fixtures, and they read like it. `alice` is in `admins`, which
+  # maps to ROLE_ADMINS and is what sees the Admin section and every workspace;
+  # `bob` is an ordinary member. A group named after a workspace grants access
+  # to that workspace, which is what `backend` demonstrates.
+  #
+  # Both passwords are the word `password`, in a file published on the internet.
+  # Delete these two entries before this directory holds anything you mind
+  # somebody reading.
+  ldap-bootstrap:
+    content: |
+      dn: ou=people,dc=orknux,dc=io
+      objectClass: organizationalUnit
+      ou: people
+
+      dn: ou=groups,dc=orknux,dc=io
+      objectClass: organizationalUnit
+      ou: groups
+
+      dn: uid=alice,ou=people,dc=orknux,dc=io
+      objectClass: inetOrgPerson
+      uid: alice
+      cn: Alice Example
+      sn: Example
+      mail: alice@orknux.io
+      userPassword: password
+
+      dn: uid=bob,ou=people,dc=orknux,dc=io
+      objectClass: inetOrgPerson
+      uid: bob
+      cn: Bob Example
+      sn: Example
+      mail: bob@orknux.io
+      userPassword: password
+
+      dn: cn=admins,ou=groups,dc=orknux,dc=io
+      objectClass: groupOfNames
+      cn: admins
+      member: uid=alice,ou=people,dc=orknux,dc=io
+
+      dn: cn=users,ou=groups,dc=orknux,dc=io
+      objectClass: groupOfNames
+      cn: users
+      member: uid=alice,ou=people,dc=orknux,dc=io
+      member: uid=bob,ou=people,dc=orknux,dc=io
+
+      dn: cn=backend,ou=groups,dc=orknux,dc=io
+      objectClass: groupOfNames
+      cn: backend
+      member: uid=bob,ou=people,dc=orknux,dc=io
+
+volumes:
+  # Named, not bound to a path on your machine, so this file has nothing in it
+  # that only works on the computer it was written on. `docker compose down -v`
+  # removes all four, which is how you start over - and is also how you lose
+  # everything, including the credentials your secret key was protecting.
+  postgres-data:
+  ldap-data:
+  ldap-config:
+  orknux-data:

@@ -13,6 +13,35 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **Links can be added while an issue is being written**, rather than only
+  after it exists, and are hung on it the moment it is filed.
+- **Sorting a list of issues by last comment**, which is not the same as by
+  last change: closing, relabelling and assigning all move the change time, so
+  that order surfaces the housekeeping rather than the conversation. An issue
+  nobody has replied to sorts last either way round.
+- **An address on a user**, taken from the directory or the OIDC provider at
+  sign-in and refreshed from there until somebody types their own - after which
+  sign-in leaves it alone. Yours is in Preferences; an administrator can set
+  anybody's, including an external user's, which is the point.
+- **A run says which run it was started from**, for both kinds of re-run, and
+  links back to it.
+- **Run, in the workflow editor**, which starts the graph in front of you and
+  takes you to the run it made. It uses the draft, deliberately: the point is to
+  try what you are looking at before committing to it.
+
+### Fixed
+
+- The `@` mention list appeared at the bottom of the whole editor box rather
+  than at the mention. In the comment box, which sits low on the page, that put
+  it off the bottom of the window with only the first two names reachable.
+- The sort control's options did not name the field they sorted on - "Newest"
+  sorted by number and read as a date, so a list ordered correctly looked wrong
+  against the times beside it.
+
 ## 0.4.0
 
 ### Added

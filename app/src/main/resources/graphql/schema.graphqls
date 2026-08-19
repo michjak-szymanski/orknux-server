@@ -243,6 +243,20 @@ type Mutation {
     updateIssue(id: ID!, input: IssueInput!): Issue!
     deleteIssue(id: ID!): Boolean!
     """
+    Moves an issue to another workspace, comments, labels, links, observers and
+    files with it. Administrators only.
+
+    Its number changes: numbers are per workspace, so it is given one that is
+    free where it is going, and the one it had is free for the next issue filed
+    where it came from. References written as `#4` elsewhere are left alone -
+    nothing can tell which of them meant this issue - so the move is recorded as
+    a comment on the issue saying where it came from, and in the audit of both
+    workspaces. Refused rather than fudged where something on it could not exist
+    in the destination: an assignee or an observer that is an agent or a model
+    of the workspace it is leaving.
+    """
+    moveIssue(id: ID!, workspaceId: ID!): Issue!
+    """
     Adds a comment, and answers with the issue it was added to. Any files given
     were uploaded beforehand and are put on the comment here.
     """
@@ -263,6 +277,18 @@ type Mutation {
     addIssueLink(id: ID!, url: String!, title: String): Issue!
     "Takes a link off an issue. Only whoever added it may, administrators included."
     removeIssueLink(id: ID!): Boolean!
+    """
+    Adds an observer, who then hears everything the reporter and the assignee
+    hear. Naming nobody means yourself, which anybody in the workspace may do;
+    naming somebody else needs the administrator role. A model cannot observe -
+    there is nowhere for a model to read its news.
+    """
+    observeIssue(id: ID!, observerKind: AssigneeKind, observerId: ID): Issue!
+    """
+    Takes an observer off again, under the same two rules: yourself always, and
+    somebody else with the administrator role.
+    """
+    unobserveIssue(id: ID!, observerKind: AssigneeKind, observerId: ID): Issue!
     "Gives an internal user a password. Administrators only."
     setUserPassword(id: ID!, password: String!): AppUser!
     "Changes your own, which needs the current one."
@@ -2546,6 +2572,8 @@ enum NotificationKind {
     STATUS
     COMMENT
     MENTIONED
+    "You were made an observer of it, and will hear about it from now on."
+    OBSERVING
 }
 
 "One thing that happened, as the bell shows it."
@@ -2641,6 +2669,26 @@ type IssueLink {
     mine: Boolean!
 }
 
+"""
+Somebody who asked to hear about an issue without being given it. A person or
+an agent; never a model, which has nowhere to read its news. Explicit only - the
+reporter and the assignee already hear about everything and are shown in their
+own places.
+"""
+type IssueObserver {
+    kind: AssigneeKind!
+    id: ID!
+    name: String!
+    "The second line: a username, or what kind of thing it is."
+    hint: String!
+    "Themselves, in the ordinary case, or the administrator who decided."
+    addedBy: String!
+    "ISO-8601 offset date-time."
+    addedAt: String!
+    "Whether this is the person reading, so the page knows which button to draw."
+    mine: Boolean!
+}
+
 type IssueComment {
     id: ID!
     author: String!
@@ -2671,6 +2719,8 @@ type Issue {
     attachments: [IssueAttachment!]!
     "Addresses hung on the issue, oldest first."
     links: [IssueLink!]!
+    "Whoever asked to hear about it, oldest first. Only the ones explicitly added."
+    observers: [IssueObserver!]!
     comments: [IssueComment!]!
     "When somebody last said something here, or null if nobody has. Not lastModifiedAt, which closing and relabelling also move."
     lastCommentAt: String

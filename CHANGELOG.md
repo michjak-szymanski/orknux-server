@@ -17,6 +17,60 @@ have failed.
 
 ### Added
 
+- **An issue can be moved to another workspace**, from a **Move** button on the
+  issue itself. Administrators only, because a move takes an issue out of one
+  team's tracker and puts it in another's. Its comments, labels, links,
+  observers and files go with it - the files properly, bytes and all, into the
+  destination's own storage, so the screenshots still open. What cannot come
+  with it is its number, which is per workspace: it is given one that is free
+  where it lands, and the number it had is free again for the next issue filed
+  where it came from. So the address people were sending each other stops
+  working, and a `#4` written in some other issue goes on pointing at whatever
+  holds 4 where it was written. Nothing rewrites those, because nothing can tell
+  which of them meant this issue and editing what other people wrote is not this
+  product's habit; instead the move is written into the issue as a comment
+  saying where it came from, into both workspaces' activity, and told to
+  everybody following it. The dialog says all of this before the button is
+  pressed. Where something on the issue could not exist in the destination - an
+  assignee or an observer that is an agent or a model of the workspace it is
+  leaving - the move is refused in a sentence naming what is in the way, rather
+  than quietly clearing it: an issue that arrives looking like nobody's work is
+  a worse answer than being stopped. People are never in the way, since a user
+  belongs to the installation rather than to a workspace, and neither is an
+  `@name` in a comment for the same reason.
+- **Observers on an issue**, below its labels. An issue's news reached exactly
+  two audiences - whoever has it and whoever filed it - which is the right pair
+  for work somebody has been handed and nobody at all for work that has not: an
+  assistant filing what it found, assigned to no one because handing out work is
+  not its judgement, wrote careful reports that reached an empty room. An
+  observer hears everything the reporter and the assignee hear, including an
+  issue being reopened long after it was closed. Anybody in a workspace can
+  watch or stop watching an issue in one press; an administrator can put
+  somebody else on the list or take them off. A person or an agent can observe,
+  and a model cannot - observing is a statement about who reads, and a model has
+  nowhere to read its news.
+- **`orknux_open_issue` takes observers**, so an assistant can put a finding in
+  front of somebody without assigning them the work. Naming nobody tells the
+  workspace's administrators, which is the default that the silence above
+  argued for; naming anybody replaces it.
+- **Forgotten passwords can be reset by mail.** There is a **Reset** link beside
+  the password box on the sign-in page: type the address on your account and a
+  link arrives that lets you choose a new password. The link works once, stops
+  working an hour after it was sent, and using it signs the account out
+  everywhere it was signed in - which is the point, since the reason for
+  resetting a password is usually that somebody else may know the old one.
+  Only for a user this installation made up who already has a password: a
+  directory or single sign-on account's password belongs to the provider, and
+  there is nothing here to reset. The form answers the same sentence whichever
+  it was, so it cannot be used to find out who has an account.
+  **On upgrade**: two settings are needed before this does anything, and until
+  they are set the form still answers politely and the log says why.
+  `ORKNUX_MAIL_HOST` and `ORKNUX_MAIL_FROM` name the installation's own mail
+  server - deliberately not a workspace's SMTP connection, which belongs to that
+  team and would stop working the day they rotated it. `ORKNUX_BASE_URL` is the
+  address the interface is reached at, since the link has to be written from
+  something
+  and the request's own `Host` header is written by whoever is calling.
 - **Links can be added while an issue is being written**, rather than only
   after it exists, and are hung on it the moment it is filed.
 - **Sorting a list of issues by last comment**, which is not the same as by

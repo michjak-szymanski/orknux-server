@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.security
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.annotation.Primary
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Component
@@ -86,8 +87,15 @@ data class SignInThrottleProperties(
  * running two instances gets two counters that are each strict enough. Buying a
  * shared one would cost an operator a service to run for a benefit they cannot
  * see.
+ *
+ * **Primary, because there is more than one of these.** The class is instantiated
+ * a second time for the forgotten-password form, which needs the same rules and
+ * must not share the counters - otherwise anybody able to reach that form could
+ * put a colleague's username into a pause here. This one is sign-in's, and
+ * anything that wants the other asks for it by name.
  */
 @Component
+@Primary
 @EnableConfigurationProperties(SignInThrottleProperties::class)
 class SignInThrottle(private val properties: SignInThrottleProperties) {
 

@@ -94,6 +94,16 @@ class SecurityConfig {
                  */
                 authorize(HttpMethod.GET, AUTH_METHOD_PATH, permitAll)
                 /*
+                 * Forgetting a password is the one thing that cannot be done
+                 * signed in, so this pair has to be open. What stands in for
+                 * authentication is a link mailed to an address the account
+                 * already had, a throttle counting how often anybody knocks, and
+                 * an answer that is the same sentence whether or not the address
+                 * belongs to anybody.
+                 */
+                authorize(HttpMethod.POST, PASSWORD_RESET_PATH, permitAll)
+                authorize(HttpMethod.POST, "$PASSWORD_RESET_PATH/**", permitAll)
+                /*
                  * A webhook is called by whatever is out there — a build server,
                  * a form, another product — and none of them can sign in here.
                  * What answers is a path nothing else knows and a shape it has
@@ -162,6 +172,9 @@ const val LOGIN_PATH = "/api/session"
 
 /** Open: what the sign-in screen has to know before anybody has signed in. */
 const val AUTH_METHOD_PATH = "/api/auth/method"
+
+/** Open, necessarily: whoever is asking has no password to sign in with. */
+const val PASSWORD_RESET_PATH = "/api/password-reset"
 
 /** Where a webhook trigger answers; open, because its callers cannot sign in. */
 const val WEBHOOK_PATH = "/api/webhooks"

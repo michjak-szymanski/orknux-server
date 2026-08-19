@@ -124,6 +124,15 @@ orknux:
     # Where the interface is served from, when it is not this server. Comma
     # separated; empty allows none, which is right once they share an origin.
     allowed-origins: ${ORKNUX_ALLOWED_ORIGINS:http://localhost:5173}
+    # Where this installation is reached from, as somebody's browser spells it.
+    # Set this in a deployment: it is what a mailed password reset link points at,
+    # and the development default below points at the Vite server.
+    #
+    # It is configured rather than worked out from the request because the Host
+    # header is written by whoever is calling - a link built from it is a link an
+    # attacker chooses the address of, and the link in question opens an account.
+    # Empty means no link can be written and none is sent; the log says so.
+    base-url: ${ORKNUX_BASE_URL:http://localhost:5173}
   webhook:
     # The most a webhook caller may send. This endpoint is open to the internet
     # by necessity - a build server cannot sign in - and the body it posts is
@@ -132,6 +141,34 @@ orknux:
     # far past any real webhook; raise it where a sender genuinely posts more.
     # Anything larger is refused with 413 and never reaches a trigger.
     max-body-size: ${ORKNUX_WEBHOOK_MAX_BODY_SIZE:1MB}
+  mail:
+    # The mail server this installation sends its own mail through - today, the
+    # password reset link and nothing else.
+    #
+    # Not a workspace's SMTP connection, deliberately. Those exist so a team's
+    # workflows can send from the team's address with a credential a workspace
+    # administrator pasted in; a password reset is the installation writing to
+    # somebody about their account, has to work for a person who belongs to no
+    # workspace, and must not stop working the day one team rotates a password.
+    #
+    # Empty host or from means this installation cannot send its own mail. That is
+    # a supported state rather than a misconfiguration - it simply cannot offer a
+    # password reset, and says so in the log rather than borrowing somebody's
+    # relay. Set both to turn the feature on.
+    host: ${ORKNUX_MAIL_HOST:}
+    # Empty takes whatever the security below usually listens on: 587 for
+    # STARTTLS, 465 for TLS, 25 for none.
+    port: ${ORKNUX_MAIL_PORT:}
+    # Empty sends without authenticating, which is what an internal relay on the
+    # same network usually wants.
+    username: ${ORKNUX_MAIL_USERNAME:}
+    password: ${ORKNUX_MAIL_PASSWORD:}
+    # What the mail is from. A relay will not take a message without one.
+    from: ${ORKNUX_MAIL_FROM:}
+    # NONE, STARTTLS or TLS. STARTTLS is required rather than merely offered -
+    # a server that has stopped offering it is refused rather than quietly
+    # receiving the password in the clear.
+    security: ${ORKNUX_MAIL_SECURITY:STARTTLS}
   security:
     # Sees the Admin section and every workspace.
     # LDAP or OIDC. One at a time, deliberately: both would mean an LDAP password
@@ -162,6 +199,24 @@ orknux:
       first-wait: ${ORKNUX_SIGN_IN_FIRST_WAIT:2s}
       longest-wait: ${ORKNUX_SIGN_IN_LONGEST_WAIT:5m}
       forget-after: ${ORKNUX_SIGN_IN_FORGET_AFTER:15m}
+    password-reset:
+      # How long a mailed reset link works for. An hour: the link is a secret
+      # sitting in a mailbox, in the mail server's copy of it and on whatever
+      # phone synchronised it, so what matters is not how long a person needs but
+      # how long that copy stays dangerous. Long enough for a slow relay and a
+      # spam folder checked on the second look, dead well before anybody goes
+      # reading old mail.
+      expiry: ${ORKNUX_PASSWORD_RESET_EXPIRY:1h}
+      # How hard the forgotten-password form may be knocked on. The same rules as
+      # sign-in above and counted separately, so asking about somebody repeatedly
+      # cannot put them into a pause on the sign-in page. Tighter per address
+      # asked about, because asking for a reset is something a person does once.
+      throttle:
+        per-username: ${ORKNUX_PASSWORD_RESET_PER_EMAIL:3}
+        per-address: ${ORKNUX_PASSWORD_RESET_PER_ADDRESS:20}
+        first-wait: ${ORKNUX_PASSWORD_RESET_FIRST_WAIT:2s}
+        longest-wait: ${ORKNUX_PASSWORD_RESET_LONGEST_WAIT:5m}
+        forget-after: ${ORKNUX_PASSWORD_RESET_FORGET_AFTER:15m}
     oidc:
       # The claim carrying group or role membership. There is no standard one:
       # Keycloak and Okta usually say groups, Entra says groups or roles. Each value

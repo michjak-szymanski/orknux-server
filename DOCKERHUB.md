@@ -141,6 +141,30 @@ environment-variable spelling of one is not something anybody should have to
 work out. Empty is a working configuration: a role with no mapping is granted to
 whoever holds an authority derived from its own name.
 
+**Resetting a forgotten password** — a link mailed to the address on the
+account, good once and for an hour. Only for a user this installation made up
+who already has a password: a directory or OIDC account's password belongs to
+the provider. Off until the mail server below and `ORKNUX_BASE_URL` are set, and
+until they are the form still answers the same polite sentence and the log says
+what is missing.
+
+The mail server is the installation's own, deliberately not a workspace's SMTP
+connection: that credential belongs to one team, would stop working the day they
+rotated it, and has nothing to do with an account that may belong to no
+workspace at all.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_MAIL_HOST` | The relay this server sends its own mail through. Empty means it cannot, and cannot offer a password reset. | *none* | **Yes** for password resets |
+| `ORKNUX_MAIL_FROM` | What the mail is from. A relay will not take a message without one. | *none* | **Yes** for password resets |
+| `ORKNUX_MAIL_PORT` | Empty takes what the security below usually listens on: 587, 465 or 25. | *by security* | No |
+| `ORKNUX_MAIL_USERNAME` | Empty sends without authenticating, which is what an internal relay usually wants. | *none* | No |
+| `ORKNUX_MAIL_PASSWORD` | That account's password. | *none* | No |
+| `ORKNUX_MAIL_SECURITY` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than merely offered, so a server that has stopped offering it is refused rather than quietly taking the password in the clear. | `STARTTLS` | No |
+| `ORKNUX_PASSWORD_RESET_EXPIRY` | How long a mailed link works for. The link is a secret sitting in a mailbox, so what matters is not how long a person needs but how long that copy stays dangerous. | `1h` | No |
+| `ORKNUX_PASSWORD_RESET_PER_EMAIL` | Requests about one address that cost nothing; the next one waits. | `3` | No |
+| `ORKNUX_PASSWORD_RESET_PER_ADDRESS` | Requests from one caller that cost nothing. Higher, since an office behind one router is one address. | `20` | No |
+
 ## Runs
 
 Temporal is what makes a run durable — it survives a restart, retries a step,
@@ -223,6 +247,7 @@ workspace's own issue tracker needs nothing else configured here.
 | --- | --- | --- | --- |
 | `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
 | `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is on another origin |
+| `ORKNUX_BASE_URL` | Where the interface is reached from, as somebody's browser spells it. It is what a mailed password reset link points at. Configured rather than worked out from the request, because the `Host` header is written by whoever is calling — a link built from it is a link an attacker chooses the address of, and this one opens an account. | `http://localhost:5173` | **Yes** for password resets |
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider: the provider is where a leaver is disabled, and this is not the lock keeping anybody out. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface is served from this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |

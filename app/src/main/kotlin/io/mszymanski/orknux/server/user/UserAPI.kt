@@ -233,15 +233,6 @@ class UserAPI(
     private fun editor(): String = SecurityContextHolder.getContext().authentication?.name ?: "system"
 
     private companion object {
-        /**
-         * Short enough not to be a fight, long enough to be worth having.
-         *
-         * A length and nothing else: composition rules push people towards
-         * worse passwords they can remember rather than better ones they
-         * cannot.
-         */
-        const val SHORTEST_PASSWORD = 12
-
         /** As long as an address is allowed to be, and the column that holds it. */
         const val LONGEST_EMAIL = 320
 

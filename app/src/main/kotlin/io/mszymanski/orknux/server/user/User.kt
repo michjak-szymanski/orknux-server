@@ -183,7 +183,30 @@ interface AppUserRepository : JpaRepository<AppUser, Long> {
             "or lower(u.displayName) like lower(concat('%', :search, '%')) order by lower(u.displayName)",
     )
     fun search(search: String): List<AppUser>
+
+    /**
+     * Whoever has this address, without regard to case.
+     *
+     * A list rather than one, because nothing stops two accounts recording the
+     * same address - a shared mailbox, or somebody with a second identity for an
+     * assistant. What to do about that is the caller's decision and not the
+     * table's.
+     */
+    @Query("select u from AppUser u where lower(u.email) = lower(:email)")
+    fun findByEmail(email: String): List<AppUser>
 }
+
+/**
+ * Short enough not to be a fight, long enough to be worth having.
+ *
+ * A length and nothing else: composition rules push people towards worse
+ * passwords they can remember rather than better ones they cannot.
+ *
+ * Here rather than beside whichever screen asks for it, because three things now
+ * set a password - an administrator, the owner, and a mailed reset link - and a
+ * minimum that differed between them would be a minimum that meant nothing.
+ */
+const val SHORTEST_PASSWORD = 12
 
 class UserNotFoundException(id: Long) : RuntimeException("No user with id $id")
 

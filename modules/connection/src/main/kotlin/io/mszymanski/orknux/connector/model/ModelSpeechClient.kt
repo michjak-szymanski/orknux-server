@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.model
 
+import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -54,12 +55,17 @@ class ModelSpeechClient(
     private val providers: ModelProviderRepository,
     private val models: LlmModelRepository,
     private val probe: ModelProviderProbe,
+    private val connections: ConnectionProbe,
     private val mapper: ObjectMapper,
 ) {
 
     private val http: HttpClient = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(CONNECT_SECONDS))
+        // Said out loud rather than left to the default, because it is the same
+        // rule the chat client and the probe state: a redirect can leave the
+        // host somebody configured and take the key with it.
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
     /**
@@ -84,15 +90,27 @@ class ModelSpeechClient(
         val provider = providers.findByIdOrNull(model.providerId)
             ?: return Speech.Failed("The provider ${model.name} belongs to has been removed")
 
+        val endpoint = "${provider.endpoint.trimEnd('/')}/audio/speech"
+        val uri = try {
+            URI(endpoint)
+        } catch (_: Exception) {
+            return Speech.Failed("The provider endpoint is not a usable URL")
+        }
+
+        /*
+         * Where this is going is asked about here rather than only behind the
+         * "Test provider" button, because the credential goes with it and a
+         * check nobody has to press is not a check. [ConnectionProbe] decides,
+         * the same rule the connection probe applies, and the refusal comes
+         * back as the failure the reading button reports - which is where the
+         * person who set the endpoint is looking. Asked before the credential
+         * is resolved, so a call that will not be made fetches nothing.
+         */
+        connections.vet(endpoint)?.let { return Speech.Failed("${provider.name} cannot be called: $it") }
+
         val credential = when (val resolved = probe.credentials(provider)) {
             is ModelProviderProbe.Credential.Failed -> return Speech.Failed(resolved.reason)
             is ModelProviderProbe.Credential.Header -> resolved.header
-        }
-
-        val uri = try {
-            URI("${provider.endpoint.trimEnd('/')}/audio/speech")
-        } catch (_: Exception) {
-            return Speech.Failed("The provider endpoint is not a usable URL")
         }
 
         val body = mapper.writeValueAsString(

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.model
 
+import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.data.repository.findByIdOrNull
@@ -111,6 +112,7 @@ class ModelChatClient(
     private val providers: ModelProviderRepository,
     private val models: LlmModelRepository,
     private val probe: ModelProviderProbe,
+    private val connections: ConnectionProbe,
     private val mapper: ObjectMapper,
     private val properties: ModelChatProperties,
     private val usage: ModelUsageRecorder,
@@ -297,16 +299,31 @@ class ModelChatClient(
         val provider = providers.findByIdOrNull(model.providerId)
             ?: return Prepared.Failed("The provider ${model.name} belongs to no longer exists")
 
+        val anthropic = provider.type == ProviderType.ANTHROPIC
+        val endpoint = endpointFor(provider, model, anthropic)
+        val uri = try {
+            URI(endpoint)
+        } catch (_: Exception) {
+            return Prepared.Failed("The provider endpoint is not a usable URL")
+        }
+
+        /*
+         * An endpoint is whatever somebody typed into the provider form, and
+         * this request carries the stored key, so where it is going is asked
+         * about here and not only behind the "Test provider" button - a check
+         * nobody has to press is not a check. [ConnectionProbe] decides, the
+         * same as it does for the probe and for a workflow's own request, and
+         * the refusal is returned rather than logged: it becomes the failure
+         * the chat shows, which is where whoever configured the provider is.
+         *
+         * Before the credential rather than after it, so a call that will not
+         * be made does not decrypt a key or fetch a token to carry.
+         */
+        connections.vet(endpoint)?.let { return Prepared.Failed("${provider.name} cannot be called: $it") }
+
         val credential = when (val resolved = probe.credentials(provider)) {
             is ModelProviderProbe.Credential.Failed -> return Prepared.Failed(resolved.reason)
             is ModelProviderProbe.Credential.Header -> resolved.header
-        }
-
-        val anthropic = provider.type == ProviderType.ANTHROPIC
-        val uri = try {
-            URI(endpointFor(provider, model, anthropic))
-        } catch (_: Exception) {
-            return Prepared.Failed("The provider endpoint is not a usable URL")
         }
 
         val body = if (anthropic) {

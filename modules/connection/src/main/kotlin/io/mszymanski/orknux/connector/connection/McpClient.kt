@@ -60,15 +60,23 @@ data class McpProperties(
 class McpClient(
     private val mapper: ObjectMapper,
     private val properties: McpProperties,
+    private val probe: ConnectionProbe,
 ) {
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(CONNECT_TIMEOUT)
-        .followRedirects(HttpClient.Redirect.NORMAL)
+        // Not followed, for the reason the probe does not follow one either: a
+        // redirect can leave the host somebody configured and take the stored
+        // credential with it, which is how a request meant for an MCP server
+        // ends up delivering a bearer token to whoever answered. The first
+        // response is the answer.
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
     /** What this server offers, or why it could not say. */
     fun tools(server: McpServer): McpListing {
+        refusal(server)?.let { return McpListing.Failed(it) }
+
         val session = open(server) ?: return McpListing.Failed("The server did not complete the MCP handshake")
         val answer = send(server, session, "tools/list", mapper.createObjectNode(), id = 2)
             ?: return McpListing.Failed("The server did not answer tools/list")
@@ -90,6 +98,8 @@ class McpClient(
      * on, which beats the conversation dying because a server was down.
      */
     fun call(server: McpServer, tool: String, arguments: String): String {
+        refusal(server)?.let { return failure(it) }
+
         val session = open(server)
             ?: return failure("${server.name} did not complete the MCP handshake")
 
@@ -116,6 +126,24 @@ class McpClient(
         }
         return mapper.writeValueAsString(mapOf("result" to text))
     }
+
+    /**
+     * Why this server's address must not be called, or null when it may be.
+     *
+     * An address is whatever a workspace member typed, and every request that
+     * goes out carries the stored credential, so it is asked about before the
+     * handshake rather than at the socket - the point of asking is to refuse
+     * while there is still a sentence to hand back. What may be called at all
+     * is [ConnectionProbe]'s decision, the same one a connection check makes,
+     * so there is one rule here and one place to change it.
+     *
+     * The server is named in the answer because that is what the person who
+     * configured it will recognise: this reason travels back to the model as
+     * the tool's result, and from there into the conversation, which is the
+     * only place somebody is watching.
+     */
+    private fun refusal(server: McpServer): String? =
+        probe.vet(server.address)?.let { "${server.name} cannot be called: $it" }
 
     /**
      * Initializes a session and returns its id, or null when the server would

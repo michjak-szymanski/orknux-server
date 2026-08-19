@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.model
 
+import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -38,12 +39,17 @@ class ModelTranscriptionClient(
     private val providers: ModelProviderRepository,
     private val models: LlmModelRepository,
     private val probe: ModelProviderProbe,
+    private val connections: ConnectionProbe,
     private val mapper: ObjectMapper,
 ) {
 
     private val http: HttpClient = HttpClient.newBuilder()
         .version(HttpClient.Version.HTTP_1_1)
         .connectTimeout(Duration.ofSeconds(CONNECT_SECONDS))
+        // Said out loud rather than left to the default, because it is the same
+        // rule the chat client and the probe state: a redirect can leave the
+        // host somebody configured and take the key with it.
+        .followRedirects(HttpClient.Redirect.NEVER)
         .build()
 
     /**
@@ -65,15 +71,27 @@ class ModelTranscriptionClient(
         val provider = providers.findByIdOrNull(model.providerId)
             ?: return Transcription.Failed("The provider ${model.name} belongs to has been removed")
 
+        val endpoint = "${provider.endpoint.trimEnd('/')}/audio/transcriptions"
+        val uri = try {
+            URI(endpoint)
+        } catch (_: Exception) {
+            return Transcription.Failed("The provider endpoint is not a usable URL")
+        }
+
+        /*
+         * Asked before the recording is sent anywhere, and not only behind the
+         * "Test provider" button: the credential rides on this request, and a
+         * check that only happens when somebody presses something is a check
+         * that mostly does not happen. [ConnectionProbe] decides, the same rule
+         * the connection probe applies, and the refusal is what the dictation
+         * button reports back rather than a line in a log. Before the
+         * credential too, so a call that will not be made fetches nothing.
+         */
+        connections.vet(endpoint)?.let { return Transcription.Failed("${provider.name} cannot be called: $it") }
+
         val credential = when (val resolved = probe.credentials(provider)) {
             is ModelProviderProbe.Credential.Failed -> return Transcription.Failed(resolved.reason)
             is ModelProviderProbe.Credential.Header -> resolved.header
-        }
-
-        val uri = try {
-            URI("${provider.endpoint.trimEnd('/')}/audio/transcriptions")
-        } catch (_: Exception) {
-            return Transcription.Failed("The provider endpoint is not a usable URL")
         }
 
         val boundary = "orknux-${UUID.randomUUID()}"

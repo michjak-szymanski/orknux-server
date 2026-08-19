@@ -116,8 +116,8 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_DB_PASSWORD` | `orknux` | The Postgres password, used by Postgres, the server and Temporal alike. Only read when the database volume is first created. |
 | `ORKNUX_LDAP_ADMIN_PASSWORD` | `admin` | The directory's admin password, which is also what the server binds with. |
 | `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP` or `OIDC`. |
-| `ORKNUX_SERVER_TAG` | `latest` | Which `orknux/orknux-server` image. |
-| `ORKNUX_UI_TAG` | `latest` | Which `orknux/orknux-ui` image. |
+| `ORKNUX_SERVER_TAG` | `0.4` | Which `orknux/orknux-server` image. |
+| `ORKNUX_UI_TAG` | `0.4` | Which `orknux/orknux-ui` image. |
 | `ORKNUX_TEMPORAL_UI_URL` | *empty* | Where a run links out to. Empty offers no links, which is right while the Temporal UI is not running. |
 | `ORKNUX_ALLOWED_ORIGINS` | *empty* | Cross-origin callers to allow. Empty is correct here, since the browser only talks to `orknux-ui`. |
 | `ORKNUX_TEMPORAL_UI_PORT` | `8233` | Only with `--profile debug`. |
@@ -136,15 +136,16 @@ Both images are published from CI on every push to `main`:
 - `sha-<commit>` never moves, and is the one to pin to if you want to be certain
   what you are running.
 
-`compose.yaml` uses `latest` so that copying it and running it works. **Pin it
-before you rely on it** - `latest` moving under a running deployment is how an
-upgrade happens to you rather than being something you did.
+`compose.yaml` pins `0.4`, so what you bring up today is what you bring up next
+week. `latest` follows `main` and moving under a running deployment is how an
+upgrade happens to you rather than being something you did. Set
+`ORKNUX_SERVER_TAG` and `ORKNUX_UI_TAG` to move deliberately, and to
+`sha-<commit>` if you want to be certain to the commit.
 
-Worth knowing before you reach for a version number: the release tags lag
-`main`. At the time of writing `orknux/orknux-ui` has `0.3` and `0.3.0` but
-`orknux/orknux-server` stops at `0.1`/`0.1.0`, so the two repositories do not
-currently offer a matching pair of version tags. Check what actually exists
-before you pin:
+Both repositories are at `0.4`/`0.4.0`, released together, and that is what
+this file uses. They are meant to move together - the interface and the server
+are one product released under one version - so pin them to the same number.
+Check what exists before reaching for a different one:
 
 - https://hub.docker.com/r/orknux/orknux-server/tags
 - https://hub.docker.com/r/orknux/orknux-ui/tags

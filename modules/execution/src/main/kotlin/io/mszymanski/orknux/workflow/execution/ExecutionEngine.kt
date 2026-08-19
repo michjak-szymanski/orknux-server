@@ -26,5 +26,11 @@ interface ExecutionEngine {
         input: String? = null,
         /** Which copy to run, where what started it does not decide. See [StartExecutionInput]. */
         version: GraphVersion? = null,
+        /**
+         * Where to pick up an earlier run, instead of starting at the
+         * beginning. The steps ahead of it are carried over from what that run
+         * recorded, and this walks only what is left. See [ResumePoint].
+         */
+        resumeFrom: ResumePoint? = null,
     ): WorkflowExecution
 }

@@ -63,6 +63,7 @@ class ExecutionService(
                 trigger = input.trigger,
                 input = input.payload,
                 version = input.version,
+                resumeFrom = input.resumeFrom,
             ),
         )
 
@@ -93,6 +94,15 @@ data class StartExecutionInput(
      * draft, everything else means what was published.
      */
     val version: GraphVersion? = null,
+    /**
+     * Where to pick up an earlier run rather than start at the beginning.
+     *
+     * A run that failed at the last node of six should not have to redo the
+     * five that worked - for anything that sends or charges, redoing them is
+     * not a repeat but a second occurrence. Null for an ordinary run, which is
+     * every run that is not somebody asking for one step again.
+     */
+    val resumeFrom: ResumePoint? = null,
 )
 
 data class ExecutionView(
@@ -159,6 +169,13 @@ data class ExecutionStepView(
      */
     val actionId: Long?,
     val conditionId: Long?,
+    /** Which way out of a condition this step sent the run; null for the rest. */
+    val branch: EdgeBranch?,
+    /**
+     * Copied from an earlier run rather than performed by this one, which is
+     * what every step ahead of the one a re-run started at looks like.
+     */
+    val carriedOver: Boolean,
     val x: Double,
     val y: Double,
 ) {
@@ -176,6 +193,8 @@ data class ExecutionStepView(
         error = step.error,
         actionId = step.actionId,
         conditionId = step.conditionId,
+        branch = step.branch,
+        carriedOver = step.carriedOver,
         x = step.x,
         y = step.y,
     )

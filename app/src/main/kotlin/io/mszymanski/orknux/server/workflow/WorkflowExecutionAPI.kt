@@ -14,6 +14,7 @@ import io.mszymanski.orknux.workflow.execution.ExecutionStatus
 import io.mszymanski.orknux.workflow.execution.ExecutionStepView
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
 import io.mszymanski.orknux.workflow.execution.GraphVersion
+import io.mszymanski.orknux.workflow.execution.ResumePoint
 import io.mszymanski.orknux.workflow.execution.StartExecutionInput
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
@@ -131,6 +132,48 @@ class WorkflowExecutionAPI(
                 } else {
                     GraphVersion.PUBLISHED
                 },
+            ),
+        )
+        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
+    }
+
+    /**
+     * Runs the workflow again from one of its steps, carrying what the earlier
+     * run had produced by the time it got there.
+     *
+     * Re-running everything is often not an option. A run that failed at the
+     * last node of six had to redo the five that worked, and for a node that
+     * sends a message, files a ticket or takes a payment, redoing it is not a
+     * repeat but a second occurrence - so the safe thing to do with a fixed
+     * node was nothing. This starts at the node and goes on to the end; the
+     * steps ahead of it appear as what they were, marked as carried over.
+     *
+     * The refusals are the execution module's, and they are refusals rather
+     * than best guesses on purpose: a step that never ran, a graph redrawn
+     * since so the node is gone, an answer the earlier run did not record.
+     * Starting a run that quietly reads blank where the earlier one read a
+     * channel is worse than being told it cannot be done.
+     */
+    @MutationMapping
+    fun rerunExecutionStep(@Argument id: Long, @Argument nodeKey: String): RunDetailView {
+        val previous = runs.execution(id) ?: throw ExecutionNotFoundException(id)
+        requireWorkspaceAccess(previous.workspaceId)
+
+        val started = runs.startExecution(
+            StartExecutionInput(
+                workspaceId = previous.workspaceId,
+                workflowId = previous.workflowId,
+                trigger = ExecutionTrigger.MANUAL,
+                payload = previous.input,
+                // The graph the original ran, for the reason rerunExecution
+                // gives: a person pressed this, so it is recorded as manual,
+                // and manual would otherwise mean the draft.
+                version = if (previous.trigger == ExecutionTrigger.MANUAL) {
+                    GraphVersion.DRAFT
+                } else {
+                    GraphVersion.PUBLISHED
+                },
+                resumeFrom = ResumePoint(executionId = id, nodeKey = nodeKey),
             ),
         )
         return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))

@@ -37,8 +37,9 @@ class InlineExecutionEngine(
         trigger: ExecutionTrigger,
         input: String?,
         version: GraphVersion?,
+        resumeFrom: ResumePoint?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input, version)
+        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom)
         val executionId = requireNotNull(plan.execution.id)
 
         /*
@@ -49,6 +50,11 @@ class InlineExecutionEngine(
          * is asked before each one and told what each one decided.
          */
         val gate = BranchGate(plan.edges)
+
+        // A run that begins partway down starts with the exits an earlier run
+        // took already open, or the first step it walks would have nothing
+        // leading to it and be skipped as unreachable.
+        plan.carried.forEach { gate.follow(it.nodeKey, it.branch) }
 
         for ((index, step) in plan.steps.withIndex()) {
             if (!gate.mayRun(step.nodeKey)) {

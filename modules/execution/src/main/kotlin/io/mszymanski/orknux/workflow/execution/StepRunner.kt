@@ -126,6 +126,11 @@ class StepRunner(
 
         step.status = result.status
         step.output = result.output
+        // Which way out of a condition the run went, written down rather than
+        // only acted on: a later run that starts partway down this graph has to
+        // know which edges this one took, and the answer is not recoverable
+        // from the statuses alone - a node with no runtime is skipped too.
+        step.branch = result.branch
         step.finishedAt = OffsetDateTime.now()
         steps.save(step)
 

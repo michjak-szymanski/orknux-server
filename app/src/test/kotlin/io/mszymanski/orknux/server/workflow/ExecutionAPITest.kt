@@ -147,6 +147,51 @@ class ExecutionAPITest(
         assertThat(executions.findAll()).hasSize(2)
     }
 
+    /**
+     * The mutation behind "run it again from here": the steps ahead of the
+     * chosen one come back as what they were, marked, and only the rest is
+     * performed. What may and may not be started is the execution module's, and
+     * RerunFromStepTest is where that lives; this is that the argument reaches
+     * it and the answer comes back shaped for the panel offering the button.
+     */
+    @Test
+    fun `re-running from a step carries what came before it rather than doing it again`() {
+        val id = start().id
+
+        graphQlTester.document(
+            """
+            mutation {
+              rerunExecutionStep(id: $id, nodeKey: "fetch") {
+                id trigger steps { key status carriedOver }
+              }
+            }
+            """,
+        ).execute()
+            .path("rerunExecutionStep.trigger").entity(String::class.java).isEqualTo("MANUAL")
+            .path("rerunExecutionStep.steps[*].key").entityList(String::class.java).containsExactly("trigger", "fetch")
+            .path("rerunExecutionStep.steps[0].carriedOver").entity(Boolean::class.java).isEqualTo(true)
+            .path("rerunExecutionStep.steps[1].carriedOver").entity(Boolean::class.java).isEqualTo(false)
+
+        assertThat(executions.findAll()).hasSize(2)
+    }
+
+    /**
+     * A refusal has to arrive as a sentence, because the panel offering the
+     * button is where somebody reads why it could not be done.
+     */
+    @Test
+    fun `re-running from a node the workflow no longer has says so`() {
+        val id = start().id
+
+        graphQlTester.document("""mutation { rerunExecutionStep(id: $id, nodeKey: "removed-since") { id } }""")
+            .execute()
+            .errors().expect { it.message?.contains("no longer has a step called removed-since") == true }.verify()
+
+        // Nothing half-run left behind: the refusal happens before the run is
+        // written down.
+        assertThat(executions.findAll()).hasSize(1)
+    }
+
     @Test
     fun `an unknown run is null rather than an error`() {
         graphQlTester.document("""query { execution(id: 999999) { id } }""")

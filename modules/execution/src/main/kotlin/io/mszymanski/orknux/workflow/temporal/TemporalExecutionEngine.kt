@@ -4,6 +4,7 @@ import io.mszymanski.orknux.workflow.execution.ExecutionEngine
 import io.mszymanski.orknux.workflow.execution.ExecutionPlanner
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
 import io.mszymanski.orknux.workflow.execution.GraphVersion
+import io.mszymanski.orknux.workflow.execution.ResumePoint
 import io.mszymanski.orknux.workflow.execution.WorkflowExecution
 import io.temporal.client.WorkflowClient
 import io.temporal.client.WorkflowOptions
@@ -34,8 +35,9 @@ class TemporalExecutionEngine(
         trigger: ExecutionTrigger,
         input: String?,
         version: GraphVersion?,
+        resumeFrom: ResumePoint?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input, version)
+        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom)
         val executionId = requireNotNull(plan.execution.id)
 
         val workflow = client.newWorkflowStub(
@@ -56,6 +58,7 @@ class TemporalExecutionEngine(
             steps = plan.steps.map { it.nodeKey },
             input = input,
             edges = plan.edges.map { PlanEdge(it.source, it.target, it.branch) },
+            carried = plan.carried.map { PlanExit(it.nodeKey, it.branch) },
         ))
 
         return plan.execution

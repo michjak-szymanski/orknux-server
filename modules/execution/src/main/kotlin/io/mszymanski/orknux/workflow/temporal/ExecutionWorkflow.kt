@@ -50,6 +50,21 @@ data class RunPlan @JsonCreator constructor(
      * fetched mid-run could answer differently the second time it is walked.
      */
     @JsonProperty("edges") val edges: List<PlanEdge> = emptyList(),
+    /**
+     * The exits an earlier run already took, for a plan that begins partway
+     * down the graph.
+     *
+     * Empty for an ordinary run. Sent with the plan for the same reason the
+     * edges are: what the workflow decides has to be replayable from history,
+     * and reading the earlier run again mid-flight could answer differently.
+     */
+    @JsonProperty("carried") val carried: List<PlanExit> = emptyList(),
+)
+
+/** One step an earlier run took, and which way out of it that run went. */
+data class PlanExit @JsonCreator constructor(
+    @JsonProperty("nodeKey") val nodeKey: String,
+    @JsonProperty("branch") val branch: EdgeBranch? = null,
 )
 
 /** One edge as the plan carries it, with the answer it leaves by. */
@@ -128,6 +143,11 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
          * carried it would be the worst kind of difference.
          */
         val gate = BranchGate(plan.edges.map { GraphEdge(it.source, it.target, it.branch) })
+
+        // A run that begins partway down starts with the exits an earlier run
+        // took already open, or the first step it walks would have nothing
+        // leading to it and be skipped as unreachable.
+        plan.carried.forEach { gate.follow(it.nodeKey, it.branch) }
 
         for ((index, nodeKey) in plan.steps.withIndex()) {
             val unreached = plan.steps.size - index - 1

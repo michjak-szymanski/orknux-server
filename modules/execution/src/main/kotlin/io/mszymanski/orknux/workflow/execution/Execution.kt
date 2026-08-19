@@ -189,6 +189,30 @@ class ExecutionStep(
     @Column(nullable = false, length = 16)
     var status: StepStatus = StepStatus.PENDING,
 
+    /**
+     * Which way out of a condition this step sent the run.
+     *
+     * Null for every kind that answers nothing, and for a condition drawn
+     * without branches. Kept because a run started from a node halfway down the
+     * graph has to know which edges the earlier run took: without it, a branch
+     * the earlier run refused is indistinguishable from one it never reached,
+     * and the new run would revive it.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    var branch: EdgeBranch? = null,
+
+    /**
+     * Copied from an earlier run rather than performed by this one.
+     *
+     * A run that starts partway down shows the steps ahead of it as they were,
+     * so the page reads end to end. That would otherwise claim work this run
+     * never did, which is why it is written down rather than inferred from the
+     * times.
+     */
+    @Column(name = "carried_over", nullable = false)
+    var carriedOver: Boolean = false,
+
     @Column(name = "position_x", nullable = false)
     val x: Double,
 

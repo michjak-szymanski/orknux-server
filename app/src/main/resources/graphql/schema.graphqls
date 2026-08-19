@@ -411,6 +411,16 @@ type Mutation {
     startExecution(workspaceId: ID!, workflowId: ID!, input: String): ExecutionDetail!
     "Runs the workflow of an earlier run again."
     rerunExecution(id: ID!): ExecutionDetail!
+    """
+    Runs the workflow again starting at one of an earlier run's steps, carrying
+    what that run had produced by the time it reached it.
+
+    The steps ahead of the chosen one are not performed again: they appear in
+    the new run as what they were, marked `carriedOver`. Refused where it
+    cannot honestly be done - a step that never ran, a node the graph no longer
+    has, a branch the earlier run did not take.
+    """
+    rerunExecutionStep(id: ID!, nodeKey: String!): ExecutionDetail!
 }
 
 type Workspace {
@@ -1479,6 +1489,10 @@ type ExecutionStep {
     "The catalogue entry the step ran, so the run can link back to it."
     actionId: ID
     conditionId: ID
+    "Which way out of a condition this step sent the run; null for every other kind."
+    branch: EdgeBranch
+    "Copied from an earlier run rather than performed here, which is what every step ahead of a re-run's starting point is."
+    carriedOver: Boolean!
     x: Float!
     y: Float!
 }

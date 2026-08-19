@@ -25,7 +25,8 @@ class FakeWorkflowGraphSource : WorkflowGraphSource {
 /**
  * A runner for the tests to steer: nodes named `ok…` do work and hand something
  * on, `wait…` parks for an hour the first time and is done the second, `boom`
- * fails. Ahead of [UnimplementedNodeRunner], which claims everything.
+ * fails, and `asks-yes…` / `asks-no…` answer the way a condition does. Ahead of
+ * [UnimplementedNodeRunner], which claims everything.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 class ScriptedNodeRunner : NodeRunner {
@@ -34,6 +35,13 @@ class ScriptedNodeRunner : NodeRunner {
 
     override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult = when {
         step.name == "boom" -> throw IllegalStateException("boom has no answer")
+        // What ConditionNodeRunner reports for a condition that holds and one
+        // that does not, including the halt on a no: how the graph is drawn
+        // decides whether that is a fork or an ending, not the runner.
+        step.name.startsWith("asks-yes") ->
+            StepResult(StepStatus.COMPLETED, "${step.name} holds", branch = EdgeBranch.YES)
+        step.name.startsWith("asks-no") ->
+            StepResult(StepStatus.COMPLETED, "${step.name} did not hold", halt = true, branch = EdgeBranch.NO)
         step.name.startsWith("ok") -> StepResult(StepStatus.COMPLETED, "${step.name} did the work")
         step.name.startsWith("wait") -> park(step)
         else -> UnimplementedNodeRunner().run(step, input)

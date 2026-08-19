@@ -90,6 +90,16 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             // Raised by the execution module while a run is being planned.
             is io.mszymanski.orknux.workflow.execution.WorkflowGraphEmptyException,
             is io.mszymanski.orknux.workflow.execution.WorkflowGraphCyclicException,
+            // Why a run cannot honestly be started at the step somebody chose.
+            // Each carries the reason as a sentence, because the panel offering
+            // the button is where the answer has to be readable.
+            is io.mszymanski.orknux.workflow.execution.StepNotInWorkflowException,
+            is io.mszymanski.orknux.workflow.execution.StepNotInExecutionException,
+            is io.mszymanski.orknux.workflow.execution.StepNeverRanException,
+            is io.mszymanski.orknux.workflow.execution.BranchNotTakenException,
+            is io.mszymanski.orknux.workflow.execution.BranchNotRecordedException,
+            is io.mszymanski.orknux.workflow.execution.StepInputMissingException,
+            is io.mszymanski.orknux.workflow.execution.ExecutionStillRunningException,
             -> ErrorType.BAD_REQUEST
 
             is io.mszymanski.orknux.workflow.execution.WorkflowNotFoundException,

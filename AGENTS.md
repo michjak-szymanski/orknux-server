@@ -258,12 +258,25 @@ CI does the rest: `.github/workflows/ci.yml` builds, runs the suite, runs
 `latest` follows `main`; a `v*` tag also publishes `X.Y.Z` and `X.Y`; every build
 is tagged `sha-<commit>`, which is the only tag that never moves.
 
-**`DOCKERHUB.md` is not published by anything.** It is the Docker Hub repository
-description and is pasted there by hand, so a variable documented in it after a
-release is a variable Docker Hub does not know about until somebody goes and
-updates the description. It claims to list every environment variable the server
-reads; `grep -oE 'ORKNUX_[A-Z0-9_]+' app/src/main/resources/application.yml`
-against it is how that claim gets checked.
+**`DOCKERHUB.md` is published by CI, and has a size limit.** It is the Docker
+Hub repository description, and the publish job pushes it after the images go
+up - last, and after the push, so a description that fails to update cannot stop
+a release. It used to be pasted into a web form by hand, which is how it came to
+be eleven variables out of date while being correct in git; an operator planning
+an upgrade reads the one on Docker Hub, so that gap was the whole of the problem.
+
+Two things follow from it. **Docker Hub takes 25,000 bytes and the action
+truncates silently past that**, so the build fails when the file is over - the
+check is in the `build` job, before the suite, and it says how many bytes to
+lose. Shorten it or move a section into `README.md` and link, but do not let it
+be cut, because the end of the file is where the least-known settings are. And
+**the token needs read, write and delete scope**: updating a description is not
+a push, and a token scoped only to push works perfectly for the image and
+answers 401 for this.
+
+It claims to list every environment variable the server reads;
+`grep -oE 'ORKNUX_[A-Z0-9_]+' app/src/main/resources/application.yml` against it
+is how that claim gets checked.
 
 Three headings, and no others: **Added** for what is new, **Changed** for what
 an existing installation will do differently - the section people actually need

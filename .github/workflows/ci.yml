@@ -26,6 +26,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      # Docker Hub takes 25,000 bytes of description and not one more. The
+      # action that publishes it truncates silently past that and only warns,
+      # which would leave the reference ending mid-sentence with the last two
+      # sections gone - and nothing red anywhere to say so. Checked here rather
+      # than at publish time so it fails on the branch that grew the file,
+      # while somebody is still editing it.
+      - name: The Docker Hub description has to fit
+        run: |
+          limit=25000
+          comfortable=24000
+          size=$(wc -c < DOCKERHUB.md)
+          echo "DOCKERHUB.md is $size bytes of $limit."
+          if [ "$size" -gt "$limit" ]; then
+            echo "::error file=DOCKERHUB.md::$size bytes, and Docker Hub takes $limit. Shorten it by $((size - limit)) bytes, or move a section into README.md and link to it - do not let it be truncated, because the end is where the least-known settings are."
+            exit 1
+          fi
+          if [ "$size" -gt "$comfortable" ]; then
+            echo "::warning file=DOCKERHUB.md::$size bytes, $((limit - size)) short of the $limit Docker Hub allows. Adding another variable or two will break the build - worth shortening now rather than in the middle of a release."
+          fi
 
       - name: Set up JDK
         uses: actions/setup-java@v4
@@ -39,6 +58,7 @@ jobs:
       # configuration in app/pom.xml, so nothing secret is needed to run it.
       - name: Build and test
         run: ./mvnw -B -ntp verify
+
 
       - name: Publish test report
         uses: actions/upload-artifact@v4
@@ -129,3 +149,28 @@ jobs:
           # last one resolved instead of downloading the dependency tree again.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # And the repository description, which until now was a file somebody
+      # remembered to paste into a web form. DOCKERHUB.md claims to list every
+      # environment variable this image reads; a claim that is true in git and
+      # eleven variables out of date on Docker Hub is worse than no claim, and
+      # an operator planning an upgrade reads the one on Docker Hub.
+      #
+      # Last, and after the push, so a description that fails to update cannot
+      # stop the image being published - the images are the release, and this
+      # is the page beside them. It goes red, which is the point.
+      #
+      # The token needs read, write *and* delete: updating a description is not
+      # a push, and a token scoped only to push answers 401 here while working
+      # perfectly in the step above.
+      - name: Update the Docker Hub description
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          # A token of its own, if there is one, because this is the only step
+          # here that needs delete scope - see the note above - and the push
+          # above should not be carrying it. Falls back to the token that
+          # pushes, which then has to be the wider one.
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+          readme-filepath: ./DOCKERHUB.md

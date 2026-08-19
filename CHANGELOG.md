@@ -54,6 +54,12 @@ have failed.
 
 ### Changed
 
+- **The top bar carries the workspace selector, Docs and Admin**, on the right
+  beside the account, and the left is the mark and two links. The selector is on
+  more screens than it was, not fewer - it used to be missing from docs, chat,
+  preferences and the whole admin section, which are exactly the screens
+  somebody comes back to a workspace from.
+
 - **A workspace id you cannot see now reads as one that does not exist.** The
   last of what 0.5.0 closed for entities: the create paths, the workspace model
   setters, the graph editor and plugin parameters all answered two ways, so
@@ -89,6 +95,17 @@ have failed.
   truncates silently.
 
 ### Fixed
+
+- **The last button on a page is no longer under the floating assistant
+  launcher.** On a settings page that is the delete button in the Danger Zone,
+  which overlapped it by 31 by 19 pixels. Padding alone would not have done it:
+  the row was pinned to exactly the window height, so a taller page's content
+  escaped a box that could not grow. The sidebar's background and the
+  attribution strip now reach the bottom of a long page as well.
+
+- **The Admin button is offered only to administrators.** The flag that decides
+  defaulted to on, and eleven pages never set it - one of them the docs page,
+  which anybody signed in can open.
 
 - **The preferences page could not reach its own end.** 611 pixels of it were
   unreachable at 900 tall, with nothing on the screen able to scroll, so every

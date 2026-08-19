@@ -70,6 +70,50 @@ have failed.
   both variables. Every start says so in the log while the account still has it.
   `deploy/README.md` has the whole of it.
 
+### Changed
+
+- **An id that is not yours reads as one that is not real, whether you read it
+  or change it.** A by-id query now answers null for
+  anything the caller cannot see, so an entity in somebody else's workspace is
+  indistinguishable from an id nobody ever used. Every mutation taking an id was
+  still answering two ways - "No action with id 5" for a number nothing was saved
+  under, "That does not exist, or you do not have access to it" for one belonging
+  to a workspace the caller is not in. Same error type, different words, which is
+  the whole of the leak: walking the numbers still mapped out what this
+  installation holds and roughly how much of it there is, and doing it through
+  mutations rather than queries changed nothing except which endpoint answered.
+
+  Sixty-five mutations now throw exactly what the absent case already threw, in
+  the same words, so there is no second message left to tell the two apart. It
+  covers actions, conditions, functions, agents, skills, tools, triggers,
+  workflows, runs, models, model providers, MCP servers, workspace connections,
+  memories and their catalogues, variables and their catalogues, objects, and
+  issues along with their comments, links, observers and files. One more is not a
+  mutation at all: downloading a file attached to an issue is a plain HTTP GET
+  taking a number, and it answered the same two ways. A mutation that already
+  answers false for an id that is not there now answers false for one that is not
+  yours, rather than raising the error that would have been the tell.
+
+  **On upgrade**: nothing to configure. A caller holding an id it is not entitled
+  to is now told the thing does not exist, which is what it is told for an id that
+  never did - so a client that treated the access refusal as "ask an
+  administrator" will see "not found" instead. That is the intended answer, and
+  the interface has said both in the same words since 0.5.0.
+
+### Fixed
+
+- **The Entra ID token endpoint is checked before the client secret is posted to
+  it.** Every outbound call this server makes is asked where it is going, and the
+  service principal token grant was the last one that was not. The authority it
+  posts to is an installation setting rather than anything a workspace member
+  types, so reaching it took the administrator role already - but it is a POST
+  carrying the application's client secret, and an address nobody checked is an
+  address that can be a link-local one, which is where a cloud instance keeps the
+  credentials of everything running on it. It is now vetted exactly as a model
+  endpoint, an MCP server address and a workflow's own request are, and a refusal
+  comes back as the reason the provider check and the chat show rather than as a
+  line in a log.
+
 ## 0.5.0
 
 ### Added
@@ -230,23 +274,6 @@ have failed.
   only that the thing does not exist or is not the caller's, and arrives as not
   found rather than forbidden - which is what the REST side has always answered
   to the same refusal.
-
-  The other half of that leak is now closed too: a query holding an id answers
-  null for anything the caller cannot see, so an entity in somebody else's
-  workspace is indistinguishable from an id that was never used. Before this,
-  three answers came back for an arbitrary number - null, an error, or the thing
-  itself - and the error was the one that said "that id is real". It applies to
-  every by-id query: `action`, `condition`, `function`, `agent`, `skill`, `tool`,
-  `trigger`, `execution`, `model`, `modelProvider`, `mcpServer`,
-  `workspaceConnection`, `memory`, `memoryCatalog`, `variable`, `workflowObject`,
-  `chatSession` and `workspaceIssue`. The five that cannot answer null, because
-  the schema declares what they return non-nullable, refuse instead as though the
-  thing were missing: `memories`, `memoryAuthors`, `triggerFirings`,
-  `discoveredModels` and `modelUsage`.
-  **On upgrade**: nothing to configure. Anything reading these queries has to
-  treat null as "gone or never yours" rather than as an error worth reporting;
-  the interface already does, and now says so in the same words on the action,
-  condition and issue screens as everywhere else.
 - The `@` mention list appeared at the bottom of the whole editor box rather
   than at the mention. In the comment box, which sits low on the page, that put
   it off the bottom of the window with only the first two names reachable.

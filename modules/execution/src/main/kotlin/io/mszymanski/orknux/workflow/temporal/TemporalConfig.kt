@@ -20,10 +20,17 @@ import java.time.Duration
 /**
  * The Temporal client and the worker that runs in this process.
  *
- * The stubs are not connected on creation, so this service starts whether or
- * not Temporal is up — the same rule the GraphQL upstreams follow. A run
- * started while it is down fails at the start, rather than the application
- * refusing to boot.
+ * The stubs are not connected on creation, and the intention was that this
+ * service starts whether or not Temporal is up - the same rule the GraphQL
+ * upstreams follow, with a run started while it is down failing at the start
+ * rather than the application refusing to boot.
+ *
+ * That is not what happens. Pointed at a host that does not resolve, the server
+ * exits 1 during startup, which was found by starting the published image
+ * against a live database and no Temporal while writing deploy/compose.yaml. So
+ * Temporal is on the required path today whatever this comment intended, and a
+ * deployment has to bring it up before the server. Worth fixing rather than
+ * documenting, since the behaviour the comment describes is the better one.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(TemporalProperties::class)

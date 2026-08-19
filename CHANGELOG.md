@@ -13,6 +13,43 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **Links on an issue.** An address gets a row of its own rather than a
+  sentence buried in the description, so what a report points at can be seen at
+  a glance and taken off one at a time. A GitHub address is shown the way people
+  say it - `owner/repo#123` for an issue or pull request, `owner/repo@abc1234`
+  for a commit - worked out from the address alone, so nothing here asks GitHub
+  anything. Only `http` and `https` are ever kept, because what goes on the page
+  is an anchor other people click.
+- **A run can be started again from one of its steps**, rather than only from
+  the beginning. The steps ahead of the chosen one are not performed a second
+  time: they appear as what they were, marked as carried over, and the run
+  starts holding exactly what the earlier one held when it reached that point.
+  It refuses, and says which, where that cannot honestly be done - a step that
+  never ran, a node the graph has since lost, a branch the earlier run did not
+  take.
+- **A compose file that brings up a whole Orknux**, at
+  [`deploy/compose.yaml`](deploy/compose.yaml): the published images, the
+  database, a directory and Temporal, on one published port. The compose file at
+  the root of the repository is a different thing and stays that way - it brings
+  up the dependencies for working on Orknux, not for running it.
+
+### Fixed
+
+- An issue in a list read "opened by alice - 18 minutes ago" beside the time it
+  last *changed*, which on a list of closed issues is when each was closed. Down
+  a list correctly ordered by number the times then ran in no order at all,
+  which is indistinguishable from sorting being broken. It shows when the issue
+  was opened, and when the sort is by last change it shows that too.
+- The volume example for the server image mounted a path the image does not
+  contain, so it was created owned by root and the server - which runs as its
+  own user - could not write a single attachment.
+  **On upgrade**: if you copied that example, move the volume to
+  `/home/orknux` and set `ORKNUX_ATTACHMENTS_LOCATION` accordingly.
+
 ## 0.3.0
 
 ### Added

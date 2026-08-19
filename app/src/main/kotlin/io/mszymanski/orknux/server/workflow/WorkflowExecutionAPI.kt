@@ -132,6 +132,11 @@ class WorkflowExecutionAPI(
                 } else {
                     GraphVersion.PUBLISHED
                 },
+                // So the new run's page can point back at the one somebody
+                // pressed re-run on. Nothing else on the row would say: a
+                // re-run is manual and carries the earlier input, which
+                // describes every hand-started run alike.
+                startedFrom = id,
             ),
         )
         return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
@@ -174,6 +179,7 @@ class WorkflowExecutionAPI(
                     GraphVersion.PUBLISHED
                 },
                 resumeFrom = ResumePoint(executionId = id, nodeKey = nodeKey),
+                startedFrom = id,
             ),
         )
         return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
@@ -212,6 +218,12 @@ data class RunDetailView(
      */
     val stoppedAtNodeKey: String?,
     val stoppedReason: String?,
+    /**
+     * The run this one was started from, when somebody re-ran an earlier one -
+     * the whole of it, or from one of its steps. Null for a run nobody re-ran,
+     * which is what keeps the field worth showing when it is there.
+     */
+    val startedFrom: Long?,
     val steps: List<ExecutionStepView>,
     val edges: List<WorkflowEdgeView>,
     val logs: List<ExecutionLogLineView>,
@@ -241,6 +253,7 @@ data class RunDetailView(
         error = run.error,
         stoppedAtNodeKey = run.stoppedAtNodeKey,
         stoppedReason = run.stoppedReason,
+        startedFrom = run.startedFrom,
         steps = run.steps,
         edges = edges,
         logs = run.logs,

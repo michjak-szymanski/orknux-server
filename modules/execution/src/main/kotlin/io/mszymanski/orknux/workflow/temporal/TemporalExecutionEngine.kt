@@ -36,8 +36,9 @@ class TemporalExecutionEngine(
         input: String?,
         version: GraphVersion?,
         resumeFrom: ResumePoint?,
+        startedFrom: Long?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom)
+        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom, startedFrom)
         val executionId = requireNotNull(plan.execution.id)
 
         val workflow = client.newWorkflowStub(

@@ -176,6 +176,45 @@ class ExecutionAPITest(
     }
 
     /**
+     * Where a run came from is worth keeping because nothing else on it says.
+     *
+     * A re-run is recorded as manual and carries the earlier run's input, which
+     * describes every hand-started run equally well, so without this the run
+     * somebody pressed re-run on is a thing to remember rather than to follow.
+     */
+    @Test
+    fun `re-running records the run it was started from`() {
+        val id = start().id
+
+        graphQlTester.document("""mutation { rerunExecution(id: $id) { id startedFrom } }""")
+            .execute()
+            .path("rerunExecution.startedFrom").entity(Long::class.java).isEqualTo(id)
+    }
+
+    @Test
+    fun `re-running from a step records the run it was started from`() {
+        val id = start().id
+
+        graphQlTester.document(
+            """mutation { rerunExecutionStep(id: $id, nodeKey: "fetch") { id startedFrom } }""",
+        ).execute()
+            .path("rerunExecutionStep.startedFrom").entity(Long::class.java).isEqualTo(id)
+    }
+
+    /**
+     * The null half of it, which is the half that makes the other half mean
+     * something: a column that is never null says nothing when it is set.
+     */
+    @Test
+    fun `a run nobody re-ran was started from nothing`() {
+        val id = start().id
+
+        graphQlTester.document("""query { execution(id: $id) { startedFrom } }""")
+            .execute()
+            .path("execution.startedFrom").valueIsNull()
+    }
+
+    /**
      * A refusal has to arrive as a sentence, because the panel offering the
      * button is where somebody reads why it could not be done.
      */

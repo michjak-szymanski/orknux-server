@@ -1530,6 +1530,11 @@ type ExecutionDetail {
     stoppedReason: String
     "Why the run stopped, when it stopped badly."
     error: String
+    """
+    The run this one was started from, when somebody re-ran an earlier one -
+    all of it, or from one of its steps. Null for a run nobody re-ran.
+    """
+    startedFrom: ID
     steps: [ExecutionStep!]!
     edges: [WorkflowEdge!]!
     logs: [ExecutionLogLine!]!

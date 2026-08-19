@@ -91,6 +91,17 @@ class WorkflowExecution(
     val input: String? = null,
 
     /**
+     * The run this one was started from, when somebody re-ran an earlier one.
+     *
+     * Null for an ordinary run. Written down rather than worked out afterwards
+     * because nothing else on the row says it: a re-run is recorded as manual
+     * and carries the earlier run's input, which describes every hand-started
+     * run equally well and names no particular one.
+     */
+    @Column(name = "started_from")
+    val startedFrom: Long? = null,
+
+    /**
      * What the run is carrying now: everything produced so far, under the names
      * the nodes gave it.
      *

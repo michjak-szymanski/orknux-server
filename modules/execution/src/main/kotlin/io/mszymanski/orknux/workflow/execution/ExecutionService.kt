@@ -64,6 +64,7 @@ class ExecutionService(
                 input = input.payload,
                 version = input.version,
                 resumeFrom = input.resumeFrom,
+                startedFrom = input.startedFrom,
             ),
         )
 
@@ -103,6 +104,16 @@ data class StartExecutionInput(
      * every run that is not somebody asking for one step again.
      */
     val resumeFrom: ResumePoint? = null,
+    /**
+     * The run this one is a re-run of, so the new run can point back at it.
+     *
+     * It belongs here rather than being read off [resumeFrom], because only one
+     * of the two ways of running something again has a resume point: repeating
+     * a whole run starts at the beginning and still came from somewhere. A
+     * resume point does imply it, so giving both is allowed and giving only the
+     * resume point still records the link.
+     */
+    val startedFrom: Long? = null,
 )
 
 data class ExecutionView(
@@ -229,6 +240,8 @@ data class ExecutionDetailView(
     val error: String?,
     /** What the run was started on, so it can be run again on the same thing. */
     val input: String? = null,
+    /** The run this one was started from; null for a run nobody re-ran. */
+    val startedFrom: Long? = null,
     /** The node that ended the run early, and what it said; null for a full run. */
     val stoppedAtNodeKey: String? = null,
     val stoppedReason: String? = null,
@@ -247,6 +260,7 @@ data class ExecutionDetailView(
         durationSeconds = execution.finishedAt?.let { seconds(execution.startedAt, it) },
         error = execution.error,
         input = execution.input,
+        startedFrom = execution.startedFrom,
         stoppedAtNodeKey = execution.stoppedAtNodeKey,
         stoppedReason = execution.stoppedReason,
         steps = steps.map(::ExecutionStepView),

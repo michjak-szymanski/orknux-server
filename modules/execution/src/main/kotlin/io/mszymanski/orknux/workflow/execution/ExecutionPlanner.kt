@@ -73,6 +73,8 @@ class ExecutionPlanner(
      *   the beginning. The steps ahead of that node are copied from what the
      *   earlier run recorded rather than performed again, and the run starts
      *   holding what the earlier one was holding when it reached that node.
+     * @param startedFrom the run this one is a re-run of, recorded so the new
+     *   run can point back at it.
      */
     fun plan(
         workspaceId: Long,
@@ -81,6 +83,7 @@ class ExecutionPlanner(
         input: String?,
         asked: GraphVersion? = null,
         resumeFrom: ResumePoint? = null,
+        startedFrom: Long? = null,
     ): ExecutionPlan {
         /*
          * A person pressing Run means the graph on their screen; anything else
@@ -110,6 +113,13 @@ class ExecutionPlanner(
                 // chosen node. The first step of a re-run is handed exactly
                 // what it was handed before, which is the point of the exercise.
                 carried = earlier?.carried,
+                /*
+                 * Where this run came from. A resume point already names it -
+                 * starting partway down means starting from a particular run -
+                 * so a caller that gives one need not say it twice, and cannot
+                 * lose the link by forgetting to.
+                 */
+                startedFrom = startedFrom ?: resumeFrom?.executionId,
             ),
         )
         val executionId = requireNotNull(execution.id)

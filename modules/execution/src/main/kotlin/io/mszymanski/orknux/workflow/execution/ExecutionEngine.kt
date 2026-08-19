@@ -32,5 +32,10 @@ interface ExecutionEngine {
          * recorded, and this walks only what is left. See [ResumePoint].
          */
         resumeFrom: ResumePoint? = null,
+        /**
+         * The run this one was started from, when it is a re-run. Recorded on
+         * the run so it can point back at it. See [StartExecutionInput].
+         */
+        startedFrom: Long? = null,
     ): WorkflowExecution
 }

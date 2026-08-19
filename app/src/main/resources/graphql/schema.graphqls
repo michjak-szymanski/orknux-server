@@ -228,6 +228,13 @@ type Mutation {
     attachToIssue(id: ID!, attachmentIds: [ID!]!): Issue!
     "Takes a file off an issue. Only whoever attached it may, administrators included."
     removeIssueAttachment(id: ID!): Boolean!
+    """
+    Hangs a web address on an issue. Only http and https are kept: a link is
+    rendered as an anchor on a page other people click.
+    """
+    addIssueLink(id: ID!, url: String!, title: String): Issue!
+    "Takes a link off an issue. Only whoever added it may, administrators included."
+    removeIssueLink(id: ID!): Boolean!
     "Gives an internal user a password. Administrators only."
     setUserPassword(id: ID!, password: String!): AppUser!
     "Changes your own, which needs the current one."
@@ -2475,6 +2482,29 @@ type IssueAttachment {
     mine: Boolean!
 }
 
+"""
+A web address hung on an issue - the pull request that caused it, the dashboard
+that showed it. Only http and https are ever stored.
+"""
+type IssueLink {
+    id: ID!
+    url: String!
+    "What whoever added it called it, or null when they let the address speak."
+    title: String
+    """
+    The address as GitHub reads it: owner/repo, owner/repo#123 for an issue or
+    pull request, owner/repo@abc1234 for a commit. Null when it is not a GitHub
+    address, or is one of a shape this does not read. Worked out from the
+    address alone - nothing asks GitHub whether it exists.
+    """
+    github: String
+    addedBy: String!
+    "ISO-8601 offset date-time."
+    addedAt: String!
+    "Whether the person reading this added it, and so may remove it."
+    mine: Boolean!
+}
+
 type IssueComment {
     id: ID!
     author: String!
@@ -2503,6 +2533,8 @@ type Issue {
     labels: [String!]!
     "What is attached to the issue itself; a comment's files are on the comment."
     attachments: [IssueAttachment!]!
+    "Addresses hung on the issue, oldest first."
+    links: [IssueLink!]!
     comments: [IssueComment!]!
     "ISO-8601 offset date-time."
     createdAt: String!

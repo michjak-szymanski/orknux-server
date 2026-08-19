@@ -59,6 +59,7 @@ class IssueAPI(
     private val access: WorkspaceAccess,
     private val newsDesk: IssueNewsDesk,
     private val attachments: IssueAttachmentRepository,
+    private val links: IssueLinkRepository,
     private val store: AttachmentStore,
     private val installation: InstallationSettings,
 ) {
@@ -348,10 +349,10 @@ class IssueAPI(
          * trips to discover that fourteen of them brought nothing.
          */
         val files = attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(issue.id))
-        return describe(issue, files)
+        return describe(issue, files, links.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)))
     }
 
-    private fun describe(issue: Issue, files: List<IssueAttachment>) = IssueView(
+    private fun describe(issue: Issue, files: List<IssueAttachment>, addresses: List<IssueLink>) = IssueView(
         id = requireNotNull(issue.id),
         workspaceId = issue.workspaceId,
         number = issue.number,
@@ -362,6 +363,7 @@ class IssueAPI(
         assignee = nameFor(issue),
         labels = issue.labels.sorted(),
         attachments = files.filter { it.commentId == null }.map(::describeFile),
+        links = addresses.map(::describeLink),
         comments = issue.comments.map { comment ->
             IssueCommentView(
                 id = requireNotNull(comment.id),
@@ -422,6 +424,96 @@ class IssueAPI(
          */
         mine = attachment.uploadedBy == currentUser(),
     )
+
+    /**
+     * A link as the page shows it, with its GitHub reading worked out now.
+     *
+     * Read rather than stored, on purpose. What `owner/repo#123` is worth
+     * depends only on the address, so keeping a copy of the answer beside it
+     * would be keeping something that can go stale against the rules that
+     * produced it - and improving those rules would mean a migration over every
+     * link anybody has ever added rather than a deployment.
+     */
+    private fun describeLink(link: IssueLink) = IssueLinkView(
+        id = requireNotNull(link.id),
+        url = link.url,
+        title = link.title,
+        github = GitHubAddress.shortNameOf(link.url),
+        addedBy = link.addedBy,
+        addedAt = link.addedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        /*
+         * Whether the person reading this may take it off, answered here for
+         * the reason a comment's `mine` is: the button and the refusal have to
+         * agree, and comparing names in the browser is how they stop agreeing.
+         */
+        mine = link.addedBy == currentUser(),
+    )
+
+    /**
+     * Hangs an address on an issue.
+     *
+     * Nothing is done with it beyond keeping it and reading its shape - see
+     * [GitHubAddress] for why the recognition never asks GitHub anything. What
+     * is done is refusing what a browser should not be handed: [IssueLinks]
+     * decides that, because the page renders this as an anchor other people
+     * click.
+     */
+    @MutationMapping
+    @Transactional
+    fun addIssueLink(@Argument id: Long, @Argument url: String, @Argument title: String?): IssueView {
+        val held = issues.findByIdOrNull(id) ?: throw IssueNotFoundException(id)
+        requireWorkspaceAccess(held.workspaceId)
+
+        val address = IssueLinks.clean(url)
+        val added = links.save(
+            IssueLink(
+                issueId = requireNotNull(held.id),
+                url = address,
+                title = title?.trim()?.take(IssueLinks.MAX_TITLE)?.takeIf { it.isNotEmpty() },
+                addedBy = currentUser(),
+            ),
+        )
+        /*
+         * The audit says what a reader would recognise rather than the address:
+         * a line of forty characters of query string tells whoever is scanning
+         * the log nothing, and `owner/repo#123` tells them what was linked.
+         */
+        audit.record(
+            held.workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Issue #${held.number}: linked ${nameOf(added)}",
+        )
+        return describe(held)
+    }
+
+    /**
+     * Taking a link off again.
+     *
+     * Only whoever added it, exactly as only whoever wrote a comment may change
+     * it and only whoever attached a file may remove it. Not administrators
+     * either - what somebody else put on an issue is part of the record, and an
+     * administrator who needs it gone can delete the issue, which shows.
+     */
+    @MutationMapping
+    @Transactional
+    fun removeIssueLink(@Argument id: Long): Boolean {
+        val held = links.findByIdOrNull(id) ?: throw IssueLinkNotFoundException(id)
+        val issue = issues.findByIdOrNull(held.issueId) ?: throw IssueNotFoundException(held.issueId)
+        requireWorkspaceAccess(issue.workspaceId)
+        if (held.addedBy != currentUser()) throw IssueLinkNotYoursException()
+
+        links.delete(held)
+        audit.record(
+            issue.workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Issue #${issue.number}: unlinked ${nameOf(held)}",
+        )
+        return true
+    }
+
+    /** What to call a link where one line is all there is: the page's own order. */
+    private fun nameOf(link: IssueLink) =
+        link.title ?: GitHubAddress.shortNameOf(link.url) ?: link.url
 
     /**
      * Says which issue - or which of its comments - these files belong to.
@@ -534,6 +626,8 @@ data class IssueView(
     val labels: List<String>,
     /** What was attached to the issue itself; a comment's files are on the comment. */
     val attachments: List<IssueAttachmentView>,
+    /** Addresses hung on the issue, oldest first. */
+    val links: List<IssueLinkView>,
     val comments: List<IssueCommentView>,
     val createdAt: String,
     val lastModifiedAt: String,
@@ -561,6 +655,31 @@ data class IssueAttachmentView(
     val uploadedBy: String,
     val uploadedAt: String,
     /** Whether the person reading this attached it, and so may remove it. */
+    val mine: Boolean,
+)
+
+/**
+ * An address on an issue, as the page shows it.
+ *
+ * Three things to show it by, in order: what somebody called it, what GitHub
+ * would call it, and failing both the address itself. The page picks the first
+ * that is there rather than being told which to use, so the same link reads the
+ * same wherever it appears.
+ */
+data class IssueLinkView(
+    val id: Long,
+    val url: String,
+    /** What whoever added it called it, or null when they let the address speak. */
+    val title: String?,
+    /**
+     * The address as GitHub reads it, or null when it is not a GitHub one.
+     *
+     * By the shape of the address alone - nothing here asks GitHub anything.
+     */
+    val github: String?,
+    val addedBy: String,
+    val addedAt: String,
+    /** Whether the person reading this added it, and so may remove it. */
     val mine: Boolean,
 )
 

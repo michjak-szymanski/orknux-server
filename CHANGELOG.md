@@ -13,7 +13,7 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
-## Unreleased
+## 0.4.0
 
 ### Added
 
@@ -44,6 +44,12 @@ have failed.
   a list correctly ordered by number the times then ran in no order at all,
   which is indistinguishable from sorting being broken. It shows when the issue
   was opened, and when the sort is by last change it shows that too.
+- **Spring Boot 4.0.7**, which closes two things worth naming. Spring LDAP
+  accepted a valid username with an empty password - an unauthenticated bind -
+  on exactly the mechanism this product uses to sign people in, stopped until
+  now only by a guard in a different library. And Tomcat had a request smuggling
+  hole, which matters here because the interface's nginx sits in front of it and
+  the boundary being crossed is the one people authenticate across.
 - The volume example for the server image mounted a path the image does not
   contain, so it was created owned by root and the server - which runs as its
   own user - could not write a single attachment.

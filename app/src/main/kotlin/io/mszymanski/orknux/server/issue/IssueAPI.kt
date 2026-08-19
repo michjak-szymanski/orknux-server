@@ -246,7 +246,14 @@ class IssueAPI(
          */
         val before = held.assignee?.let { it.kind to it.id }
         val heldBy = nameFor(held)?.name
-        if (input.assigneeKind != null || input.assigneeId != null) {
+        /*
+         * The id is what says whether the assignee was touched: absent, the
+         * caller did not mention it; empty, they chose nobody. A kind on its
+         * own names no one and is left alone rather than read as a clear -
+         * half a pair is a client that forgot the other half, not an
+         * instruction.
+         */
+        if (input.assigneeId != null) {
             held.assignee = assigneeFrom(held.workspaceId, input)
         }
         val handedOver = held.assignee?.let { it.kind to it.id } != before
@@ -354,13 +361,19 @@ class IssueAPI(
     /**
      * The assignee an input names, checked against this workspace.
      *
-     * Nothing is trusted from the caller past its kind: an id that names no
-     * agent here is a mistake worth reporting now rather than an issue
+     * The id carries the answer, the way an empty description does: a blank
+     * one is nobody, which is how the page says "No one". A kind without an
+     * id names no one either. An id without a kind is refused rather than
+     * read as one or the other - the two halves mean nothing apart, and
+     * guessing which was meant would clear an issue somebody was assigning.
+     *
+     * Nothing else is trusted from the caller past its kind: an id that names
+     * no agent here is a mistake worth reporting now rather than an issue
      * assigned to a number.
      */
     private fun assigneeFrom(workspaceId: Long, input: IssueInput): Assignee? {
-        val kind = input.assigneeKind ?: return null
         val id = input.assigneeId?.takeIf { it.isNotBlank() } ?: return null
+        val kind = input.assigneeKind ?: throw IssueAssigneeKindMissingException(id)
 
         val known = when (kind) {
             AssigneeKind.USER -> users.findByIdOrNull(id.toLongOrNull() ?: -1) != null
@@ -661,6 +674,14 @@ class IssueAPI(
      * tracker through the tools rather than through this, so an agent named
      * here is always somebody putting an agent on an issue - which is deciding
      * for somebody else, and needs the role.
+     *
+     * The role is a role that administers *this* workspace, not the
+     * installation. Putting somebody on an issue is signing them up to be told
+     * about it, and who is on this workspace's issues is this workspace's
+     * business - it was only ever an installation administrator's because
+     * there was nothing smaller to ask for. An installation administrator
+     * still qualifies everywhere, and somebody who merely belongs to the
+     * workspace still cannot do it.
      */
     private fun observerAsked(
         workspaceId: Long,
@@ -675,7 +696,7 @@ class IssueAPI(
 
         if (kind == AssigneeKind.MODEL) throw IssueObserverInvalidException("A model")
         val itIsMe = kind == AssigneeKind.USER && me?.id?.toString() == id
-        if (!itIsMe) access.requireAdmin()
+        if (!itIsMe) access.requireAdministers(workspaceId)
 
         // Nothing is trusted from the caller past its kind, exactly as an
         // assignee is not: an id that names no agent here is a mistake worth

@@ -1,11 +1,18 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.plugin.Plugin
+import io.mszymanski.orknux.server.plugin.PluginDeclarations
+import io.mszymanski.orknux.server.plugin.PluginFunctionRegistry
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.workflow.script.PluginInspection
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -32,6 +39,10 @@ class ConditionAPITest(
     @Autowired val functions: WorkflowFunctionRepository,
     @Autowired val actions: WorkflowActionRepository,
     @Autowired val nodes: WorkflowNodeRepository,
+    @Autowired val plugins: PluginRepository,
+    @Autowired val registry: PluginFunctionRegistry,
+    @Autowired val declarations: PluginDeclarations,
+    @Autowired val pluginRunner: PluginRunner,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
 ) {
@@ -44,6 +55,7 @@ class ConditionAPITest(
         actions.deleteAll()
         conditions.deleteAll()
         functions.deleteAll()
+        plugins.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
@@ -209,6 +221,76 @@ class ConditionAPITest(
             """,
         ).execute().path("createCondition.id").entity(Long::class.java).get()
 
+    /**
+     * A plugin's function is a function a condition may call.
+     *
+     * It belongs to no workspace by design - `FunctionScope.PLUGIN` says so,
+     * the picker offers it in every workspace, and unloading a plugin counts
+     * the conditions naming its functions - but the gate here compared its
+     * workspace with the condition's, which a null can never match. So the
+     * picker offered something that could not be saved. Run as well as saved:
+     * the implementation is the plugin's, not a script column this workspace
+     * wrote.
+     */
+    @Test
+    fun `a condition can call a function a plugin declared`() {
+        val declared = pluginFunction()
+
+        val id = graphQlTester.document(
+            """
+            mutation {
+              createCondition(input: {
+                workspaceId: $workspaceId, name: "From a teammate", type: FUNCTION, functionId: $declared
+              }) { id functionName }
+            }
+            """,
+        ).execute()
+            .path("createCondition.functionName").entity(String::class.java).isEqualTo("teammates_isTeammate")
+            .path("createCondition.id").entity(Long::class.java).get()
+
+        val condition = conditions.findById(id).orElseThrow()
+        assertThat(evaluator.holds(condition, """{"user":"alice@example.com"}""")).isTrue()
+        assertThat(evaluator.holds(condition, """{"user":"bob@example.com"}""")).isFalse()
+    }
+
+    @Test
+    fun `another workspace's function is refused, and says so`() {
+        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "frontend")).id)
+        val theirs = function("isUrgent", "BOOLEAN", "export default function isUrgent(input) { return true; }")
+
+        graphQlTester.document(
+            """
+            mutation {
+              createCondition(input: {
+                workspaceId: $elsewhere, name: "Not mine", type: FUNCTION, functionId: $theirs
+              }) { id }
+            }
+            """,
+        ).execute().errors()
+            .expect { it.message?.contains("belongs to another workspace") == true }
+            .verify()
+    }
+
+    /** A plugin loaded from its own source, and its functions materialised. */
+    private fun pluginFunction(): Long {
+        val read = pluginRunner.inspect(TEAMMATES) as PluginInspection.Read
+        val plugin = plugins.save(
+            Plugin(
+                key = read.id,
+                name = "teammates",
+                filename = "teammates.js",
+                source = TEAMMATES,
+                sizeBytes = TEAMMATES.length.toLong(),
+                apiVersion = read.apiVersion,
+                sha256 = "0".repeat(64),
+                declaredFunctions = declarations.validated(read.functions),
+                declaredParameters = declarations.validatedParameters(read.parameters),
+            ),
+        )
+        registry.reconcile(plugin)
+        return requireNotNull(functions.findAll().first { it.scope == FunctionScope.PLUGIN }.id)
+    }
+
     private fun function(name: String, returnType: String, source: String): Long = graphQlTester.document(
         """
         mutation(${'$'}source: String!) {
@@ -220,4 +302,24 @@ class ConditionAPITest(
         }
         """,
     ).variable("source", source).execute().path("createFunction.id").entity(Long::class.java).get()
+
+    private companion object {
+        val TEAMMATES = """
+            export default class Teammates extends OrknuxPlugin {
+              id() { return 'teammates'; }
+              apiVersion() { return 1; }
+
+              functions() {
+                return [
+                  new OrknuxFunction({
+                    name: 'isTeammate',
+                    params: [{ name: 'input', type: 'map' }],
+                    returnType: 'boolean',
+                    run: (input) => input !== null && input.user === 'alice@example.com',
+                  }),
+                ];
+              }
+            }
+        """.trimIndent()
+    }
 }

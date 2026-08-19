@@ -1,5 +1,8 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.user.AppUser
+import io.mszymanski.orknux.server.user.AppUserRepository
+import io.mszymanski.orknux.server.user.UserType
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -26,11 +29,13 @@ class IssueAPITest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val issues: IssueRepository,
     @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val users: AppUserRepository,
     @Autowired val audit: WorkspaceAuditRepository,
 ) {
 
     private var workspaceId: Long = 0
     private var elsewhereId: Long = 0
+    private var bobId: Long = 0
 
     @BeforeEach
     fun reset() {
@@ -39,6 +44,14 @@ class IssueAPITest(
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
         elsewhereId = requireNotNull(workspaces.save(Workspace(name = "billing")).id)
+        // Somebody to hand an issue to. Reused rather than recreated: the other
+        // tests here leave the user table alone, and one Bob is enough.
+        bobId = requireNotNull(
+            (
+                users.findByUsername("bob")
+                    ?: users.save(AppUser(username = "bob", displayName = "Bob", type = UserType.INTERNAL))
+                ).id,
+        )
     }
 
     private fun file(title: String, labels: String = "[]", workspace: Long = workspaceId): Long =
@@ -211,6 +224,52 @@ class IssueAPITest(
             """mutation { updateIssue(id: $id, input: { assigneeKind: AGENT, assigneeId: "9999" }) { id } }""",
         ).execute()
             .errors().expect { it.message?.contains("not something in this workspace") == true }
+            .verify()
+    }
+
+    /**
+     * "No one" has to survive the round trip.
+     *
+     * The page posts its whole form on every save, so an absent assignee is how
+     * a caller says it did not touch the box - which left the picker's empty
+     * choice with no way to say anything at all, and clearing an assignee
+     * silently did nothing. An empty id is the clear; an absent pair is still
+     * hands off.
+     */
+    @Test
+    fun `an empty assignee id clears the assignee, and an absent one leaves it alone`() {
+        val id = file("The reply is late")
+
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { assigneeKind: USER, assigneeId: "$bobId" }) { assignee { name } } }""",
+        ).execute().path("updateIssue.assignee.name").entity(String::class.java).isEqualTo("Bob")
+
+        // A save that does not mention the assignee leaves Bob where he is.
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { title: "The reply is still late" }) { assignee { name } } }""",
+        ).execute().path("updateIssue.assignee.name").entity(String::class.java).isEqualTo("Bob")
+
+        // A kind by itself names nobody, and is not read as a clear either.
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { assigneeKind: AGENT }) { assignee { name } } }""",
+        ).execute().path("updateIssue.assignee.name").entity(String::class.java).isEqualTo("Bob")
+
+        // What the picker sends for "No one".
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { assigneeId: "" }) { assignee { name } } }""",
+        ).execute().path("updateIssue.assignee").valueIsNull()
+
+        assertThat(issues.findById(id).orElseThrow().assignee).isNull()
+    }
+
+    @Test
+    fun `an assignee id without a kind is refused rather than guessed at`() {
+        val id = file("The reply is late")
+
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { assigneeId: "$bobId" }) { id } }""",
+        ).execute()
+            .errors().expect { it.message?.contains("without a kind") == true }
             .verify()
     }
 

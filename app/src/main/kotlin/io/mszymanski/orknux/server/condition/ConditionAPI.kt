@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
@@ -228,9 +229,21 @@ class ConditionAPI(
 
             ConditionType.FUNCTION -> {
                 val functionId = condition.functionId ?: throw ConditionFunctionRequiredException()
-                val function = functions.findByIdOrNull(functionId)
-                if (function == null || function.workspaceId != condition.workspaceId) {
-                    throw ConditionFunctionRequiredException()
+                // Nothing at that id is the same as nothing chosen: a function
+                // deleted out from under a condition leaves it with nothing to
+                // call.
+                val function = functions.findByIdOrNull(functionId) ?: throw ConditionFunctionRequiredException()
+                /*
+                 * A plugin's functions belong to no workspace and are offered in
+                 * every one — the picker lists them, the evaluator runs them
+                 * without asking whose they are, and unloading a plugin counts
+                 * the conditions naming them. Only another workspace's own
+                 * function is out of reach, and saying so is the point: refusing
+                 * it as "needs a function to call" describes a box somebody has
+                 * already filled in.
+                 */
+                if (function.scope != FunctionScope.PLUGIN && function.workspaceId != condition.workspaceId) {
+                    throw ConditionFunctionElsewhereException(function.name)
                 }
                 // The whole point of a condition is a yes or a no.
                 if (function.returnType != ValueType.BOOLEAN) {

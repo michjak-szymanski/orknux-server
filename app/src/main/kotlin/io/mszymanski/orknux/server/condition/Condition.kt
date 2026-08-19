@@ -186,5 +186,8 @@ class ConditionInUseException(name: String, used: List<String>) :
 class ConditionFunctionRequiredException :
     RuntimeException("A function condition needs a function to call")
 
+class ConditionFunctionElsewhereException(name: String) :
+    RuntimeException("$name belongs to another workspace; a condition can call this workspace's functions and a plugin's")
+
 class ConditionFunctionNotBooleanException(name: String, returnType: String) :
     RuntimeException("$name returns $returnType; a condition needs a function that returns a boolean")

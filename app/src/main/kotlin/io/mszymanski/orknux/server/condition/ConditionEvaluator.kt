@@ -1,7 +1,12 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
@@ -27,6 +32,9 @@ class ConditionEvaluator(
     private val conditions: WorkflowConditionRepository,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val pluginRunner: PluginRunner,
+    private val plugins: PluginRepository,
+    private val pluginParameters: PluginParameters,
     private val externals: VariableArguments,
     private val mapper: ObjectMapper,
     private val clock: Clock = Clock.systemDefaultZone(),
@@ -68,7 +76,18 @@ class ConditionEvaluator(
         // checking something against a stored secret is the same shape as an
         // action doing it.
         val arguments = listOf(input ?: "null") + externals.of(function)
-        val call = scripts.call(function.source, function.name, arguments, contextFor(condition))
+        /*
+         * A plugin's function is not this workspace's JavaScript — its source
+         * column holds a note saying where the implementation lives — so it is
+         * asked of the plugin, in the plugin's own sandbox, the same way an
+         * action calls one. Running the note as a script would answer nothing
+         * and read as a condition nobody can decide.
+         */
+        val call = if (function.scope == FunctionScope.PLUGIN) {
+            askPlugin(condition, function, arguments)
+        } else {
+            scripts.call(function.source, function.name, arguments, contextFor(condition))
+        }
         return when (val result = call) {
             is ScriptResult.Returned -> when (result.json) {
                 "true" -> true
@@ -80,6 +99,43 @@ class ConditionEvaluator(
 
             is ScriptResult.Failed -> throw ConditionNotDecidableException("${function.name} ${result.reason}")
         }
+    }
+
+    /**
+     * Asks a function one of the plugins declared.
+     *
+     * Unloaded, or configured with something still missing, is a question this
+     * workspace cannot answer rather than a false: a wait would otherwise sail
+     * past on "no" and a branch take the wrong side, both without saying why.
+     */
+    private fun askPlugin(
+        condition: WorkflowCondition,
+        function: WorkflowFunction,
+        arguments: List<String>,
+    ): ScriptResult {
+        val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
+            ?: throw ConditionNotDecidableException(
+                "${function.name} is declared by a plugin that is no longer loaded",
+            )
+
+        val missing = pluginParameters.missingFor(plugin, condition.workspaceId)
+        if (missing.isNotEmpty()) {
+            throw ConditionNotDecidableException(
+                "${function.name} cannot run: the ${plugin.key} plugin has not been told " +
+                    missing.joinToString(", ") + ". Set it on this workspace's plugins page.",
+            )
+        }
+
+        // The name the plugin gave it, not the prefixed one a workspace picks it
+        // by: the prefix exists so two plugins can both declare `isTeammate`,
+        // and the plugin never agreed to answer to it.
+        val declared = function.name.removePrefix("${plugin.key}_")
+        return pluginRunner.call(
+            plugin.source,
+            declared,
+            arguments,
+            pluginParameters.settingsFor(plugin, condition.workspaceId),
+        )
     }
 
     /**

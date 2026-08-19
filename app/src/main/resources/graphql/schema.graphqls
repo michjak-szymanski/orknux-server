@@ -30,6 +30,18 @@ type Query {
     workspaceIssue(workspaceId: ID!, number: Int!): Issue
     "Every label in use in this workspace, so a filter can offer what exists."
     workspaceIssueLabels(workspaceId: ID!): [String!]!
+    """
+    What has happened to one issue, oldest first.
+
+    Its own query rather than a field on the issue: the issue page loads on
+    every visit and the history is read only by somebody who opens the tab.
+    """
+    issueHistory(
+        workspaceId: ID!,
+        number: Int!,
+        "How many of the most recent entries to return. 200 by default, 1000 at most."
+        limit: Int
+    ): IssueHistory
 
     "What has happened that concerns you, newest first, across every workspace you can see."
     myNotifications(limit: Int): [Notification!]!
@@ -2957,6 +2969,70 @@ type Issue {
 type IssuePage {
     totalElements: Int!
     content: [Issue!]!
+}
+
+"""
+What kind of change one line in an issue's history is.
+
+Five of these are stored when they happen; OPENED is read off the issue itself
+and COMMENT off the comments table, because both were already recorded
+faithfully and a second copy of a comment is a copy that goes stale the moment
+somebody edits it.
+"""
+enum IssueEventKind {
+    "It was filed."
+    OPENED
+    """
+    From here on, changes were written down.
+
+    Only on issues that existed before the history did. A record that began
+    yesterday and says nothing about it would be claiming an issue opened last
+    week had a quiet week.
+    """
+    RECORDING
+    "It was closed, reopened, or picked up."
+    STATUS
+    "A label was put on or taken off - one entry for each."
+    LABEL
+    "It changed hands, was handed out, or was put back down."
+    ASSIGNEE
+    "Somebody started or stopped hearing about it."
+    OBSERVER
+    "Somebody said something."
+    COMMENT
+}
+
+type IssueEvent {
+    "Unique across all three sources: an event and a comment can both be row 5."
+    id: ID!
+    kind: IssueEventKind!
+    "Who did it. Every entry names somebody."
+    actor: String!
+    "ISO-8601 offset date-time."
+    at: String!
+    "What it was: the old status, who it was taken from, the label removed."
+    was: String
+    "What it became: the new status, who it went to, the label added."
+    became: String
+    "What a comment said, shortened. Null for everything that is not one."
+    said: String
+    "Whether that comment has been changed since it was written."
+    edited: Boolean!
+    "Which comment it is, so the page can go and show it in full."
+    commentId: ID
+}
+
+"""
+An issue's history, and what was left out of it.
+
+The count is not decoration: a list that simply stops is a list implying the
+issue was quiet before that, which is the one thing a history must never say.
+"""
+type IssueHistory {
+    "Oldest first."
+    entries: [IssueEvent!]!
+    "How many older entries were not returned."
+    earlier: Int!
 }
 
 input IssueInput {

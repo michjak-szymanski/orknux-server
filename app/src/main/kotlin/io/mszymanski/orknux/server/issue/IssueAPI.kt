@@ -58,6 +58,7 @@ class IssueAPI(
     private val audit: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
     private val newsDesk: IssueNewsDesk,
+    private val history: IssueHistoryRecorder,
     private val attachments: IssueAttachmentRepository,
     private val links: IssueLinkRepository,
     private val observers: IssueObserverRepository,
@@ -216,7 +217,15 @@ class IssueAPI(
         // An empty description is a description somebody cleared, so it is
         // written; an absent one is a field they did not touch.
         input.description?.let { held.description = it.trim().takeIf { text -> text.isNotEmpty() } }
+        /*
+         * Copied before it is replaced, and copied rather than aliased: the set
+         * on the entity is the one about to be written over, so a reference to
+         * it would report every issue as having always had the labels it ends
+         * up with.
+         */
+        val labelsWere = held.labels.toSet()
         input.labels?.let { held.labels = cleanLabels(it) }
+        val statusWas = held.status
         var statusChanged = false
         input.status?.let { wanted ->
             if (wanted != held.status) {
@@ -236,6 +245,7 @@ class IssueAPI(
          * gets it to stop reading them.
          */
         val before = held.assignee?.let { it.kind to it.id }
+        val heldBy = nameFor(held)?.name
         if (input.assigneeKind != null || input.assigneeId != null) {
             held.assignee = assigneeFrom(held.workspaceId, input)
         }
@@ -246,6 +256,16 @@ class IssueAPI(
         val saved = issues.save(held)
         if (handedOver) newsDesk.assigned(saved, currentUser())
         if (statusChanged) newsDesk.statusChanged(saved, currentUser())
+        /*
+         * The history is written from what changed rather than from what was
+         * sent: the page posts the whole form on every save, so an issue saved
+         * for its description arrives carrying the same status, the same labels
+         * and the same assignee it already had. Each recorder call compares and
+         * writes nothing where the two sides match.
+         */
+        history.statusChanged(saved, statusWas, saved.status, currentUser())
+        history.labelsChanged(saved, labelsWere, saved.labels.toSet(), currentUser())
+        if (handedOver) history.assigneeChanged(saved, heldBy, nameFor(saved)?.name, currentUser())
         return describe(saved)
     }
 
@@ -590,6 +610,7 @@ class IssueAPI(
                 WorkspaceAuditCategory.WORKSPACE,
                 "Issue #${held.number}: ${name?.name ?: who} is now an observer",
             )
+            history.observerAdded(held, name?.name ?: who, currentUser())
             newsDesk.observing(held, currentUser(), readersOf(held.workspaceId, kind, who))
         }
         return describe(held)
@@ -622,6 +643,7 @@ class IssueAPI(
                 WorkspaceAuditCategory.WORKSPACE,
                 "Issue #${held.number}: ${name?.name ?: who} is no longer an observer",
             )
+            history.observerRemoved(held, name?.name ?: who, currentUser())
         }
         return describe(held)
     }

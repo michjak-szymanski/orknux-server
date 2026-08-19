@@ -34,7 +34,9 @@ import java.time.OffsetDateTime
  * tracker and forgetting this file is a thing a reader can notice.
  *
  * What travels is everything hung on the issue's own id: its comments, its
- * labels, its links, its observers and its files. What does not travel is its
+ * labels, its links, its observers, its files and its history - which is keyed
+ * by the id for exactly this reason, since a history keyed by the number would
+ * be left behind for whatever is filed here next. What does not travel is its
  * number, which is per workspace and has to be one that is free where it is
  * going, and its news, which is a record of what was announced where and when.
  *

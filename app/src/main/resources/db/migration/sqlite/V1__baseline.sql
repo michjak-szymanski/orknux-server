@@ -962,6 +962,18 @@ CREATE TABLE workspace_issue_comment
     constraint workspace_issue_comment_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
 );
 
+CREATE TABLE workspace_issue_event
+(
+    id                           integer not null primary key autoincrement,
+    issue_id                     integer not null,
+    kind                         varchar(16) not null,
+    actor                        varchar(120) not null,
+    was                          text,
+    became                       text,
+    at                           timestamp not null default CURRENT_TIMESTAMP,
+    constraint workspace_issue_event_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workspace_issue_label
 (
     issue_id                     integer not null,
@@ -1103,6 +1115,7 @@ CREATE INDEX workspace_issue_attachment_comment_idx ON workspace_issue_attachmen
 CREATE INDEX workspace_issue_attachment_issue_idx ON workspace_issue_attachment (issue_id, uploaded_at);
 CREATE INDEX workspace_issue_attachment_workspace_idx ON workspace_issue_attachment (workspace_id);
 CREATE INDEX workspace_issue_comment_issue_idx ON workspace_issue_comment (issue_id, created_at);
+CREATE INDEX workspace_issue_event_issue_idx ON workspace_issue_event (issue_id, at, id);
 CREATE INDEX workspace_issue_link_issue_idx ON workspace_issue_link (issue_id, added_at);
 CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (issue_id, observer_kind, observer_id);
 CREATE INDEX idx_workspace_variable_catalog ON workspace_variable (catalog_id);

@@ -5,6 +5,7 @@ import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.Issue
 import io.mszymanski.orknux.server.issue.IssueComment
+import io.mszymanski.orknux.server.issue.IssueHistoryRecorder
 import io.mszymanski.orknux.server.issue.IssueNewsDesk
 import io.mszymanski.orknux.server.issue.IssueObserver
 import io.mszymanski.orknux.server.issue.IssueObserverRepository
@@ -40,6 +41,7 @@ class IssueTools(
     private val users: AppUserRepository,
     private val agents: AgentRepository,
     private val newsDesk: IssueNewsDesk,
+    private val history: IssueHistoryRecorder,
     private val observers: IssueObserverRepository,
     private val models: ModelService,
     private val web: WebProperties,
@@ -327,12 +329,17 @@ class IssueTools(
         val wanted = IssueStatus.entries.firstOrNull { it.name.equals(asked, ignoreCase = true) }
             ?: return refuse("There is no issue status called $asked")
 
+        val was = held.status
         val moved = held.status != wanted
         held.status = wanted
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)
         if (moved) newsDesk.statusChanged(held, currentUser())
+        // Written here as well as in the controller, because this is the other
+        // door into the tracker and a history with a hole exactly where the
+        // agents worked is worse than no history at all.
+        history.statusChanged(held, was, wanted, currentUser())
         return mapper.writeValueAsString(mapOf("issue" to held.number, "status" to wanted))
     }
 
@@ -348,6 +355,10 @@ class IssueTools(
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not change them")
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
 
+        // Copied rather than aliased: the three ways labels change below all
+        // work on the set the entity holds, and a reference to it would compare
+        // the result with itself.
+        val labelsWere = held.labels.toSet()
         text(arguments, "title")?.let { held.title = it.trim() }
         text(arguments, "description")?.let { given ->
             held.description = given.trim().takeIf { it.isNotEmpty() }
@@ -376,6 +387,7 @@ class IssueTools(
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)
+        history.labelsChanged(held, labelsWere, held.labels.toSet(), currentUser())
         return mapper.writeValueAsString(
             mapOf(
                 "issue" to held.number,

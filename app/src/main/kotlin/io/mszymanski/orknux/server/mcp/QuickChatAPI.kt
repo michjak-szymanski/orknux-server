@@ -44,7 +44,20 @@ class QuickChat(
      * it is not prose: the panel draws it against what the function says now
      * and puts an accept and a reject under it.
      */
-    data class Answer(val completion: ChatCompletion, val suggestion: FunctionSuggestion? = null)
+    data class Answer(
+        val completion: ChatCompletion,
+        val suggestion: FunctionSuggestion? = null,
+        /**
+         * The same offer made about a tool, carried in its own field.
+         *
+         * Two fields rather than one of either kind, because the two land in
+         * different editors and the panel has to know which before it announces
+         * anything. A round can only produce one of them in practice — a model
+         * that offered both has changed its mind mid-turn — but nothing here
+         * needs to enforce that.
+         */
+        val toolSuggestion: ToolSuggestion? = null,
+    )
 
     fun answer(
         modelId: Long,
@@ -60,6 +73,7 @@ class QuickChat(
          */
         val scope = OrknuxScope(workspaceId = workspaceId, mayWrite = mayWrite, watched = mayWrite)
         var offering: FunctionSuggestion? = null
+        var offeringTool: ToolSuggestion? = null
         val offered = orknux.specs(scope)
         val conversation = mutableListOf(ChatTurn(role = "system", content = briefing(page, mayWrite)))
         conversation += said
@@ -79,7 +93,8 @@ class QuickChat(
             val last = round == MAX_ROUNDS - 1
             when (val answer = models.complete(modelId, conversation, if (last) emptyList() else offered)) {
                 is ChatCompletion.Failed -> return Answer(answer)
-                is ChatCompletion.Answered -> return Answer(answer.copy(millis = spent + answer.millis), offering)
+                is ChatCompletion.Answered ->
+                    return Answer(answer.copy(millis = spent + answer.millis), offering, offeringTool)
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
                     calls += answer.calls.size
@@ -94,6 +109,9 @@ class QuickChat(
                          */
                         if (call.name == "orknux_suggest_function_code") {
                             orknux.suggestionIn(scope, call.arguments)?.let { offering = it }
+                        }
+                        if (call.name == "orknux_suggest_tool_code") {
+                            orknux.toolSuggestionIn(scope, call.arguments)?.let { offeringTool = it }
                         }
                         conversation += ChatTurn(
                             role = "user",
@@ -154,6 +172,22 @@ class QuickChat(
                 "rather than describing what it might contain. ",
         )
         /*
+         * A tool is not a function, said before anything makes that mistake.
+         *
+         * It was made: somebody asked for help on `/workspace/1/tools/15` and
+         * was told there is no function with id 15, followed by a list of the
+         * functions - a refusal about the wrong kind of thing, from a panel
+         * that had been handed the address of the right one. Both halves are
+         * needed here, the word and where it lives, because the id in the path
+         * is the only thing distinguishing the two and it is not distinguishing
+         * on its own.
+         */
+        append(
+            "A tool is a different thing from a function: a tool is TypeScript an agent calls while it runs, " +
+                "it lives at `/workspace/<workspace>/tools/<tool>`, and it is read with `orknux_tool` — never " +
+                "with `orknux_function`. Ids are not shared between them, so on a tools page use the tool tools. ",
+        )
+        /*
          * How to offer a change, and what happens to it.
          *
          * Said plainly because the alternative is a model that pastes a whole
@@ -205,6 +239,29 @@ class QuickChat(
                     "more; never present a placeholder or a partial version as the finished thing. "
             } else {
                 "You cannot change a function here; describe what you would do instead. "
+            },
+        )
+        /*
+         * The same offer for a tool, and the one way its shape differs.
+         *
+         * A tool declares no parameters — it is a default export handed one
+         * argument, whatever the calling agent composed — so there is no
+         * parameter list to keep in step and nothing to annotate beyond the
+         * code itself. The sandbox is the same one, and saying so once here
+         * saves the same three refusals it saves for functions.
+         */
+        append(
+            if (mayWrite) {
+                "To change a tool, call `orknux_suggest_tool_code` with the complete new TypeScript: they are " +
+                    "shown it against what is there now and either accept it or reject it, and nothing is " +
+                    "saved unless they accept. Do not paste a tool into your reply and ask them to copy it. " +
+                    "A tool is a default export that takes one argument — whatever the calling agent composed " +
+                    "— and declares no parameters of its own, so keep that shape. It runs in the same " +
+                    "locked-down sandbox as a function: no `import` or `require`, no Node or browser APIs, no " +
+                    "network. Its description is what an agent reads to decide whether to call it, so say when " +
+                    "a change makes that description wrong. "
+            } else {
+                "You cannot change a tool here; describe what you would do instead. "
             },
         )
         /*
@@ -288,6 +345,17 @@ class QuickChatAPI(
                             mapOf(
                                 "functionId" to it.functionId.toString(),
                                 "function" to it.name,
+                                "note" to it.note,
+                                "code" to it.code,
+                            ),
+                        )
+                    }
+                    said.toolSuggestion?.let {
+                        put(
+                            "toolSuggestion",
+                            mapOf(
+                                "toolId" to it.toolId.toString(),
+                                "tool" to it.name,
                                 "note" to it.note,
                                 "code" to it.code,
                             ),

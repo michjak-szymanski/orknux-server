@@ -5,6 +5,8 @@ import io.mszymanski.orknux.connector.model.ToolSpec
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentTool
+import io.mszymanski.orknux.server.agent.AgentToolRepository
 import org.springframework.data.repository.findByIdOrNull
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
@@ -74,6 +76,23 @@ data class FunctionSuggestion(
 )
 
 /**
+ * The same offer, made about a tool's code.
+ *
+ * Kept apart from [FunctionSuggestion] rather than folded into it because they
+ * land in different places: a function's change is shown by the function editor
+ * and saved with a parameter list read off the declaration, and a tool declares
+ * none — it is a default export taking whatever the agent composed. What they
+ * share is the only thing that matters here: nothing is written until somebody
+ * presses accept.
+ */
+data class ToolSuggestion(
+    val toolId: Long,
+    val name: String,
+    val note: String?,
+    val code: String,
+)
+
+/**
  * What orknux can be asked about itself.
  *
  * One surface, three doors: an agent granted it in its settings, the quick chat
@@ -107,6 +126,14 @@ class OrknuxTools(
      */
     @param:Lazy private val runs: ExecutionService,
     private val agents: AgentRepository,
+    /**
+     * The workspace's own tools — the code an agent calls, not the tools in
+     * this class. Read here for the same reason functions are: somebody at the
+     * tool editor asking for help is asking about code that is stored, and a
+     * model that cannot read it can only describe what a tool of that name
+     * might contain.
+     */
+    private val agentTools: AgentToolRepository,
     private val functions: WorkflowFunctionRepository,
     /**
      * For the names of the variables a function is handed, and nothing else.
@@ -149,6 +176,8 @@ class OrknuxTools(
     private fun agentLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/agents/$id/settings")
 
     private fun functionLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/functions/$id")
+
+    private fun toolLink(workspaceId: Long, id: Long?) = link("/workspace/$workspaceId/tools/$id")
 
     /** By number, because that is what the address carries and what people say. */
     private fun issueLink(workspaceId: Long, number: Int) = link("/workspace/$workspaceId/issues/$number")
@@ -382,6 +411,58 @@ class OrknuxTools(
             ),
         )
 
+        /*
+         * The workspace's tools, which are not these tools.
+         *
+         * The word is overloaded and the model is the one that has to live with
+         * it, so both descriptions say what a tool *is* here: code an agent
+         * calls, sitting under /tools, and a different thing from a function.
+         * Without this a question asked on the tool editor was answered with a
+         * hunt through the functions and then a refusal, which is exactly what
+         * somebody standing on the page could see was wrong.
+         */
+        add(
+            ToolSpec(
+                name = "orknux_tools",
+                description =
+                    "The tools in this workspace: the workspace's own TypeScript that an agent may call while " +
+                        "it runs. Not the same thing as a function, and not these orknux_ tools.",
+                parameters = emptyList(),
+            ),
+        )
+
+        if (scope.watched) {
+            add(
+                ToolSpec(
+                    name = "orknux_suggest_tool_code",
+                    description =
+                        "Offers a rewrite of a tool's code, shown beside what is there now for them to accept " +
+                            "or reject. It does not save anything: they decide, and you are told which they " +
+                            "chose. Send the whole tool, not a fragment.",
+                    parameters = listOf(
+                        ToolParameterSpec("tool", "The tool's name, or its id.", required = true),
+                        ToolParameterSpec(
+                            "code",
+                            "The complete new TypeScript. A tool is a default export taking one argument — " +
+                                "whatever the agent composed — so keep that shape.",
+                            required = true,
+                        ),
+                        ToolParameterSpec("note", "One line on what this changes and why.", required = false),
+                    ),
+                ),
+            )
+        }
+
+        add(
+            ToolSpec(
+                name = "orknux_tool",
+                description = "One tool in full, including the TypeScript it is written in.",
+                parameters = listOf(
+                    ToolParameterSpec("tool", "The tool's name, or its id.", required = true),
+                ),
+            ),
+        )
+
         // Offered only where they can actually be called. A tool a model is
         // shown and then refused is a round trip spent learning what the grant
         // already said.
@@ -472,6 +553,9 @@ class OrknuxTools(
             "orknux_agents" -> agentList(scope)
             "orknux_functions" -> functionList(scope)
             "orknux_function" -> function(scope, arguments)
+            "orknux_tools" -> toolList(scope)
+            "orknux_tool" -> tool(scope, arguments)
+            "orknux_suggest_tool_code" -> suggestTool(scope, arguments)
             /*
              * The tracker lives in its own service: writing on an issue
              * touches its comments, which are lazy, so those calls need a
@@ -736,6 +820,113 @@ class OrknuxTools(
 
         return FunctionSuggestion(
             functionId = requireNotNull(chosen.id),
+            name = chosen.name,
+            note = text(arguments, "note"),
+            code = code,
+        )
+    }
+
+    private fun toolList(scope: OrknuxScope): String {
+        val held = agentTools.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("name")))
+        return mapper.writeValueAsString(
+            mapOf(
+                "tools" to held.content.map {
+                    mapOf(
+                        "id" to it.id,
+                        "name" to it.name,
+                        "description" to it.description,
+                        // A tool switched off is still code somebody may be
+                        // editing; what it means is that no agent can reach it.
+                        "enabled" to it.enabled,
+                        "url" to toolLink(scope.workspaceId, it.id),
+                    )
+                },
+            ),
+        )
+    }
+
+    /**
+     * One tool, code and all.
+     *
+     * The TypeScript, never the JavaScript: what somebody has open is what they
+     * wrote, and a suggestion has to be written against that. Every tool has
+     * both halves — they are only ever saved together — so unlike a function
+     * there is no case here where the compiled half is the only source there is.
+     */
+    private fun tool(scope: OrknuxScope, arguments: String): String {
+        val chosen = toolCalled(scope, text(arguments, "tool"))
+            ?: return refuse(toolMissing(text(arguments, "tool")))
+
+        return mapper.writeValueAsString(
+            mapOf(
+                "id" to chosen.id,
+                "name" to chosen.name,
+                "description" to chosen.description,
+                "enabled" to chosen.enabled,
+                "language" to "typescript",
+                "code" to chosen.typescript,
+                /*
+                 * Said rather than left to be inferred from the code. A tool
+                 * declares no parameters: it is handed one argument, whatever
+                 * the agent composed, and its description is what tells the
+                 * agent what belongs in there.
+                 */
+                "takes" to "One argument, whatever the calling agent composed. A tool declares no parameters.",
+                "url" to toolLink(scope.workspaceId, chosen.id),
+            ),
+        )
+    }
+
+    /**
+     * The tool a call is naming, by name or by id, within this workspace.
+     *
+     * The workspace is the boundary, and it is applied by loading that
+     * workspace's tools rather than by loading the id and checking afterwards —
+     * the same way functions are found, so a tool elsewhere is not there at all
+     * rather than there and refused.
+     */
+    private fun toolCalled(scope: OrknuxScope, asked: String?): AgentTool? {
+        if (asked == null) return null
+        val held = agentTools.findByWorkspaceId(scope.workspaceId, PageRequest.of(0, MANY, Sort.by("name")))
+        return held.content.singleOrNull { it.name.equals(asked, ignoreCase = true) || it.id?.toString() == asked }
+    }
+
+    private fun toolMissing(asked: String?): String =
+        if (asked == null) "Which tool? Give its name or id." else "There is no tool called $asked here"
+
+    /**
+     * What the model is told when it offers a change to a tool.
+     *
+     * Nothing is written. The answer is that somebody has been shown it, and
+     * the next thing the model hears is which of the two buttons they pressed.
+     */
+    private fun suggestTool(scope: OrknuxScope, arguments: String): String {
+        val offered = toolSuggestionIn(scope, arguments) ?: return refuse(
+            "Which tool, and what code? Both are needed, and the tool must be one of this workspace's.",
+        )
+        return mapper.writeValueAsString(
+            mapOf(
+                "shown" to true,
+                "tool" to offered.name,
+                "waiting" to "They will accept or reject it. You will be told which.",
+                "url" to toolLink(scope.workspaceId, offered.toolId),
+            ),
+        )
+    }
+
+    /**
+     * The tool change a call is offering, or null if it is not offering one.
+     *
+     * Read by the caller as well as run, for the reason [suggestionIn] is: the
+     * offer has to reach the screen somebody is looking at, and only the door
+     * they came through knows where that is.
+     */
+    fun toolSuggestionIn(scope: OrknuxScope, arguments: String): ToolSuggestion? {
+        val code = text(arguments, "code")?.takeIf { it.isNotBlank() } ?: return null
+        val chosen = toolCalled(scope, text(arguments, "tool")) ?: return null
+
+        return ToolSuggestion(
+            toolId = requireNotNull(chosen.id),
             name = chosen.name,
             note = text(arguments, "note"),
             code = code,

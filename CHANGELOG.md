@@ -35,6 +35,20 @@ have failed.
   because a generated password that does not work looks exactly like an image
   that is fine until somebody tries it.
 
+- **The assistant can read and rewrite a workspace tool.** It could do nothing
+  with one before, and the cause was blunt: there was no tool-reading tool at
+  all, so on a tool's own address it looked for a *function* with that id, found
+  none, and listed the functions. The tool editor gains the wand the function
+  editor has, and a proposed change is shown as a diff to accept or reject in
+  the same way.
+
+- **A condition is edited on a page of its own**, at `/conditions/new` and
+  `/conditions/<id>`, rather than in a modal - the shape a shell, a user and a
+  model provider already have. Its fields moved into a form the page and the
+  dialog both wear, because that dialog has four callers and duplicating it four
+  ways was the alternative. **Open definition** beside the function picker
+  reaches the function it calls.
+
 - **An issue has a History tab**, beside the issue itself, holding what has
   happened to it: opened, comments, the status moving, labels going on and
   coming off, it changing hands, and observers arriving and leaving. Every line
@@ -90,6 +104,17 @@ have failed.
   more screens than it was, not fewer - it used to be missing from docs, chat,
   preferences and the whole admin section, which are exactly the screens
   somebody comes back to a workspace from.
+
+- **Every select is drawn by this application rather than by the operating
+  system.** A transparent control is what makes a white menu open over a dark
+  page; the pattern most of them already used is now the default, so one written
+  tomorrow gets it without remembering. The popup itself is still the browser's
+  - it can be tinted and nothing more.
+
+- **The menu's collapse control sits on its first row**, at the column's edge,
+  instead of down in the attribution strip where it fell below the fold on a
+  laptop screen. Its glyph was two chevrons and is now a panel with one edge
+  divided, which says which edge is about to move.
 
 - **A workspace id you cannot see now reads as one that does not exist.** The
   last of what 0.5.0 closed for entities: the create paths, the workspace model

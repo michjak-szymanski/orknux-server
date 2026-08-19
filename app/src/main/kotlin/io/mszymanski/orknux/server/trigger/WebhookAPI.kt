@@ -28,11 +28,11 @@ import tools.jackson.databind.ObjectMapper
  * clock could not cover between them.
  *
  * **What is not there, and what is the wrong shape, are both 404.** A path
- * nothing listens on, a trigger that has been turned off, a body that is not the
- * shape the trigger promises its workflows: all answer the same way, because the
- * caller of a webhook is the open internet. Distinguishing "no such endpoint"
- * from "wrong shape" tells whoever is probing that something is there and what
- * it expects.
+ * nothing listens on, a trigger that has been turned off, a body that is not
+ * JSON at all, a body that is not the shape the trigger promises its workflows:
+ * all answer the same way, because the caller of a webhook is the open internet.
+ * Distinguishing "no such endpoint" from "wrong shape" tells whoever is probing
+ * that something is there and what it expects.
  *
  * **A caller who fails to prove who they are gets 401**, which is a different
  * thing and worth saying: the endpoint exists, the request was understood, and
@@ -86,17 +86,32 @@ class WebhookAPI(
     ): ResponseEntity<Map<String, Any>> {
         val sent = body?.takeIf { it.isNotBlank() }?.let { runCatching { mapper.readTree(it) }.getOrNull() }
         if (sent == null) {
+            /*
+             * A body that is not JSON is the wrong shape, and the wrong shape is
+             * 404 here like everything else that is not a start.
+             *
+             * This answered 400 once, which was the one thing an anonymous
+             * caller could get out of this endpoint that only a real path could
+             * produce: send a full stop to a list of guessed names, and the ones
+             * that came back 400 instead of 404 were the webhooks this
+             * installation has armed. The owner still learns what happened, on
+             * the line below, because what the caller may know and what the
+             * owner needs to know are not the same thing.
+             */
             log.debug("Webhook {} was called with something that is not JSON", path)
             runner.note(trigger, FiringOutcome.FAILED, "The request body was not JSON")
-            return ResponseEntity.badRequest().body(mapOf("error" to "A JSON object is expected."))
+            return notFound()
         }
 
         /*
          * Who is calling, before what they sent.
          *
-         * Asked first on purpose: a caller who cannot prove they are allowed to
-         * start anything has no business learning whether their body was the
-         * right shape.
+         * Asked before the shape on purpose: a caller who cannot prove they are
+         * allowed to start anything has no business learning whether their body
+         * was the right shape. Parsing had to come first, because the function
+         * asked below is handed the body as JSON, and that costs nothing now
+         * that a body which will not parse is answered the same 404 as a path
+         * nothing listens on.
          */
         val allowed = authenticated(trigger, sent, body, headers)
         if (!allowed.yes) {

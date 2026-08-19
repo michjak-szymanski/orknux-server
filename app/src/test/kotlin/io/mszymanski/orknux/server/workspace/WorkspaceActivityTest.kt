@@ -38,7 +38,12 @@ class WorkspaceActivityTest(
         agents.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
-        roles.deleteAll()
+        /*
+         * The roles these tests make, and only those. The built-in one comes from
+         * a migration that runs once against the one database the whole suite
+         * shares, so taking it here takes it from every test that follows.
+         */
+        roles.deleteAll(roles.findAll().filterNot { it.builtin })
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
     }
 

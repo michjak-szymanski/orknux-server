@@ -31,8 +31,13 @@ class WorkspaceAPITest(
          * more than one of these wants to be called `backend`. Without this the
          * second of them dies on ux_security_role_name rather than on anything
          * it was testing.
+         *
+         * The built-in one is left alone. A migration creates it once and never
+         * again, and the whole suite runs against one database, so a fixture
+         * that takes it takes it for every test that follows - which is how a
+         * test about refusing to delete a built-in role came to fail here.
          */
-        roles.deleteAll()
+        roles.deleteAll(roles.findAll().filterNot { it.builtin })
     }
 
     @Test

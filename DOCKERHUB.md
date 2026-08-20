@@ -309,7 +309,7 @@ and the tracker needs nothing else configured here.
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together, since a log without one fills the disk it shares with the database. | `1GB` | No |
-| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation - workspace counts, run rates, model names - so it needs a credential like anything else, and Prometheus can carry one. `true` only where the scrape crosses a network the scraper alone is on; it opens nothing else under `/actuator`. | `false` | No |
+| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation - workspace counts, run rates, model names - so it needs a credential like anything else, and Prometheus can carry one. `true` only where the scrape crosses a network the scraper alone is on; it opens nothing else under `/actuator`. Where a fresh installation starts: the same switch is on the Admin screen, and once pressed that answer holds. | `false` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |
 
 Sessions are kept in the database, so signing in outlives a restart and more

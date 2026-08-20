@@ -174,6 +174,13 @@ orknux:
     # only the scraper is on, and where a credential in the scrape config would
     # be ceremony over a wire nobody else can reach. Nothing else under
     # /actuator is opened by it.
+    #
+    # This is where a fresh installation starts, not the last word: it is also a
+    # switch on the Admin screen, and once an administrator has pressed it theirs
+    # is the answer. Not the floor the other installation settings get, because
+    # here the file's default is already the closed answer - a floor under it
+    # would mean the switch could never be pressed at all. The decision is read
+    # per scrape, so pressing it needs no restart, and the audit log says who.
     anonymous: ${ORKNUX_METRICS_ANONYMOUS:false}
   web:
     # Where the interface is served from, when it is not this server. Comma

@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.attachment
 
 import io.mszymanski.orknux.server.chat.ChatProperties
+import io.mszymanski.orknux.server.monitoring.MetricsProperties
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
@@ -48,6 +49,7 @@ interface InstallationSettingRepository : JpaRepository<InstallationSetting, Str
 object SettingNames {
     const val ATTACHMENTS_ENABLED = "attachments.enabled"
     const val CHAT_ENABLED = "chat.enabled"
+    const val METRICS_ANONYMOUS = "metrics.anonymous"
 }
 
 /**
@@ -63,6 +65,7 @@ class InstallationSettings(
     private val settings: InstallationSettingRepository,
     private val properties: AttachmentProperties,
     private val chat: ChatProperties,
+    private val metrics: MetricsProperties,
 ) {
 
     /**
@@ -110,6 +113,35 @@ class InstallationSettings(
     @Transactional
     fun setAttachmentsEnabled(enabled: Boolean, by: String) = hold(SettingNames.ATTACHMENTS_ENABLED, enabled, by)
 
+    /**
+     * Whether `/actuator/prometheus` answers somebody who has not signed in.
+     *
+     * The one setting here where the file is not the floor, because for this one
+     * the file's default *is* the closed answer. Attachments and the chat are on
+     * unless an operator says otherwise, so "false in the file is final" costs an
+     * administrator nothing; this is off unless somebody says otherwise, and the
+     * same rule would mean the switch could never be pressed on a default
+     * installation - a switch that is only ever a way of saying no twice.
+     *
+     * So the file is the value a fresh installation starts at, and what an
+     * administrator stored is the answer from then on. Neither is fighting the
+     * other: ORKNUX_METRICS_ANONYMOUS decides what happens before anybody has an
+     * opinion, and after that the opinion is what happened.
+     *
+     * Read per request rather than once at startup - see SecurityConfig - which
+     * is what lets the switch take effect without a restart.
+     */
+    fun metricsAnonymous(): Boolean {
+        val held = settings.findByIdOrNull(SettingNames.METRICS_ANONYMOUS) ?: return metrics.anonymous
+        return held.value.toBooleanStrictOrNull() ?: metrics.anonymous
+    }
+
+    /** What a fresh installation would answer, for a screen that wants to say so. */
+    fun metricsAnonymousConfigured(): Boolean = metrics.anonymous
+
+    @Transactional
+    fun setMetricsAnonymous(enabled: Boolean, by: String) = hold(SettingNames.METRICS_ANONYMOUS, enabled, by)
+
     private fun hold(name: String, enabled: Boolean, by: String) {
         val held = settings.findByIdOrNull(name) ?: InstallationSetting(name = name)
         held.value = enabled.toString()
@@ -120,5 +152,5 @@ class InstallationSettings(
 }
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(AttachmentProperties::class, ChatProperties::class)
+@EnableConfigurationProperties(AttachmentProperties::class, ChatProperties::class, MetricsProperties::class)
 class AttachmentConfig

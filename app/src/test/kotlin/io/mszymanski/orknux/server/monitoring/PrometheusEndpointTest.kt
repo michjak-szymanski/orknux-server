@@ -1,18 +1,25 @@
 package io.mszymanski.orknux.server.monitoring
 
+import io.mszymanski.orknux.server.attachment.InstallationSettingRepository
+import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.attachment.SettingNames
 import io.mszymanski.orknux.server.user.AppUser
 import io.mszymanski.orknux.server.user.AppUserRepository
 import io.mszymanski.orknux.server.user.InternalAuthentication
 import io.mszymanski.orknux.server.user.UserType
 import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.http.HttpHeaders
+import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.test.context.support.WithMockUser
 import org.springframework.web.client.RestClient
 
 /**
@@ -112,7 +119,11 @@ class PrometheusEndpointTest(
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
     properties = ["orknux.metrics.anonymous=true"],
 )
-class AnonymousPrometheusEndpointTest(@LocalServerPort val port: Int) {
+class AnonymousPrometheusEndpointTest(
+    @LocalServerPort val port: Int,
+    @Autowired val settings: InstallationSettings,
+    @Autowired val held: InstallationSettingRepository,
+) {
 
     private val client = restClient(port)
 
@@ -130,9 +141,92 @@ class AnonymousPrometheusEndpointTest(@LocalServerPort val port: Int) {
         assertThat(get(client, "/actuator/env").statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
         assertThat(get(client, "/api/session").statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
     }
+
+    /**
+     * The half of the arrangement worth writing down: the file says where a
+     * fresh installation starts, and an administrator who has since said no is
+     * not overruled by it on the next restart.
+     */
+    @Test
+    fun `what an administrator stored beats what the file says`() {
+        settings.setMetricsAnonymous(false, "test")
+
+        assertThat(get(client, PROMETHEUS).statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
+    }
+
+    @AfterEach
+    fun forgetTheSwitch() = forgetTheSwitch(held)
+}
+
+/**
+ * The switch, pressed while the server is running.
+ *
+ * This is the one that would silently not work. Every other rule in the chain is
+ * settled when the chain is built, and a metrics rule written the same way would
+ * pass a test that only ever asked it once — the endpoint would be open or shut
+ * according to the configuration the context started with, and pressing the
+ * switch would appear to do nothing until somebody restarted the server and
+ * concluded it had worked all along.
+ *
+ * So the flip happens between two scrapes of the same running server, over the
+ * real port, and the answer has to change both ways.
+ */
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureGraphQlTester
+@WithMockUser(username = "alice", roles = ["ADMINS"])
+class MetricsSwitchTest(
+    @LocalServerPort val port: Int,
+    @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
+    @Autowired val held: InstallationSettingRepository,
+) {
+
+    private val client = restClient(port)
+
+    @Test
+    fun `pressing it changes the answer on the next scrape, with no restart`() {
+        assertThat(get(client, PROMETHEUS).statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
+
+        press(true)
+        assertThat(get(client, PROMETHEUS).statusCode).isEqualTo(HttpStatus.OK)
+
+        // And back, because a switch that only goes one way is a door.
+        press(false)
+        assertThat(get(client, PROMETHEUS).statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
+    }
+
+    @Test
+    fun `opens the metrics and nothing else when it is on`() {
+        press(true)
+
+        assertThat(get(client, PROMETHEUS).statusCode).isEqualTo(HttpStatus.OK)
+        assertThat(get(client, "/actuator/env").statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
+        assertThat(get(client, "/api/session").statusCode).isEqualTo(HttpStatus.UNAUTHORIZED)
+    }
+
+    /** Through the mutation an administrator's screen calls, not the service behind it. */
+    private fun press(enabled: Boolean) {
+        graphQlTester
+            .document("mutation { setMetricsAnonymous(enabled: $enabled) { metricsAnonymous } }")
+            .execute()
+            .path("setMetricsAnonymous.metricsAnonymous")
+            .entity(Boolean::class.java)
+            .isEqualTo(enabled)
+    }
+
+    @AfterEach
+    fun forgetTheSwitch() = forgetTheSwitch(held)
 }
 
 private const val PROMETHEUS = "/actuator/prometheus"
+
+/**
+ * Puts the switch back, so the next class in the suite starts where a fresh
+ * installation would. Deleted rather than set to false: absent is what "nobody
+ * has pressed it" looks like, and that is the state being restored.
+ */
+private fun forgetTheSwitch(held: InstallationSettingRepository) {
+    held.findById(SettingNames.METRICS_ANONYMOUS).ifPresent(held::delete)
+}
 
 /** Status handling is disabled so a refusal can be asserted on rather than thrown. */
 private fun restClient(port: Int): RestClient = RestClient.builder()

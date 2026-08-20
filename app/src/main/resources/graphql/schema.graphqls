@@ -448,6 +448,17 @@ type Mutation {
     "Turns the chat on or off for the whole installation. Administrators only."
     setChatEnabled(enabled: Boolean!): InstallationSettings!
     """
+    Opens the metrics endpoint to callers who have not signed in, or closes it
+    again. Administrators only, and recorded in the audit log.
+
+    Turning this on publishes `/actuator/prometheus` to anybody who can reach
+    this server's port: how many workspaces exist, how often workflows run and
+    how often they fail. Only do it where the scrape crosses a network the
+    scraper alone is on. A Prometheus that can send an Authorization header
+    should carry an API token instead and leave this off.
+    """
+    setMetricsAnonymous(enabled: Boolean!): InstallationSettings!
+    """
     Says which chat uploaded files belong to. Sent when the message is, since a
     first message is what makes the chat.
     """
@@ -2446,6 +2457,8 @@ type ChatAttachment {
 """
 What this installation allows, as the configuration file and the screen agree
 it. The file is the floor: what it forbids cannot be switched back on here.
+The exception is `metricsAnonymous`, whose floor would be its own ceiling; the
+field says why.
 """
 type InstallationSettings {
     attachmentsEnabled: Boolean!
@@ -2460,6 +2473,18 @@ type InstallationSettings {
     chatEnabled: Boolean!
     "False when the configuration file has said no, and the switch is not offered."
     chatConfigurable: Boolean!
+    """
+    Whether `/actuator/prometheus` answers a caller who has not signed in.
+
+    The one field here the file does not put a floor under, because for this one
+    the file's default is already the closed answer and a floor would mean the
+    switch could never be pressed. ORKNUX_METRICS_ANONYMOUS is what a fresh
+    installation starts at; what an administrator stored is the answer after
+    that, and it takes effect on the next scrape rather than the next restart.
+    """
+    metricsAnonymous: Boolean!
+    "What a fresh installation would have answered: ORKNUX_METRICS_ANONYMOUS."
+    metricsAnonymousConfigured: Boolean!
 }
 
 "What a component reports about itself."

@@ -96,6 +96,11 @@ class AgentConversation(
         log.warn("Agent {} was still calling tools after {} rounds", agent.name, MAX_ROUNDS)
         return ChatCompletion.Failed(
             "${agent.name} kept looking things up without reaching an answer, and was stopped after $MAX_ROUNDS rounds",
+            // Settled, and deliberately so. What put the agent in the loop is
+            // its instructions and the tools it was granted, and those are the
+            // same on the next attempt; a retry policy here buys another eight
+            // rounds of the same billing on the way to the same sentence.
+            permanent = true,
         ).also { record(into, agent, it) }
     }
 

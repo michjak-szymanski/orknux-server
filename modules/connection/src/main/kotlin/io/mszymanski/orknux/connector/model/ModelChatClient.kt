@@ -86,7 +86,19 @@ sealed interface ChatCompletion {
         val outputTokens: Long = 0,
     ) : ChatCompletion
 
-    data class Failed(val reason: String) : ChatCompletion
+    /**
+     * @param permanent whether asking again could ever come out differently.
+     *   A request the provider refused for what it said will be refused again
+     *   in the same words, and so will a model nobody has configured; a
+     *   provider that timed out, rate limited the call or fell over has said
+     *   nothing about the request at all. Read by a caller with a retry policy
+     *   to decide whether to spend an attempt on it.
+     *
+     *   Settled by default, because that is the answer that costs nothing when
+     *   it is wrong: a failure nobody classified is asked once and reported,
+     *   rather than billed for three times on the way to the same message.
+     */
+    data class Failed(val reason: String, val permanent: Boolean = true) : ChatCompletion
 }
 
 @ConfigurationProperties(prefix = "orknux.model")
@@ -180,7 +192,10 @@ class ModelChatClient(
             val response = client.send(ready.request, HttpResponse.BodyHandlers.ofInputStream())
             if (response.statusCode() !in 200..299) {
                 val body = response.body().reader().use { it.readText() }
-                return ChatCompletion.Failed(reason(response.statusCode(), body))
+                return ChatCompletion.Failed(
+                    reason(response.statusCode(), body),
+                    permanent = settled(response.statusCode()),
+                )
             }
 
             val whole = StringBuilder()
@@ -203,12 +218,19 @@ class ModelChatClient(
             }
             val millis = (System.nanoTime() - started) / 1_000_000
             if (whole.isEmpty()) {
-                ChatCompletion.Failed("The provider answered with no message")
+                // A stream that carried no text is a round that produced
+                // nothing, not a request the provider objected to - the same
+                // question asked again is as likely to be answered as not.
+                ChatCompletion.Failed("The provider answered with no message", permanent = false)
             } else {
                 counted(modelId, ChatCompletion.Answered(whole.toString(), millis, input, output))
             }
         } catch (failure: Exception) {
-            ChatCompletion.Failed(failure.message ?: "The provider could not be reached")
+            // Nothing came back at all: a socket that closed, a name that did
+            // not resolve, the request timeout running out on a model still
+            // thinking. None of it is the provider's answer to this request, so
+            // none of it is settled.
+            ChatCompletion.Failed(failure.message ?: "The provider could not be reached", permanent = false)
         }
     }
 
@@ -251,7 +273,10 @@ class ModelChatClient(
             val millis = (System.nanoTime() - started) / 1_000_000
 
             if (response.statusCode() !in 200..299) {
-                return ChatCompletion.Failed(reason(response.statusCode(), response.body()))
+                return ChatCompletion.Failed(
+                    reason(response.statusCode(), response.body()),
+                    permanent = settled(response.statusCode()),
+                )
             }
             val (input, output) = tokensOf(response.body())
 
@@ -274,10 +299,14 @@ class ModelChatClient(
             }
 
             val content = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
-                ?: return ChatCompletion.Failed("The provider answered with no message")
+                ?: return ChatCompletion.Failed("The provider answered with no message", permanent = false)
             counted(modelId, ChatCompletion.Answered(content, millis, input, output))
         } catch (failure: Exception) {
-            ChatCompletion.Failed(failure.message ?: "The provider could not be reached")
+            // Nothing came back at all: a socket that closed, a name that did
+            // not resolve, the request timeout running out on a model still
+            // thinking. None of it is the provider's answer to this request, so
+            // none of it is settled.
+            ChatCompletion.Failed(failure.message ?: "The provider could not be reached", permanent = false)
         }
     }
 
@@ -555,6 +584,22 @@ class ModelChatClient(
     }.getOrNull()
 
     /**
+     * Whether a status the provider answered with settles the question.
+     *
+     * The line is about what the status says. 4xx is the provider having read
+     * the request and refused it, and a second identical request is refused
+     * identically — an unknown model, a key without access, a body it would not
+     * parse. The two exceptions are about the moment rather than the request:
+     * 408, the provider saying it ran out of time, and 429, the provider saying
+     * not now. 5xx is a provider that failed to answer at all, which says
+     * nothing about the request and is the case a second attempt exists for.
+     */
+    private fun settled(status: Int): Boolean = when (status) {
+        HTTP_TIMEOUT, HTTP_TOO_MANY_REQUESTS -> false
+        else -> status < SERVER_ERROR
+    }
+
+    /**
      * What went wrong, in the provider's own words where it gave any. A refused
      * key and a bad request read very differently to whoever has to fix it.
      */
@@ -568,6 +613,14 @@ class ModelChatClient(
 
     private companion object {
         const val CONNECT_SECONDS = 10L
+
+        /** The two statuses that are about the moment rather than the request. */
+        const val HTTP_TIMEOUT = 408
+        const val HTTP_TOO_MANY_REQUESTS = 429
+
+        /** Where the provider stops objecting to the request and starts failing. */
+        const val SERVER_ERROR = 500
+
         const val DEFAULT_MAX_TOKENS = 4096
         const val ANTHROPIC_VERSION = "2023-06-01"
         const val DEFAULT_AZURE_VERSION = "2024-06-01"

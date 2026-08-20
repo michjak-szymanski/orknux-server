@@ -10,6 +10,7 @@ import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.ExecutionLogRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
 import io.mszymanski.orknux.workflow.execution.ExecutionStepRepository
@@ -28,6 +29,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * An agent node in a workflow, run.
@@ -142,16 +144,90 @@ class AgentNodeRunnerTest(
         assertThat(step.error).contains("has no model chosen")
     }
 
-    private fun serveAnswer(): String {
+    /**
+     * The point of the whole thing: a provider saying "not now" is not an
+     * answer about the request, so the node asks again and the run finishes.
+     */
+    @Test
+    fun `a rate limited call is asked again, and the run finishes on a later attempt`() {
+        val agentId = agent("Reviewer", model(serveAfter(refusals = 2, status = 429)))
+        graph(agentId, attempts = 3)
+
+        start()
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(step.attempts).isEqualTo(3)
+        assertThat(step.output).isEqualTo("The database was the cause.")
+        assertThat(executions.findAll().single().status).isEqualTo(ExecutionStatus.COMPLETED)
+        // Three calls really were made, rather than one answer being reused.
+        assertThat(received).hasSize(3)
+    }
+
+    /**
+     * The other half, and the one that costs money to get wrong. A 400 is the
+     * provider having read the request and refused it; the same request will be
+     * refused in the same words, so the policy is not spent proving it.
+     */
+    @Test
+    fun `a request the provider refused is not asked again, whatever the policy says`() {
+        val agentId = agent("Reviewer", model(serveAfter(refusals = 9, status = 400)))
+        graph(agentId, attempts = 5)
+
+        start(expectFailure = true)
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.FAILED)
+        assertThat(step.attempts).isEqualTo(1)
+        assertThat(step.error).contains("could not answer")
+        assertThat(received).hasSize(1)
+    }
+
+    /**
+     * And where the graph has an answer for it, the run goes on down the edge
+     * drawn for exactly this rather than ending at the agent.
+     */
+    @Test
+    fun `an agent that could not answer leaves by its failure edge`() {
+        val agentId = agent("Reviewer", model(serveAfter(refusals = 9, status = 400)))
+        withFallback(agentId)
+
+        start()
+
+        val recorded = steps.findAll().associateBy { it.nodeKey }
+        assertThat(recorded.getValue("think").status).isEqualTo(StepStatus.FAILED)
+        assertThat(recorded.getValue("think").branch).isEqualTo(EdgeBranch.FAILURE)
+        assertThat(recorded.getValue("rescue").status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(executions.findAll().single().status).isEqualTo(ExecutionStatus.COMPLETED)
+    }
+
+    private fun serveAnswer(): String = serveAfter(refusals = 0, status = 200)
+
+    /**
+     * A provider that refuses the first [refusals] calls with [status] and
+     * answers after that.
+     *
+     * Every call is counted in `received` whether it was answered or not, which
+     * is what lets a test say how many times the model was actually asked - a
+     * step that retried and a step that did not look identical from the count
+     * of attempts alone if nothing watches the wire.
+     */
+    private fun serveAfter(refusals: Int, status: Int): String {
+        val calls = AtomicInteger()
         server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/chat/completions") { exchange ->
             received += exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
-            val body = """
+            val refusing = calls.incrementAndGet() <= refusals
+            val body = if (refusing) {
+                """{"error":{"message":"the provider would not take it"}}"""
+            } else {
+                """
                 {"choices":[{"message":{"role":"assistant","content":"The database was the cause."}}],
                  "usage":{"prompt_tokens":11,"completion_tokens":6}}
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+                """.trimIndent()
+            }.toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("Content-Type", "application/json")
-            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.sendResponseHeaders(if (refusing) status else 200, body.size.toLong())
             exchange.responseBody.use { it.write(body) }
             exchange.close()
         }
@@ -159,16 +235,42 @@ class AgentNodeRunnerTest(
         return "http://${server.address.hostString}:${server.address.port}"
     }
 
-    /** One agent node, which is the whole workflow. */
-    private fun graph(agentId: Long?) {
+    /**
+     * One agent node, which is the whole workflow.
+     *
+     * No wait between attempts: what these are about is how many calls are
+     * made, not the clock, and the inline engine spends a backoff on the thread
+     * running the test.
+     */
+    private fun graph(agentId: Long?, attempts: Int? = null) {
         val names = if (agentId == null) "" else ", agentId: $agentId"
+        val retries = if (attempts == null) "" else ", retryAttempts: $attempts, retryBackoffSeconds: 0"
         graphQlTester.document(
             """
             mutation {
               saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
-                nodes: [{ key: "think", kind: AGENT, name: "Reviewer"$names, x: 0, y: 0 }],
+                nodes: [{ key: "think", kind: AGENT, name: "Reviewer"$names$retries, x: 0, y: 0 }],
                 edges: []
               }) { nodes { key agentId } }
+            }
+            """,
+        ).execute()
+    }
+
+    /** The same node, told to handle its own failure, with somewhere to go. */
+    private fun withFallback(agentId: Long) {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId,
+                    fallbackEnabled: true, x: 0, y: 0 },
+                  { key: "rescue", kind: OBJECT, name: "Say so", outputName: "note", x: 200, y: 200,
+                    mappings: [{ name: "why", expression: "the agent could not answer", mode: VALUE }] }
+                ],
+                edges: [{ source: "think", target: "rescue", branch: FAILURE }]
+              }) { nodes { key } }
             }
             """,
         ).execute()

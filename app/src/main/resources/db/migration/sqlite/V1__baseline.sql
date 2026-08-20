@@ -415,6 +415,7 @@ CREATE TABLE object_property
     kind                         varchar(16) not null,
     ref_object_id                integer,
     element_kind                 varchar(16),
+    description                  varchar(500),
     primary key (object_id, position),
     constraint object_property_object_id_fkey FOREIGN KEY (object_id) REFERENCES workflow_object(id) ON DELETE CASCADE,
     constraint object_property_ref_object_id_fkey FOREIGN KEY (ref_object_id) REFERENCES workflow_object(id)

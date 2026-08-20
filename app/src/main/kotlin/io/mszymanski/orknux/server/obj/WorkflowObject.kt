@@ -58,6 +58,17 @@ class ObjectProperty(
     @Enumerated(EnumType.STRING)
     @Column(name = "element_kind", length = 16)
     var elementKind: PropertyKind? = null,
+
+    /**
+     * What this field means, for whoever — or whatever — reads it.
+     *
+     * A name says what a field is called and nothing about what belongs in it,
+     * which is a gap a person fills from context and a model fills by guessing.
+     * This is where the context goes, so that both of them read the same
+     * sentence rather than two different inferences from one word.
+     */
+    @Column(length = 500)
+    var description: String? = null,
 )
 
 /**

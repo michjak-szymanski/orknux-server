@@ -4,6 +4,10 @@ import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.obj.ObjectProperty
+import io.mszymanski.orknux.server.obj.PropertyKind
+import io.mszymanski.orknux.server.obj.WorkflowObject
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -28,6 +32,7 @@ import tools.jackson.databind.ObjectMapper
 class OrknuxFunctionToolsTest(
     @Autowired val tools: OrknuxTools,
     @Autowired val functions: WorkflowFunctionRepository,
+    @Autowired val objects: WorkflowObjectRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
     @Autowired val mapper: ObjectMapper,
@@ -39,6 +44,7 @@ class OrknuxFunctionToolsTest(
     @BeforeEach
     fun reset() {
         functions.deleteAll()
+        objects.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
@@ -81,6 +87,88 @@ class OrknuxFunctionToolsTest(
         // The annotated half: what the editor holds, and what a suggestion has
         // to be written against.
         assertThat(answer).contains("email: string")
+    }
+
+    /**
+     * The whole point of writing a description on a field: it reaches the model.
+     *
+     * A signature says `customer: Customer` and stops, which tells a model that
+     * something of that name exists and nothing about what is in it - so the
+     * body it writes reaches for fields it invented. Sending the shape with the
+     * function closes that, and sending each field's description closes the
+     * half a model could never infer: `tier` is a word read three ways, and the
+     * sentence beside it is read one way.
+     */
+    @Test
+    fun `a parameter that names an object arrives with the object's fields and what they mean`() {
+        val customer = objects.save(
+            WorkflowObject(
+                workspaceId = workspaceId,
+                name = "Customer",
+                description = "Who is asking, and what they are entitled to.",
+                properties = mutableListOf(
+                    ObjectProperty(
+                        name = "tier",
+                        kind = PropertyKind.STRING,
+                        description = "The support plan they pay for: free, pro or enterprise.",
+                    ),
+                    ObjectProperty(name = "seats", kind = PropertyKind.NUMBER),
+                ),
+            ),
+        )
+        functions.save(
+            WorkflowFunction(
+                workspaceId = workspaceId,
+                name = "isPriority",
+                description = "Whether this customer jumps the queue.",
+                source = "export default async function isPriority(customer) { return false; }",
+                typescript = "export default async function isPriority(customer: Customer) { return false; }",
+                returnType = ValueType.BOOLEAN,
+                params = mutableListOf(
+                    FunctionParam(name = "customer", type = ValueType.OBJECT, objectId = customer.id),
+                ),
+            ),
+        )
+
+        val answer = tools.run(scope(), "orknux_function", """{"function":"isPriority"}""")
+
+        assertThat(answer).contains("Customer")
+        assertThat(answer).contains("tier")
+        assertThat(answer).contains("The support plan they pay for: free, pro or enterprise.")
+        // A field nobody described is sent as a field nobody described, rather
+        // than with its own name repeated back as if somebody had.
+        assertThat(answer).contains("""{"name":"seats","type":"number","description":null}""")
+    }
+
+    /** A shape belongs to its workspace, the same way the code does. */
+    @Test
+    fun `an object in another workspace is not sent with the function`() {
+        val theirs = objects.save(
+            WorkflowObject(
+                workspaceId = elsewhereId,
+                name = "Invoice",
+                properties = mutableListOf(
+                    ObjectProperty(name = "secretRate", kind = PropertyKind.NUMBER, description = "What we charge."),
+                ),
+            ),
+        )
+        functions.save(
+            WorkflowFunction(
+                workspaceId = workspaceId,
+                name = "borrowed",
+                source = "export default async function borrowed(invoice) { return 0; }",
+                typescript = "export default async function borrowed(invoice: Invoice) { return 0; }",
+                returnType = ValueType.NUMBER,
+                params = mutableListOf(
+                    FunctionParam(name = "invoice", type = ValueType.OBJECT, objectId = theirs.id),
+                ),
+            ),
+        )
+
+        val answer = tools.run(scope(), "orknux_function", """{"function":"borrowed"}""")
+
+        assertThat(answer).doesNotContain("secretRate")
+        assertThat(answer).contains(""""returnedObject":null""")
     }
 
     @Test

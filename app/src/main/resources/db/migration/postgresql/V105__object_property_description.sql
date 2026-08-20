@@ -1,0 +1,21 @@
+-- What one field of an object means, said in words rather than left to its name.
+--
+-- An object is how this workspace writes down a shape, and until now the only
+-- thing a field carried was what it was called. `tier` is a name two people read
+-- two ways, and a model reads a third: it has nothing to go on but the word, so
+-- it guesses, and a guess about what a field means is a guess that reaches
+-- whatever the model does next. A sentence beside the field is the cheapest fix
+-- there is, and it is the same sentence a person needs when they open the
+-- object a year later.
+--
+-- Bounded at 500 the way every other description on this side is - an agent's, a
+-- tool's, a skill's. A field's description is prose and a name's limit would be
+-- absurd for it, but prose that grows without a limit is prose that arrives in
+-- somebody's context window uninvited, and 500 characters is more than a field
+-- has ever needed to explain itself.
+--
+-- Nullable, and nothing is backfilled. Every field that already exists has no
+-- description, and inventing one from its name would put words in an author's
+-- mouth that read exactly like words they wrote.
+ALTER TABLE object_property
+    ADD COLUMN description VARCHAR(500);

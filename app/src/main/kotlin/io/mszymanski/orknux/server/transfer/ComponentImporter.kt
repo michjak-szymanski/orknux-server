@@ -528,6 +528,7 @@ class ComponentImporter(
                 refObjectId = property.text("objectRef")
                     ?.let { idFor(workspaceId, ComponentKind.OBJECT, it, resolved) },
                 elementKind = property.enumOrNull<PropertyKind>("elementKind", component),
+                description = property.text("description"),
             )
         }.toMutableList()
     }

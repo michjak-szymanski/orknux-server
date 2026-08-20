@@ -104,8 +104,12 @@ class ComponentImporter(
 ) {
 
     /** What the confirmation dialog shows. Reads nothing into the workspace. */
-    fun plan(workspaceId: Long, envelope: String, bindings: List<ComponentBinding> = emptyList()): ImportPlan =
-        plan(workspaceId, parse(envelope), bindings)
+    fun plan(
+        workspaceId: Long,
+        envelope: String,
+        bindings: List<ComponentBinding> = emptyList(),
+        exclude: List<ComponentExclusion> = emptyList(),
+    ): ImportPlan = plan(workspaceId, parse(envelope), bindings, exclude)
 
     /**
      * What an envelope says about itself, without a workspace in the question.
@@ -140,17 +144,34 @@ class ComponentImporter(
      * typed against an object that is not there, which is worse than no import.
      */
     @Transactional
-    fun apply(workspaceId: Long, envelope: String, bindings: List<ComponentBinding> = emptyList()): ImportPlan {
+    fun apply(
+        workspaceId: Long,
+        envelope: String,
+        bindings: List<ComponentBinding> = emptyList(),
+        exclude: List<ComponentExclusion> = emptyList(),
+    ): ImportPlan {
         val parsed = parse(envelope)
-        val plan = plan(workspaceId, parsed, bindings)
+        val plan = plan(workspaceId, parsed, bindings, exclude)
         if (!plan.importable) throw ImportNotPossibleException(plan.problems)
+
+        /*
+         * What is being left out, taken back off the plan rather than worked out
+         * a second time. Asking for one exclusion can leave out three — whatever
+         * cannot do without it goes too — and the closure that decided which is
+         * the plan's. Reading it back from the entries is what makes it certain
+         * that what was previewed is what is written.
+         */
+        val leftOut = plan.entries.filter { it.disposition == ImportDisposition.EXCLUDE }
+            .mapNotNull { entry -> entry.kind?.let { it to entry.name } }
+            .toSet()
+        val held = parsed.components.filter { (it.kind to it.name) !in leftOut }
 
         // What the file could not carry, settled before anything is written:
         // by name where the target has one, and by what the caller bound where
         // it does not. Resolved through the same function the plan used, so what
         // was previewed and what is written cannot come apart.
         val told = bindings.associateBy { it.kind to it.name }
-        val bound = parsed.components.flatMap(::externalsOf).distinct()
+        val bound = held.flatMap(::externalsOf).distinct()
             .mapNotNull { reference ->
                 boundTo(workspaceId, reference, told)?.let { (reference.kind to reference.label) to it }
             }
@@ -160,7 +181,7 @@ class ComponentImporter(
         // means here. Filled as things are created, so a renamed component is
         // pointed at by its new id without anything else having to know it moved.
         val resolved = mutableMapOf<Pair<ComponentKind, String>, Long>()
-        val named = plan.entries.filter { it.kind != null && it.disposition != ImportDisposition.REUSE }
+        val named = plan.entries.filter { it.kind != null && it.disposition in WRITTEN }
             .associate { (it.kind!! to it.name) to it.targetName }
 
         /*
@@ -178,16 +199,16 @@ class ComponentImporter(
          * which is how a tree is described, and it is why objects are the one
          * kind written in two passes.
          */
-        val objects = parsed.components.filter { it.kind == ComponentKind.OBJECT }
+        val objects = held.filter { it.kind == ComponentKind.OBJECT }
         val written = objects +
-            parsed.components.filter { it.kind == ComponentKind.FUNCTION } +
-            dependenciesFirst(parsed.components.filter { it.kind == ComponentKind.CONDITION }) +
+            held.filter { it.kind == ComponentKind.FUNCTION } +
+            dependenciesFirst(held.filter { it.kind == ComponentKind.CONDITION }) +
             // Everything after a condition in the catalogue, in the catalogue's
             // order — which is a dependency order, so an action is written after
             // the function it calls, an agent after the tools it was granted and
             // a workflow after every one of them. A stable sort, so two of a kind
             // are still written in the order the file put them in.
-            parsed.components.filter { it.kind.ordinal > ComponentKind.CONDITION.ordinal }
+            held.filter { it.kind.ordinal > ComponentKind.CONDITION.ordinal }
                 .sortedBy { it.kind.ordinal }
 
         objects.forEach { component ->
@@ -200,7 +221,7 @@ class ComponentImporter(
             resolved[component.kind to component.name] = create(workspaceId, component, here, resolved, bound)
         }
 
-        plan.entries.filter { it.kind != null && it.disposition != ImportDisposition.REUSE }.forEach { entry ->
+        plan.entries.filter { it.kind != null && it.disposition in WRITTEN }.forEach { entry ->
             val said = if (entry.disposition == ImportDisposition.RENAME) {
                 "${entry.kind!!.label.replaceFirstChar(Char::uppercase)} ${entry.name} imported as ${entry.targetName}"
             } else {
@@ -213,23 +234,47 @@ class ComponentImporter(
 
     // ---------------------------------------------------------------- planning
 
-    private fun plan(workspaceId: Long, parsed: Parsed, bindings: List<ComponentBinding>): ImportPlan {
-        val carried = parsed.components.map { it.kind to it.name }.toSet()
+    private fun plan(
+        workspaceId: Long,
+        parsed: Parsed,
+        bindings: List<ComponentBinding>,
+        exclude: List<ComponentExclusion>,
+    ): ImportPlan {
+        val leftOut = leftOut(workspaceId, parsed, exclude)
+        val held = parsed.components.filter { (it.kind to it.name) !in leftOut }
+        val carried = held.map { it.kind to it.name }.toSet()
         val entries = mutableListOf<ImportEntry>()
         val problems = mutableListOf<String>()
 
+        if (held.isEmpty()) {
+            problems += "Everything this file carries has been left out, so there is nothing left to import."
+        }
+
         // A component's name here, decided before anything else looks at it:
-        // what points at it has to point at the name it will actually have.
+        // what points at it has to point at the name it will actually have. In
+        // the file's own order, left-out ones included, so a row that was ticked
+        // off stays where it was on the list instead of vanishing from it.
         val taken = mutableMapOf<ComponentKind, MutableSet<String>>()
-        val here = mutableMapOf<Pair<ComponentKind, String>, String>()
         parsed.components.forEach { component ->
+            val why = leftOut[component.kind to component.name]
+            if (why != null) {
+                entries += ImportEntry(
+                    kind = component.kind,
+                    carried = true,
+                    name = component.name,
+                    targetName = component.name,
+                    disposition = ImportDisposition.EXCLUDE,
+                    detail = why,
+                )
+                return@forEach
+            }
             val claimed = taken.getOrPut(component.kind) { mutableSetOf() }
             val name = freeName(workspaceId, component.kind, component.name, claimed)
             claimed.add(name)
-            here[component.kind to component.name] = name
             entries += if (name == component.name) {
                 ImportEntry(
                     kind = component.kind,
+                    carried = true,
                     name = component.name,
                     targetName = name,
                     disposition = ImportDisposition.CREATE,
@@ -238,6 +283,7 @@ class ComponentImporter(
             } else {
                 ImportEntry(
                     kind = component.kind,
+                    carried = true,
                     name = component.name,
                     targetName = name,
                     disposition = ImportDisposition.RENAME,
@@ -249,9 +295,10 @@ class ComponentImporter(
         }
 
         // Then every reference. One that the file carries is settled above; one
-        // it does not is the target workspace's to satisfy, by name.
+        // it does not — including one it carries and is leaving out — is the
+        // target workspace's to satisfy, by name.
         val seen = mutableSetOf<Pair<ComponentKind, String>>()
-        parsed.components.forEach { component ->
+        held.forEach { component ->
             referencesOf(component).forEach { (kind, name) ->
                 if (kind to name in carried) return@forEach
                 if (!seen.add(kind to name)) return@forEach
@@ -262,9 +309,17 @@ class ComponentImporter(
                         name = name,
                         targetName = name,
                         disposition = ImportDisposition.MISSING,
-                        detail = "${component.name} points at ${kind.indefinite} called $name, which this file " +
-                            "does not carry and this workspace does not have. Export again with everything " +
-                            "included, or create it here first.",
+                        // The file may carry it and be leaving it out, which is a
+                        // different mistake with a different fix: put it back.
+                        detail = if (kind to name in leftOut) {
+                            "${component.name} points at ${kind.indefinite} called $name, which is being left " +
+                                "out and which this workspace does not have. Keep it, or leave " +
+                                "${component.name} out as well."
+                        } else {
+                            "${component.name} points at ${kind.indefinite} called $name, which this file " +
+                                "does not carry and this workspace does not have. Export again with everything " +
+                                "included, or create it here first."
+                        },
                     )
                     problems += "There is no ${kind.label} called $name here, and ${component.name} needs one."
                 } else {
@@ -291,7 +346,7 @@ class ComponentImporter(
          */
         val told = bindings.associateBy { it.kind to it.name }
         val asked = mutableSetOf<Pair<ExternalKind, String>>()
-        parsed.components.forEach { component ->
+        held.forEach { component ->
             externalsOf(component).forEach { reference ->
                 if (!asked.add(reference.kind to reference.label)) return@forEach
                 val kind = reference.kind
@@ -325,8 +380,17 @@ class ComponentImporter(
             }
         }
 
-        // Variables last, because they are the ones somebody has to go and make.
-        parsed.variables.forEach { variable ->
+        /*
+         * Variables last, because they are the ones somebody has to go and make.
+         *
+         * One that only a left-out function was handed is no longer wanted: a
+         * variable is required by the functions that name it, and the header
+         * lists them because the export read those same functions. So it is
+         * dropped only where the file itself shows that every function naming it
+         * has gone — never on the header's word alone, which is what keeps a
+         * hand-written file behaving exactly as it did.
+         */
+        parsed.variables.filter { stillHanded(parsed, held, it.name) }.forEach { variable ->
             val existing = variables.findByWorkspaceId(workspaceId).firstOrNull { it.name == variable.name }
             if (existing == null) {
                 entries += ImportEntry(
@@ -359,6 +423,74 @@ class ComponentImporter(
             entries = entries,
             problems = problems,
         )
+    }
+
+    /**
+     * Which of the file's components this import will not create, and why.
+     *
+     * Only a component the file *carries* can be left out, and that is the whole
+     * of the difference between the two halves of a plan: what is in the
+     * envelope is here and can be dropped, while what the envelope points at and
+     * does not carry is a name with nothing behind it — dropping it would drop a
+     * reference, not a thing, and leave whatever made the reference pointing at
+     * nowhere. So an exclusion naming one of those is refused rather than
+     * quietly obeyed.
+     *
+     * What is asked for is not always all that goes. A kept component that
+     * points at a left-out one has to point at *something*, and where this
+     * workspace has nothing by that name there is nothing for it to point at, so
+     * it is left out too — and so is whatever needed *that*, until the set stops
+     * growing. Each one carries the sentence saying which loss took it, because
+     * the alternative is somebody unticking one row, importing, and finding out
+     * afterwards that three did not arrive.
+     *
+     * The workspace's own row is what stops the cascade, and that is the case
+     * worth having: leaving out an object this workspace already has is exactly
+     * how somebody says "use the one that is here", and every function typed
+     * against it stays and points at that one.
+     */
+    private fun leftOut(
+        workspaceId: Long,
+        parsed: Parsed,
+        asked: List<ComponentExclusion>,
+    ): Map<Pair<ComponentKind, String>, String> {
+        if (asked.isEmpty()) return emptyMap()
+        val carried = parsed.components.map { it.kind to it.name }.toSet()
+        val out = mutableMapOf<Pair<ComponentKind, String>, String>()
+
+        asked.forEach { one ->
+            if (one.kind to one.name !in carried) throw ImportExclusionUnknownException(one.kind, one.name)
+            out[one.kind to one.name] = "Left out: nothing is created for it, and it is still in the file."
+        }
+
+        var settled = false
+        while (!settled) {
+            settled = true
+            parsed.components.filter { (it.kind to it.name) !in out }.forEach { component ->
+                val needed = referencesOf(component).firstOrNull { (kind, name) ->
+                    kind to name in out && findByName(workspaceId, kind, name) == null
+                } ?: return@forEach
+                out[component.kind to component.name] =
+                    "Left out too: it points at ${needed.first.indefinite} called ${needed.second}, which is " +
+                        "being left out and which this workspace does not have either."
+                settled = false
+            }
+        }
+        return out
+    }
+
+    /**
+     * Whether any function still being imported is handed this variable.
+     *
+     * True as well when no function in the file names it at all: the header is
+     * then the only thing that says it is wanted, and a file this did not write
+     * is taken at its word rather than second-guessed.
+     */
+    private fun stillHanded(parsed: Parsed, held: List<ParsedComponent>, name: String): Boolean {
+        fun hands(components: List<ParsedComponent>) = components.any { component ->
+            component.kind == ComponentKind.FUNCTION && name in component.node.names("variableRefs")
+        }
+        return hands(held) || !hands(parsed.components)
     }
 
     /** Every reference one component makes, as kind and envelope name. */
@@ -1071,6 +1203,14 @@ class ComponentImporter(
     private class RequiredVariable(val name: String, val type: String, val secret: Boolean)
 
     private companion object {
+        /**
+         * The dispositions that mean a row is actually written.
+         *
+         * REUSE points at what is already here and EXCLUDE was asked to be left
+         * out; neither creates anything, so neither is named, audited or built.
+         */
+        val WRITTEN = setOf(ImportDisposition.CREATE, ImportDisposition.RENAME)
+
         /** Matches what a function and a tool already require of a name. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
 
@@ -1145,6 +1285,21 @@ data class ImportEntry(
     val kind: ComponentKind?,
     /** The kind, for something no file could carry. Set only when [kind] is not. */
     val external: ExternalKind? = null,
+    /**
+     * Whether the envelope actually holds this one, rather than pointing at it.
+     *
+     * The one fact a screen needs in order to know what it may offer. Only what
+     * the file carries can be left out of an import; every other row is a
+     * reference — something that has to be here already, or bound — and a
+     * control offering to remove one of those would be offering to remove a
+     * mention rather than a thing.
+     *
+     * Never true of a variable or an external, and never true of a component the
+     * file merely names: a carried one is [ImportDisposition.CREATE],
+     * [ImportDisposition.RENAME] or [ImportDisposition.EXCLUDE], and nothing else
+     * ever is.
+     */
+    val carried: Boolean = false,
     /** The name in the file; for a model, the provider's name and the model's. */
     val name: String,
     /** The name it will have here, which differs when it was renamed or bound. */
@@ -1168,6 +1323,24 @@ data class ComponentBinding(
     val kind: ExternalKind,
     val name: String,
     val targetId: Long,
+)
+
+/**
+ * One component of the envelope that this import is to leave out.
+ *
+ * Named the way everything in an envelope is named — by kind and by the name the
+ * *file* gave it, not the one a rename would land it under here — so a client
+ * sends back exactly what the plan showed it.
+ *
+ * Only what the file carries can be named here. A plan lists what the envelope
+ * points at beside what it holds, and the two are not the same sort of thing:
+ * one is a component sitting in the file, the other a name that has to be
+ * matched against this workspace. Naming the second is refused rather than
+ * ignored — see [ImportExclusionUnknownException].
+ */
+data class ComponentExclusion(
+    val kind: ComponentKind,
+    val name: String,
 )
 
 /**

@@ -217,11 +217,21 @@ type Query {
     against it, and answering means asking again with those answers in
     `bindings`. Ask with none to find out what is wanted; ask with them to find
     out whether anything still is.
+
+    `exclude` leaves components out, and works the same way: name one the file
+    carries and ask again. Only what the file carries can be named — an entry
+    with `carried` false is a reference, something that has to exist here or be
+    bound, and there is nothing in the envelope to leave out. Asking to leave out
+    a component something else in the file needs, where this workspace has
+    nothing by that name, leaves that one out too, and the one after it: each
+    comes back as `EXCLUDE` saying which loss took it, so what it costs is
+    visible before anything is written.
     """
     componentImportPlan(
         workspaceId: ID!,
         envelope: String!,
-        bindings: [ComponentBindingInput!] = []
+        bindings: [ComponentBindingInput!] = [],
+        exclude: [ComponentExclusionInput!] = []
     ): ComponentImportPlan!
     """
     The templates this installation publishes, by name.
@@ -250,7 +260,8 @@ type Query {
     componentTemplatePlan(
         workspaceId: ID!,
         templateId: ID!,
-        bindings: [ComponentBindingInput!] = []
+        bindings: [ComponentBindingInput!] = [],
+        exclude: [ComponentExclusionInput!] = []
     ): ComponentImportPlan!
     "The workspace's catalogs, by name, each with what it holds."
     variableCatalogs(workspaceId: ID!): [VariableCatalog!]!
@@ -358,11 +369,18 @@ type Mutation {
     name it does not have refuses the import until it is given one. A binding
     naming a row this workspace does not hold is refused rather than ignored,
     and nothing is written.
+
+    `exclude` names components the file carries that this import is not to
+    create — and, with them, whatever in the file cannot do without them. Send
+    exactly what `componentImportPlan` was sent: the mutation reads the file
+    again and reaches the same set, so what was confirmed is what happens.
+    Naming something the file does not carry is refused rather than ignored.
     """
     importComponents(
         workspaceId: ID!,
         envelope: String!,
-        bindings: [ComponentBindingInput!] = []
+        bindings: [ComponentBindingInput!] = [],
+        exclude: [ComponentExclusionInput!] = []
     ): ComponentImportPlan!
     """
     Publishes an exported file as a template. Administrators only.
@@ -414,7 +432,8 @@ type Mutation {
     useComponentTemplate(
         workspaceId: ID!,
         templateId: ID!,
-        bindings: [ComponentBindingInput!] = []
+        bindings: [ComponentBindingInput!] = [],
+        exclude: [ComponentExclusionInput!] = []
     ): ComponentImportPlan!
     """
     Takes a plugin out of the installation. Administrators only.
@@ -3362,6 +3381,21 @@ input ComponentBindingInput {
     targetId: ID!
 }
 
+"""
+One component of an envelope that an import is to leave out.
+
+Named as the file names it — the name the plan gave back, not whatever a rename
+would land it under here. Only a component the file *carries* can be named: a
+plan lists what the envelope points at beside what it holds, and the first sort
+is a mention rather than a thing, so removing it would leave whatever mentioned
+it pointing at nowhere. One of those is refused rather than ignored.
+"""
+input ComponentExclusionInput {
+    kind: ComponentKind!
+    "The name in the file, as the plan gave it."
+    name: String!
+}
+
 "How much of what a component reaches travels with it."
 enum ExportDepth {
     "The one component. For a workspace that already has what it points at."
@@ -3395,6 +3429,13 @@ enum ImportDisposition {
     these remain.
     """
     MISSING
+    """
+    Carried by the file and not created, because it was named in `exclude` — or
+    because something it needs was, and this workspace has nothing to take that
+    one's place. Still listed and still named: `detail` says which of the two it
+    is, so unticking one row cannot quietly take three with it.
+    """
+    EXCLUDE
 }
 
 type ComponentImportEntry {
@@ -3406,6 +3447,16 @@ type ComponentImportEntry {
     is pointed at, never created, and never bound.
     """
     external: ExternalKind
+    """
+    Whether the envelope holds this one, rather than pointing at it.
+
+    The one fact that says what may be offered against a row. Only what the file
+    carries can be left out of an import; everything else listed is a reference —
+    a name that has to be matched against this workspace, or bound — and there is
+    nothing in the file to remove. True exactly when `disposition` is `CREATE`,
+    `RENAME` or `EXCLUDE`; never for a variable or an external.
+    """
+    carried: Boolean!
     "The name in the file; for a model, the provider's name and the model's."
     name: String!
     "The name it will have here; different from `name` when it was renamed or bound."
@@ -3427,7 +3478,7 @@ type ComponentImportPlan {
     "What wrote it. Quoted in messages; nothing branches on it."
     producedBy: String
     depth: ExportDepth!
-    "False while anything is MISSING; Import is refused."
+    "False while anything is MISSING, or while nothing is left to create."
     importable: Boolean!
     entries: [ComponentImportEntry!]!
     "Empty when importable; otherwise what has to be fixed here first."

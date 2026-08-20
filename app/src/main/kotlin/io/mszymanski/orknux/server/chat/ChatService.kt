@@ -90,7 +90,8 @@ class ChatService(
 
     /**
      * Everything said in one chat, oldest first, as the store kept it - and for
-     * a chat continuing a session, who said the part it did not say itself.
+     * a chat continuing a session, who said the part it did not say itself, and
+     * what was looked up in between.
      *
      * The store keeps a role and some text, so a turn carried in from a session
      * comes back indistinguishable from one this chat produced, and the screen
@@ -98,15 +99,36 @@ class ChatService(
      * work out what an agent did, that is the most misleading line on the page:
      * the agent's own words, under somebody else's name. So the names are put
      * back here, from the session they came out of.
+     *
+     * And with them the calls, which were never in the thread at all - [seed]
+     * copies what was *said*, for a reason written there that has not changed.
+     * That reason is about the prompt. This is the reading, and an answer shown
+     * with no sign of the lookup that produced it reads as the agent having
+     * known something it went and found out. Two audiences, two answers: what
+     * goes to the model is [ChatMemoryRepository]'s thread and is untouched by
+     * any of this, and what goes on the page is assembled here.
+     *
+     * Only the stretch that was carried, though. An agent answering *in* this
+     * chat records its calls in the same session, and they are deliberately not
+     * put back: there is nowhere to put them. The thread keeps a role, some
+     * text and an order and no clock at all, so a later call could only be
+     * placed by matching words again - and a session is shared by key, so what
+     * was written in it after this chat opened may have been written by a run
+     * that has nothing to do with this chat. A lookup drawn under an answer
+     * that did not make it is a worse lie than the one this fixes, and unlike
+     * the carried stretch there is somewhere it is already right: the session's
+     * own page, which has every line of the conversation this chat is one end
+     * of.
      */
     fun messages(session: ChatSession): List<ChatMessage> {
         val thread = history.findByConversationId(session.conversationId).map(::ChatMessage)
         val llmSessionId = session.llmSessionId ?: return thread
-        return carried(thread, recorder.saidBefore(llmSessionId, session.createdAt))
+        return carried(thread, recorder.readBefore(llmSessionId, session.createdAt))
     }
 
     /**
-     * Puts the session's names back on the turns that came from it.
+     * Puts the session's names back on the turns that came from it, and its
+     * calls back between them.
      *
      * Matched rather than counted. Nothing recorded how many turns were seeded,
      * and nothing should have to: [seed] copies a run of the session's lines
@@ -119,9 +141,23 @@ class ChatService(
      * remembered have since moved - names fewer turns rather than naming them
      * wrongly, and a chat that names none of them is exactly the chat we had
      * before.
+     *
+     * The matching is against what was said and nothing else. A call was never
+     * copied into the thread, so a thread turn is never compared with one;
+     * counting one as a turn would put every comparison after it a line out and
+     * lose the alignment the paragraph above depends on. The calls are put back
+     * afterwards, at the places they were recorded in, and only inside the
+     * stretch that did line up - outside it there is nothing to be sure they
+     * belong between.
+     *
+     * @param read the session as it stood when this chat opened, calls and all.
      */
-    private fun carried(thread: List<ChatMessage>, said: List<RememberedTurn>): List<ChatMessage> {
-        if (thread.isEmpty() || said.isEmpty()) return thread
+    private fun carried(thread: List<ChatMessage>, read: List<RememberedTurn>): List<ChatMessage> {
+        if (thread.isEmpty() || read.isEmpty()) return thread
+
+        val where = read.indices.filter { !read[it].called }
+        val said = where.map { read[it] }
+        if (said.isEmpty()) return thread
 
         var found = 0
         var from = 0
@@ -142,9 +178,24 @@ class ChatService(
         }
 
         if (found == 0) return thread
-        return thread.mapIndexed { at, message ->
-            if (at < found) message.copy(actor = said[from + at].actor) else message
+
+        /*
+         * Walked over the session rather than over the thread, because the
+         * session is the one that has the calls in it. Every line between the
+         * two ends that matched is either a turn the thread holds - taken in
+         * order, which is what matching them established - or a call, which
+         * only the session ever held.
+         */
+        var turn = 0
+        val head = (where[from]..where[from + found - 1]).map { at ->
+            val line = read[at]
+            if (line.called) {
+                ChatMessage(role = RememberedTurn.CALL, content = line.content, actor = line.actor)
+            } else {
+                thread[turn++].copy(actor = line.actor)
+            }
         }
+        return head + thread.drop(found)
     }
 
     /**
@@ -208,10 +259,15 @@ class ChatService(
      *
      * [LlmSessionRecorder.remembered] rather than the whole transcript: it is
      * already the tail a model can be shown — what was *said*, bounded, oldest
-     * first — and the chat wants exactly that. Tool calls and system notes stay
-     * on the session's own page, where somebody reading how the agent worked
-     * will look for them; they are not turns in a conversation and pasting them
-     * into one would read as the agent talking to itself.
+     * first — and the chat wants exactly that. Tool calls and system notes are
+     * not turns in a conversation, and a thread holding one would put it in
+     * front of the model on every send after this: a call the model never made
+     * in this exchange, with no result threaded to it.
+     *
+     * Which is about the thread, and only the thread. [messages] shows the
+     * calls to whoever is reading the chat, off the session and beside the
+     * turns rather than in them - the page and the prompt being two different
+     * audiences with two different answers.
      */
     private fun seed(chat: ChatSession, llmSessionId: Long) {
         val said = recorder.remembered(llmSessionId)

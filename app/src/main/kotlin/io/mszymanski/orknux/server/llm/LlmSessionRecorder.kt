@@ -110,9 +110,41 @@ class LlmSessionRecorder(
      * [MEMORY_CHARS] - counted from the newest backwards, so the cut falls at
      * the oldest turn rather than in the middle of the newest.
      */
-    fun remembered(session: Long): List<ChatTurn> {
+    fun remembered(session: Long): List<ChatTurn> =
+        tail(session) { events.latest(session, SAID, PageRequest.of(0, MEMORY_TURNS)) }
+            .map { ChatTurn(it.role, it.content) }
+
+    /**
+     * The same tail as it stood before a moment, and who said each line of it.
+     *
+     * For reading back what something else copied out of here. [remembered]
+     * answers a model, which only needs the words; this answers whoever wants
+     * to know who spoke them - which the copy could not keep, because the place
+     * it was copied into stores a role and some text and has nowhere to put a
+     * name.
+     *
+     * Bounded by when the copy was taken, because a chat continuing a session
+     * writes back into it: asked without the bound, a session would hand back
+     * the chat's own turns as though they had been there to be copied.
+     *
+     * Shaped by exactly the same rules as [remembered] - same kinds, same
+     * counts, same order - so what comes back is the tail that was copied
+     * rather than something merely like it.
+     */
+    fun saidBefore(session: Long, before: OffsetDateTime): List<RememberedTurn> =
+        tail(session) { events.latestBefore(session, SAID, before, PageRequest.of(0, MEMORY_TURNS)) }
+
+    /**
+     * The bounding and the ordering, in one place.
+     *
+     * Both readers want the same tail and differ only in where they stop, so
+     * the rules that decide how much of a session is memory are written once.
+     * Two copies of them would be two answers to "what was said", and the
+     * second one to drift would be a chat labelling turns it did not carry.
+     */
+    private fun tail(session: Long, read: () -> List<LlmSessionEvent>): List<RememberedTurn> {
         val recent = try {
-            events.latest(session, SAID, PageRequest.of(0, MEMORY_TURNS))
+            read()
         } catch (failure: Exception) {
             // Same bargain as writing: an unreadable memory is a worse answer,
             // not a failed run.
@@ -123,13 +155,17 @@ class LlmSessionRecorder(
         var room = MEMORY_CHARS
         return recent
             .asSequence()
-            .mapNotNull { event -> event.content?.takeIf { it.isNotBlank() }?.let { event.kind to it } }
+            .mapNotNull { event -> event.content?.takeIf { it.isNotBlank() }?.let { event to it } }
             .takeWhile { (_, said) ->
                 room -= said.length
                 room >= 0
             }
-            .map { (kind, said) ->
-                ChatTurn(if (kind == LlmSessionEventKind.USER) "user" else "assistant", said)
+            .map { (event, said) ->
+                RememberedTurn(
+                    role = if (event.kind == LlmSessionEventKind.USER) "user" else "assistant",
+                    content = said,
+                    actor = event.actor,
+                )
             }
             .toList()
             .asReversed()
@@ -186,3 +222,13 @@ class LlmSessionRecorder(
         val log = LoggerFactory.getLogger(LlmSessionRecorder::class.java)
     }
 }
+
+/**
+ * One line of a session's memory, with the name on it.
+ *
+ * The name is the whole reason this exists beside [ChatTurn]: a turn put to a
+ * model is a role and some words, because that is all a provider takes, while
+ * anybody reading a transcript needs to know which agent, tool or person the
+ * words belong to.
+ */
+data class RememberedTurn(val role: String, val content: String, val actor: String)

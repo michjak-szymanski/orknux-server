@@ -55,6 +55,17 @@
             <version>${temporal.version}</version>
         </dependency>
 
+        <!--
+            Counters for what a run did, kept where a run's outcome is known
+            rather than guessed at from the outside. Only the instrument API is
+            needed here: the registry behind it, and the endpoint that renders
+            it, both come with the app's actuator starter. Version from the BOM.
+        -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>io.temporal</groupId>
             <artifactId>temporal-testing</artifactId>

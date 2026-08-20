@@ -59,6 +59,12 @@ class StepRunner(
     private val log: RunLogger,
     /** Ordered by `@Order`; the first that claims a kind runs it. */
     private val runners: List<NodeRunner>,
+    /**
+     * Counted here because this is where both engines end a run: the inline one
+     * calls [failRun] and [finishRun] directly, and Temporal reaches them through
+     * an activity. Counting in either engine would count one deployment's runs.
+     */
+    private val metrics: WorkflowRunMetrics,
 ) {
 
     /**
@@ -195,6 +201,14 @@ class StepRunner(
     /** Stops the run. The steps it never reached stay pending, because they were. */
     fun failRun(executionId: Long, nodeKey: String, reason: String, unreached: Int): WorkflowExecution {
         val execution = executionOf(executionId)
+        /*
+         * Read before the status is changed, because a Temporal activity is
+         * delivered at least once: an attempt that ended the run and then died
+         * before saying so arrives again, and the second one must not be a
+         * second failure. Writing the same ending twice is harmless; counting
+         * it twice is a failure rate nobody can trust.
+         */
+        val counts = execution.status == ExecutionStatus.RUNNING
         execution.status = ExecutionStatus.FAILED
         execution.error = reason.take(ERROR_LENGTH)
         execution.finishedAt = OffsetDateTime.now()
@@ -205,6 +219,7 @@ class StepRunner(
             LogLevel.ERROR,
             "${execution.workflowName} stopped at $nodeKey with $unreached steps unreached",
         )
+        if (counts) metrics.runFailed()
         return executions.save(execution)
     }
 
@@ -217,6 +232,8 @@ class StepRunner(
      */
     fun finishRun(executionId: Long, stoppedAt: String? = null, reason: String? = null): WorkflowExecution {
         val execution = executionOf(executionId)
+        // See [failRun]: an activity that is delivered twice ends the run twice.
+        val counts = execution.status == ExecutionStatus.RUNNING
         execution.status = ExecutionStatus.COMPLETED
         execution.finishedAt = OffsetDateTime.now()
         execution.stoppedAtNodeKey = stoppedAt
@@ -228,6 +245,7 @@ class StepRunner(
             "${execution.workflowName} stopped after $stoppedAt: $reason"
         }
         log.write(executionId, null, if (reason == null) LogLevel.SUCCESS else LogLevel.INFO, ending)
+        if (counts) metrics.runCompleted()
         return executions.save(execution)
     }
 

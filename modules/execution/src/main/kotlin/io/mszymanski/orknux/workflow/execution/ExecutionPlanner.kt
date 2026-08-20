@@ -66,6 +66,13 @@ class ExecutionPlanner(
     private val executions: WorkflowExecutionRepository,
     private val steps: ExecutionStepRepository,
     private val log: RunLogger,
+    /**
+     * Counted here rather than in an engine, because this is the one place a run
+     * comes into existence — both engines plan through it, and a re-run is a run
+     * like any other. A request that never got this far was refused, and a
+     * refusal is not a run that failed.
+     */
+    private val metrics: WorkflowRunMetrics,
 ) {
 
     /**
@@ -123,6 +130,7 @@ class ExecutionPlanner(
             ),
         )
         val executionId = requireNotNull(execution.id)
+        metrics.runStarted()
 
         val recorded = steps.saveAll(
             order.mapIndexed { index, node ->

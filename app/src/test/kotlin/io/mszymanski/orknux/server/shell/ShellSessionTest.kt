@@ -17,6 +17,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.apache.sshd.common.config.keys.PublicKeyEntry
 import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter
+import org.apache.sshd.common.util.OsUtils
 import org.apache.sshd.common.util.security.SecurityUtils
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterAll
@@ -293,6 +294,39 @@ class ShellSessionTest(
         )
         service.check(shellId)
         assertThat(shells.findById(shellId).get().status).isEqualTo(ShellStatus.CONNECTED)
+    }
+
+    @Test
+    fun `a shell with no username connects as the account this server runs as`() {
+        val shell = shells.findById(shellId).get()
+        shell.username = null
+        shells.save(shell)
+
+        /*
+         * Who this process is, for the length of one connection. The container
+         * only accepts ACCOUNT, so the test has to be that account for the
+         * fallback to be provable at all - and this is MINA's own supported way
+         * of saying so, the same accessor the fallback reads. Faking it any
+         * other way would be testing a mock of the thing under test.
+         */
+        OsUtils.setCurrentUser(ACCOUNT)
+        try {
+            service.check(shellId)
+        } finally {
+            // Back to whatever the JVM says, and not to a name this test chose:
+            // null clears the cache rather than setting a value.
+            OsUtils.setCurrentUser(null)
+        }
+
+        val checked = shells.findById(shellId).get()
+        // Not merely a handshake. The check runs `uname` as well, so a blank
+        // user name that reached the far side and was refused could not reach
+        // here.
+        assertThat(checked.status).isEqualTo(ShellStatus.CONNECTED)
+        assertThat(checked.lastCheckMessage).contains("Connected to Linux")
+        // And the username is still nothing, because connecting is not a reason
+        // to write a name into a field the administrator left empty.
+        assertThat(checked.username).isNull()
     }
 
     @Test

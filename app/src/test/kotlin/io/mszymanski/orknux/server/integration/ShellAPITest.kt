@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.integration
 import io.mszymanski.orknux.connector.shell.ShellRepository
 import io.mszymanski.orknux.connector.shell.ShellSessionRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
+import org.apache.sshd.common.util.OsUtils
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -53,6 +54,51 @@ class ShellAPITest(
 
         assertThat(audit.findAll().map { it.message })
             .contains("Shell build box added for runner@127.0.0.1:2222")
+    }
+
+    @Test
+    fun `a shell with no account named runs as the one this server runs as`() {
+        // The field left empty, which is what `ssh build.internal` allows and
+        // what an administrator adding a container they already have a shell on
+        // expects to be allowed here.
+        val id = create("build box", username = null, privateKey = KEY)
+
+        graphQlTester.document("{ shells { username account status } }").execute()
+            // Nothing was typed, and the API says so rather than inventing a
+            // name: a screen has to be able to show the box empty again.
+            .path("shells[0].username").valueIsNull()
+            // But what it will connect as is not a mystery. This is the account
+            // this process runs as, which is the only thing on the answer that
+            // no screen could have worked out for itself.
+            .path("shells[0].account").entity(String::class.java).isEqualTo(OsUtils.getCurrentUser())
+            // And a key with no username is still something to connect with,
+            // which NOT_CONFIGURED would have denied.
+            .path("shells[0].status").entity(String::class.java).isEqualTo("NOT_CHECKED")
+
+        assertThat(audit.findAll().map { it.message })
+            .contains("Shell build box added for ${OsUtils.getCurrentUser()}@127.0.0.1:22")
+
+        // And it can be given one afterwards without anything else changing.
+        graphQlTester.document(
+            """
+            mutation { updateShell(id: $id, input: {
+              name: "build box", host: "127.0.0.1", port: 22, username: "runner"
+            }) { username account privateKeySet } }
+            """,
+        ).execute()
+            .path("updateShell.username").entity(String::class.java).isEqualTo("runner")
+            .path("updateShell.account").entity(String::class.java).isEqualTo("runner")
+            .path("updateShell.privateKeySet").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    @Test
+    fun `an account of nothing but spaces is stored as no account at all`() {
+        // Blank and absent are the same thing for an account name, unlike for
+        // the key below it, and the row has to say which so that "not set" and
+        // "set to nothing" cannot drift apart.
+        create("build box", username = "   ", privateKey = KEY)
+
+        assertThat(shells.findAll().single().username).isNull()
     }
 
     @Test
@@ -179,10 +225,14 @@ class ShellAPITest(
         name: String,
         host: String = "127.0.0.1",
         port: Int = 22,
-        username: String = "runner",
+        username: String? = "runner",
         privateKey: String? = null,
         keyPassphrase: String? = null,
     ): Long {
+        // Left out of the document entirely rather than sent as null, because
+        // "an administrator did not fill the field in" is the case worth
+        // covering and that is what the screen sends.
+        val account = username?.let { ", username: ${quote(it)}" }.orEmpty()
         val key = privateKey?.let { ", privateKey: ${quote(it)}" }.orEmpty()
         val passphrase = keyPassphrase?.let { ", keyPassphrase: ${quote(it)}" }.orEmpty()
 
@@ -190,7 +240,7 @@ class ShellAPITest(
             """
             mutation {
               createShell(input: {
-                name: ${quote(name)}, host: ${quote(host)}, port: $port, username: ${quote(username)}$key$passphrase
+                name: ${quote(name)}, host: ${quote(host)}, port: $port$account$key$passphrase
               }) { id }
             }
             """,

@@ -254,11 +254,14 @@ class ShellService(
         return port
     }
 
-    private fun validUsername(username: String): String {
-        val trimmed = username.trim()
-        if (trimmed.isEmpty()) throw ShellAddressInvalidException("A username is required")
-        return trimmed
-    }
+    /**
+     * A username, or null when there is none to keep.
+     *
+     * Nothing is refused here any more. An account is optional the way it is
+     * optional at `ssh build.internal`, and what happens when it is left out is
+     * settled once, on the entity, by [Shell.account].
+     */
+    private fun validUsername(username: String?): String? = username?.trim()?.ifEmpty { null }
 
     /**
      * Parsed where somebody can still fix it.
@@ -300,7 +303,14 @@ data class ShellInput(
     val name: String,
     val host: String,
     val port: Int = 22,
-    val username: String,
+    /**
+     * The account on the far side, or null for the one this server runs as.
+     *
+     * Blank and absent mean the same thing here, unlike the key below: there is
+     * nothing secret about an account name, so the screen always has the current
+     * value to send back and never needs to say "unchanged".
+     */
+    val username: String? = null,
     /** Null leaves the stored key alone; empty clears it. Never read back. */
     val privateKey: String? = null,
     /** Same rule as the key. */
@@ -327,7 +337,16 @@ data class ShellView(
     val name: String,
     val host: String,
     val port: Int,
-    val username: String,
+    /** What the administrator typed, or null when they left it out. */
+    val username: String?,
+    /**
+     * The account commands actually run as: [username] when there is one, and
+     * otherwise the account this server process runs as. On the view rather than
+     * worked out again by the screen, because the screen has no way to know what
+     * this process runs as and a page that guessed would be guessing about
+     * privilege.
+     */
+    val account: String,
     val privateKeySet: Boolean,
     val passphraseSet: Boolean,
     /** The fingerprint this host was first seen with, for reading by eye. */
@@ -345,6 +364,7 @@ data class ShellView(
         host = shell.host,
         port = shell.port,
         username = shell.username,
+        account = shell.account,
         privateKeySet = !shell.privateKey.isNullOrBlank(),
         passphraseSet = !shell.keyPassphrase.isNullOrBlank(),
         hostKey = shell.hostKey,

@@ -13,13 +13,27 @@ package io.mszymanski.orknux.server.transfer
  *    name — and because every reference in it is single-kinded (a property can
  *    only name an object, a condition's member can only name a condition) a
  *    reference is a bare name rather than a kind-and-name pair.
- * 2. **No secrets travel.** A variable's value is encrypted at rest and is not
- *    ours to put in a file somebody emails. So a function that is handed a
- *    variable exports the variable's *name*, and the import refuses until the
- *    target workspace has one of its own by that name.
+ * 2. **No secrets travel.** The line is the one the database already draws: a
+ *    column this installation encrypts at rest is not ours to put in a file
+ *    somebody emails, and nothing that is encrypted is written here. A
+ *    variable's value, a connection's token, a model provider's key and an MCP
+ *    server's header are all on that side of it, so each of those is exported
+ *    as a name and a type — enough for the target to say what it means here,
+ *    and nothing that would work anywhere on its own. A column the workspace
+ *    typed in the clear — a function's source, an action's headers — is the
+ *    workspace's own text and travels; the day one of those becomes a place
+ *    credentials are kept it has to be encrypted first, and it stops travelling
+ *    by this same rule rather than by a second one.
  * 3. **A version the reader does not know is refused, by name.** Reading what
  *    can be read out of a newer envelope is how half a workflow gets created
  *    and nobody is told which half.
+ *
+ * A kind added to the catalogue is not a version bump, and deliberately: an
+ * older reader given a component it has never heard of refuses the whole file
+ * and names the kind, which is the same whole-file refusal rule 3 exists to
+ * get. So an export of the kinds that travelled before still claims version 1
+ * and can still be read by the installation that wrote it a release ago, and
+ * only a file that actually holds a new kind is refused there.
  *
  * The envelope is written and read by hand, as `WorkflowSnapshot` writes the
  * published graph, and for the same reason: a shape in a file outlives the class
@@ -40,10 +54,15 @@ const val COMPONENT_FORMAT_VERSION: Int = 1
 /**
  * What can be exported and imported.
  *
- * The self-contained half of the catalogue: everything here reaches only other
- * things in here. Agents and workflows are not on the list yet — they reach
- * models and connections, which hold credentials, and that needs the import to
- * ask a question this one never has to.
+ * The whole catalogue. The first five reach only each other and travel whole;
+ * the last four reach outward as well — an agent names a model, an action and a
+ * trigger name a connection — and what they reach out to holds credentials, so
+ * it cannot be carried. That is what [ExternalKind] is, and it is the whole of
+ * the difference between the two halves: everything in an envelope is still
+ * written by name, and the import still creates all of it or none of it.
+ *
+ * The order is the order things are written in, which is the order they depend
+ * on each other in: nothing here reaches anything below it.
  */
 enum class ComponentKind {
     OBJECT,
@@ -51,6 +70,10 @@ enum class ComponentKind {
     CONDITION,
     TOOL,
     SKILL,
+    ACTION,
+    TRIGGER,
+    AGENT,
+    WORKFLOW,
     ;
 
     /** "function", for a message somebody reads. */
@@ -59,10 +82,74 @@ enum class ComponentKind {
     /**
      * "an object", "a function".
      *
-     * Here rather than at each message, because there is exactly one of these
-     * that takes "an" and every sentence that names a kind has to get it right.
+     * Here rather than at each message, because every sentence that names a kind
+     * has to get it right and three of them take "an".
      */
-    val indefinite: String get() = if (this == OBJECT) "an $label" else "a $label"
+    val indefinite: String get() = indefiniteFor(label)
+}
+
+/**
+ * What an envelope points at and can never carry.
+ *
+ * Each of these is a row with an encrypted column in it — a key, a token, a
+ * header — so what travels is the name and the type, and the import will not
+ * create anything until it has been told what each one means in the target
+ * workspace. A connection invented from a name would be a connection to
+ * nowhere; one invented from a name and somebody else's token would be worse.
+ *
+ * Not a [ComponentKind] on purpose. A kind is something the file holds; these
+ * are things it asks for, and the two are answered differently — one by
+ * creating, the other by binding.
+ */
+enum class ExternalKind {
+
+    /** One model, reached through one provider; both are named. */
+    MODEL,
+
+    /** One of the workspace's connections to a service. */
+    CONNECTION,
+
+    /** One MCP server the workspace has registered. */
+    MCP_SERVER,
+    ;
+
+    /** "mcp server", for a message somebody reads. */
+    val label: String get() = name.lowercase().replace('_', ' ')
+
+    val indefinite: String get() = indefiniteFor(label)
+}
+
+/** "an object", "a connection" — one rule, so no message has to remember it. */
+private fun indefiniteFor(label: String): String =
+    if (label.first() in "aeiou") "an $label" else "a $label"
+
+/**
+ * One thing an envelope points at that it could not carry.
+ *
+ * [name] is what the source workspace called it and [type] is what it was —
+ * `SLACK`, `OPENAI` — which together are the whole of what a target needs in
+ * order to say what to point it at. A model has a provider as well, because a
+ * model is only ever reached through one and two providers may well offer a
+ * model of the same name.
+ */
+data class ExternalReference(
+    val kind: ExternalKind,
+    val name: String,
+    /** The provider a model is reached through; null for everything else. */
+    val provider: String? = null,
+    /** The type it was there, when it has one. Never a setting, never a secret. */
+    val type: String? = null,
+) {
+
+    /**
+     * What the plan calls it, and what a binding names it by.
+     *
+     * Unique within a workspace, which a model's name alone is not. Built here
+     * and compared as it stands — nothing ever takes it apart again, because
+     * what resolves a reference to a row is the structured [provider] and
+     * [name] beside it.
+     */
+    val label: String get() = provider?.let { "$it / $name" } ?: name
 }
 
 /**
@@ -96,16 +183,21 @@ enum class ImportDisposition {
     RENAME,
 
     /**
-     * Not created: the workspace already has one by this name and the envelope
-     * did not carry it. A shallow export's dependencies and every variable land
-     * here.
+     * Not created: the workspace already has this one, and the imported things
+     * that pointed at it will point at it here.
+     *
+     * A shallow export's dependencies and every variable land here, matched by
+     * name. So does an external the import was told what to point at — a
+     * binding is the same answer given by hand rather than found, and it would
+     * be a distinction without a difference to call it something else.
      */
     REUSE,
 
     /**
      * Pointed at, not carried, and not here. The import is refused while any of
      * these remain, because creating the rest would leave a function typed
-     * against an object that does not exist.
+     * against an object that does not exist — or an agent naming a model that
+     * is nobody's.
      */
     MISSING,
 }
@@ -139,4 +231,18 @@ class EnvelopeInvalidException(says: String) : RuntimeException(says)
  */
 class ImportNotPossibleException(problems: List<String>) : RuntimeException(
     "Nothing was imported. " + problems.joinToString(" "),
+)
+
+/**
+ * The import was told to point a reference at something that is not there.
+ *
+ * A binding names a row in the target workspace by id, so this is a client's
+ * mistake rather than a file's: an id from another workspace, one that has been
+ * deleted since the form was drawn, or one of the wrong kind altogether.
+ * Refused rather than ignored — an ignored binding is an import that quietly
+ * did something other than what it was asked to.
+ */
+class ImportBindingInvalidException(kind: ExternalKind, name: String, targetId: Long) : RuntimeException(
+    "This workspace has no ${kind.label} with id $targetId, so there is nothing for $name to point at. " +
+        "Nothing was imported.",
 )

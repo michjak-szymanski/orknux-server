@@ -78,9 +78,13 @@ class ComponentTemplateAPI(
      * writes nothing.
      */
     @QueryMapping
-    fun componentTemplatePlan(@Argument workspaceId: Long, @Argument templateId: Long): ImportPlan {
+    fun componentTemplatePlan(
+        @Argument workspaceId: Long,
+        @Argument templateId: Long,
+        @Argument bindings: List<ComponentBinding>?,
+    ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.plan(workspaceId, templates.envelopeOf(templateId))
+        return importer.plan(workspaceId, templates.envelopeOf(templateId), bindings.orEmpty())
     }
 
     /** Publishes a file somebody uploaded. Administrators only. */
@@ -168,9 +172,13 @@ class ComponentTemplateAPI(
      * workspace would go to find out where a function came from.
      */
     @MutationMapping
-    fun useComponentTemplate(@Argument workspaceId: Long, @Argument templateId: Long): ImportPlan {
+    fun useComponentTemplate(
+        @Argument workspaceId: Long,
+        @Argument templateId: Long,
+        @Argument bindings: List<ComponentBinding>?,
+    ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.apply(workspaceId, templates.envelopeOf(templateId))
+        return importer.apply(workspaceId, templates.envelopeOf(templateId), bindings.orEmpty())
     }
 
     private fun requireEnvelope(envelope: String?): String =

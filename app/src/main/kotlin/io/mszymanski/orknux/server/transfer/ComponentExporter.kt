@@ -1,7 +1,11 @@
 package io.mszymanski.orknux.server.transfer
 
+import io.mszymanski.orknux.server.action.WorkflowAction
+import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.agent.AgentSkill
 import io.mszymanski.orknux.server.agent.AgentSkillRepository
 import io.mszymanski.orknux.server.agent.AgentTool
@@ -11,7 +15,16 @@ import io.mszymanski.orknux.server.condition.WorkflowCondition
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObject
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
+import io.mszymanski.orknux.server.trigger.WorkflowTrigger
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
+import io.mszymanski.orknux.server.workflow.NodeKind
+import io.mszymanski.orknux.server.workflow.Workflow
+import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowNode
+import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowRepository
+import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -26,8 +39,18 @@ import java.time.format.DateTimeFormatter
  *
  * Walks outward from the thing asked for, collecting what it reaches, and writes
  * every one of them by name. Nothing here reads a credential: a variable a
- * function is handed appears as a name and a shape under `requires`, which is
- * the whole of what the target needs in order to say what to point it at.
+ * function is handed appears as a name and a shape under `requires`, and the
+ * three things that are kept beside a key — a model, a connection, an MCP
+ * server — are read through [ComponentExternals], which hands back a name and a
+ * type and nothing else. That is the whole of what the target needs in order to
+ * say what to point them at.
+ *
+ * What an agent, an action and a trigger reach outward to is written on the
+ * component that reaches it and nowhere else. There is deliberately no second
+ * list of them beside `requires.variables`: a variable is there because it is
+ * never a component and the file has nowhere else to describe it, whereas an
+ * external is written where the reference is made, and a summary of those
+ * kept beside them would be a second thing to keep in step with them.
  */
 @Service
 class ComponentExporter(
@@ -38,6 +61,14 @@ class ComponentExporter(
     private val skills: AgentSkillRepository,
     private val catalogs: SkillCatalogRepository,
     private val variables: WorkspaceVariableRepository,
+    private val actions: WorkflowActionRepository,
+    private val triggers: WorkflowTriggerRepository,
+    private val agents: AgentRepository,
+    private val workflows: WorkflowRepository,
+    private val assignments: WorkspaceWorkflowRepository,
+    private val nodes: WorkflowNodeRepository,
+    private val edges: WorkflowEdgeRepository,
+    private val externals: ComponentExternals,
     private val mapper: ObjectMapper,
     @Value("\${orknux.version:unknown}") private val version: String,
 ) {
@@ -71,8 +102,9 @@ class ComponentExporter(
 
         val components = envelope.putArray("components")
         // Objects before what is typed against them, and functions before the
-        // conditions that call them: the file reads top-down the way it is applied.
-        reached.sortedWith(compareBy({ ORDER.indexOf(it.kind) }, { it.name }))
+        // conditions that call them: the file reads top-down the way it is
+        // applied, which is the order the catalogue itself is declared in.
+        reached.sortedWith(compareBy({ it.kind.ordinal }, { it.name }))
             .forEach { components.add(describe(workspaceId, it)) }
 
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(envelope)
@@ -131,6 +163,71 @@ class ComponentExporter(
 
         // Neither reaches anything: a tool is code and a skill is markdown.
         ComponentKind.TOOL, ComponentKind.SKILL -> emptyList()
+
+        ComponentKind.ACTION -> action(workspaceId, held.id).let { action ->
+            held(workspaceId, ComponentKind.FUNCTION, action.functionId) +
+                held(workspaceId, ComponentKind.CONDITION, action.conditionId)
+        }
+
+        ComponentKind.TRIGGER -> trigger(workspaceId, held.id).let { trigger ->
+            held(workspaceId, ComponentKind.OBJECT, trigger.objectId) +
+                held(workspaceId, ComponentKind.FUNCTION, trigger.authFunctionId) +
+                held(workspaceId, ComponentKind.CONDITION, trigger.conditionId)
+        }
+
+        /*
+         * An agent's tools, and the skills in the catalogs it was granted.
+         *
+         * The tools are the obvious half: a granted tool that is not there is a
+         * name an agent can never call. The skills are the less obvious one, and
+         * they are here for the same reason — a grant is per catalog rather than
+         * per skill, so carrying the grant and not what is in it would land an
+         * agent that reads nothing. What the agent holds is the catalog's name
+         * either way; the skills travel because a deep export is the one that
+         * lands somewhere it can be used.
+         */
+        ComponentKind.AGENT -> agent(workspaceId, held.id).let { agent ->
+            agent.tools.distinct()
+                .mapNotNull { tools.findByWorkspaceIdAndName(workspaceId, it) }
+                .map { Held(ComponentKind.TOOL, it.id!!, it.name) } +
+                agent.skillCatalogs.distinct()
+                    .mapNotNull { catalogs.findByWorkspaceIdAndName(workspaceId, it)?.id }
+                    .flatMap { skills.findByCatalogId(it) }
+                    .filter { it.workspaceId == workspaceId }
+                    .map { Held(ComponentKind.SKILL, it.id!!, it.name) }
+        }
+
+        /*
+         * Everything the graph points at, which is every kind above.
+         *
+         * A node names one thing at most, and which field it names it in is
+         * decided by the node's kind — so this reads the field the kind uses
+         * rather than every field that is set. A node whose kind was changed
+         * leaves the old id behind it, and carrying what that pointed at would
+         * put things in the file the workflow does not use.
+         */
+        ComponentKind.WORKFLOW -> nodes.findByWorkflowId(held.id).flatMap { node ->
+            when (node.kind) {
+                NodeKind.AGENT -> held(workspaceId, ComponentKind.AGENT, node.agentId)
+                NodeKind.TRIGGER -> held(workspaceId, ComponentKind.TRIGGER, node.triggerId)
+                NodeKind.ACTION -> held(workspaceId, ComponentKind.ACTION, node.actionId)
+                NodeKind.CONDITION -> held(workspaceId, ComponentKind.CONDITION, node.conditionId)
+                NodeKind.OBJECT -> held(workspaceId, ComponentKind.OBJECT, node.objectId)
+            }
+        }.distinct()
+    }
+
+    /**
+     * One edge, or none, for an id that may be null or may be gone.
+     *
+     * A component points at what it points at with a nullable column, and a
+     * column that names something since deleted is a shape the catalogue allows.
+     * Neither is worth refusing an export over: what is not there is not
+     * carried, and the import says so by name rather than the export failing.
+     */
+    private fun held(workspaceId: Long, kind: ComponentKind, id: Long?): List<Held> {
+        val name = id?.let { nameOrNull(workspaceId, kind, it) } ?: return emptyList()
+        return listOf(Held(kind, id, name))
     }
 
     /**
@@ -169,6 +266,10 @@ class ComponentExporter(
         ComponentKind.CONDITION -> describeCondition(workspaceId, condition(workspaceId, held.id))
         ComponentKind.TOOL -> describeTool(tool(workspaceId, held.id))
         ComponentKind.SKILL -> describeSkill(skill(workspaceId, held.id))
+        ComponentKind.ACTION -> describeAction(workspaceId, action(workspaceId, held.id))
+        ComponentKind.TRIGGER -> describeTrigger(workspaceId, trigger(workspaceId, held.id))
+        ComponentKind.AGENT -> describeAgent(workspaceId, agent(workspaceId, held.id))
+        ComponentKind.WORKFLOW -> describeWorkflow(workflow(workspaceId, held.id))
     }
 
     private fun describeObject(held: WorkflowObject): ObjectNode = start(ComponentKind.OBJECT, held.name).apply {
@@ -246,9 +347,185 @@ class ComponentExporter(
         put("enabled", held.enabled)
     }
 
+    /**
+     * An action, with the connection it sends through named rather than carried.
+     *
+     * Its headers and its URL are written as they stand. They are columns the
+     * workspace typed in the clear, like a function's source, and the format's
+     * rule about secrets is the one the database draws: what is encrypted at
+     * rest does not travel, and neither of these is. A header that holds a token
+     * is a token in a plain column, which is a thing to fix where it is stored
+     * rather than a thing to paper over here.
+     */
+    private fun describeAction(workspaceId: Long, held: WorkflowAction): ObjectNode =
+        start(ComponentKind.ACTION, held.name).apply {
+            put("type", held.type.name)
+            put("subtype", held.subtype.name)
+            putExternal("connectionRef", externals.connectionReference(workspaceId, held.connectionId))
+            put("connectionAction", held.connectionAction?.name)
+            put("content", held.content)
+            put("target", held.target?.name)
+            put("targetName", held.targetName)
+            put("emailTo", held.emailTo)
+            put("emailCc", held.emailCc)
+            put("emailSubject", held.emailSubject)
+            put("emailReplyTo", held.emailReplyTo)
+            put("url", held.url)
+            put("method", held.method)
+            put("headers", held.headers)
+            put("functionRef", held.functionId?.let { functions.findByIdOrNull(it)?.name })
+            put("conditionExpression", held.conditionExpression)
+            put("conditionRef", held.conditionId?.let { conditions.findByIdOrNull(it)?.name })
+            put("timeoutSeconds", held.timeoutSeconds)
+            put("retryIntervalSeconds", held.retryIntervalSeconds)
+            put("durationSeconds", held.durationSeconds)
+            put("icon", held.icon)
+            val mappings = putArray("mappings")
+            held.mappings.forEach { mapping ->
+                mappings.addObject().apply {
+                    put("argument", mapping.argument)
+                    put("expression", mapping.expression)
+                }
+            }
+        }
+
+    /**
+     * A trigger, with everything that makes it fire.
+     *
+     * Whether it is switched on is not written: an import decides that, and it
+     * decides off. A file is opened in a workspace nobody has looked at yet, and
+     * a trigger that arrived listening would be firing on somebody else's
+     * connection before anybody had read what it does.
+     */
+    private fun describeTrigger(workspaceId: Long, held: WorkflowTrigger): ObjectNode =
+        start(ComponentKind.TRIGGER, held.name).apply {
+            put("type", held.type.name)
+            putExternal("connectionRef", externals.connectionReference(workspaceId, held.connectionId))
+            put("action", held.action?.name)
+            put("cron", held.cron)
+            put("timezone", held.timezone)
+            put("webhookPath", held.webhookPath)
+            put("objectRef", held.objectId?.let { objects.findByIdOrNull(it)?.name })
+            put("authType", held.authType.name)
+            put("authFunctionRef", held.authFunctionId?.let { functions.findByIdOrNull(it)?.name })
+            put("conditionRef", held.conditionId?.let { conditions.findByIdOrNull(it)?.name })
+            put("payload", held.payload)
+            put("icon", held.icon)
+        }
+
+    /**
+     * An agent: its instructions, what it may call, and what it thinks with.
+     *
+     * The two access grants travel with it, and they are the reason the plan
+     * says so out loud. Neither is a secret — they are settings a workspace
+     * chose — but an agent that may open a shell is an agent that may run
+     * anything the account on the other end can, and somebody importing a file
+     * from elsewhere should be told that before pressing the button rather than
+     * after.
+     */
+    private fun describeAgent(workspaceId: Long, held: Agent): ObjectNode =
+        start(ComponentKind.AGENT, held.name).apply {
+            put("type", held.type.name)
+            put("description", held.description)
+            put("systemPrompt", held.systemPrompt)
+            put("enabled", held.enabled)
+            put("orknuxAccess", held.orknuxAccess)
+            put("shellAccess", held.shellAccess)
+            put("icon", held.icon)
+            putExternal("modelRef", externals.modelReference(workspaceId, held.modelId))
+            val servers = putArray("mcpServerRefs")
+            held.mcpServers.forEach { servers.add(it) }
+            val granted: ArrayNode = putArray("toolRefs")
+            held.tools.forEach { granted.add(it) }
+            // Grants by name, and by name is how the agent holds them. A catalog
+            // holds nothing but a name, so the import makes one it does not have
+            // rather than refusing — the same answer a skill's folder gets.
+            val skillCatalogs = putArray("skillCatalogs")
+            held.skillCatalogs.forEach { skillCatalogs.add(it) }
+            val memoryCatalogs = putArray("memoryCatalogs")
+            held.memoryCatalogs.forEach { memoryCatalogs.add(it) }
+        }
+
+    /**
+     * A workflow's graph, node keys and all.
+     *
+     * The keys travel unchanged. They are the workflow's own — an edge names
+     * them, and a node's parameter names the node it reads from — so they mean
+     * exactly as much in the target as they did here, which is the one kind of
+     * identifier this format does carry.
+     *
+     * What the workflow is called is written; whether it was published is not.
+     * Publishing takes a copy of the graph to run, and an import that arrived
+     * published would be promising to run a copy nobody made.
+     */
+    private fun describeWorkflow(held: Workflow): ObjectNode {
+        val workflowId = requireNotNull(held.id)
+        return start(ComponentKind.WORKFLOW, held.name).apply {
+            put("description", held.description)
+            val drawn = putArray("nodes")
+            nodes.findByWorkflowId(workflowId).sortedBy { it.nodeKey }.forEach { drawn.add(describeNode(it)) }
+            val wired = putArray("edges")
+            edges.findByWorkflowId(workflowId)
+                .sortedWith(compareBy({ it.sourceKey }, { it.targetKey }))
+                .forEach { edge ->
+                    wired.addObject().apply {
+                        put("source", edge.sourceKey)
+                        put("target", edge.targetKey)
+                        put("branch", edge.branch?.name)
+                    }
+                }
+        }
+    }
+
+    private fun describeNode(held: WorkflowNode): ObjectNode = mapper.createObjectNode().apply {
+        put("key", held.nodeKey)
+        put("kind", held.kind.name)
+        put("name", held.name)
+        put("description", held.description)
+        put("outputName", held.outputName)
+        put("orientation", held.orientation?.name)
+        put("icon", held.icon)
+        put("x", held.positionX)
+        put("y", held.positionY)
+        put("yesLabel", held.yesLabel)
+        put("noLabel", held.noLabel)
+        // The one the node's kind uses, and only that one: an id left behind by
+        // a node that changed kind is not something this workflow points at.
+        put("agentRef", held.agentId.takeIf { held.kind == NodeKind.AGENT }?.let { agents.findByIdOrNull(it)?.name })
+        put("triggerRef", held.triggerId.takeIf { held.kind == NodeKind.TRIGGER }?.let { triggers.findByIdOrNull(it)?.name })
+        put("actionRef", held.actionId.takeIf { held.kind == NodeKind.ACTION }?.let { actions.findByIdOrNull(it)?.name })
+        put(
+            "conditionRef",
+            held.conditionId.takeIf { held.kind == NodeKind.CONDITION }?.let { conditions.findByIdOrNull(it)?.name },
+        )
+        put("objectRef", held.objectId.takeIf { held.kind == NodeKind.OBJECT }?.let { objects.findByIdOrNull(it)?.name })
+        val mappings = putArray("mappings")
+        held.mappings.forEach { mapping ->
+            mappings.addObject().apply {
+                put("name", mapping.name)
+                put("expression", mapping.expression)
+                put("mode", mapping.mode.name)
+                put("sourceNodeKey", mapping.sourceNodeKey)
+            }
+        }
+    }
+
     private fun start(kind: ComponentKind, name: String): ObjectNode = mapper.createObjectNode().apply {
         put("kind", kind.name)
         put("name", name)
+    }
+
+    /** A reference this file cannot carry: a name, a type, and never anything else. */
+    private fun ObjectNode.putExternal(field: String, reference: ExternalReference?) {
+        if (reference == null) {
+            putNull(field)
+            return
+        }
+        putObject(field).apply {
+            put("name", reference.name)
+            put("provider", reference.provider)
+            put("type", reference.type)
+        }
     }
 
     private fun nameOf(workspaceId: Long, kind: ComponentKind, id: Long): String = when (kind) {
@@ -257,7 +534,15 @@ class ComponentExporter(
         ComponentKind.CONDITION -> condition(workspaceId, id).name
         ComponentKind.TOOL -> tool(workspaceId, id).name
         ComponentKind.SKILL -> skill(workspaceId, id).name
+        ComponentKind.ACTION -> action(workspaceId, id).name
+        ComponentKind.TRIGGER -> trigger(workspaceId, id).name
+        ComponentKind.AGENT -> agent(workspaceId, id).name
+        ComponentKind.WORKFLOW -> workflow(workspaceId, id).name
     }
+
+    /** The same question, for a column that may name something since deleted. */
+    private fun nameOrNull(workspaceId: Long, kind: ComponentKind, id: Long): String? =
+        runCatching { nameOf(workspaceId, kind, id) }.getOrNull()
 
     /*
      * One refusal for an id that is not there and one that belongs to another
@@ -280,19 +565,28 @@ class ComponentExporter(
     private fun skill(workspaceId: Long, id: Long): AgentSkill =
         skills.findByIdOrNull(id)?.takeIf { it.workspaceId == workspaceId } ?: missing(ComponentKind.SKILL, id)
 
+    private fun action(workspaceId: Long, id: Long): WorkflowAction =
+        actions.findByIdOrNull(id)?.takeIf { it.workspaceId == workspaceId } ?: missing(ComponentKind.ACTION, id)
+
+    private fun trigger(workspaceId: Long, id: Long): WorkflowTrigger =
+        triggers.findByIdOrNull(id)?.takeIf { it.workspaceId == workspaceId } ?: missing(ComponentKind.TRIGGER, id)
+
+    private fun agent(workspaceId: Long, id: Long): Agent =
+        agents.findByIdOrNull(id)?.takeIf { it.workspaceId == workspaceId } ?: missing(ComponentKind.AGENT, id)
+
+    /**
+     * A workflow definition, if this workspace has been given it.
+     *
+     * The definition is installation-wide and the assignment is what makes it
+     * one workspace's, so this asks the assignment rather than the definition —
+     * the same question the graph editor asks before it will open one.
+     */
+    private fun workflow(workspaceId: Long, id: Long): Workflow =
+        workflows.findByIdOrNull(id)?.takeIf { assignments.existsByWorkspaceIdAndWorkflowId(workspaceId, id) }
+            ?: missing(ComponentKind.WORKFLOW, id)
+
     private fun missing(kind: ComponentKind, id: Long): Nothing =
         throw ComponentNotExportableException(kind, id)
-
-    private companion object {
-        /** Depended-on before depending: how the components are written out. */
-        val ORDER = listOf(
-            ComponentKind.OBJECT,
-            ComponentKind.FUNCTION,
-            ComponentKind.CONDITION,
-            ComponentKind.TOOL,
-            ComponentKind.SKILL,
-        )
-    }
 }
 
 /** No such component in this workspace — the same answer for both reasons. */

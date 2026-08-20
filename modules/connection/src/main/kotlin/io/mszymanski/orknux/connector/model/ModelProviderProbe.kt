@@ -202,7 +202,6 @@ class ModelProviderProbe(
         return when (provider.type) {
             ProviderType.ANTHROPIC -> HttpHeader("x-api-key", key)
             ProviderType.AZURE_OPENAI -> HttpHeader("api-key", key)
-            ProviderType.GOOGLE_AI -> HttpHeader("x-goog-api-key", key)
             else -> HttpHeader("Authorization", "Bearer $key")
         }
     }

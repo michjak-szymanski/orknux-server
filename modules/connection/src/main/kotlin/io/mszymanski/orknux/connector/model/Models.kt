@@ -40,12 +40,20 @@ enum class ResetInterval {
     NEVER,
 }
 
-/** The services a provider can be. Each brings its own settings and its own way in. */
+/**
+ * The services a provider can be. Each brings its own settings and its own way in.
+ *
+ * A type is here because something branches on it. OPENAI is the shape the rest
+ * are measured against; ANTHROPIC has its own body, its own streaming events and
+ * its own `/messages` path; AZURE_OPENAI puts the deployment and the API version
+ * in the URL and can authenticate through Entra ID; OLLAMA is the OpenAI shape at
+ * an address of your own. GOOGLE_AI was removed in V170 because it branched on
+ * nothing except the name of its auth header - see the migration.
+ */
 enum class ProviderType {
     OPENAI,
     ANTHROPIC,
     AZURE_OPENAI,
-    GOOGLE_AI,
     OLLAMA,
 
     /** Anything that speaks one of the above well enough, until it earns a type. */

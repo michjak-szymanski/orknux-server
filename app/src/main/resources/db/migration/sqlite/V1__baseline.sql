@@ -411,7 +411,7 @@ CREATE TABLE model_provider
     constraint uk_model_provider_name UNIQUE (workspace_id, name),
     constraint ck_model_provider_auth CHECK (((auth_method) IN ('API_KEY', 'ENTRA_ID'))),
     constraint ck_model_provider_status CHECK (((status) IN ('NOT_CONFIGURED', 'NOT_CHECKED', 'CONNECTED', 'FAILED'))),
-    constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'GOOGLE_AI', 'OLLAMA', 'CUSTOM')))
+    constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'OLLAMA', 'CUSTOM')))
 );
 
 CREATE TABLE model_usage_day

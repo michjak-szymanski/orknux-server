@@ -2103,7 +2103,6 @@ enum ProviderType {
     OPENAI
     ANTHROPIC
     AZURE_OPENAI
-    GOOGLE_AI
     OLLAMA
     CUSTOM
 }

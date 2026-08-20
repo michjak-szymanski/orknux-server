@@ -58,6 +58,31 @@ have failed.
 
 ### Changed
 
+- **Google AI is no longer a provider type; use Custom.** It never worked. The
+  only thing the type ever did was send the key as `x-goog-api-key`, which is
+  the header Google's own API wants - while every address orknux builds for a
+  provider is an OpenAI-shaped one (`/models`, `/chat/completions`), which that
+  API does not have. Pointed at Google's base it failed both; pointed at
+  `/v1beta` it passed the connection check against a real model list and then
+  404'd on every message, which is the worst way for it to fail.
+
+  Google's OpenAI-compatible endpoint does work, and always has - through
+  **Custom**. Set the endpoint to
+  `https://generativelanguage.googleapis.com/v1beta/openai` with your Gemini key
+  and the model list, chat, streaming and tool calls all behave.
+
+  **On upgrade**, providers stored as Google AI become Custom providers with
+  their endpoint and key untouched, and the models configured against them are
+  left alone. They will start sending `Authorization: Bearer`, which is the
+  header that endpoint documents - so a provider that could not work before may
+  now, once its endpoint names the `/v1beta/openai` path. If you script against
+  the API, `GOOGLE_AI` is gone from `ProviderType`.
+
+- **The Ollama endpoint hint points at `/v1`.** The provider form suggested
+  `http://localhost:11434`, which is the address of Ollama's own API; the
+  OpenAI-compatible one orknux talks to is under `/v1`, and anyone who took the
+  hint at its word got a 404 from both the check and the first message.
+
 - **There is one Slack connection type, not two.** "Slack (outgoing only)" and
   "Slack (Socket Mode)" were two names for the same integration: whichever you
   picked, orknux listened on it the moment it held an app-level token. So they

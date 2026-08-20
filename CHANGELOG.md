@@ -17,6 +17,18 @@ have failed.
 
 ### Added
 
+- **The top bar carries four sections** - AI, Workflow, Workspace and Chat -
+  each with its own menu, rather than one Workspace section holding nineteen
+  pages. No page changed address; only which menu it sits under. Where a section
+  link goes is its own menu's first page, so the two cannot drift apart.
+
+- **Issue news is sent by email as well as shown in the bell**, to anybody whose
+  account has an address, with a switch in Preferences for turning it off. It is
+  the same audience the bell uses rather than a second set of rules, so changing
+  who hears about an issue changes both. An installation with no mail relay
+  configured sends nothing and says so only in its log. The subject never
+  carries any of the comment, because the subject is what a locked screen shows.
+
 - **Templates: a component published once, for every workspace to take.** A new
   **Templates** page under Admin holds exported components under a name and a
   description, and every catalogue page - Functions, Objects, Conditions, Tools,
@@ -213,6 +225,22 @@ have failed.
   truncates silently.
 
 ### Fixed
+
+- **Voice mode releases the microphone on every way out.** It held one open
+  stream per entry, so the browser went on reporting the device in use until the
+  page was reloaded - three rounds of entering and leaving left three live
+  streams and three running audio contexts. The composer's own microphone button
+  had a second version of the same fault: it only ever released when somebody
+  pressed stop, so navigating away mid-recording left the device open.
+
+- **The chat's composer sits at the bottom of the frame again.** The room every
+  page was given at its foot for the floating assistant launcher was room the
+  one page whose last element is meant to touch the bottom did not want.
+
+- **The two collapse controls are the same control.** The menu and the catalogue
+  panel beside it collapsed by different gestures, with different icons, and the
+  catalogue column was 80 pixels shorter than the menu - it cancelled the page's
+  padding with one number when that padding is no longer one number.
 
 - **The last button on a page is no longer under the floating assistant
   launcher.** On a settings page that is the delete button in the Danger Zone,

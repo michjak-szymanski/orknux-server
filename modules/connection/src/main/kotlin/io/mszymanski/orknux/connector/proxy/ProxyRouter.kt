@@ -17,12 +17,19 @@ import java.net.http.HttpClient
  * HTTP clients that ask.
  *
  * **Why this is one object and not a setting on each client.** Every outbound
- * call in this application is built from [builder], which is the only reason the
+ * call in this application is routed from here, which is the only reason the
  * rules can be trusted to cover anything. A proxy rule that applies to some
  * calls and not others is worse than no rule at all: the ones it misses fail
  * against an endpoint nobody can reach, and nothing on the screen that lists the
  * rules says so. So the seam is the client itself - a client that was not built
- * here is a client the rules do not reach, and there are none.
+ * here is a client the rules do not reach.
+ *
+ * Most callers get that by building from [builder]. The exception is a library
+ * that will not be handed a [java.net.http.HttpClient] at all: Slack's SDK
+ * brings its own HTTP and websocket stacks, so it is given [proxySelector] and
+ * [resolve] instead. What matters is that both roads end at the same compiled
+ * rules in the same order - the decision lives here and is made once, whatever
+ * asks for it.
  *
  * **Why first match wins, by a position an administrator sets.** Two other
  * orderings were considered. "Most specific wins" needs a definition of specific
@@ -63,6 +70,17 @@ class ProxyRouter(private val source: ProxyRuleSource) {
     fun builder(): HttpClient.Builder = HttpClient.newBuilder()
         .proxy(selector)
         .authenticator(authenticator)
+
+    /**
+     * The rules as a [ProxySelector], for a client this cannot build.
+     *
+     * Slack's SDK carries its own HTTP stack and its own websocket stack, and
+     * neither takes a [java.net.http.HttpClient]. Handing them this object is
+     * how they are brought back under the same rules without a second copy of
+     * the decision: it is the very selector [builder] attaches, so a rule cannot
+     * mean one thing for an MCP call and another for a Slack one.
+     */
+    fun proxySelector(): ProxySelector = selector
 
     /** Forget the compiled rules, so the next request reads them again. */
     fun reload() {

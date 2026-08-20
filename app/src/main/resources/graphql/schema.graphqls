@@ -261,6 +261,46 @@ type Query {
     variable(id: ID!): Variable
     workflowObject(id: ID!): WorkflowObject
     agent(id: ID!): Agent
+    """
+    One workspace's LLM sessions, most recently spoken in first.
+
+    There is no mutation beside this. A session appears the first time an agent
+    records into it and is found by its key afterwards, so what a person does
+    with the list is find one and read it.
+    """
+    llmSessions(
+        workspaceId: ID!,
+        "Matches the key or the prefix. Absent or empty matches everything."
+        search: String,
+        page: Int = 0,
+        size: Int = 20,
+        "Most recently spoken in when absent."
+        order: LlmSessionOrder,
+        "Descending when absent."
+        ascending: Boolean
+    ): LlmSessionPage!
+    "One session, by the id the list handed over. Null when it is not one you can see."
+    llmSession(id: ID!): LlmSession
+    """
+    One session's transcript, oldest first.
+
+    Its own query rather than a field on the session: a fortnight of conversation
+    is more than a page can draw, and the search, the kind filter and the sort
+    all belong to the reading rather than to the session.
+    """
+    llmSessionEvents(
+        sessionId: ID!,
+        "Matches what was said and who said it. Absent or empty matches everything."
+        search: String,
+        "Only these kinds. Absent or empty is every kind, not none."
+        kinds: [LlmSessionEventKind!],
+        page: Int = 0,
+        size: Int = 20,
+        "By time when absent."
+        order: LlmSessionEventOrder,
+        "Ascending when absent, which is the order it happened in."
+        ascending: Boolean
+    ): LlmSessionEventPage!
     "Everything that happened inside one workspace, newest first."
     workspaceActivity(
         workspaceId: ID!,
@@ -1082,6 +1122,101 @@ type AgentPage {
     size: Int!
     totalElements: Int!
     totalPages: Int!
+}
+
+"""
+A conversation with an agent that no single run owns.
+
+Keyed by something the caller computes rather than by a workflow or a chat,
+which is the whole mechanism: two workflows that arrive at the same key are
+writing into the same conversation, and that is how one survives the run that
+opened it. Nobody creates one from a screen - it appears the first time an agent
+records into it.
+"""
+type LlmSession {
+    id: ID!
+    workspaceId: ID!
+    """
+    The identity, composed. It is `prefix:key`, or the key alone where no prefix
+    was given; the separator keeps prefix "issue-" with key "42" from being the
+    same session as no prefix with key "issue-42".
+    """
+    key: String!
+    "The prefix it was composed from, or null where there was none."
+    keyPrefix: String
+    "How many lines it holds, which is what a list of transcripts is scanned by."
+    eventCount: Int!
+    "ISO-8601 offset date-time."
+    createdAt: String!
+    "When anything was last said here, or null on one nothing has been recorded in yet."
+    lastEventAt: String
+}
+
+type LlmSessionPage {
+    totalElements: Int!
+    content: [LlmSession!]!
+}
+
+"What a list of LLM sessions is ordered by."
+enum LlmSessionOrder {
+    "By the composed key, so a session can be found by name without reading every row."
+    KEY
+    "By when it was first opened."
+    CREATED
+    """
+    By when anything was last said in it, which is what \"what is happening\" means
+    here. A session nothing has been recorded in yet sorts last, whichever way round.
+    """
+    LAST_EVENT
+}
+
+"""
+What one line of a session is.
+
+Four, taken from the four things there are to record. TOOL is the call and not
+its result: what a tool returned can be a whole file, and what a reader wants to
+know is that the agent went and looked, and what it asked for.
+"""
+enum LlmSessionEventKind {
+    "The agent's answer, as the model finally gave it."
+    AGENT
+    "A tool the agent called, and the arguments it passed."
+    TOOL
+    "What was put to the agent - a question, or a node's prompt."
+    USER
+    """
+    A note from the machinery about the conversation rather than in it. An agent
+    that could not answer leaves one, so a transcript that goes quiet says why.
+    """
+    SYSTEM
+}
+
+"What a transcript is ordered by."
+enum LlmSessionEventOrder {
+    "By time, which is what a transcript is."
+    AT
+    "By kind, for reading every tool call at once without losing the ones between."
+    KIND
+}
+
+type LlmSessionEvent {
+    id: ID!
+    kind: LlmSessionEventKind!
+    "The agent, the tool, whoever asked, or \"system\". Every line names somebody."
+    actor: String!
+    """
+    The payload, and what it is depends on the kind: the words for what was said,
+    the call's arguments exactly as the model sent them for a tool, the text of a
+    note.
+    """
+    content: String
+    "ISO-8601 offset date-time."
+    at: String!
+}
+
+type LlmSessionEventPage {
+    totalElements: Int!
+    content: [LlmSessionEvent!]!
 }
 
 """

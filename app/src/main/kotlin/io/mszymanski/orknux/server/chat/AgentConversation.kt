@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -24,46 +25,61 @@ import org.springframework.stereotype.Service
  *
  * No transaction is held while this runs. It calls a model repeatedly and can
  * take minutes; a database connection held for that long is one nobody else has.
+ *
+ * A caller that named an LLM session gets the round written down as it happens —
+ * the tools that were called, and what was finally said. That is not the same
+ * record as the chat history and does not contradict the paragraph above: the
+ * history is the conversation somebody had, while a session is the conversation
+ * the agent had, working included. A caller that named no session pays for a
+ * null check and touches no table at all.
  */
 @Service
 class AgentConversation(
     private val models: ModelChatClient,
     private val tools: AgentTools,
     private val agents: AgentRepository,
+    private val sessions: LlmSessionRecorder,
 ) {
 
     /**
      * The same thing, for a caller holding only an id — the streaming endpoint,
      * which is outside the transaction that read the session.
      */
-    fun answer(modelId: Long, agentId: Long, turns: List<ChatTurn>): ChatCompletion {
+    fun answer(modelId: Long, agentId: Long, turns: List<ChatTurn>, into: Long? = null): ChatCompletion {
         val agent = agents.findByIdOrNull(agentId)
             ?: return ChatCompletion.Failed("That agent no longer exists")
-        return answer(modelId, agent, turns)
+        return answer(modelId, agent, turns, into)
     }
 
     /**
      * @param turns the conversation so far, briefing included.
+     * @param into the LLM session this round is recorded in, or null for a round
+     *   nobody is keeping. Null is the ordinary case — a chat keeps its own
+     *   history and needs none of this.
      * @return what the agent said, or why it could not say anything.
      */
-    fun answer(modelId: Long, agent: Agent, turns: List<ChatTurn>): ChatCompletion {
+    fun answer(modelId: Long, agent: Agent, turns: List<ChatTurn>, into: Long? = null): ChatCompletion {
         val offered = tools.specsFor(agent)
-        if (offered.isEmpty()) return models.complete(modelId, turns)
+        if (offered.isEmpty()) return models.complete(modelId, turns).also { record(into, agent, it) }
 
         val conversation = turns.toMutableList()
         var spent = 0L
 
         repeat(MAX_ROUNDS) {
             when (val answer = models.complete(modelId, conversation, offered)) {
-                is ChatCompletion.Failed -> return answer
+                is ChatCompletion.Failed -> return answer.also { record(into, agent, it) }
 
-                is ChatCompletion.Answered -> return answer.copy(millis = spent + answer.millis)
+                is ChatCompletion.Answered ->
+                    return answer.copy(millis = spent + answer.millis).also { record(into, agent, it) }
 
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
                     conversation += answer.turn
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
+                        // Written before the tool runs, so one that hangs still
+                        // leaves the transcript saying what was asked of it.
+                        into?.let { sessions.toolCalled(it, call.name, call.arguments) }
                         conversation += ChatTurn(
                             role = "user",
                             content = tools.run(agent, call),
@@ -80,7 +96,28 @@ class AgentConversation(
         log.warn("Agent {} was still calling tools after {} rounds", agent.name, MAX_ROUNDS)
         return ChatCompletion.Failed(
             "${agent.name} kept looking things up without reaching an answer, and was stopped after $MAX_ROUNDS rounds",
-        )
+        ).also { record(into, agent, it) }
+    }
+
+    /**
+     * The round's outcome, written into the session that asked for one.
+     *
+     * A failure becomes a system note rather than an answer, because it is not
+     * something the agent said — it is something that happened to the
+     * conversation. A transcript that simply stopped would leave whoever reads
+     * it looking for words that were never spoken.
+     *
+     * A round that asked for tools is not an outcome and is not recorded here;
+     * those lines are written as the calls are dispatched, and the round is not
+     * over.
+     */
+    private fun record(into: Long?, agent: Agent, answer: ChatCompletion) {
+        val session = into ?: return
+        when (answer) {
+            is ChatCompletion.Answered -> sessions.agentSaid(session, agent.name, answer.content)
+            is ChatCompletion.Failed -> sessions.note(session, "${agent.name} could not answer: ${answer.reason}")
+            is ChatCompletion.CalledTools -> Unit
+        }
     }
 
     private companion object {

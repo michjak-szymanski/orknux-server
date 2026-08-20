@@ -73,6 +73,35 @@ class ScriptRunnerTest {
     }
 
     @Test
+    fun `a regex that backtracks is stopped by the clock, which the statement limit cannot see`() {
+        // The hole the statement limit does not cover: one statement, and the
+        // whole budget spent inside it. A backreference is what does it - it
+        // takes the engine off the linear matcher it uses for a plain pattern
+        // and on to backtracking, where a string of a's costs exponentially. The
+        // statement limit counts one statement here however long it runs, so
+        // only the wall clock can end this.
+        val impatient = ScriptRunner(ScriptProperties(timeoutMillis = 500, statementLimit = 5_000_000))
+
+        val started = System.nanoTime()
+        val result = impatient.call(
+            """
+            export default function backtrack() {
+              return /(a+)+\1b/.test('a'.repeat(80));
+            }
+            """.trimIndent(),
+            "backtrack",
+            emptyList(),
+        )
+        val took = (System.nanoTime() - started) / 1_000_000
+
+        assertThat(result).isInstanceOf(ScriptResult.Failed::class.java)
+        assertThat((result as ScriptResult.Failed).reason).contains("longer than")
+        // Stopped rather than merely slow: without the watchdog this would not
+        // have come back at all.
+        assertThat(took).isLessThan(30_000)
+    }
+
+    @Test
     fun `Java is not reachable`() {
         val result = runner.call(
             """

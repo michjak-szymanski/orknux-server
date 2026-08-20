@@ -254,21 +254,21 @@ class QuickChat(
             },
         )
         /*
-         * The same offer for a tool, and the one way its shape differs.
+         * The same offer for a tool.
          *
-         * A tool declares no parameters — it is a default export handed one
-         * argument, whatever the calling agent composed — so there is no
-         * parameter list to keep in step and nothing to annotate beyond the
-         * code itself. The sandbox is the same one, and saying so once here
-         * saves the same three refusals it saves for functions.
+         * A tool declares parameters now, as a function does, and the editor
+         * reads them back off whatever is offered — so what the declaration
+         * takes is what the tool takes, and the two cannot come apart. The
+         * sandbox is the same one, and saying so once here saves the same
+         * three refusals it saves for functions.
          */
         append(
             if (mayWrite) {
                 "To change a tool, call `orknux_suggest_tool_code` with the complete new TypeScript: they are " +
                     "shown it against what is there now and either accept it or reject it, and nothing is " +
                     "saved unless they accept. Do not paste a tool into your reply and ask them to copy it. " +
-                    "A tool is a default export that takes one argument — whatever the calling agent composed " +
-                    "— and declares no parameters of its own, so keep that shape. It runs in the same " +
+                    "A tool is a default export whose parameters are what an agent calling it fills in, so " +
+                    "give it the parameters it needs and annotate every one of them with its type. It runs in the same " +
                     "locked-down sandbox as a function: no `import` or `require`, no Node or browser APIs, no " +
                     "network. Its description is what an agent reads to decide whether to call it, so say when " +
                     "a change makes that description wrong. "

@@ -1384,11 +1384,31 @@ type Tool {
     source: String!
     "The TypeScript it was compiled from, which is what the editor opens."
     typescript: String!
+    """
+    What it takes, in the order the sandbox passes it.
+
+    The same list a function declares, and stored the same way. A tool used to
+    take one hard-coded argument called `input`, which was not a signature
+    anybody could read or change; existing tools were given that one parameter,
+    so nothing about how they are called moved.
+    """
+    params: [ToolParam!]!
+    "\"(city: string, days: number)\", ready for the list."
+    signature: String!
     "Off leaves it defined but out of reach."
     enabled: Boolean!
     "ISO-8601 offset date-time, and the uid that saved it."
     lastModifiedAt: String!
     lastModifiedBy: String!
+}
+
+type ToolParam {
+    name: String!
+    type: ValueType!
+    "Which object, when the type is OBJECT. Null otherwise."
+    objectId: ID
+    "What that object is called, resolved for the editor's annotations."
+    objectName: String
 }
 
 type ToolPage {
@@ -1500,6 +1520,13 @@ type SourceValidation {
     column: Int
 }
 
+input ToolParamInput {
+    name: String!
+    type: ValueType!
+    "Required when the type is OBJECT, and ignored otherwise."
+    objectId: ID
+}
+
 input CreateToolInput {
     workspaceId: ID!
     name: String!
@@ -1512,6 +1539,8 @@ input CreateToolInput {
     source: String
     "The TypeScript it was compiled from."
     typescript: String
+    "Left out means the one every tool used to take: an object called `input`."
+    params: [ToolParamInput!]
 }
 
 input UpdateToolInput {
@@ -1521,6 +1550,8 @@ input UpdateToolInput {
     source: String
     "The TypeScript it was compiled from."
     typescript: String
+    "Null leaves them alone; an empty list takes them all off."
+    params: [ToolParamInput!]
 }
 
 """

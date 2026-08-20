@@ -108,6 +108,19 @@ CREATE TABLE agent_tool
     constraint agent_tool_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE agent_tool_param
+(
+    tool_id                      integer not null,
+    position                     integer not null,
+    name                         varchar(64) not null,
+    type                         varchar(16) not null,
+    object_id                    integer,
+    primary key (tool_id, position),
+    constraint ck_agent_tool_param_object CHECK (((((type) = 'OBJECT') AND (object_id IS NOT NULL)) OR (((type) != 'OBJECT') AND (object_id IS NULL)))),
+    constraint ck_agent_tool_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY'))),
+    constraint agent_tool_param_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE
+);
+
 CREATE TABLE app_user
 (
     id                           integer not null primary key autoincrement,

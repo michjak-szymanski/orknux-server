@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
@@ -40,22 +41,25 @@ class WorkspaceToolCaller(
     }
 
     /**
-     * Runs one, handing it whatever the model composed.
+     * Runs one, handing it the arguments the model composed.
      *
-     * One argument rather than named parameters, because a tool declares none:
-     * it is a default export taking what it is given. The model is told to put
-     * everything in `input`, and the tool's own description is what tells it
-     * what belongs there.
+     * Positionally, in the order the tool declares them — the same way the
+     * sandbox hands a function its arguments, and for the same reason: the
+     * declaration in the code and the list in the editor are two spellings of
+     * one signature, so they have to be filled in the same order.
+     *
+     * The model addresses them by name, because that is all a tool schema can
+     * say; the mapping from those names to positions happens here.
      *
      * A script that failed comes back as a result rather than an exception. The
      * model can apologise, try another way, or answer without it — all of which
      * beat the conversation dying because a tool threw.
      */
-    fun call(agent: Agent, tool: AgentTool, input: String): String {
+    fun call(agent: Agent, tool: AgentTool, arguments: String): String {
         val result = scripts.call(
             source = tool.source,
             functionName = tool.name,
-            arguments = listOf(input.ifBlank { "{}" }),
+            arguments = argumentsFor(tool, arguments),
             context = context(agent, tool),
         )
         return when (result) {
@@ -65,6 +69,44 @@ class WorkspaceToolCaller(
                 mapper.writeValueAsString(mapOf("error" to result.reason))
             }
         }
+    }
+
+    /**
+     * What the model sent, laid out in the order the tool takes it.
+     *
+     * Every argument is JSON text, and `null` is the JSON for "not given" — so a
+     * parameter the model left out arrives as null rather than shifting the ones
+     * after it along, which is the failure a positional call has to avoid.
+     *
+     * Two kindnesses to models that do not follow the schema exactly. One: a
+     * tool taking a single parameter accepts arguments sent flat, which is how
+     * the one parameter every tool used to take was already being read. Two: a
+     * value stringified by a model that was asked for an object is unwrapped if
+     * the string turns out to be the JSON, because the schema this crosses can
+     * only say "string" and some models take that literally.
+     */
+    private fun argumentsFor(tool: AgentTool, arguments: String): List<String> {
+        if (tool.params.isEmpty()) return emptyList()
+        val sent = runCatching { mapper.readTree(arguments) }.getOrNull()
+
+        return tool.params.map { param ->
+            val given = sent?.path(param.name)
+            when {
+                given == null || given.isMissingNode || given.isNull ->
+                    if (tool.params.size == 1) arguments.ifBlank { "{}" } else "null"
+
+                given.isString && param.type != ValueType.STRING -> unwrapped(given.stringValue().orEmpty())
+                    ?: mapper.writeValueAsString(given)
+
+                else -> mapper.writeValueAsString(given)
+            }
+        }
+    }
+
+    /** The JSON inside a string a model stringified, or null if it was only a string. */
+    private fun unwrapped(text: String): String? {
+        val parsed = runCatching { mapper.readTree(text) }.getOrNull() ?: return null
+        return if (parsed.isMissingNode || parsed.isNull || parsed.isString) null else text
     }
 
     /** What the script is told about where it is running. */

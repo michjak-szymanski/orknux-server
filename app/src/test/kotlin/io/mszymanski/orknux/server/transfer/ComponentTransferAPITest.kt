@@ -277,6 +277,88 @@ class ComponentTransferAPITest(
     }
 
     @Test
+    fun `leaving out a component the workspace already has points what needed it at that one`() {
+        val objectId = createObject(from, "Order")
+        createFunction(from, "normalise", returnObjectId = objectId)
+        val theirObject = createObject(into, "Order")
+
+        val json = export(from, "FUNCTION", functions.findByWorkspaceIdAndName(from, "normalise")!!.id!!, "DEEP")
+
+        // Both are carried, so both may be left out; nothing else on the plan is.
+        assertThat(plan(into, json).entries.filter { it.carried }.map { it.name })
+            .containsExactly("Order", "normalise")
+
+        val without = plan(into, json, exclude = listOf("OBJECT" to "Order"))
+        assertThat(without.importable).isTrue()
+        assertThat(without.entries.single { it.name == "Order" && it.disposition == "EXCLUDE" }.carried).isTrue()
+        // The reference is not dropped with it: it now has to be satisfied here,
+        // and it is, by the Order the target already had.
+        assertThat(without.entries.single { it.name == "Order" && it.disposition == "REUSE" }.carried).isFalse()
+
+        import(into, json, exclude = listOf("OBJECT" to "Order"))
+
+        assertThat(objects.findByWorkspaceId(into).map { it.name }).containsExactly("Order")
+        assertThat(functions.findByWorkspaceIdAndName(into, "normalise")!!.returnObjectId).isEqualTo(theirObject)
+    }
+
+    @Test
+    fun `leaving out one that nothing here can replace takes what needed it, and says which`() {
+        val objectId = createObject(from, "Order")
+        createFunction(from, "normalise", returnObjectId = objectId)
+        val json = export(from, "FUNCTION", functions.findByWorkspaceIdAndName(from, "normalise")!!.id!!, "DEEP")
+
+        // Nothing called Order in the target, so the function has nothing to be
+        // typed against: it goes too, rather than being quietly created broken.
+        val without = plan(into, json, exclude = listOf("OBJECT" to "Order"))
+        assertThat(without.entries.filter { it.disposition == "EXCLUDE" }.map { it.name })
+            .containsExactly("Order", "normalise")
+        assertThat(without.entries.single { it.name == "normalise" }.detail)
+            .contains("Left out too")
+            .contains("an object called Order")
+
+        // And with everything in the file left out there is nothing to do, which
+        // the plan says rather than offering an import that creates nothing.
+        assertThat(without.importable).isFalse()
+        assertThat(without.problems.single()).contains("nothing left to import")
+
+        graphQlTester.document(
+            """
+            mutation {
+              importComponents(
+                workspaceId: $into, envelope: ${quote(json)}, exclude: [{ kind: OBJECT, name: "Order" }]
+              ) { importable }
+            }
+            """,
+        ).execute().errors().satisfy { errors ->
+            assertThat(errors.single().message).contains("Nothing was imported")
+        }
+        assertThat(functions.findByWorkspaceId(into)).isEmpty()
+    }
+
+    @Test
+    fun `only what the file carries can be left out`() {
+        val objectId = createObject(from, "Order")
+        val functionId = createFunction(from, "normalise", returnObjectId = objectId)
+        // Shallow: the envelope names Order and does not hold it, so there is
+        // nothing there to leave out - the fix for that row is to make one here.
+        val json = export(from, "FUNCTION", functionId, "SHALLOW")
+
+        assertThat(plan(into, json).entries.single { it.name == "Order" }.carried).isFalse()
+
+        graphQlTester.document(
+            """
+            query {
+              componentImportPlan(
+                workspaceId: $into, envelope: ${quote(json)}, exclude: [{ kind: OBJECT, name: "Order" }]
+              ) { importable }
+            }
+            """,
+        ).execute().errors().satisfy { errors ->
+            assertThat(errors.single().message).contains("This file carries no object called Order")
+        }
+    }
+
+    @Test
     fun `an id from another workspace is not a way to read its code`() {
         val theirs = createFunction(into, "secretSauce")
         graphQlTester.document(
@@ -288,7 +370,14 @@ class ComponentTransferAPITest(
 
     // ----------------------------------------------------------------- helpers
 
-    private data class Entry(val kind: String?, val name: String, val targetName: String, val disposition: String)
+    private data class Entry(
+        val kind: String?,
+        val name: String,
+        val targetName: String,
+        val disposition: String,
+        val carried: Boolean = false,
+        val detail: String = "",
+    )
 
     private data class Plan(val importable: Boolean, val entries: List<Entry>, val problems: List<String>)
 
@@ -296,29 +385,45 @@ class ComponentTransferAPITest(
         """query { exportComponent(workspaceId: $workspaceId, kind: $kind, id: $id, depth: $depth) { json } }""",
     ).execute().path("exportComponent.json").entity(String::class.java).get()
 
-    private fun plan(workspaceId: Long, envelope: String): Plan = read(
+    private fun plan(
+        workspaceId: Long,
+        envelope: String,
+        exclude: List<Pair<String, String>> = emptyList(),
+    ): Plan = read(
         graphQlTester.document(
             """
             query {
-              componentImportPlan(workspaceId: $workspaceId, envelope: ${quote(envelope)}) {
-                importable problems entries { kind name targetName disposition }
+              componentImportPlan(
+                workspaceId: $workspaceId, envelope: ${quote(envelope)}, exclude: ${excluding(exclude)}
+              ) {
+                importable problems entries { kind name targetName disposition carried detail }
               }
             }
             """,
         ).execute().path("componentImportPlan").entity(Map::class.java).get().let(mapper::valueToTree),
     )
 
-    private fun import(workspaceId: Long, envelope: String): Plan = read(
+    private fun import(
+        workspaceId: Long,
+        envelope: String,
+        exclude: List<Pair<String, String>> = emptyList(),
+    ): Plan = read(
         graphQlTester.document(
             """
             mutation {
-              importComponents(workspaceId: $workspaceId, envelope: ${quote(envelope)}) {
-                importable problems entries { kind name targetName disposition }
+              importComponents(
+                workspaceId: $workspaceId, envelope: ${quote(envelope)}, exclude: ${excluding(exclude)}
+              ) {
+                importable problems entries { kind name targetName disposition carried detail }
               }
             }
             """,
         ).execute().path("importComponents").entity(Map::class.java).get().let(mapper::valueToTree),
     )
+
+    /** `[{ kind: OBJECT, name: "Order" }]`, as the argument wants it. */
+    private fun excluding(exclude: List<Pair<String, String>>): String =
+        exclude.joinToString(", ", "[", "]") { (kind, name) -> "{ kind: $kind, name: ${quote(name)} }" }
 
     private fun read(node: JsonNode): Plan = Plan(
         importable = node.path("importable").asBoolean(false),
@@ -328,6 +433,8 @@ class ComponentTransferAPITest(
                 name = it.path("name").stringValue(),
                 targetName = it.path("targetName").stringValue(),
                 disposition = it.path("disposition").stringValue(),
+                carried = it.path("carried").asBoolean(false),
+                detail = it.path("detail").asString(""),
             )
         },
         problems = node.path("problems").values().map { it.stringValue() },

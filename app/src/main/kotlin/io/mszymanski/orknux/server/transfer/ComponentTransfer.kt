@@ -200,6 +200,21 @@ enum class ImportDisposition {
      * is nobody's.
      */
     MISSING,
+
+    /**
+     * Carried by the file and not created, because the caller said to leave it out.
+     *
+     * Only ever a component the envelope actually holds. Everything else a plan
+     * lists is a *reference* — something the file points at and does not carry —
+     * and there is nothing there to leave out: the fix for one of those is to
+     * bind it, to make it here, or to export again with more of what it needs.
+     *
+     * Not the same as absent from the plan. A left-out component is still listed,
+     * still named, and still says why — including when it was left out because
+     * something else was, which is the only way somebody finds out that
+     * unticking one row took three with it.
+     */
+    EXCLUDE,
 }
 
 /** The envelope is not JSON, or not this format at all. */
@@ -244,5 +259,19 @@ class ImportNotPossibleException(problems: List<String>) : RuntimeException(
  */
 class ImportBindingInvalidException(kind: ExternalKind, name: String, targetId: Long) : RuntimeException(
     "This workspace has no ${kind.label} with id $targetId, so there is nothing for $name to point at. " +
+        "Nothing was imported.",
+)
+
+/**
+ * The import was told to leave out something the file does not carry.
+ *
+ * Refused rather than ignored, for the reason a bad binding is: a request the
+ * server silently drops is a client showing one import and getting another. It
+ * is also the answer to the mistake worth naming — a plan lists what the file
+ * points at beside what it holds, and only what it holds can be left out.
+ */
+class ImportExclusionUnknownException(kind: ComponentKind, name: String) : RuntimeException(
+    "This file carries no ${kind.label} called $name, so there is none to leave out. Only what the file " +
+        "carries can be left out; what it points at and does not carry has to exist here instead. " +
         "Nothing was imported.",
 )

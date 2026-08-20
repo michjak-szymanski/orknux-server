@@ -30,6 +30,13 @@ import org.springframework.stereotype.Controller
  * answers attached. A call of its own that only listed the unbound would be a
  * second reader of the same file, and the lenient one: it could offer a form for
  * a file the import then refuses for some other reason entirely.
+ *
+ * Leaving a component out takes the same route for the same reason. Naming one
+ * the file carries asks for the plan again without it, and what that costs — a
+ * kept component that needed it going too, a reference that now has nothing to
+ * point at — is in the plan that comes back, before anything is written. Only
+ * what the file carries can be named: a plan lists what the envelope points at
+ * beside what it holds, and a reference is a mention rather than a thing.
  */
 @Controller
 class ComponentTransferAPI(
@@ -67,9 +74,10 @@ class ComponentTransferAPI(
         @Argument workspaceId: Long,
         @Argument envelope: String,
         @Argument bindings: List<ComponentBinding>?,
+        @Argument exclude: List<ComponentExclusion>?,
     ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.plan(workspaceId, envelope, bindings.orEmpty())
+        return importer.plan(workspaceId, envelope, bindings.orEmpty(), exclude.orEmpty())
     }
 
     /**
@@ -84,9 +92,10 @@ class ComponentTransferAPI(
         @Argument workspaceId: Long,
         @Argument envelope: String,
         @Argument bindings: List<ComponentBinding>?,
+        @Argument exclude: List<ComponentExclusion>?,
     ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.apply(workspaceId, envelope, bindings.orEmpty())
+        return importer.apply(workspaceId, envelope, bindings.orEmpty(), exclude.orEmpty())
     }
 }
 
@@ -103,6 +112,7 @@ class ComponentTransferExceptionResolver : DataFetcherExceptionResolverAdapter()
             is EnvelopeInvalidException,
             is ImportNotPossibleException,
             is ImportBindingInvalidException,
+            is ImportExclusionUnknownException,
             -> ErrorType.BAD_REQUEST
 
             is ComponentNotExportableException -> ErrorType.NOT_FOUND

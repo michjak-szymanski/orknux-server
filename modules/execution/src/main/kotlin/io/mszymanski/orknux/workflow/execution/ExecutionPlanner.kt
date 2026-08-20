@@ -151,6 +151,7 @@ class ExecutionPlanner(
                     // policy edited mid-run does not change one already under way.
                     retryAttempts = node.retryAttempts,
                     retryBackoffSeconds = node.retryBackoffSeconds,
+                    retryBackoff = node.retryBackoff,
                     attempts = before?.attempts ?: 0,
                     x = node.x,
                     y = node.y,

@@ -280,6 +280,13 @@ class WorkflowGraphAPI(
             ?.takeIf { it > MIN_ATTEMPTS && handlesFailure(node.kind) },
         retryBackoffSeconds = node.retryBackoffSeconds?.coerceIn(0, MAX_BACKOFF_SECONDS)
             ?.takeIf { handlesFailure(node.kind) },
+        // Kept only where the wait it shapes is kept, and only where there is a
+        // second attempt for it to sit between: a curve on a node that runs once
+        // is a setting that describes nothing, and one saved on a kind that
+        // cannot retry is a setting nothing will ever read.
+        retryBackoff = node.retryBackoff?.takeIf {
+            handlesFailure(node.kind) && (node.retryAttempts ?: MIN_ATTEMPTS) > MIN_ATTEMPTS
+        },
         mappings = mappingsFor(node, refusing),
     )
 
@@ -518,6 +525,8 @@ data class WorkflowNodeInput(
     val retryAttempts: Int? = null,
     /** How long to leave a failed attempt alone before the next; null is none. */
     val retryBackoffSeconds: Int? = null,
+    /** How that wait grows from one attempt to the next; null is fixed. */
+    val retryBackoff: RetryBackoff? = null,
     val x: Double,
     val y: Double,
 )
@@ -566,6 +575,8 @@ data class WorkflowNodeView(
     /** How many times in all this node may be attempted; null is once. */
     val retryAttempts: Int?,
     val retryBackoffSeconds: Int?,
+    /** How the wait grows from one attempt to the next; null is fixed. */
+    val retryBackoff: RetryBackoff?,
     val x: Double,
     val y: Double,
     /** What the node needs, read off whatever it points at. */
@@ -597,6 +608,7 @@ data class WorkflowNodeView(
         fallbackEnabled = node.fallbackEnabled,
         retryAttempts = node.retryAttempts,
         retryBackoffSeconds = node.retryBackoffSeconds,
+        retryBackoff = node.retryBackoff,
         x = node.positionX,
         y = node.positionY,
         inputs = inputs,
@@ -657,6 +669,8 @@ private val PLACEHOLDER_IN_VALUE = Regex("""\{\{[^}]*\}\}""")
  * is somebody who has not thought about what a run costs. The ceiling on the
  * backoff is an hour, which is longer than any single wait a workflow has
  * needed and short enough that a run cannot disappear for a day over a typo.
+ * A doubling curve is bounded by the same hour where it is spent rather than
+ * here, because what this holds is the first wait and not what it grows into.
  */
 private const val MIN_ATTEMPTS = 1
 private const val MAX_ATTEMPTS = 10

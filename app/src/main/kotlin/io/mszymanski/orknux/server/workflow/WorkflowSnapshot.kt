@@ -5,6 +5,7 @@ import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphNode
 import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.workflow.execution.NodeKind
+import io.mszymanski.orknux.workflow.execution.RetryBackoff
 import io.mszymanski.orknux.workflow.execution.WorkflowGraph as RunnableGraph
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -48,6 +49,7 @@ object WorkflowSnapshot {
                     },
                     "retryAttempts" to node.retryAttempts,
                     "retryBackoffSeconds" to node.retryBackoffSeconds,
+                    "retryBackoff" to node.retryBackoff?.name,
                     "x" to node.x,
                     "y" to node.y,
                 )
@@ -86,6 +88,9 @@ object WorkflowSnapshot {
                     // be told to try again, which reads as the once it had.
                     retryAttempts = number(node, "retryAttempts")?.toInt(),
                     retryBackoffSeconds = number(node, "retryBackoffSeconds")?.toInt(),
+                    // Absent reads as the fixed wait, which is the only curve
+                    // there was when these snapshots were written.
+                    retryBackoff = text(node, "retryBackoff")?.let { RetryBackoff.valueOf(it) },
                     x = node.path("x").asDouble(),
                     y = node.path("y").asDouble(),
                 )

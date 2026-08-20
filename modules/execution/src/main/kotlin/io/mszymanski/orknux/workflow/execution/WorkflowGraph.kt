@@ -70,9 +70,40 @@ data class GraphNode(
     val retryAttempts: Int? = null,
     /** How long to leave a failed attempt alone before the next; null is none. */
     val retryBackoffSeconds: Int? = null,
+    /**
+     * How that wait grows from one attempt to the next; null is [RetryBackoff.FIXED].
+     *
+     * Null rather than a default so a graph published before curves existed says
+     * what it always said: the same wait every time.
+     */
+    val retryBackoff: RetryBackoff? = null,
     val x: Double = 0.0,
     val y: Double = 0.0,
 )
+
+/**
+ * How the wait between two attempts grows.
+ *
+ * Whether the second retry waits longer than the first is a question about the
+ * failure being waited on, not about the node: a connection reset is over by the
+ * time anybody asks again, and a rate limit is a window somebody else's traffic
+ * decides the width of. So it is set per node, and the engine reads it here
+ * rather than guessing from the failure.
+ */
+enum class RetryBackoff {
+
+    /** The same wait before every retry. */
+    FIXED,
+
+    /**
+     * Doubling: the wait before the nth retry is the node's wait times 2^(n-1).
+     *
+     * Bounded where it is spent rather than here — see StepRunner — because an
+     * hour's wait means the same thing whichever curve produced it, and 10
+     * attempts doubling off an hour is three weeks of run nobody asked for.
+     */
+    EXPONENTIAL,
+}
 
 /**
  * Which way out of a node an edge leaves by.

@@ -19,8 +19,56 @@ data class StepOutcome(
     val resumeAfter: Duration? = null,
 )
 
-/** How many attempts a node is allowed, and how long between them. */
-private data class RetryPolicy(val attempts: Int, val backoff: Duration)
+/**
+ * How many attempts a node is allowed, and how long it waits between them.
+ *
+ * Visible, and with the arithmetic on it rather than inline where it is spent,
+ * so the curve can be asserted without a test that actually sits out the waits
+ * it is checking.
+ */
+data class RetryPolicy(
+    val attempts: Int,
+    /** The wait before the first retry, and the whole of it under [RetryBackoff.FIXED]. */
+    val backoff: Duration,
+    val curve: RetryBackoff = RetryBackoff.FIXED,
+) {
+
+    /**
+     * How long to leave the step alone, having spent [attemptsSpent] attempts.
+     *
+     * Doubling counts from the first retry, so the number written on the node is
+     * what it waits before its second attempt on either curve; only the waits
+     * after that one differ. Which also means switching a node to doubling never
+     * makes its first retry later than it was.
+     */
+    fun waitAfter(attemptsSpent: Int): Duration {
+        if (curve != RetryBackoff.EXPONENTIAL) return backoff
+        val doublings = (attemptsSpent - 1).coerceIn(0, MAX_DOUBLINGS)
+        val grown = backoff.multipliedBy(1L shl doublings)
+        return if (grown > MAX_WAIT) MAX_WAIT else grown
+    }
+
+    companion object {
+
+        /**
+         * The longest a single wait may come to, whatever the curve.
+         *
+         * The same hour the editor already refuses to take more than for a fixed
+         * wait: an hour is what one wait is allowed to cost the person waiting,
+         * and which curve arrived at it does not change that. Left uncapped, ten
+         * attempts doubling off that hour is three weeks of run - and the two
+         * numbers that produced it are "3600" and "10", neither of which looks
+         * like three weeks to whoever typed them.
+         */
+        val MAX_WAIT: Duration = Duration.ofHours(1)
+
+        /**
+         * Enough doublings to reach the cap from a wait of one second, and few
+         * enough that the shift stays a number.
+         */
+        private const val MAX_DOUBLINGS = 30
+    }
+}
 
 /**
  * Implemented by a failure that knows whether it is worth trying again.
@@ -191,7 +239,15 @@ class StepRunner(
      */
     private fun retryOf(step: ExecutionStep): RetryPolicy? = step.retryAttempts
         ?.takeIf { it > 1 }
-        ?.let { RetryPolicy(it, Duration.ofSeconds((step.retryBackoffSeconds ?: 0).coerceAtLeast(0).toLong())) }
+        ?.let {
+            RetryPolicy(
+                attempts = it,
+                backoff = Duration.ofSeconds((step.retryBackoffSeconds ?: 0).coerceAtLeast(0).toLong()),
+                // Null is the fixed wait every step had before a node could ask
+                // for anything else.
+                curve = step.retryBackoff ?: RetryBackoff.FIXED,
+            )
+        }
 
     /**
      * Parks a failed attempt instead of throwing, so the next one is asked for
@@ -217,15 +273,20 @@ class StepRunner(
         step.waitUntil = null
         steps.save(step)
 
+        // What this attempt in particular earns, which on a doubling curve is
+        // not what the last one waited - so it is worked out here and then both
+        // written down and spent, rather than the log quoting the node's number
+        // while the run waits some other length of time.
+        val wait = policy.waitAfter(step.attempts)
         log.write(
             executionId,
             step.nodeKey,
             LogLevel.INFO,
             "${step.name} failed on attempt ${step.attempts} of ${policy.attempts}: $reason. " +
-                "Trying again in ${policy.backoff.toSeconds()}s",
+                "Trying again in ${wait.toSeconds()}s",
         )
         // It produced nothing, so the next attempt is handed what this one was.
-        return StepOutcome(StepStatus.WAITING, input, resumeAfter = policy.backoff)
+        return StepOutcome(StepStatus.WAITING, input, resumeAfter = wait)
     }
 
     /**

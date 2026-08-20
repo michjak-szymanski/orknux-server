@@ -402,7 +402,7 @@ class GraphValidatorTest(
             nodes = """
                 { key: "ask", kind: AGENT, name: "Ask", fallbackEnabled: true,
                   yesLabel: "Answered", noLabel: "Could not answer",
-                  retryAttempts: 3, retryBackoffSeconds: 20, x: 0, y: 0 },
+                  retryAttempts: 3, retryBackoffSeconds: 20, retryBackoff: EXPONENTIAL, x: 0, y: 0 },
                 { key: "onwards", kind: ACTION, name: "Onwards", actionId: $actionId, x: 200, y: 0 },
                 { key: "rescue", kind: ACTION, name: "Tell someone", actionId: $actionId, x: 200, y: 200 }
             """,
@@ -417,8 +417,36 @@ class GraphValidatorTest(
         assertThat(ask.fallbackEnabled).isTrue()
         assertThat(ask.retryAttempts).isEqualTo(3)
         assertThat(ask.retryBackoffSeconds).isEqualTo(20)
+        assertThat(ask.retryBackoff).isEqualTo(RetryBackoff.EXPONENTIAL)
         assertThat(ask.yesLabel).isEqualTo("Answered")
         assertThat(ask.noLabel).isEqualTo("Could not answer")
+    }
+
+    /**
+     * A curve describes how the wait grows between attempts, so a node with one
+     * attempt has nothing for it to describe - and a kind that cannot retry has
+     * nothing that would ever read it. Both are dropped on the way in rather
+     * than kept as a setting whose effect is nil.
+     */
+    @Test
+    fun `a backoff curve is dropped where there is no second attempt to wait for`() {
+        val actionId = wait("Post it")
+        save(
+            nodes = """
+                { key: "once", kind: ACTION, name: "Post", actionId: $actionId,
+                  retryBackoff: EXPONENTIAL, x: 0, y: 0 },
+                { key: "shape", kind: OBJECT, name: "Make it",
+                  retryAttempts: 4, retryBackoff: EXPONENTIAL, x: 200, y: 0 }
+            """,
+            edges = """{ source: "once", target: "shape" }""",
+        )
+
+        val saved = nodes.findByWorkflowId(workflowId).associateBy { it.nodeKey }
+        assertThat(saved.getValue("once").retryBackoff).isNull()
+        // An object node assembles what it was handed, so it never retries and
+        // the attempts go with the curve.
+        assertThat(saved.getValue("shape").retryBackoff).isNull()
+        assertThat(saved.getValue("shape").retryAttempts).isNull()
     }
 
     /**

@@ -45,6 +45,7 @@ import io.mszymanski.orknux.server.workflow.MappingMode
 import io.mszymanski.orknux.server.workflow.NodeKind
 import io.mszymanski.orknux.server.workflow.NodeMapping
 import io.mszymanski.orknux.server.workflow.NodeOrientation
+import io.mszymanski.orknux.server.workflow.RetryBackoff
 import io.mszymanski.orknux.server.workflow.Workflow
 import io.mszymanski.orknux.server.workflow.WorkflowEdge
 import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
@@ -788,6 +789,9 @@ class ComponentImporter(
                     fallbackEnabled = drawn.path("fallbackEnabled").asBoolean(false),
                     retryAttempts = drawn.path("retryAttempts").let { if (it.isNumber) it.asInt() else null },
                     retryBackoffSeconds = drawn.path("retryBackoffSeconds").let { if (it.isNumber) it.asInt() else null },
+                    // Absent from every envelope written while a fixed wait was
+                    // the only one there was, which is what null goes on meaning.
+                    retryBackoff = drawn.enumOrNull<RetryBackoff>("retryBackoff", component),
                     mappings = drawn.path("mappings").values().map { mapping ->
                         NodeMapping(
                             name = mapping.text("name").orEmpty(),

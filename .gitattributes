@@ -9,7 +9,14 @@
 *.sh text eol=lf
 
 # The same argument, for the files a container reads as configuration or as an
-# entrypoint by another name.
+# entrypoint by another name. `mvnw` is one of those: `Dockerfile.one` copies it
+# in and runs it with `/bin/sh`, so a carriage return in its shebang builds an
+# image that dies on first start. It is stored with LF and carries no attribute,
+# which means a fresh checkout on Windows is the only place it breaks - and the
+# machine it breaks on is the one least likely to be told why.
 Dockerfile* text eol=lf
+mvnw text eol=lf
+# And its counterpart stays a Windows batch file.
+mvnw.cmd text eol=crlf
 *.conf text eol=lf
 *.template text eol=lf

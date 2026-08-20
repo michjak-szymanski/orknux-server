@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import tools.jackson.databind.ObjectMapper
 
 /**
  * A condition that asks a function: what the sandbox is told, and what counts
@@ -24,6 +25,7 @@ class ConditionEvaluatorTest(
     @Autowired val conditions: WorkflowConditionRepository,
     @Autowired val functions: WorkflowFunctionRepository,
     @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val mapper: ObjectMapper,
 ) {
 
     private var workspaceId: Long = 0
@@ -91,6 +93,38 @@ class ConditionEvaluatorTest(
             .isInstanceOf(ConditionNotDecidableException::class.java)
             .hasMessageContaining("which is not true or false")
     }
+
+    @Test
+    fun `a pattern is run against a value of the size a real message is`() {
+        val condition = matching("looks like a ticket", """[A-Z]{2,10}-\d+""")
+
+        assertThat(evaluator.holds(condition, """{"text":"please look at ORKX-114 today"}""")).isTrue()
+        assertThat(evaluator.holds(condition, """{"text":"please look at it today"}""")).isFalse()
+        // Longer than anything a chat renders, and still under the bound.
+        val long = "x".repeat(9_000) + " ORKX-114"
+        assertThat(evaluator.holds(condition, mapper.writeValueAsString(mapOf("text" to long)))).isTrue()
+    }
+
+    @Test
+    fun `a value past the bound is not matched, since that regex runs on this thread`() {
+        val condition = matching("looks like a ticket", """[A-Z]{2,10}-\d+""")
+
+        // The pattern would match; the value is more than MATCHES will take from
+        // whoever sent it, so the answer is no rather than however long it takes.
+        val enormous = "x".repeat(20_000) + " ORKX-114"
+        assertThat(evaluator.holds(condition, mapper.writeValueAsString(mapOf("text" to enormous)))).isFalse()
+    }
+
+    private fun matching(name: String, pattern: String): WorkflowCondition = conditions.save(
+        WorkflowCondition(
+            workspaceId = workspaceId,
+            name = name,
+            type = ConditionType.SLACK,
+            property = ConditionProperty.MESSAGE_TEXT,
+            check = ConditionCheck.MATCHES,
+            values = mutableListOf(pattern),
+        ),
+    )
 
     private fun condition(name: String, source: String): WorkflowCondition {
         val function = functions.save(

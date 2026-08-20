@@ -13,7 +13,7 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
-## Unreleased
+## 0.8.0
 
 ### Added
 
@@ -29,6 +29,13 @@ have failed.
   compute the same key write into the same conversation, which is the point: a
   ticket seen by two different workflows has one history, not two. Nothing is
   recorded for a node that names no session.
+
+  What was said before goes back in front of the model, so an agent that keeps a
+  session remembers it rather than merely writing it down. A session has its own
+  page under **AI**, searchable, with the transcript filterable by kind; it can
+  be thrown away when it should not have been kept; and it can be **continued in
+  chat**, so a person picks up a conversation an agent was having and what they
+  say is written into it too.
 - **What cannot travel is asked for on arrival.** A model, a connection and an
   MCP server are kept beside a credential, so an envelope names them and
   carries nothing else. The import plan reports each one it cannot satisfy and
@@ -37,6 +44,19 @@ have failed.
 - Nothing arrives switched on. A trigger is created disabled, a workflow arrives
   as a draft, and an agent that was granted shell or Orknux access says so in
   the plan before anything is written.
+- **An issue can be linked to another** - relates to, blocks, duplicates - and
+  the link shows on both ends without the far one being touched. Both histories
+  record it, and being blocked is news, because it changes what to do next.
+- **A field of an object can say what it means**, and the sentence reaches the
+  model as well as the reader: a function whose parameter names an object is now
+  handed that object's shape with its descriptions, where before it was told
+  only the name and left to guess. Choosing a field's type is a search rather
+  than a list, and whether it holds one value or a list is asked separately.
+- **A Prometheus endpoint**, at `/actuator/prometheus`, carrying the JVM's own
+  measures and three counters worth alerting on: runs started, finished, and
+  failed. It answers to anyone signed in; whether it also answers to a scraper
+  that has not is a switch on the admin settings page, off until somebody turns
+  it on.
 
 ### Fixed
 
@@ -64,6 +84,19 @@ have failed.
 - **A shell's account is optional, the way it is at `ssh`.** Leaving it out
   means the account the server runs as, and the Shell page names which account
   that is rather than leaving an administrator to find out by failing.
+- **The all-in-one image stops offering single sign-on it does not run.** It
+  claimed LDAP, so its sign-in card advertised a directory that was never there
+  and its monitoring page reported itself degraded for failing to reach one. It
+  now says it signs people in against accounts it holds itself, and the absent
+  directory is absent rather than unreachable.
+- **A script that threw is not run twice more to watch it throw again.** Every
+  script failure was retryable, so a runaway burned its whole budget three times
+  over. Failures now say whether asking again could answer differently; only the
+  clock and memory can.
+- **The script sandbox denies the one thing `HostAccess.NONE` leaves open.** It
+  reads as no host access at all, and still permitted mutable target mappings.
+  No exploit was found - everything crossing that boundary is a JSON string -
+  but the sandbox now matches what its own comments claim.
 - **A workspace that cannot be read says why.** Its settings page kept the
   message inside the form, and a load that failed never reached the form, so
   the failure was a heading over blank space.

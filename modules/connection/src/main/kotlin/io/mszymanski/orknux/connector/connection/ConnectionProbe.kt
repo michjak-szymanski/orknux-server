@@ -155,7 +155,7 @@ class ConnectionProbe(
      * is what the token is for, and the answer says whether it works.
      */
     fun check(target: ConnectionTarget, type: ConnectionType?): CheckResult =
-        if (type == ConnectionType.SLACK_SOCKET_MODE || type == ConnectionType.SLACK) {
+        if (type == ConnectionType.SLACK) {
             checkSlack(target)
         } else {
             check(target)

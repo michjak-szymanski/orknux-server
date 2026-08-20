@@ -57,7 +57,7 @@ class OutgoingMessages(
         val connection = connections.findByIdOrNull(connectionId)
             ?: return Delivery.NotPossible("the connection it sends through has been deleted")
 
-        if (connection.type != ConnectionType.SLACK && connection.type != ConnectionType.SLACK_SOCKET_MODE) {
+        if (connection.type != ConnectionType.SLACK) {
             return Delivery.NotPossible("${connection.type} connections cannot send messages yet")
         }
 

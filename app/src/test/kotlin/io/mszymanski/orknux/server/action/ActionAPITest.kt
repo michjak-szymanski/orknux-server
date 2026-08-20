@@ -64,7 +64,7 @@ class ActionAPITest(
             """
             mutation {
               createWorkspaceConnection(input: {
-                workspaceId: $workspaceId, name: "Slack", type: SLACK_SOCKET_MODE, url: "https://slack.com/api"
+                workspaceId: $workspaceId, name: "Slack", type: SLACK
               }) { id }
             }
             """,

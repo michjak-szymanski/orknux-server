@@ -21,7 +21,7 @@ interface WorkspaceConnectionRepository : JpaRepository<WorkspaceConnection, Lon
     fun findByConnectionId(connectionId: Long): List<WorkspaceConnection>
 
     /** Every workspace's connection to one kind of service, for the listeners. */
-    fun findByTypeIn(types: Collection<ConnectionType>): List<WorkspaceConnection>
+    fun findByType(type: ConnectionType): List<WorkspaceConnection>
 
     fun deleteByWorkspaceId(workspaceId: Long): Long
 }

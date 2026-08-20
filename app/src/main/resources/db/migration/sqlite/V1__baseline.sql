@@ -210,7 +210,7 @@ CREATE TABLE connection
     type                         varchar(24) not null,
     url                          varchar(1000) not null,
     constraint uk_connection_name UNIQUE (name),
-    constraint ck_connection_type CHECK (((type) IN ('SLACK', 'SLACK_SOCKET_MODE', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK')))
+    constraint ck_connection_type CHECK (((type) IN ('SLACK', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK')))
 );
 
 CREATE TABLE execution_log
@@ -963,7 +963,7 @@ CREATE TABLE workspace_connection
     constraint ck_workspace_connection_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
     constraint ck_workspace_connection_check CHECK (((last_check_status IS NULL) OR ((last_check_status) IN ('CONNECTED', 'FAILED')))),
     constraint ck_workspace_connection_smtp_security CHECK (((smtp_security) IN ('NONE', 'STARTTLS', 'TLS'))),
-    constraint ck_workspace_connection_type CHECK (((type) IN ('SLACK', 'SLACK_SOCKET_MODE', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK'))),
+    constraint ck_workspace_connection_type CHECK (((type) IN ('SLACK', 'GITHUB', 'JIRA', 'TEAMS', 'SMTP', 'WEBHOOK'))),
     constraint team_connection_connection_id_fkey FOREIGN KEY (connection_id) REFERENCES connection(id) ON DELETE SET NULL
 );
 

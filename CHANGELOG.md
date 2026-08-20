@@ -50,7 +50,30 @@ have failed.
   selector, so the shape the code is being written against can be read without
   hunting for it.
 
+- **A Slack connection's app-level token can be read back.** It could be typed
+  and never seen again, which left no way to check which token was in there
+  short of pasting a new one. It now has its own Reveal, and the audit log
+  records which of the two credentials was revealed rather than only that one
+  was.
+
 ### Changed
+
+- **There is one Slack connection type, not two.** "Slack (outgoing only)" and
+  "Slack (Socket Mode)" were two names for the same integration: whichever you
+  picked, orknux listened on it the moment it held an app-level token. So they
+  are one **Slack** now, with a required bot token (`xoxb-...`) and an optional
+  app-level token (`xapp-...`) - give it the app-level token and it listens for
+  mentions as well as sending, leave it empty and it only sends.
+
+  **Nothing to do on upgrade.** Connections stored as Socket Mode become Slack
+  connections with both their tokens where they were, and go on listening
+  exactly as they did. If you script against the API, `SLACK_SOCKET_MODE` is
+  gone from `ConnectionType` and `SLACK` is what to send.
+
+  A Slack connection is no longer asked for its URL or how it authenticates:
+  there is one Slack Web API and a bot token is a bearer token, so both are
+  filled in. A connection that pointed somewhere else is moved to
+  `https://slack.com/api`; a workspace's own URL override is left alone.
 
 - **Deleting an issue asks first.** It used to delete on the click that reached
   it. If you have anything scripted against that button, it now opens a dialog.

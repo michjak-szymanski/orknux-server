@@ -161,6 +161,27 @@ class WorkspaceConnectionAPI(
         return connections.revealWorkspaceConnectionSecret(id)
     }
 
+    /**
+     * The same for the app-level token, which had no way back out at all.
+     *
+     * The entry names the credential rather than saying "Credentials", because
+     * there are two now and a log that cannot tell them apart answers neither
+     * question anybody asks it. The bot token's entry keeps its own wording, so
+     * the lines already in the table go on meaning exactly what they meant.
+     */
+    @MutationMapping
+    fun revealWorkspaceConnectionAppToken(@Argument id: Long): String? {
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
+
+        auditRecorder.record(
+            connection.workspaceId,
+            WorkspaceAuditCategory.INTEGRATION,
+            "App-level token for ${connection.name} revealed",
+        )
+        return connections.revealWorkspaceConnectionAppToken(id)
+    }
+
     private fun requireWorkspaceAccess(workspaceId: Long) {
         access.requireVisible(workspaceId)
     }

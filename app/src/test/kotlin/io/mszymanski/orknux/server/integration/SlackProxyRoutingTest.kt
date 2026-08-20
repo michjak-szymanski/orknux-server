@@ -19,7 +19,6 @@ import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.ArgumentMatchers.anyCollection
 import org.mockito.Mockito.mock
 import org.mockito.Mockito.`when`
 import org.springframework.context.ApplicationEventPublisher
@@ -246,14 +245,14 @@ class SlackProxyRoutingTest {
             id = CONNECTION_ID,
             workspaceId = 1,
             name = "Slack",
-            type = ConnectionType.SLACK_SOCKET_MODE,
+            type = ConnectionType.SLACK,
             url = "https://slack.com",
             secret = "xoxb-test",
             appToken = "xapp-1-test",
         )
         val repository = mock(WorkspaceConnectionRepository::class.java)
         `when`(repository.findById(CONNECTION_ID)).thenReturn(Optional.of(connection))
-        `when`(repository.findByTypeIn(anyCollection())).thenReturn(listOf(connection))
+        `when`(repository.findByType(ConnectionType.SLACK)).thenReturn(listOf(connection))
         return repository
     }
 

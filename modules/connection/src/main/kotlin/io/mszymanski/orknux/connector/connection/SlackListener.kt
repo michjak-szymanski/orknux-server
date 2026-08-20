@@ -78,9 +78,9 @@ class SlackListener(
      * would rather not wait for the timer.
      */
     fun reconcile() {
-        // Both Slack types can hold the two tokens; the socket-mode type is the
-        // one whose form asks for them.
-        val wanted = workspaceConnections.findByTypeIn(listOf(ConnectionType.SLACK_SOCKET_MODE, ConnectionType.SLACK))
+        // The app-level token is what decides this, not the type: a Slack
+        // connection given one listens, one left without it only sends.
+        val wanted = workspaceConnections.findByType(ConnectionType.SLACK)
             .filter { !it.appToken.isNullOrBlank() && !it.secret.isNullOrBlank() }
             .associateBy { requireNotNull(it.id) }
 

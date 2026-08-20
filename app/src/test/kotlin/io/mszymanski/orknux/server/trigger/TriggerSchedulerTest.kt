@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
 import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowPublicationRepository
 import io.mszymanski.orknux.server.workflow.WorkflowRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionLogRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionStepRepository
@@ -43,6 +44,7 @@ class TriggerSchedulerTest(
     @Autowired val edges: WorkflowEdgeRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val publications: WorkflowPublicationRepository,
 ) {
 
     private var workspaceId: Long = 0
@@ -158,6 +160,52 @@ class TriggerSchedulerTest(
         // And the draft's own occurrence was taken rather than left due, so it
         // does not come back a minute later to try the same thing again.
         assertThat(triggers.findByWorkspaceIdAndName(workspaceId, "Unpublished Trigger")?.lastFiredAt).isNotNull()
+    }
+
+    /**
+     * The shape of the bug, rather than the one instance of it that was reported.
+     *
+     * A draft workflow is what stopped every scheduled trigger in the
+     * installation, and the test above pins that exact case. But the reason it
+     * could happen was structural: the whole round ran in one transaction, so
+     * *anything* failing in it took every other trigger down with it. Fixing the
+     * draft alone would leave the next thing that throws free to do the same.
+     *
+     * So this one breaks a firing for a reason nothing in the product catches by
+     * name - a published snapshot that is not readable, which is what a
+     * half-written row or a bad restore looks like - and asks the only question
+     * that matters: did the triggers on either side of it still go?
+     */
+    @Test
+    fun `a trigger that fails for any reason at all does not stop the others`() {
+        // A workflow each: instancing writes the graph, so two triggers on one
+        // workflow would leave only the second of them attached to it.
+        val before = draftWorkflow("Fires Before")
+        instance(scheduled("Before Trigger", "* * * * *"), workflow = before)
+        val broken = draftWorkflow("Corrupt Snapshot")
+        instance(scheduled("Breaks", "* * * * *"), workflow = broken)
+        val after = draftWorkflow("Fires After")
+        instance(scheduled("After Trigger", "* * * * *"), workflow = after)
+
+        // Its published graph is well-formed JSON and not a graph: the column
+        // is a json type, so nonsense is refused before this code ever sees it,
+        // and what a bad restore actually leaves behind is a readable document
+        // of the wrong shape. Nothing declares an exception for it, which is
+        // the point.
+        val snapshot = publications.findAll().first { it.workflowId == broken }
+        snapshot.graph = """{"nodes": "this should have been a list"}"""
+        publications.save(snapshot)
+
+        scheduler.tick(OffsetDateTime.now())
+
+        assertThat(executions.findAll().map { it.workflowName })
+            .describedAs("a failure in the middle of the round stops neither side of it")
+            .containsExactlyInAnyOrder("Fires Before", "Fires After")
+        for (name in listOf("Before Trigger", "After Trigger")) {
+            assertThat(triggers.findByWorkspaceIdAndName(workspaceId, name)?.lastFiredAt)
+                .describedAs("$name kept its stamp")
+                .isNotNull()
+        }
     }
 
     @Test

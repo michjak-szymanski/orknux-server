@@ -5,6 +5,7 @@ import io.mszymanski.orknux.server.condition.ConditionNotDecidableException
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import io.mszymanski.orknux.server.workflow.AppWorkflowGraphSource
 import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionService
@@ -42,6 +43,7 @@ class TriggerRunner(
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val firings: TriggerFiringRepository,
+    private val graphs: AppWorkflowGraphSource,
 ) {
 
     /**
@@ -217,39 +219,69 @@ class TriggerRunner(
         workflowId: Long,
         payload: String,
         refusals: MutableList<String>,
-    ): Boolean = try {
-        val started = runs.startExecution(
-            StartExecutionInput(
-                workspaceId = trigger.workspaceId,
-                workflowId = workflowId,
-                trigger = when (trigger.type) {
-                    TriggerType.SCHEDULED -> ExecutionTrigger.SCHEDULE
-                    TriggerType.INCOMING_CONNECTION, TriggerType.WEBHOOK -> ExecutionTrigger.WEBHOOK
-                },
-                payload = payload,
-            ),
-        )
-        auditRecorder.recordAutomated(
-            workspaceId = trigger.workspaceId,
-            category = WorkspaceAuditCategory.WORKFLOW,
-            message = "Workflow ${started.workflowName} run started by trigger ${trigger.name}",
-            actor = "trigger:${trigger.name}",
-        )
-        true
-    } catch (notPublished: WorkflowNotPublishedException) {
+    ): Boolean {
         /*
-         * Not an error worth a stack trace: a graph that has never been
-         * published is a graph somebody is still drawing, and a trigger firing
-         * at one is a thing to be told about plainly.
+         * Asked before starting, rather than found out by catching.
+         *
+         * A workflow somebody is still drawing is an ordinary thing for a
+         * trigger to point at - an import arrives as a draft - and the ordinary
+         * case should raise nothing. It used to raise something expensive: the
+         * exception came out of a transactional method, which marked the
+         * caller's transaction rollback-only on its way, and no amount of
+         * catching down here put that back. The catch below stays, for the race
+         * where a graph is published between this question and the answer being
+         * used, but it is no longer how a draft is normally discovered.
          */
+        if (!graphs.published(workflowId)) {
+            return unpublished(trigger, workflowId, WorkflowNotPublishedException(workflowId).message, refusals)
+        }
+
+        return try {
+            val started = runs.startExecution(
+                StartExecutionInput(
+                    workspaceId = trigger.workspaceId,
+                    workflowId = workflowId,
+                    trigger = when (trigger.type) {
+                        TriggerType.SCHEDULED -> ExecutionTrigger.SCHEDULE
+                        TriggerType.INCOMING_CONNECTION, TriggerType.WEBHOOK -> ExecutionTrigger.WEBHOOK
+                    },
+                    payload = payload,
+                ),
+            )
+            auditRecorder.recordAutomated(
+                workspaceId = trigger.workspaceId,
+                category = WorkspaceAuditCategory.WORKFLOW,
+                message = "Workflow ${started.workflowName} run started by trigger ${trigger.name}",
+                actor = "trigger:${trigger.name}",
+            )
+            true
+        } catch (notPublished: WorkflowNotPublishedException) {
+            unpublished(trigger, workflowId, notPublished.message, refusals)
+        } catch (failure: Exception) {
+            // One workflow failing is no reason for the others to miss the trigger.
+            log.error("Trigger {} could not start workflow {}", trigger.name, workflowId, failure)
+            refusals += failure.message ?: failure::class.simpleName.orEmpty()
+            false
+        }
+    }
+
+    /**
+     * Said the same way whichever of the two found it, so what is written into
+     * the firing log does not depend on which one did.
+     *
+     * Not an error worth a stack trace: a graph that has never been published is
+     * a graph somebody is still drawing, and a trigger firing at one is a thing
+     * to be told about plainly.
+     */
+    private fun unpublished(
+        trigger: WorkflowTrigger,
+        workflowId: Long,
+        detail: String?,
+        refusals: MutableList<String>,
+    ): Boolean {
         log.info("Trigger {} found workflow {} unpublished; nothing started", trigger.name, workflowId)
-        refusals += notPublished.message ?: "a workflow that has never been published"
-        false
-    } catch (failure: Exception) {
-        // One workflow failing is no reason for the others to miss the trigger.
-        log.error("Trigger {} could not start workflow {}", trigger.name, workflowId, failure)
-        refusals += failure.message ?: failure::class.simpleName.orEmpty()
-        false
+        refusals += detail ?: "a workflow that has never been published"
+        return false
     }
 
     private companion object {

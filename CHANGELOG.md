@@ -94,6 +94,19 @@ have failed.
 
 ### Fixed
 
+- **One unpublished workflow stopped every scheduled trigger.** A workflow
+  somebody was still drawing - an imported one arrives that way - was enough to
+  silence the clock for the whole installation: the round that fires the due
+  triggers ran in a single transaction, and refusing to start an unpublished
+  graph poisoned it, so every trigger in that round had its run and its
+  "last fired" rolled back together. A minute later the same triggers were due
+  against the same draft, and nothing scheduled ever fired again.
+
+  Each trigger now fires in a transaction of its own, so one that cannot run
+  takes only itself down, and a workflow is asked whether it is published rather
+  than found out by failing. Nothing to do after upgrading: the triggers that
+  stopped resume on the next round.
+
 - **Slack went round the proxy rules entirely.** On a network where outbound
   traffic has to go through a proxy, a rule matching `slack.com` was shown on
   the rules page as the rule that answers and was never once consulted: the

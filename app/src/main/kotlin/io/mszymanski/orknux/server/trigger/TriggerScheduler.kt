@@ -13,8 +13,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.scheduling.support.CronExpression
 import org.springframework.stereotype.Component
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import java.time.Duration
 import java.time.OffsetDateTime
@@ -36,7 +38,7 @@ import javax.sql.DataSource
 @Component
 class TriggerScheduler(
     private val triggers: WorkflowTriggerRepository,
-    private val runs: TriggerRunner,
+    private val occurrence: ScheduledTriggerOccurrence,
 ) {
 
     /**
@@ -44,10 +46,21 @@ class TriggerScheduler(
      *
      * A trigger that has never fired starts from now, so adding one does not
      * replay the schedule it missed.
+     *
+     * Deliberately not `@Transactional`. It used to be, and one workspace's
+     * draft workflow was then enough to stop every scheduled trigger in the
+     * installation: starting a run against an unpublished graph threw out of a
+     * transactional method, which marked this shared transaction rollback-only,
+     * so the commit at the end of the round failed, every `lastFiredAt` in it
+     * was rolled back, and the next minute found exactly the same work to do.
+     * Nothing fired, for ever. Each trigger now gets its own boundary — reached
+     * through [occurrence], because a `@Transactional` method called from
+     * another method of the same bean is not proxied and would be no boundary
+     * at all — so a trigger that cannot be fired takes only itself down.
      */
-    @Transactional
     fun tick(now: OffsetDateTime = OffsetDateTime.now()) {
         for (trigger in triggers.findByTypeAndEnabledTrue(TriggerType.SCHEDULED)) {
+            val id = trigger.id ?: continue
             val cron = trigger.cron ?: continue
             val zone = zoneOf(trigger.timezone)
             val expression = runCatching { CronExpression.parse(sixField(cron)) }.getOrElse {
@@ -59,8 +72,31 @@ class TriggerScheduler(
             val due = expression.next(since.atZoneSameInstant(zone).toOffsetDateTime())
             if (due == null || due.isAfter(now)) continue
 
-            trigger.lastFiredAt = now
-            runs.fire(trigger, mapOf("cron" to cron, "firedAt" to now.toString()))
+            /*
+             * The stamp is committed before the firing is attempted, and that
+             * is the deliberate half of this.
+             *
+             * `lastFiredAt` records that an occurrence was taken, not that it
+             * succeeded. Stamping inside the same transaction as the firing
+             * would read better, but it means a trigger whose workflow fails
+             * has its stamp rolled back and comes back due a minute later, and
+             * a minute after that, for as long as the failure lasts - which for
+             * anything that sends or charges is not a retry but a second
+             * occurrence of something that already half happened. The cost of
+             * this order is that a genuinely transient failure loses that one
+             * occurrence rather than repeating it. That is bounded and it is
+             * written into the firing log; the other way round is unbounded and
+             * writes a new line every minute for ever.
+             */
+            val stamped = runCatching { occurrence.take(id, now) }
+                .onFailure { log.error("Trigger {} could not be stamped as fired", trigger.name, it) }
+                .getOrDefault(false)
+            // A stamp that did not stick would fire this same occurrence again
+            // on the next tick, so nothing is started until it has.
+            if (!stamped) continue
+
+            runCatching { occurrence.fire(id, cron, now) }
+                .onFailure { log.error("Trigger {} could not be fired", trigger.name, it) }
         }
     }
 
@@ -69,6 +105,53 @@ class TriggerScheduler(
 
     private companion object {
         val log = LoggerFactory.getLogger(TriggerScheduler::class.java)
+    }
+}
+
+/**
+ * One trigger's turn, in a transaction of its own.
+ *
+ * A separate bean rather than two more methods on [TriggerScheduler], because
+ * Spring's `@Transactional` is applied by a proxy and a call from one method of
+ * a bean to another goes straight to the object: the annotation would be there
+ * and the boundary would not. Everything the round does that touches the
+ * database happens through here, so whatever one trigger does to its
+ * transaction stays inside its own.
+ *
+ * `REQUIRES_NEW` rather than the default, for the same reason stated as a rule:
+ * a firing must not be able to reach a transaction it did not open, whoever
+ * calls the tick and whatever they are in the middle of.
+ */
+@Component
+class ScheduledTriggerOccurrence(
+    private val triggers: WorkflowTriggerRepository,
+    private val runs: TriggerRunner,
+) {
+
+    /**
+     * Claims this occurrence by stamping the trigger, and commits.
+     *
+     * Nothing is caught in here on purpose. A failed write leaves the
+     * transaction rollback-only and the commit at this boundary throws whatever
+     * a `runCatching` inside the method would have missed - which is the shape
+     * of the bug this whole change is about. The caller catches, outside.
+     *
+     * @return false when there was nothing to stamp, the trigger having been
+     *   deleted between the round reading it and this.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun take(triggerId: Long, now: OffsetDateTime): Boolean {
+        val trigger = triggers.findByIdOrNull(triggerId) ?: return false
+        trigger.lastFiredAt = now
+        triggers.save(trigger)
+        return true
+    }
+
+    /** Starts what the trigger is wired to, in a transaction of this trigger's own. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    fun fire(triggerId: Long, cron: String, now: OffsetDateTime) {
+        val trigger = triggers.findByIdOrNull(triggerId) ?: return
+        runs.fire(trigger, mapOf("cron" to cron, "firedAt" to now.toString()))
     }
 }
 

@@ -145,7 +145,28 @@ class GraphValidator(
                 passThrough = true,
             )
         }
+
+        /*
+         * A session node has no ports at all, which is the whole of what makes
+         * it a declaration rather than a step.
+         *
+         * It produces nothing: an agent reads which conversation it belongs to
+         * off the edge, not off the payload, so there is no field here for a
+         * later node to point at. And it needs nothing, even though its key is
+         * often a reference - because that reference is resolved in the agent it
+         * feeds, against what *that* node was handed. Reporting it as an input
+         * here would demand the field reach a node a run never reaches.
+         *
+         * What it does report is a key it has not been given, the way an action
+         * node reports having no action: a session with no key names nothing and
+         * records nothing, which is worth saying before a run proves it.
+         */
+        NodeKind.SESSION -> Ports(unresolved = "no session key".takeIf { keyOf(node).isEmpty() })
     }
+
+    /** What a session node's key is set to, written or referenced; blank if neither. */
+    private fun keyOf(node: WorkflowNode): String =
+        node.mappings.firstOrNull { it.name == SESSION_KEY }?.expression?.trim().orEmpty()
 
     /**
      * What an object node's fields are called, and what each holds.
@@ -234,7 +255,54 @@ class GraphValidator(
                     message = "Nothing can feed ${target.name}: a trigger is where a run starts.",
                 )
             }
+            /*
+             * Nothing feeds a session either, and for a stronger reason than a
+             * trigger: a run never reaches a session node at all. It is read by
+             * the agents wired to it, so an edge pointing at one is somebody
+             * drawing a step that will not happen.
+             */
+            if (target.kind == NodeKind.SESSION) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.ERROR,
+                    nodeKey = target.nodeKey,
+                    message = "Nothing can feed ${target.name}: a session is read, not run.",
+                )
+            }
+            /*
+             * And a session leads only to an agent. An agent is the only thing
+             * here that talks to a model, so a session wired to anything else
+             * does nothing whatsoever - there is no version of that graph that
+             * was meant, which is why it is refused rather than warned about.
+             */
+            if (source.kind == NodeKind.SESSION && target.kind != NodeKind.AGENT) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.ERROR,
+                    nodeKey = target.nodeKey,
+                    message = "${source.name} can only lead to an agent: ${target.name} does not talk to a model.",
+                )
+            }
         }
+
+        /*
+         * One agent, one conversation.
+         *
+         * Two sessions reaching a node would have to be resolved by picking one,
+         * and whichever rule did the picking - the first edge drawn, the node
+         * listed first - would be invisible on the canvas. So it is refused, and
+         * the answer is to delete an edge rather than to learn the rule.
+         */
+        known.filter { byKey.getValue(it.sourceKey).kind == NodeKind.SESSION }
+            .groupBy { it.targetKey }
+            .filterValues { it.size > 1 }
+            .forEach { (targetKey, reaching) ->
+                val target = byKey.getValue(targetKey)
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.ERROR,
+                    nodeKey = targetKey,
+                    message = "${reaching.size} sessions reach ${target.name}; a turn belongs to one conversation.",
+                )
+            }
+
         if (hardOnly) return problems
 
         // --- What each node can see, followed along the edges ---
@@ -251,12 +319,30 @@ class GraphValidator(
                 )
             }
 
-            val incoming = known.count { it.targetKey == node.nodeKey }
-            if (node.kind != NodeKind.TRIGGER && incoming == 0 && nodes.size > 1) {
+            /*
+             * A session node is drawn beside the graph rather than in it, so
+             * "nothing before it" is its normal state and never a mistake. Its
+             * own edge into an agent is not what reaches that agent either - it
+             * says which conversation the agent keeps, not that a run gets there
+             * - so it does not count towards the agent's incoming either.
+             */
+            val incoming = known.count {
+                it.targetKey == node.nodeKey && byKey.getValue(it.sourceKey).kind != NodeKind.SESSION
+            }
+            if (node.kind != NodeKind.TRIGGER && node.kind != NodeKind.SESSION && incoming == 0 && nodes.size > 1) {
                 problems += GraphProblem(
                     severity = GraphProblemSeverity.WARNING,
                     nodeKey = node.nodeKey,
                     message = "${node.name} has nothing before it, so a run never reaches it.",
+                )
+            }
+
+            // A session nothing is wired to is a conversation nobody joins.
+            if (node.kind == NodeKind.SESSION && known.none { it.sourceKey == node.nodeKey }) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.WARNING,
+                    nodeKey = node.nodeKey,
+                    message = "${node.name} leads to no agent, so nothing writes into it.",
                 )
             }
 
@@ -443,6 +529,9 @@ class GraphValidator(
 
         /** What a reference reads from when it does not read the run's payload. */
         const val TRIGGER = "trigger"
+
+        /** The parameter a session node is identified by; `AgentNodeRunner` reads the same. */
+        const val SESSION_KEY = "sessionKey"
     }
 }
 

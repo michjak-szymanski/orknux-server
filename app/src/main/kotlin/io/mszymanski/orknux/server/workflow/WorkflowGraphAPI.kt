@@ -226,6 +226,15 @@ class WorkflowGraphAPI(
     }
 
     /**
+     * What a session node is: a key, and what it is filed under.
+     *
+     * In this order because that is the order they read in - the prefix names
+     * the conversation, the key names which one of it. Both are always present,
+     * and the optional one is the prefix.
+     */
+    private val SESSION_PARAMETERS = listOf("sessionKeyPrefix", "sessionKey")
+
+    /**
      * The node a save would write, which is also the node a preview describes.
      *
      * One place, so what the editor is shown and what it gets when it saves
@@ -290,6 +299,21 @@ class WorkflowGraphAPI(
          */
         if (node.kind == NodeKind.AGENT) {
             return sent.values.map { mappingOf(it, refusing) }.toMutableList()
+        }
+
+        /*
+         * A session node has exactly two parameters, and always both.
+         *
+         * They are not a catalogue's and not the node's own invention: a session
+         * is identified by a key and the prefix it is filed under, and that is
+         * the whole of what this kind is. Fixing the list here means the panel
+         * cannot be talked into saving a third one, and a node saved before one
+         * of them was filled in still comes back with both boxes to fill.
+         */
+        if (node.kind == NodeKind.SESSION) {
+            return SESSION_PARAMETERS
+                .map { name -> sent[name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = name) }
+                .toMutableList()
         }
 
         /*

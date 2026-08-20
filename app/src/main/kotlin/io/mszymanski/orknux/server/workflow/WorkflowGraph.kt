@@ -47,6 +47,21 @@ enum class NodeKind {
 
     /** Makes an object out of what the run is carrying, and hands it on. */
     OBJECT,
+
+    /**
+     * Names an LLM session, for the agent nodes wired to it to talk into.
+     *
+     * A declaration rather than a step: nothing runs it, and it produces
+     * nothing a later node could read. It holds the two parameters a session is
+     * identified by - `sessionKey`, and the optional `sessionKeyPrefix` it is
+     * filed under - and every agent node an edge leads from it to writes into
+     * that one conversation. Two agents sharing a session is two edges from one
+     * of these, rather than the same key typed into both.
+     *
+     * Its parameters are resolved where they are used, in the agent, so a key
+     * read off what the run is carrying still reads what that agent was handed.
+     */
+    SESSION,
 }
 
 /**

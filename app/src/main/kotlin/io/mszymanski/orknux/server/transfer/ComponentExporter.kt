@@ -213,6 +213,9 @@ class ComponentExporter(
                 NodeKind.ACTION -> held(workspaceId, ComponentKind.ACTION, node.actionId)
                 NodeKind.CONDITION -> held(workspaceId, ComponentKind.CONDITION, node.conditionId)
                 NodeKind.OBJECT -> held(workspaceId, ComponentKind.OBJECT, node.objectId)
+                // A session node points at no catalogue entry: what it names is
+                // a key it carries, so it brings nothing with it.
+                NodeKind.SESSION -> emptyList()
             }
         }.distinct()
     }

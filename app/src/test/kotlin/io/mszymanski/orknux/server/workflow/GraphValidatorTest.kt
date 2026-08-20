@@ -196,6 +196,148 @@ class GraphValidatorTest(
         }
     }
 
+    /**
+     * A session node is not in the run, so nothing can lead into it.
+     *
+     * Stronger than the same rule for a trigger: a run does at least reach a
+     * trigger, at the start. It never reaches one of these at all - the agents
+     * wired to it read it - so an edge pointing at one draws a step that will
+     * not happen, and no version of that graph was meant.
+     */
+    @Test
+    fun `nothing can feed a session`() {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "ask", kind: AGENT, name: "Ask", x: 0, y: 0 },
+                  { key: "chat", kind: SESSION, name: "Thread", x: 200, y: 0 }
+                ],
+                edges: [{ source: "ask", target: "chat" }]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().errors().expect { it.message?.contains("a session is read, not run") == true }.verify()
+    }
+
+    /** An agent is the only thing that talks to a model, so it is the only target. */
+    @Test
+    fun `a session can only lead to an agent`() {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "chat", kind: SESSION, name: "Thread", x: 0, y: 0 },
+                  { key: "act", kind: ACTION, name: "Act", x: 200, y: 0 }
+                ],
+                edges: [{ source: "chat", target: "act" }]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().errors().expect { it.message?.contains("can only lead to an agent") == true }.verify()
+    }
+
+    /**
+     * One agent, one conversation.
+     *
+     * Two would have to be resolved by picking one, and whichever rule did the
+     * picking would be invisible on the canvas - so the graph is refused rather
+     * than the rule learned.
+     */
+    @Test
+    fun `two sessions cannot reach one agent`() {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "chatA", kind: SESSION, name: "Thread", x: 0, y: 0 },
+                  { key: "chatB", kind: SESSION, name: "Ticket", x: 0, y: 100 },
+                  { key: "ask", kind: AGENT, name: "Ask", x: 200, y: 0 }
+                ],
+                edges: [{ source: "chatA", target: "ask" }, { source: "chatB", target: "ask" }]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute()
+            .errors().expect { it.message?.contains("a turn belongs to one conversation") == true }.verify()
+    }
+
+    /**
+     * A session is drawn beside the graph rather than in it.
+     *
+     * So "nothing before it" is its normal state and not worth saying - and the
+     * edge it draws into an agent is not a run reaching that agent either, so
+     * the agent is still told that nothing reaches it.
+     */
+    @Test
+    fun `a session is not a step, so neither end of its edge counts as one`() {
+        val problems = save(
+            nodes = """
+                { key: "chat", kind: SESSION, name: "Thread", x: 0, y: 0,
+                  mappings: [{ name: "sessionKey", expression: "42", mode: VALUE }] },
+                { key: "ask", kind: AGENT, name: "Ask", x: 200, y: 0 }
+            """,
+            edges = """{ source: "chat", target: "ask" }""",
+        )
+
+        assertThat(problems).noneSatisfy { assertThat(it).contains("Thread has nothing before it") }
+        assertThat(problems).anySatisfy { assertThat(it).contains("Ask has nothing before it") }
+    }
+
+    /** A session with no key names nothing, which is worth saying before a run does. */
+    @Test
+    fun `a session with no key is warned about`() {
+        val problems = save(
+            nodes = """
+                { key: "chat", kind: SESSION, name: "Thread", x: 0, y: 0 },
+                { key: "ask", kind: AGENT, name: "Ask", x: 200, y: 0 }
+            """,
+            edges = """{ source: "chat", target: "ask" }""",
+        )
+
+        assertThat(problems).anySatisfy {
+            assertThat(it).contains("WARNING").contains("Thread has no session key")
+        }
+    }
+
+    /** And a session nobody is wired to is a conversation nobody joins. */
+    @Test
+    fun `a session leading nowhere is warned about`() {
+        val problems = save(
+            nodes = """
+                { key: "chat", kind: SESSION, name: "Thread", x: 0, y: 0,
+                  mappings: [{ name: "sessionKey", expression: "42", mode: VALUE }] },
+                { key: "ask", kind: AGENT, name: "Ask", x: 200, y: 0 }
+            """,
+            edges = "",
+        )
+
+        assertThat(problems).anySatisfy { assertThat(it).contains("Thread leads to no agent") }
+    }
+
+    /**
+     * The key is often read off the run, and it is read where it is used - in
+     * the agent - so the session node itself asks nothing of what comes before
+     * it. Reporting it as an input here would demand a field reach a node a run
+     * never reaches, and every session keyed off a ticket would be a warning.
+     */
+    @Test
+    fun `a session whose key is a reference asks nothing of the graph`() {
+        val problems = save(
+            nodes = """
+                { key: "chat", kind: SESSION, name: "Thread", x: 0, y: 0,
+                  mappings: [{ name: "sessionKey", expression: "ticket", mode: REFERENCE }] },
+                { key: "ask", kind: AGENT, name: "Ask", x: 200, y: 0 }
+            """,
+            edges = """{ source: "chat", target: "ask" }""",
+        )
+
+        assertThat(problems).noneSatisfy { assertThat(it).contains("Thread needs") }
+    }
+
     /** Saves the graph and answers with its problems, as "SEVERITY message". */
     private fun save(nodes: String, edges: String): List<String> = graphQlTester.document(
         """

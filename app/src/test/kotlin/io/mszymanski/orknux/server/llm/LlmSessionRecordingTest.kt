@@ -258,6 +258,143 @@ class LlmSessionRecordingTest(
         assertThat(lines.count { it.kind == LlmSessionEventKind.TOOL }).isGreaterThan(1)
     }
 
+    /**
+     * The shape the editor draws now: a session node, and an edge to the agent.
+     *
+     * The two halves live on the session rather than on the agent, and the edge
+     * is what says this agent talks into it. What lands in the session is the
+     * same round as before - the point being that moving where the key is
+     * written down changed nothing about what is recorded.
+     */
+    @Test
+    fun `an agent records into the session node wired to it`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        wiredGraph(agentId, prefix = "issue", key = "42")
+
+        start()
+
+        val session = sessions.findAll().single()
+        assertThat(session.sessionKey).isEqualTo("issue:42")
+        assertThat(session.keyPrefix).isEqualTo("issue")
+        assertThat(events.findAll().sortedBy { it.id }.map { it.kind })
+            .containsExactly(LlmSessionEventKind.USER, LlmSessionEventKind.AGENT)
+    }
+
+    /**
+     * The reason the session is a node at all: two agents, one conversation.
+     *
+     * Under the old shape this meant typing the same key into both nodes and
+     * nothing on the canvas saying they were sharing anything. Here it is two
+     * edges from one node, and the second agent is asked with the first one's
+     * exchange in front of it.
+     */
+    @Test
+    fun `two agents wired to one session node share the conversation`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "chat", kind: SESSION, name: "The incident", x: 0, y: 0, mappings: [
+                    { name: "sessionKeyPrefix", expression: "issue", mode: VALUE },
+                    { name: "sessionKey", expression: "42", mode: VALUE }
+                  ] },
+                  { key: "first", kind: AGENT, name: "Ask reviewer", agentId: $agentId, x: 200, y: 0 },
+                  { key: "second", kind: AGENT, name: "Ask again", agentId: $agentId, x: 400, y: 0 }
+                ],
+                edges: [
+                  { source: "chat", target: "first" },
+                  { source: "chat", target: "second" },
+                  { source: "first", target: "second" }
+                ]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute()
+
+        start()
+
+        // One conversation, with both nodes' rounds in it, in the order they ran.
+        assertThat(sessions.findAll()).hasSize(1)
+        val lines = events.findAll().sortedBy { it.id }
+        assertThat(lines.map { it.actor })
+            .containsExactly("Ask reviewer", "Reviewer", "Ask again", "Reviewer")
+        // And the second node heard the first: what it sent carries the answer
+        // the first node had already put in the session.
+        assertThat(received.last()).contains("The database was the cause.")
+    }
+
+    /**
+     * A key read off the run still reads the run, though it is written on a
+     * node the run never reaches.
+     *
+     * It is resolved in the agent, against what that step was handed - which is
+     * what keeps a session keyed by a ticket, a thread or a customer working
+     * now that the key lives somewhere else.
+     */
+    @Test
+    fun `a session node's key can be read from what the run was handed`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        wiredGraph(agentId, prefix = "issue", key = "ticket", keyIsReference = true)
+
+        start()
+
+        assertThat(sessions.findAll().single().sessionKey).isEqualTo("issue:99")
+    }
+
+    /**
+     * A session wired to the node beats the key the node itself still carries.
+     *
+     * The old shape has to keep running, and it does - but the moment somebody
+     * draws a session node and joins it up, that is the answer. Otherwise the
+     * canvas would say one thing and the run would do another.
+     */
+    @Test
+    fun `a wired session overrides a key the agent node still carries`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "chat", kind: SESSION, name: "The incident", x: 0, y: 0, mappings: [
+                    { name: "sessionKeyPrefix", expression: "issue", mode: VALUE },
+                    { name: "sessionKey", expression: "42", mode: VALUE }
+                  ] },
+                  { key: "think", kind: AGENT, name: "Ask reviewer", agentId: $agentId, x: 200, y: 0, mappings: [
+                    { name: "sessionKeyPrefix", expression: "old", mode: VALUE },
+                    { name: "sessionKey", expression: "7", mode: VALUE }
+                  ] }
+                ],
+                edges: [{ source: "chat", target: "think" }]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute()
+
+        start()
+
+        assertThat(sessions.findAll().single().sessionKey).isEqualTo("issue:42")
+    }
+
+    /**
+     * The session node and its edges are a declaration, not a step.
+     *
+     * Nothing runs it, so no step is recorded for it - and the agent it leads
+     * to is not counted as having been reached by it either.
+     */
+    @Test
+    fun `a session node is not recorded as a step of the run`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        wiredGraph(agentId, prefix = "issue", key = "42")
+
+        val executionId = start()
+
+        assertThat(steps.findAll().filter { it.executionId == executionId }.map { it.nodeKey })
+            .containsExactly("think")
+    }
+
     /** Answers in one round, with no tools involved. */
     private fun serveAnswer(): String = serve {
         """
@@ -331,6 +468,31 @@ class LlmSessionRecordingTest(
                 }],
                 edges: []
               }) { nodes { key agentId } }
+            }
+            """,
+        ).execute()
+    }
+
+    /**
+     * The same one agent, with the session written where it belongs now: on a
+     * node of its own, with an edge saying which agent talks into it.
+     */
+    private fun wiredGraph(agentId: Long, prefix: String?, key: String, keyIsReference: Boolean = false) {
+        val mapped = buildList {
+            if (prefix != null) add("""{ name: "sessionKeyPrefix", expression: "$prefix", mode: VALUE }""")
+            add("""{ name: "sessionKey", expression: "$key", mode: ${if (keyIsReference) "REFERENCE" else "VALUE"} }""")
+        }.joinToString(", ")
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "chat", kind: SESSION, name: "The incident", x: 0, y: 0, mappings: [$mapped] },
+                  { key: "think", kind: AGENT, name: "Ask reviewer", agentId: $agentId, x: 200, y: 0 }
+                ],
+                edges: [{ source: "chat", target: "think" }]
+              }) { nodes { key } }
             }
             """,
         ).execute()

@@ -809,7 +809,7 @@ CREATE TABLE workflow_node
     no_label                     varchar(40),
     orientation                  varchar(16),
     constraint uk_workflow_node UNIQUE (workflow_id, node_key),
-    constraint ck_workflow_node_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT'))),
+    constraint ck_workflow_node_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT', 'SESSION'))),
     constraint workflow_node_action_id_fkey FOREIGN KEY (action_id) REFERENCES workflow_action(id) ON DELETE SET NULL,
     constraint workflow_node_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
     constraint workflow_node_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE SET NULL,

@@ -160,16 +160,29 @@ class AgentNodeRunner(
      * The LLM session this node was told to talk into, or null for a node that
      * names none.
      *
+     * The two halves are not the agent node's own. They belong to the session
+     * node an edge leads from, and `AppWorkflowGraphSource` folds them onto this
+     * step when the graph is read for the run — so what arrives here is the
+     * session that was wired to this agent at the moment the run started, and
+     * redrawing the canvas afterwards cannot change it. Two agents wired to one
+     * session node are handed the same two halves, which is how they end up in
+     * one conversation without either of them naming it.
+     *
      * Two parameters rather than one, because the halves come from different
      * places: the prefix is nearly always something the author typed — the name
      * of the conversation this workflow has — while the key is nearly always
-     * read off what arrived, a thread, a ticket, a customer. Joining them here
-     * is what makes two workflows land in one session on purpose: the same
-     * halves, however each of them arrived at them, are the same session.
+     * read off what arrived, a thread, a ticket, a customer. They are resolved
+     * here, against what *this* step was handed, which is what keeps a
+     * referenced key reading the run rather than the session node's own view of
+     * it. Joining them here is what makes two workflows land in one session on
+     * purpose: the same halves, however each of them arrived at them, are the
+     * same session.
      *
      * A node with no key records nothing and asks nothing of the database. That
-     * is every agent node drawn before this existed, so nothing anybody has
-     * already built pays for this.
+     * is every agent node with no session wired to it, and — because a node that
+     * still carries these names from before session nodes existed is left alone
+     * unless a session overrides it — every agent node drawn before either
+     * existed still behaves exactly as it did.
      */
     private fun sessionFor(
         step: ExecutionStep,
@@ -210,9 +223,9 @@ class AgentNodeRunner(
         const val SYSTEM_PROMPT = "systemPrompt"
 
         /**
-         * Which conversation this node's turn belongs to. Blank or absent means
-         * the turn is not kept anywhere, which is what an agent node has always
-         * done.
+         * Which conversation this node's turn belongs to, put here by the
+         * session node wired to this one. Blank or absent means the turn is not
+         * kept anywhere, which is what an agent node with no session does.
          */
         const val SESSION_KEY = "sessionKey"
 

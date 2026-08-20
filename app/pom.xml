@@ -106,6 +106,27 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+
+        <!--
+            Metrics, for whoever is watching this installation from outside it.
+
+            Actuator is what serves them and Micrometer's Prometheus registry is
+            what renders them; neither carries a version here, since the BOM
+            imported by the parent manages both. Only `/actuator/prometheus` is
+            exposed - see the `management` block in application.yml - and it is
+            behind the same authentication as everything else unless an operator
+            says otherwise. Micrometer's registry bean is also what the counters
+            in orknux-execution are registered against.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-ldap</artifactId>

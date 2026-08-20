@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
+import io.mszymanski.orknux.server.monitoring.MetricsProperties
 import io.mszymanski.orknux.server.user.TokenAuthenticationFilter
 import org.springframework.security.crypto.factory.PasswordEncoderFactories
 import org.springframework.security.crypto.password.PasswordEncoder
@@ -20,7 +21,7 @@ import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(WebProperties::class, SecurityProperties::class)
+@EnableConfigurationProperties(WebProperties::class, SecurityProperties::class, MetricsProperties::class)
 class SecurityConfig {
 
     /**
@@ -37,6 +38,7 @@ class SecurityConfig {
     fun securityFilterChain(
         http: HttpSecurity,
         properties: SecurityProperties,
+        metrics: MetricsProperties,
         tokens: TokenAuthenticationFilter,
     ): SecurityFilterChain {
         http {
@@ -111,6 +113,26 @@ class SecurityConfig {
                  * comes later, and will be the trigger's own business.
                  */
                 authorize(HttpMethod.POST, "$WEBHOOK_PATH/**", permitAll)
+                /*
+                 * The metrics, for a scraper with nowhere to keep a session —
+                 * and only where an operator has said so.
+                 *
+                 * Authenticated is what the rule below already gives, and it is
+                 * the right default: a scrape describes the installation rather
+                 * than the machine, so an open one publishes how many workspaces
+                 * there are, how often workflows run and how often they fail. A
+                 * scraper that can carry an Authorization header needs nothing
+                 * here — an API token is read on the way in like anybody's, and
+                 * merely being somebody is enough: a scrape is aggregate counters
+                 * rather than anybody's data, and a token that had to administer
+                 * would be a far stronger credential to leave in a scrape config.
+                 *
+                 * So this exists for the deployment where the scrape crosses a
+                 * network only the scraper is on. It is a GET on one path, and
+                 * every other Actuator endpoint is unexposed rather than merely
+                 * protected, so what it opens cannot grow.
+                 */
+                if (metrics.anonymous) authorize(HttpMethod.GET, PROMETHEUS_PATH, permitAll)
                 authorize(anyRequest, authenticated)
             }
             // Answer unauthenticated calls with 401 instead of redirecting to a login page.
@@ -178,3 +200,6 @@ const val PASSWORD_RESET_PATH = "/api/password-reset"
 
 /** Where a webhook trigger answers; open, because its callers cannot sign in. */
 const val WEBHOOK_PATH = "/api/webhooks"
+
+/** Where a scrape reads. Authenticated unless `orknux.metrics.anonymous`. */
+const val PROMETHEUS_PATH = "/actuator/prometheus"

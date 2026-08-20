@@ -103,6 +103,25 @@ server:
         same-site: ${ORKNUX_SESSION_COOKIE_SAME_SITE:lax}
         http-only: ${ORKNUX_SESSION_COOKIE_HTTP_ONLY:true}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # Metrics and nothing else. Actuator ships a dozen endpoints and Boot
+        # exposes health by default; each one here is a page about this
+        # installation reachable over the same port as the interface, so the list
+        # is what is asked for rather than what happens to be switched on.
+        #
+        # Health is deliberately not among them. This server already answers for
+        # its own health twice: the monitoring screen names every dependency it
+        # has, and the container's health check reads /api/auth/method, which is
+        # open by design and needs no credential. A third answer would be one
+        # more surface for nothing.
+        #
+        # Everything not listed is unmapped rather than merely refused, so
+        # /actuator/env and the rest are 404 for everybody, whatever they hold.
+        include: prometheus
+
 db-scheduler:
   # The clock behind scheduled triggers. It keeps its state in the database, so
   # one instance fires a schedule however many are running.
@@ -140,6 +159,22 @@ orknux:
     # collector wants. Applies to the console and the file alike: two formats at
     # once would mean two answers to "what did it log".
     format: ${ORKNUX_LOG_FORMAT:plain}
+  metrics:
+    # Whether /actuator/prometheus answers somebody who has not signed in.
+    #
+    # False, because what it renders describes the installation and not merely
+    # the machine: how many workspaces there are, how often workflows run, how
+    # often they fail, and which models are configured. Left open on a public
+    # address that is a free and continuously updated account of somebody's
+    # estate, and none of it is anything they asked to publish.
+    #
+    # Off costs a scraper very little - Prometheus can carry an Authorization
+    # header, and an API token is read on every request like any other caller's.
+    # True is for the deployment where the metrics are scraped over a network
+    # only the scraper is on, and where a credential in the scrape config would
+    # be ceremony over a wire nobody else can reach. Nothing else under
+    # /actuator is opened by it.
+    anonymous: ${ORKNUX_METRICS_ANONYMOUS:false}
   web:
     # Where the interface is served from, when it is not this server. Comma
     # separated; empty allows none, which is right once they share an origin.

@@ -2,6 +2,8 @@ package io.mszymanski.orknux.server.admin
 
 import io.mszymanski.orknux.connector.security.SecretCipher
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
+import io.mszymanski.orknux.server.database.isSqlite
+import io.mszymanski.orknux.server.database.jdbcUrlOf
 import io.mszymanski.orknux.server.security.AuthMethod
 import io.mszymanski.orknux.server.security.SecurityProperties
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -40,14 +42,40 @@ class DoctorAPI(
     fun doctor(): List<DoctorCheckView> {
         access.requireAdmin()
         return listOf(
-            secretKey(),
-            storedSecrets(),
-            authentication(),
-            attachmentsLocation(),
-            schema(),
-            origins(),
-        )
+            "Secret key" to ::secretKey,
+            "Stored secrets" to ::storedSecrets,
+            "Authentication" to ::authentication,
+            "Attachments" to ::attachmentsLocation,
+            "Schema" to ::schema,
+            "Allowed origins" to ::origins,
+        ).map { (name, check) -> attempt(name, check) }
     }
+
+    /**
+     * One check's answer, or the fact that there is not one — never the other
+     * checks' silence.
+     *
+     * A check that throws used to take the page with it, and the whole page is
+     * one GraphQL field: one query against a catalogue table SQLite does not
+     * have turned every one of these into a single INTERNAL_ERROR, on the image
+     * that exists for people trying this for the first time. The page that is
+     * supposed to say what is wrong was the one thing that could not.
+     *
+     * So each check is run inside its own catch and a failing one reports itself
+     * as unanswered. That is worth more than the fix to the query underneath it:
+     * a check added next year gets the same isolation without anybody
+     * remembering to ask for it, and the worst a mistake in one can do is cost
+     * its own card.
+     */
+    private fun attempt(name: String, check: () -> DoctorCheckView): DoctorCheckView =
+        runCatching(check).getOrElse { failure ->
+            warn(
+                name,
+                "Could not be checked on this installation: " +
+                    (failure.message?.lines()?.first() ?: failure::class.simpleName) +
+                    ". Every other check on this page still stands.",
+            )
+        }
 
     /**
      * The one that started this.
@@ -125,18 +153,8 @@ class DoctorAPI(
      * whether it holds any. That is a couple of hundred cheap queries on a schema
      * this size, run when somebody opens a diagnostic page — not on a request path.
      */
-    private fun encryptedValues(): List<EncryptedValue> {
-        val columns = jdbc.query(
-            """
-            select table_name, column_name
-            from information_schema.columns
-            where table_schema = 'public'
-              and data_type in ('text', 'character varying')
-            order by table_name, column_name
-            """.trimIndent(),
-        ) { row, _ -> row.getString("table_name") to row.getString("column_name") }
-
-        return columns.flatMap { (table, column) ->
+    private fun encryptedValues(): List<EncryptedValue> =
+        textColumns().flatMap { (table, column) ->
             /*
              * The names come from the catalogue rather than from anything a caller
              * sent, and they are quoted anyway: a table called `order` is a syntax
@@ -152,6 +170,34 @@ class DoctorAPI(
                 )
             }.getOrDefault(emptyList())
         }
+
+    /**
+     * Which columns could hold text, asked of whichever catalogue this database
+     * keeps.
+     *
+     * There are two, and they are not two spellings of one query. Postgres has
+     * `information_schema`; SQLite has no such table at all, so the query that
+     * worked everywhere the tests run failed on the first line in the all-in-one
+     * image — the one installation somebody meets before they have decided to
+     * run a database. What SQLite offers instead is its own catalogue and
+     * `pragma_table_info`, which answers the same question a table at a time.
+     *
+     * Which of the two is asked follows the rest of the application rather than
+     * this file's own guess: [isSqlite] over the URL the pool was built from is
+     * what chooses the dialect, the scheduler's SQL and the session store's
+     * propagation, and one place deciding for all of them is what keeps them
+     * from disagreeing.
+     *
+     * The two predicates say the same thing in each database's terms. Postgres
+     * names the type, so the type is named. SQLite does not have types so much
+     * as affinities, and the rule it applies itself is that a declaration
+     * containing CHAR, CLOB or TEXT holds text — so that is the rule asked here,
+     * and a column declared `varchar(4000)` or `text` is caught without this
+     * having to list the spellings the baseline happens to use.
+     */
+    private fun textColumns(): List<Pair<String, String>> {
+        val sql = if (isSqlite(jdbc.dataSource?.let { jdbcUrlOf(it) })) SQLITE_TEXT_COLUMNS else POSTGRES_TEXT_COLUMNS
+        return jdbc.query(sql) { row, _ -> row.getString("table_name") to row.getString("column_name") }
     }
 
     /** One encrypted value and where it lives; never its contents. */
@@ -262,6 +308,35 @@ class DoctorAPI(
 
         /** Enough from one column to say the column is affected, without reading a table. */
         const val PER_COLUMN = 20
+
+        /** Every text column of the schema this application owns. */
+        val POSTGRES_TEXT_COLUMNS = """
+            select table_name, column_name
+            from information_schema.columns
+            where table_schema = 'public'
+              and data_type in ('text', 'character varying')
+            order by table_name, column_name
+        """.trimIndent()
+
+        /**
+         * The same, from SQLite's catalogue. `sqlite_master` lists the tables and
+         * `pragma_table_info` opens each one up; the internal tables SQLite keeps
+         * for itself are left out, as `information_schema` leaves out the schemas
+         * that are not this application's.
+         */
+        val SQLITE_TEXT_COLUMNS = """
+            select m.name as table_name, c.name as column_name
+            from sqlite_master m
+            join pragma_table_info(m.name) c
+            where m.type = 'table'
+              and m.name not like 'sqlite!_%' escape '!'
+              and (
+                instr(lower(c.type), 'char') > 0
+                or instr(lower(c.type), 'clob') > 0
+                or instr(lower(c.type), 'text') > 0
+              )
+            order by m.name, c.name
+        """.trimIndent()
     }
 
     private fun ok(name: String, detail: String) = DoctorCheckView(name, DoctorVerdict.OK, detail)

@@ -126,6 +126,40 @@ class TriggerSchedulerTest(
             .verify()
     }
 
+    /**
+     * The regression that stopped every schedule in the installation.
+     *
+     * Firing at a draft threw out of a transactional method, which marked the
+     * round's shared transaction rollback-only; the commit then failed, and with
+     * it went every other trigger's run and every other trigger's `lastFiredAt`.
+     * A minute later the same triggers were due against the same draft, so
+     * nothing scheduled ever fired again.
+     *
+     * Which is why this asserts on the *other* trigger. A test that only checked
+     * that the draft was skipped passed on the broken code.
+     */
+    @Test
+    fun `a trigger pointing at a draft does not stop the other triggers firing`() {
+        val draft = draftWorkflow("Half Drawn")
+        instance(scheduled("Unpublished Trigger", "* * * * *"), workflow = draft, publish = false)
+        instance(scheduled("Nightly Data Sync", "* * * * *"))
+
+        scheduler.tick(OffsetDateTime.now())
+
+        // The published one ran, alone and unharmed.
+        assertThat(executions.findAll()).singleElement().satisfies({
+            assertThat(it.workflowName).isEqualTo("Nightly Sync")
+            assertThat(it.trigger).isEqualTo(ExecutionTrigger.SCHEDULE)
+        })
+        assertThat(triggers.findByWorkspaceIdAndName(workspaceId, "Nightly Data Sync")?.lastFiredAt)
+            .describedAs("the healthy trigger's stamp survives the round")
+            .isNotNull()
+
+        // And the draft's own occurrence was taken rather than left due, so it
+        // does not come back a minute later to try the same thing again.
+        assertThat(triggers.findByWorkspaceIdAndName(workspaceId, "Unpublished Trigger")?.lastFiredAt).isNotNull()
+    }
+
     @Test
     fun `a disabled trigger stays put, and so does one nothing instances`() {
         val disabled = scheduled("Disabled", "* * * * *")
@@ -158,12 +192,17 @@ class TriggerSchedulerTest(
         """,
     ).execute().path("createTrigger.id").entity(Long::class.java).get()
 
+    /** A second workflow, so a draft and a published one can be in the same round. */
+    private fun draftWorkflow(name: String): Long = graphQlTester.document(
+        """mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "$name" }) { workflowId } }""",
+    ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+
     /** The workflow instances the definition, which is what makes it run. */
-    private fun instance(triggerId: Long) {
+    private fun instance(triggerId: Long, workflow: Long = workflowId, publish: Boolean = true) {
         graphQlTester.document(
             """
             mutation {
-              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflow, input: {
                 nodes: [{ key: "start", kind: TRIGGER, name: "Nightly", triggerId: $triggerId, x: 0, y: 0 }],
                 edges: []
               }) { nodes { key } }
@@ -173,9 +212,11 @@ class TriggerSchedulerTest(
 
         // Published, because a trigger runs the published copy: a graph that
         // was only ever saved is one somebody is still drawing.
-        graphQlTester.document(
-            """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflowId) { status } }""",
-        ).execute()
+        if (publish) {
+            graphQlTester.document(
+                """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflow) { status } }""",
+            ).execute()
+        }
     }
 
     private companion object {

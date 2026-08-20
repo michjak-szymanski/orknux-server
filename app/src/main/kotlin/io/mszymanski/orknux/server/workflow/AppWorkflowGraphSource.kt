@@ -33,6 +33,27 @@ class AppWorkflowGraphSource(
     private val mapper: ObjectMapper,
 ) : WorkflowGraphSource {
 
+    /**
+     * Whether [graph] would find something to run for a trigger.
+     *
+     * Asked by anything that starts a run without a person watching, so that a
+     * workflow somebody is still drawing is an answer rather than an exception.
+     * It reads the same two facts [graph] does — the snapshot publishing takes,
+     * and the status carried by a workflow that was live before snapshots
+     * existed — so the two cannot drift apart and say different things.
+     *
+     * The reason it is a question at all is that the exception was expensive in
+     * a way an exception should not be: thrown out of the transactional method
+     * below, it marked the caller's transaction rollback-only, and catching it
+     * afterwards did not unmark it. One unpublished workflow was enough to roll
+     * back a whole round of scheduled triggers. The boundary is now per-trigger
+     * so that can no longer spread, and this keeps the ordinary case from
+     * raising anything to be contained in the first place.
+     */
+    @Transactional(readOnly = true)
+    fun published(workflowId: Long): Boolean =
+        publications.existsById(workflowId) || workflows.findByIdOrNull(workflowId)?.status == WorkflowStatus.PUBLISHED
+
     @Transactional
     override fun graph(workspaceId: Long, workflowId: Long, version: GraphVersion): RunnableGraph {
         // A workflow runs for a workspace only if that workspace has it assigned.

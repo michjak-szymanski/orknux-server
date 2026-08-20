@@ -8,7 +8,8 @@
 # no network**, and everything it needs it has to invent on the way up. So the
 # things worth asserting are different ones.
 #
-#   1. it serves the interface and forwards the API on one port
+#   1. it serves the interface and forwards the API on one port, and describes its
+#      own sign-in truthfully - there is no directory in here
 #   2. it invented an encryption key, kept it, and did not invent a second one
 #      on the next start - the failure this image can most easily have is silent
 #   3. it invented an administrator, and that administrator can actually sign in
@@ -94,6 +95,21 @@ say "Waiting for it to answer"
 wait_for_it 180
 ok "The API answers through the proxy"
 
+# What it says about signing in, which is the first thing anybody sees.
+#
+# There is no directory in this container. Under the LDAP default the card said
+# there was: "Authenticating via LDAP", with an offer of single sign-on, on an
+# image that has nothing listening on 389. It let the generated administrator in
+# anyway - internal accounts are checked first - so it worked and looked broken,
+# which is the worst of both. INTERNAL is the entrypoint saying what is actually
+# here, and nothing else in this script would notice it going back.
+method="$(curl -fsS -m 10 "$BASE/api/auth/method")" || die "The sign-in method could not be read"
+case "$method" in
+  *'"method":"INTERNAL"'*) ok "It describes sign-in as INTERNAL" ;;
+  *'"method":"LDAP"'*) die "It claims LDAP, and there is no directory in this image: $method" ;;
+  *) die "The sign-in method is not one this image should report: $method" ;;
+esac
+
 body="$(curl -fsS -m 10 "$BASE/")" || die "The interface did not answer on /"
 case "$body" in
   *"<div id=\"root\""*|*"<div id=root"*) ok "The interface is served on the same port" ;;
@@ -167,6 +183,25 @@ case "$created" in
   *'"errors"'*) die "Creating a workspace failed: $created" ;;
   *'"name":"verify"'*) ok "A workspace was created and read back" ;;
   *) die "Creating a workspace answered something unexpected: $created" ;;
+esac
+
+# And what the monitoring screen makes of an installation with no directory.
+#
+# Asked here because it needs the administrator's session, which the step above
+# already has. It used to answer DEGRADED, "cannot reach directory", having
+# probed the localhost:389 that `spring.ldap.urls` falls back to when nobody sets
+# it - a red card, permanently, for a component this image was never meant to
+# have. A dependency that was never configured is absent, not unreachable, so
+# there is no card for it at all.
+health="$(curl -fsS -m 15 -X POST "$BASE/graphql" -H 'content-type: application/json' -b "$JAR" \
+  -d '{"query":"{ components { status detail dependencies { name } } }"}')" \
+  || die "The monitoring query failed outright"
+case "$health" in
+  *'"errors"'*) die "Reading the components failed: $health" ;;
+  *'"name":"Directory"'*) die "It reports a directory this image has not got: $health" ;;
+  *'"status":"DEGRADED"'*) die "It reports itself degraded with nothing missing: $health" ;;
+  *'"status":"HEALTHY"'*) ok "Monitoring is healthy, with no card for an absent directory" ;;
+  *) die "The components query answered something unexpected: $health" ;;
 esac
 
 # 5. Security is on in the packaged image, not only in the dev profile. The same

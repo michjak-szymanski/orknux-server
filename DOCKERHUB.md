@@ -108,7 +108,7 @@ migrations are the only thing that ever changes it.
 
 ## Signing in
 
-`ORKNUX_AUTH_METHOD` picks one, and only one. Both at once would mean an LDAP
+`ORKNUX_AUTH_METHOD` picks one, and only one. Two at once would mean an LDAP
 password for every account the OIDC provider governs - a second way in that its
 policies do not reach. Below is what to set;
 [the README's **Access** section](https://github.com/michjak-szymanski/orknux-server/blob/main/README.md#access)
@@ -116,7 +116,7 @@ is why.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_AUTH_METHOD` | `LDAP` or `OIDC`. | `LDAP` | No |
+| `ORKNUX_AUTH_METHOD` | `LDAP`, `INTERNAL` or `OIDC`. | `LDAP` | No |
 | `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
 **How hard somebody may try.** A wrong password costs nothing until the
@@ -131,6 +131,13 @@ Username and address are counted at once, in memory, so a restart forgets both.
 | `ORKNUX_SIGN_IN_FIRST_WAIT` | The pause on the first failure past the allowance. It doubles after that. | `2s` | No |
 | `ORKNUX_SIGN_IN_LONGEST_WAIT` | Where the doubling stops. | `5m` | No |
 | `ORKNUX_SIGN_IN_FORGET_AFTER` | How long a quiet username or address is remembered for, so a bad afternoon does not follow anybody into the next day. | `15m` | No |
+
+**INTERNAL** - nothing to configure, which is the point. Username and password
+against the accounts this installation holds itself, with no directory and no
+provider contacted: the sign-in card offers a password box rather than single
+sign-on, and the monitoring screen draws no card for a directory nobody set up.
+It is what `orknux/orknux-one` runs on, and what to set here when the bootstrap
+administrator below is the whole of the way in.
 
 **LDAP** - read only when `ORKNUX_AUTH_METHOD=LDAP`.
 

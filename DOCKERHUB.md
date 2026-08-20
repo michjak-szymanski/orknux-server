@@ -250,6 +250,8 @@ files, no network and no threads. These bound what it can spend.
 | --- | --- | --- | --- |
 | `ORKNUX_SCRIPT_TIMEOUT_MILLIS` | A function or tool that runs longer is stopped. | `5000` | No |
 | `ORKNUX_SCRIPT_STATEMENT_LIMIT` | How many statements one may execute - what catches a loop that never ends. | `5000000` | No |
+| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same, for a plugin, which is a bundle and takes longer to load. | `10000` | No |
+| `ORKNUX_PLUGIN_STATEMENT_LIMIT` | The same, for a plugin. | `10000000` | No |
 | `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | How long a workflow's own HTTP request may take. A step that never returns holds the run that made it. | `30` | No |
 
 ## Models and connections

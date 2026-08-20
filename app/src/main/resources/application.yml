@@ -362,6 +362,12 @@ orknux:
     # files, no network and no threads. These bound what it can spend.
     timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:5000}
     statement-limit: ${ORKNUX_SCRIPT_STATEMENT_LIMIT:5000000}
+  plugin:
+    # A plugin runs in its own sandbox, configured separately from a workspace's
+    # functions on purpose. Its budget is the larger of the two: a plugin is a
+    # bundle, and loading one is more work than calling one exported function.
+    timeout-millis: ${ORKNUX_PLUGIN_TIMEOUT_MILLIS:10000}
+    statement-limit: ${ORKNUX_PLUGIN_STATEMENT_LIMIT:10000000}
   execution:
     inline:
       # Only the inline engine. It waits out a parked step on the thread

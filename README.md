@@ -11,6 +11,10 @@ Orknux is a fully open source, workspace based, agent orchestration platform.
 &nbsp;·&nbsp; [Marketplace](https://orknux.io/market) &nbsp;·&nbsp;
 [Docker Hub](https://hub.docker.com/r/orknux/orknux-server)
 
+The same site answers to [orkx.io](https://orkx.io), [orknux.ai](https://orknux.ai)
+and [orkx.ai](https://orkx.ai). `orkx` is the short form, kept for links and the
+command line; `orknux` is the name.
+
 A Kotlin/Spring Boot GraphQL API over Postgres or SQLite, signed in against a
 directory or an OIDC provider. One deployable, built from modules that cannot
 reach into each other:

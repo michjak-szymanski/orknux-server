@@ -5,6 +5,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
+import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
@@ -111,6 +112,34 @@ class LlmSessionAPI(
         val session = sessions.findByIdOrNull(id) ?: return null
         if (!access.canSee(session.workspaceId)) return null
         return describe(session, events.countBySessionId(id).toInt())
+    }
+
+    /**
+     * Throws a whole conversation away.
+     *
+     * The one thing anybody may do to a session besides read it. Nothing can
+     * create one - a session appears because a run computed its key - so this
+     * is not the other half of a create, it is a way to be rid of a
+     * conversation that should not have been kept: a key someone mistyped, a
+     * transcript of a run they were only trying out.
+     *
+     * The events go with it. They are a session's contents rather than
+     * something in their own right, and the row's foreign key already says so.
+     *
+     * Answers true when there was one to remove and false when there was not,
+     * rather than raising - a second press of a delete button is somebody
+     * making sure, not an error worth a red box. A session in a workspace this
+     * caller cannot see is one that, to them, is not there.
+     */
+    @MutationMapping
+    @Transactional
+    fun removeLlmSession(@Argument id: Long): Boolean {
+        val session = sessions.findByIdOrNull(id) ?: return false
+        if (!access.canSee(session.workspaceId)) return false
+        access.requireVisible(session.workspaceId)
+        events.deleteBySessionId(id)
+        sessions.delete(session)
+        return true
     }
 
     /**

@@ -239,6 +239,9 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
 
     fun countBySessionId(sessionId: Long): Long
 
+    /** Everything said in one session, thrown away with it. */
+    fun deleteBySessionId(sessionId: Long)
+
     /**
      * The tail of a session, oldest first, for putting back in front of a model.
      *

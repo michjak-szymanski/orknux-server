@@ -143,6 +143,11 @@ class WorkflowGraphAPI(
                 // rule would only ever be evaluated against a blank.
                 outputName = node.outputName?.trim()?.ifEmpty { null },
                 orientation = node.orientation,
+                // Carried into the check for the same reason: a failure edge
+                // out of a node that does not handle failure is one of the
+                // shapes a save refuses, and without this it would be judged
+                // against a node that never handles it.
+                fallbackEnabled = node.fallbackEnabled && node.kind == NodeKind.ACTION,
                 positionX = node.x,
                 positionY = node.y,
             )
@@ -266,11 +271,23 @@ class WorkflowGraphAPI(
         orientation = node.orientation,
         positionX = node.x,
         positionY = node.y,
-        // Only a condition has two ways out to name.
-        yesLabel = node.yesLabel?.trim()?.ifEmpty { null }?.takeIf { node.kind == NodeKind.CONDITION },
-        noLabel = node.noLabel?.trim()?.ifEmpty { null }?.takeIf { node.kind == NodeKind.CONDITION },
+        // Only a node with two ways out has them to name: a condition, or an
+        // action that handles its own failure.
+        yesLabel = node.yesLabel?.trim()?.ifEmpty { null }?.takeIf { forks(node) },
+        noLabel = node.noLabel?.trim()?.ifEmpty { null }?.takeIf { forks(node) },
+        // Only an action can fail in a way the graph goes on from; a condition
+        // that does not hold is an answer, not a failure.
+        fallbackEnabled = node.fallbackEnabled && node.kind == NodeKind.ACTION,
+        retryAttempts = node.retryAttempts?.coerceIn(MIN_ATTEMPTS, MAX_ATTEMPTS)
+            ?.takeIf { it > MIN_ATTEMPTS && node.kind == NodeKind.ACTION },
+        retryBackoffSeconds = node.retryBackoffSeconds?.coerceIn(0, MAX_BACKOFF_SECONDS)
+            ?.takeIf { node.kind == NodeKind.ACTION },
         mappings = mappingsFor(node, refusing),
     )
+
+    /** Whether this node has two ways out, and so two labels worth keeping. */
+    private fun forks(node: WorkflowNodeInput): Boolean =
+        node.kind == NodeKind.CONDITION || (node.kind == NodeKind.ACTION && node.fallbackEnabled)
 
     /**
      * What this node will pass, resolved against the action it points at.
@@ -473,9 +490,22 @@ data class WorkflowNodeInput(
      * suggestions, which is what a node freshly pointed at one wants.
      */
     val mappings: List<NodeMappingInput>? = null,
-    /** What a condition node's two ways out are called; null means Yes and No. */
+    /**
+     * What a node's two ways out are called; null leaves it to the interface,
+     * which says Yes and No for a condition and If works / If fails for an
+     * action that handles its failure.
+     */
     val yesLabel: String? = null,
     val noLabel: String? = null,
+    /**
+     * Whether this action has a second way out for when it fails; ignored on
+     * every other kind.
+     */
+    val fallbackEnabled: Boolean = false,
+    /** How many times in all this action may be attempted; null or 1 is once. */
+    val retryAttempts: Int? = null,
+    /** How long to leave a failed attempt alone before the next; null is none. */
+    val retryBackoffSeconds: Int? = null,
     val x: Double,
     val y: Double,
 )
@@ -516,9 +546,14 @@ data class WorkflowNodeView(
     val icon: String?,
     /** Which way round it faces on the canvas; null is left to right. */
     val orientation: NodeOrientation?,
-    /** What a condition node's two ways out are called; null means Yes and No. */
+    /** What a node's two ways out are called; null leaves it to the interface. */
     val yesLabel: String?,
     val noLabel: String?,
+    /** Whether this action has a second way out for when it fails. */
+    val fallbackEnabled: Boolean,
+    /** How many times in all this action may be attempted; null is once. */
+    val retryAttempts: Int?,
+    val retryBackoffSeconds: Int?,
     val x: Double,
     val y: Double,
     /** What the node needs, read off whatever it points at. */
@@ -547,6 +582,9 @@ data class WorkflowNodeView(
         orientation = node.orientation,
         yesLabel = node.yesLabel,
         noLabel = node.noLabel,
+        fallbackEnabled = node.fallbackEnabled,
+        retryAttempts = node.retryAttempts,
+        retryBackoffSeconds = node.retryBackoffSeconds,
         x = node.positionX,
         y = node.positionY,
         inputs = inputs,
@@ -598,6 +636,19 @@ private val REFERENCEABLE = Regex("[A-Za-z_][A-Za-z0-9_]*")
 
 /** Braces in a value: the substitution somebody still expects and will not get. */
 private val PLACEHOLDER_IN_VALUE = Regex("""\{\{[^}]*\}\}""")
+
+/**
+ * What a retry policy may be set to.
+ *
+ * Bounded here rather than refused, because neither end is a mistake worth
+ * arguing with somebody over: nought attempts is a typo for one, and a hundred
+ * is somebody who has not thought about what a run costs. The ceiling on the
+ * backoff is an hour, which is longer than any single wait a workflow has
+ * needed and short enough that a run cannot disappear for a day over a typo.
+ */
+private const val MIN_ATTEMPTS = 1
+private const val MAX_ATTEMPTS = 10
+private const val MAX_BACKOFF_SECONDS = 3600
 
 class ValueHoldsPlaceholderException(parameter: String) : RuntimeException(
     "\"$parameter\" is a value holding {{...}}, which is sent as those characters. " +

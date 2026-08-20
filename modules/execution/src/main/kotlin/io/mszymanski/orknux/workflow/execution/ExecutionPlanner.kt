@@ -147,6 +147,11 @@ class ExecutionPlanner(
                     outputName = node.outputName,
                     // The run's own copy of what to pass; see ExecutionStep.
                     mappings = node.mappings.takeIf { it.isNotEmpty() }?.let(mapper::writeValueAsString),
+                    // The run's own copy of how many goes this node gets, so a
+                    // policy edited mid-run does not change one already under way.
+                    retryAttempts = node.retryAttempts,
+                    retryBackoffSeconds = node.retryBackoffSeconds,
+                    attempts = before?.attempts ?: 0,
                     x = node.x,
                     y = node.y,
                     order = index,
@@ -235,8 +240,11 @@ class ExecutionPlanner(
             if (!gate.mayRun(node.key)) continue
 
             val step = recorded.getValue(node.key)
-            // A step that failed, or was never reached, opened nothing.
-            if (step.status == StepStatus.PENDING || step.status == StepStatus.FAILED) continue
+            // A step that was never reached opened nothing, and neither did one
+            // that failed - unless its failure was the thing the graph had an
+            // answer for, which is a path the earlier run genuinely took.
+            if (step.status == StepStatus.PENDING) continue
+            if (step.status == StepStatus.FAILED && step.branch != EdgeBranch.FAILURE) continue
 
             if (step.branch == null && gate.branches(node.key)) {
                 /*

@@ -90,6 +90,50 @@ class BranchGateTest {
         assertThat(BranchGate(listOf(GraphEdge("ask", "next"))).branches("ask")).isFalse()
     }
 
+    /** post -> onwards, and post -> rescue for the case where it could not. */
+    private fun fallback() = listOf(
+        GraphEdge("post", "onwards"),
+        GraphEdge("post", "rescue", EdgeBranch.FAILURE),
+    )
+
+    /**
+     * The happy path stays the unmarked edge it has always been, so a node that
+     * did its work must not also open the one drawn for the case where it did
+     * not - which is the one reading of an unmarked edge that would be wrong.
+     */
+    @Test
+    fun `a node that did its work leaves its failure edge shut`() {
+        val gate = BranchGate(fallback())
+        gate.follow("post", null)
+
+        assertThat(gate.mayRun("onwards")).isTrue()
+        assertThat(gate.mayRun("rescue")).isFalse()
+    }
+
+    @Test
+    fun `a node that failed takes its failure edge and nothing else`() {
+        val gate = BranchGate(fallback())
+        gate.follow("post", EdgeBranch.FAILURE)
+
+        assertThat(gate.mayRun("rescue")).isTrue()
+        assertThat(gate.mayRun("onwards")).isFalse()
+    }
+
+    @Test
+    fun `whether a failure has somewhere to go is what the engines ask`() {
+        assertThat(BranchGate(fallback()).catchesFailure("post")).isTrue()
+        assertThat(BranchGate(listOf(GraphEdge("post", "onwards"))).catchesFailure("post")).isFalse()
+    }
+
+    /**
+     * A failure edge is not an answer to a question, so it must not turn a
+     * condition that did not hold into a condition that chose a direction.
+     */
+    @Test
+    fun `a failure edge does not count as the node deciding anything`() {
+        assertThat(BranchGate(fallback()).branches("post")).isFalse()
+    }
+
     @Test
     fun `a chain behind the branch that was not taken stays shut`() {
         val gate = BranchGate(fork() + GraphEdge("file", "andThen") + GraphEdge("andThen", "later"))

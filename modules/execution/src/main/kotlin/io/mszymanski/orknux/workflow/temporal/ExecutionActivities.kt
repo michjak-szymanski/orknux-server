@@ -34,6 +34,10 @@ interface ExecutionActivities {
     /** Writes down a step the run went past, because its branch was not taken. */
     @ActivityMethod
     fun skipStep(command: SkipStepCommand)
+
+    /** Writes down that a failed step's failure edge is where the run went next. */
+    @ActivityMethod
+    fun recordFailureExit(command: RecordFailureExitCommand)
 }
 
 /**
@@ -74,6 +78,10 @@ class ExecutionActivitiesImpl(private val steps: StepRunner) : ExecutionActiviti
 
     override fun skipStep(command: SkipStepCommand) {
         steps.skipStep(command.executionId, command.nodeKey, command.reason)
+    }
+
+    override fun recordFailureExit(command: RecordFailureExitCommand) {
+        steps.recordFailureExit(command.executionId, command.nodeKey)
     }
 
     override fun failRun(command: FailRunCommand) {

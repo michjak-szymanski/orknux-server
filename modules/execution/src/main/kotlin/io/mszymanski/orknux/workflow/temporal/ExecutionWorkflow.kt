@@ -74,6 +74,12 @@ data class PlanEdge @JsonCreator constructor(
     @JsonProperty("branch") val branch: EdgeBranch? = null,
 )
 
+/** A step that failed, and whose failure edge is the way the run went on. */
+data class RecordFailureExitCommand @JsonCreator constructor(
+    @JsonProperty("executionId") val executionId: Long,
+    @JsonProperty("nodeKey") val nodeKey: String,
+)
+
 /** A step the run went past, because the branch reaching it was not taken. */
 data class SkipStepCommand @JsonCreator constructor(
     @JsonProperty("executionId") val executionId: Long,
@@ -167,12 +173,27 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
             // timer outlives every process involved. What it costs is history —
             // a wait that asks every thirty seconds writes an event each time —
             // which is what the run timeout is there to bound.
-            var report: StepReport
+            // The report stays null while the step is still parking and asking
+            // again, and where the run left by a failure edge instead of the
+            // step ever answering at all.
+            var report: StepReport? = null
+            var diverted = false
             while (true) {
-                report = try {
+                val attempt = try {
                     activities.runStep(RunStepCommand(plan.executionId, nodeKey))
                 } catch (failure: ActivityFailure) {
-                    // Every attempt is spent by the time this is thrown.
+                    /*
+                     * Every attempt is spent by the time this is thrown - and a
+                     * failure the graph has an answer for is a direction rather
+                     * than an ending, the same one the inline engine takes: the
+                     * step stays failed and the run carries on down the edge
+                     * drawn for it.
+                     */
+                    if (gate.catchesFailure(nodeKey)) {
+                        activities.recordFailureExit(RecordFailureExitCommand(plan.executionId, nodeKey))
+                        diverted = true
+                        break
+                    }
                     activities.failRun(
                         FailRunCommand(
                             executionId = plan.executionId,
@@ -184,9 +205,12 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
                     return ExecutionStatus.FAILED
                 }
 
-                if (report.status != StepStatus.WAITING) break
+                if (attempt.status != StepStatus.WAITING) {
+                    report = attempt
+                    break
+                }
 
-                val pause = report.resumeAfterSeconds
+                val pause = attempt.resumeAfterSeconds
                 if (pause == null) {
                     // Unreachable — a parked node says when to come back — but
                     // spinning on it, or leaving the step open for ever, would
@@ -204,14 +228,20 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
                 Workflow.sleep(Duration.ofSeconds(pause))
             }
 
-            gate.follow(nodeKey, report.branch)
+            if (diverted) {
+                gate.follow(nodeKey, EdgeBranch.FAILURE)
+                continue
+            }
+
+            val outcome = requireNotNull(report)
+            gate.follow(nodeKey, outcome.branch)
 
             /*
              * A condition that did not hold ends the run - unless it has
              * branches, where it chose a direction rather than an ending.
              */
-            if (report.halt && !gate.branches(nodeKey)) {
-                activities.finishRun(FinishRunCommand(plan.executionId, nodeKey, report.output))
+            if (outcome.halt && !gate.branches(nodeKey)) {
+                activities.finishRun(FinishRunCommand(plan.executionId, nodeKey, outcome.output))
                 return ExecutionStatus.COMPLETED
             }
         }

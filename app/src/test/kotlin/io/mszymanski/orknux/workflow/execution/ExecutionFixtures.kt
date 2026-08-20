@@ -25,8 +25,10 @@ class FakeWorkflowGraphSource : WorkflowGraphSource {
 /**
  * A runner for the tests to steer: nodes named `ok…` do work and hand something
  * on, `wait…` parks for an hour the first time and is done the second, `boom`
- * fails, and `asks-yes…` / `asks-no…` answer the way a condition does. Ahead of
- * [UnimplementedNodeRunner], which claims everything.
+ * fails, `flaky…` fails until it is on its third attempt, `settled…` fails in a
+ * way that says trying again is pointless, and `asks-yes…` / `asks-no…` answer
+ * the way a condition does. Ahead of [UnimplementedNodeRunner], which claims
+ * everything.
  */
 @Order(Ordered.HIGHEST_PRECEDENCE)
 class ScriptedNodeRunner : NodeRunner {
@@ -35,6 +37,22 @@ class ScriptedNodeRunner : NodeRunner {
 
     override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult = when {
         step.name == "boom" -> throw IllegalStateException("boom has no answer")
+        /*
+         * Something that would work if it were asked again: a network that
+         * dropped rather than a channel that does not exist. The count is read
+         * off the step, which is where a retry policy keeps it, so the same
+         * node behaves the same however many workers carry it.
+         */
+        step.name.startsWith("flaky") ->
+            if (step.attempts < FLAKY_UNTIL) {
+                throw IllegalStateException("${step.name} could not reach anything on attempt ${step.attempts}")
+            } else {
+                StepResult(StepStatus.COMPLETED, "${step.name} did the work on attempt ${step.attempts}")
+            }
+        // A failure the runner has already called final; a policy must not
+        // spend attempts on it.
+        step.name.startsWith("settled") ->
+            throw StepFailedException(step.nodeKey, "${step.name} will never work", permanent = true)
         // What ConditionNodeRunner reports for a condition that holds and one
         // that does not, including the halt on a no: how the graph is drawn
         // decides whether that is a fork or an ending, not the runner.
@@ -60,6 +78,9 @@ class ScriptedNodeRunner : NodeRunner {
 
     private companion object {
         val WAIT: Duration = Duration.ofHours(1)
+
+        /** The attempt a `flaky` node finally works on. */
+        const val FLAKY_UNTIL = 3
     }
 }
 

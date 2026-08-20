@@ -783,6 +783,11 @@ class ComponentImporter(
                     positionY = drawn.path("y").asDouble(0.0),
                     yesLabel = drawn.text("yesLabel"),
                     noLabel = drawn.text("noLabel"),
+                    // Absent from every envelope written before failure was
+                    // something a node could handle, which reads as not doing so.
+                    fallbackEnabled = drawn.path("fallbackEnabled").asBoolean(false),
+                    retryAttempts = drawn.path("retryAttempts").let { if (it.isNumber) it.asInt() else null },
+                    retryBackoffSeconds = drawn.path("retryBackoffSeconds").let { if (it.isNumber) it.asInt() else null },
                     mappings = drawn.path("mappings").values().map { mapping ->
                         NodeMapping(
                             name = mapping.text("name").orEmpty(),

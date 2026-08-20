@@ -8,8 +8,11 @@ import org.springframework.stereotype.Service
 import java.time.Duration
 
 /**
- * Runs a workflow on the calling thread, with no retries and no way to resume:
- * a restart part way through leaves the run recorded as running for ever.
+ * Runs a workflow on the calling thread, with no way to resume: a restart part
+ * way through leaves the run recorded as running for ever. A node's own retry
+ * policy is honoured here as it is anywhere — it belongs to the step rather
+ * than to the engine — but there is nothing underneath it, so a worker that
+ * dies takes the whole run with it.
  *
  * It is what runs when `orknux.temporal.enabled` is false — a development
  * machine, or a deployment that would rather not run a Temporal service — and
@@ -66,6 +69,16 @@ class InlineExecutionEngine(
             val outcome = try {
                 runToDecision(executionId, step.nodeKey)
             } catch (failure: StepFailedException) {
+                /*
+                 * A failure the graph has an answer for is a direction, not an
+                 * ending: the step stays failed and says why, and the run
+                 * carries on down the edge drawn for exactly this.
+                 */
+                if (gate.catchesFailure(step.nodeKey)) {
+                    steps.recordFailureExit(executionId, step.nodeKey)
+                    gate.follow(step.nodeKey, EdgeBranch.FAILURE)
+                    continue
+                }
                 log.warn("Execution {} failed at {}", executionId, step.nodeKey, failure)
                 return steps.failRun(
                     executionId = executionId,

@@ -201,6 +201,31 @@ class ExecutionStep(
     var status: StepStatus = StepStatus.PENDING,
 
     /**
+     * How many times in all this step may be attempted, copied when the run
+     * started; null is once, which is what every step was until now.
+     *
+     * The run's own copy for the same reason the mappings are: a policy edited
+     * while this step is between attempts must not change how many it gets.
+     */
+    @Column(name = "retry_attempts")
+    val retryAttempts: Int? = null,
+
+    /** How long to leave a failed attempt alone before the next; null is none. */
+    @Column(name = "retry_backoff_seconds")
+    val retryBackoffSeconds: Int? = null,
+
+    /**
+     * How many attempts this step has spent.
+     *
+     * On the row rather than counted by whatever is driving, because an attempt
+     * and the one after it can be carried by different workers in different
+     * processes: Temporal hands the step back as a fresh activity call, which
+     * knows nothing of what the last one tried.
+     */
+    @Column(nullable = false)
+    var attempts: Int = 0,
+
+    /**
      * Which way out of a condition this step sent the run.
      *
      * Null for every kind that answers nothing, and for a condition drawn
@@ -208,6 +233,10 @@ class ExecutionStep(
      * graph has to know which edges the earlier run took: without it, a branch
      * the earlier run refused is indistinguishable from one it never reached,
      * and the new run would revive it.
+     *
+     * [EdgeBranch.FAILURE] on a failed step is the same fact about a step that
+     * could not do its work: the run went on down its failure edge rather than
+     * stopping there.
      */
     @Enumerated(EnumType.STRING)
     @Column(length = 8)

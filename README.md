@@ -1,7 +1,6 @@
 # orknux-server
 
 [![CI](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml/badge.svg)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/github/actions/workflow/status/michjak-szymanski/orknux-server/ci.yml?branch=main&label=tests)](https://github.com/michjak-szymanski/orknux-server/actions/workflows/ci.yml)
 [![Licence](https://img.shields.io/github/license/michjak-szymanski/orknux-server?label=licence)](LICENSE)
 [![Docker](https://img.shields.io/docker/v/orknux/orknux-server?label=docker&sort=semver)](https://hub.docker.com/r/orknux/orknux-server)
 [![Image size](https://img.shields.io/docker/image-size/orknux/orknux-server/latest?label=image)](https://hub.docker.com/r/orknux/orknux-server)

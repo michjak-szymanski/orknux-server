@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.workflow.script
 
 import org.assertj.core.api.Assertions.assertThat
+import org.graalvm.polyglot.Context
+import org.graalvm.polyglot.HostAccess
 import org.junit.jupiter.api.Test
 
 /**
@@ -109,6 +111,35 @@ class PluginRunnerTest {
         val result = runner.call(tracker, "deleteEverything", emptyList())
 
         assertThat((result as ScriptResult.Failed).reason).contains("deleteEverything")
+    }
+
+    @Test
+    fun `what a plugin answers with cannot be read back as a mutable host type`() {
+        /*
+         * A plugin's sandbox says no to the same thing the function one does, and
+         * says it in its own file. Checked separately for that reason: the two
+         * configurations are meant to drift only when somebody means them to, and
+         * a test that only looked at one of them would not notice.
+         *
+         * HostAccess.NONE leaves these mappings on. What is read off a plugin
+         * here is strings, numbers and array elements one at a time, so nothing
+         * asked for a Map even while it was allowed - which is what makes this an
+         * assertion about the policy rather than about a plugin that could reach
+         * something.
+         */
+        fun readsBackAsAMap(policy: HostAccess): Boolean =
+            Context.newBuilder("js")
+                .allowHostAccess(policy)
+                // As the runners' own engines do; the fallback runtime is
+                // expected here and the warning is six lines of it.
+                .option("engine.WarnInterpreterOnly", "false")
+                .build()
+                .use { polyglot ->
+                    runCatching { polyglot.eval("js", "({ a: 1 })").`as`(Map::class.java) }.isSuccess
+                }
+
+        assertThat(readsBackAsAMap(HostAccess.NONE)).isTrue()
+        assertThat(readsBackAsAMap(runner.hostAccess)).isFalse()
     }
 
     @Test

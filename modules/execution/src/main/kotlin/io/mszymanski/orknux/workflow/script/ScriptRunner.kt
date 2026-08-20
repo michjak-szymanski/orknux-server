@@ -198,6 +198,29 @@ class ScriptRunner(private val properties: ScriptProperties) {
     }
 
     /**
+     * No host access, and this time none of it.
+     *
+     * `HostAccess.NONE` reads like the end of the argument and is not: it denies
+     * every host method and field, but leaves on the default mappings of guest
+     * values onto mutable host types — a guest array read back as a `List`, an
+     * object with members read back as a `Map`. Those are conveniences for host
+     * code that asks a guest value what it is, and a guest is free to back one
+     * with an implementation that behaves like nothing of the sort.
+     *
+     * Nothing here asks. Everything crossing this boundary is a JSON string, so
+     * `NONE` was almost certainly enough in practice. It is replaced anyway
+     * because the rest of this builder writes its denials out, and a policy
+     * named for having nothing in it is the worst place to leave something
+     * unwritten — nobody rereads a line that already says no.
+     */
+    internal val hostAccess: HostAccess = HostAccess.newBuilder(HostAccess.NONE)
+        // Reads backwards: the argument is the list of mappings to allow, and
+        // the empty call is therefore the denial. Left off, the builder allows
+        // every mapping there is.
+        .allowMutableTargetMappings()
+        .build()
+
+    /**
      * The sandbox itself. Every `allow…` here is a decision to say no; the
      * builder's defaults are already restrictive, and they are repeated so that
      * loosening one is a visible edit rather than an upgrade's side effect.
@@ -208,7 +231,7 @@ class ScriptRunner(private val properties: ScriptProperties) {
         // GraalJS; they only ever take capability away, so they are worth the
         // acknowledgement.
         .allowExperimentalOptions(true)
-        .allowHostAccess(HostAccess.NONE)
+        .allowHostAccess(hostAccess)
         .allowHostClassLookup { false }
         .allowHostClassLoading(false)
         .allowIO(IOAccess.NONE)

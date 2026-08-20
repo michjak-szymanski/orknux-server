@@ -258,11 +258,30 @@ class PluginRunner(private val properties: PluginProperties) {
      */
     private fun describe(failure: PolyglotException, doing: String = "loading"): String = when {
         failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms while $doing"
-        failure.isResourceExhausted -> "ran more than ${properties.statementLimit} statements while $doing"
+        failure.isResourceExhausted -> exhausted(failure, doing)
         // A guest exception here is usually the contract refusing something, and its
         // message says what — so it is passed on rather than summarised.
         failure.isGuestException -> failure.message ?: "threw while $doing"
         else -> failure.message ?: "could not be run"
+    }
+
+    /**
+     * Which budget it was that ran out.
+     *
+     * `isResourceExhausted` covers both the statement limit and a guest heap that
+     * could not grow. They read the same to the flag and mean opposite things to
+     * whoever has to fix the plugin, so the message is taken from what the
+     * failure said: the heap one arrives as "Java heap space".
+     */
+    private fun exhausted(failure: PolyglotException, doing: String): String {
+        val said = failure.message ?: ""
+        val memory = said.contains("heap space", ignoreCase = true) ||
+            said.contains("out of memory", ignoreCase = true)
+        return if (memory) {
+            "asked for more memory than it was given while $doing"
+        } else {
+            "ran more than ${properties.statementLimit} statements while $doing"
+        }
     }
 
     /**

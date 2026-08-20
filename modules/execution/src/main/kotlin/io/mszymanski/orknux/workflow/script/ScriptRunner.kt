@@ -79,7 +79,7 @@ class ScriptRunner(private val properties: ScriptProperties) {
         } catch (failure: PolyglotException) {
             val reason = when {
                 failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms and was stopped"
-                failure.isResourceExhausted -> "ran more than ${properties.statementLimit} statements and was stopped"
+                failure.isResourceExhausted -> exhausted(failure)
                 failure.isGuestException -> failure.message ?: "threw"
                 else -> failure.message ?: "could not be run"
             }
@@ -95,13 +95,55 @@ class ScriptRunner(private val properties: ScriptProperties) {
     }
 
     /**
+     * Which budget it was that ran out.
+     *
+     * `isResourceExhausted` is raised both by the statement limit and by a guest
+     * heap that could not grow, and those are not the same thing to whoever
+     * reads the sentence: one says the script runs too long, the other that it
+     * asked for too much at once. Telling the author of a script that ran out of
+     * memory that it "ran more than 5,000,000 statements" sends them to count
+     * loops that were never the problem.
+     *
+     * Read off the message because the flag does not distinguish them; the guest
+     * heap failure arrives as "Java heap space".
+     */
+    private fun exhausted(failure: PolyglotException): String {
+        val said = failure.message ?: ""
+        val memory = said.contains("heap space", ignoreCase = true) ||
+            said.contains("out of memory", ignoreCase = true)
+        return if (memory) {
+            "asked for more memory than it was given and was stopped"
+        } else {
+            "ran more than ${properties.statementLimit} statements and was stopped"
+        }
+    }
+
+    /**
      * Parses [source] without running it, for the editor's Validate.
      *
      * A syntax error is what this catches; a script that only fails when it runs
      * is not something parsing can tell anyone about.
      */
     fun validate(source: String): ScriptValidation = try {
-        newContext().use { it.parse(module(source)) }
+        newContext().use {
+            /*
+             * Parsing is bounded too, for the same reason running is. It is the
+             * one entry point that had no watchdog, which made it the one entry
+             * point where a source that took the parser a long time would hold a
+             * request thread for as long as it liked - and this one is reached
+             * from the editor, by anybody who may write a function.
+             */
+            val cancel = watchdog.schedule(
+                { runCatching { it.close(true) } },
+                properties.timeoutMillis,
+                TimeUnit.MILLISECONDS,
+            )
+            try {
+                it.parse(module(source))
+            } finally {
+                cancel.cancel(false)
+            }
+        }
         ScriptValidation(valid = true)
     } catch (failure: PolyglotException) {
         val location = failure.sourceLocation

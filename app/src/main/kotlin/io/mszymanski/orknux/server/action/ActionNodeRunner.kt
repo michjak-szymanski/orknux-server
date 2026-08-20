@@ -366,7 +366,19 @@ class ActionNodeRunner(
                 expressions.namedJson(step.outputName, result.json ?: "null"),
             )
 
-            is ScriptResult.Failed -> throw ActionFailedException("${function.name} ${result.reason}")
+            /*
+             * Whether this is worth trying again travels with the answer. A
+             * script that threw will throw again - it can reach nothing that
+             * might have changed in between - so retrying it only reaches the
+             * same conclusion three times and writes the same line in the run's
+             * history three times. A script stopped by its clock or refused the
+             * memory it asked for is the other case: that was about how busy
+             * the machine was, and a quieter one may answer.
+             */
+            is ScriptResult.Failed -> throw ActionFailedException(
+                "${function.name} ${result.reason}",
+                permanent = result.settled,
+            )
         }
     }
 
@@ -518,7 +530,10 @@ class ActionNodeRunner(
 
         return when (val result = scripts.call(source, "condition", listOf(input ?: "null"))) {
             is ScriptResult.Returned -> result.json == "true"
-            is ScriptResult.Failed -> throw ActionFailedException("the condition ${result.reason}")
+            is ScriptResult.Failed -> throw ActionFailedException(
+                "the condition ${result.reason}",
+                permanent = result.settled,
+            )
         }
     }
 

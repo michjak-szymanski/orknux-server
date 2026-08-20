@@ -77,13 +77,14 @@ class ScriptRunner(private val properties: ScriptProperties) {
                 }
             }
         } catch (failure: PolyglotException) {
+            val budget = failure.isCancelled || failure.isResourceExhausted
             val reason = when {
                 failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms and was stopped"
                 failure.isResourceExhausted -> exhausted(failure)
                 failure.isGuestException -> failure.message ?: "threw"
                 else -> failure.message ?: "could not be run"
             }
-            ScriptResult.Failed(reason, millisSince(started))
+            ScriptResult.Failed(reason, millisSince(started), settled = !budget)
         } catch (failure: ScriptContractException) {
             // The script ran and did not hold up its end: it threw, or there was
             // nothing to call. Both are answers about the script, not faults here.
@@ -378,7 +379,22 @@ sealed interface ScriptResult {
     data class Returned(val json: String?, override val durationMillis: Long) : ScriptResult
 
     /** The script threw, ran too long, or never got as far as running. */
-    data class Failed(val reason: String, override val durationMillis: Long) : ScriptResult
+    /**
+     * @param settled whether asking again could ever answer differently.
+     *
+     * A script cannot reach anything: no IO, no network, no clock it can wait
+     * on. So a script that threw will throw again, given the same arguments,
+     * and running it twice more only reaches the same conclusion twice more.
+     * The budgets are the exception - a run that was stopped by the clock, or
+     * that could not be given the memory it asked for, was stopped by how busy
+     * the machine was rather than by anything about the script, and a quieter
+     * machine may well answer.
+     */
+    data class Failed(
+        val reason: String,
+        override val durationMillis: Long,
+        val settled: Boolean = true,
+    ) : ScriptResult
 }
 
 /** How many arguments a script's default export takes, or why that is not knowable. */

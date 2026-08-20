@@ -1,6 +1,5 @@
 package io.mszymanski.orknux.connector.connection
 
-import com.slack.api.Slack
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
@@ -34,10 +33,19 @@ sealed interface Delivery {
  * no runtime, which is said plainly rather than pretended around.
  */
 @Component
-class OutgoingMessages(private val connections: WorkspaceConnectionRepository) {
+class OutgoingMessages(
+    private val connections: WorkspaceConnectionRepository,
+    slackClients: SlackClients,
+) {
 
     private val log = LoggerFactory.getLogger(javaClass)
-    private val slack = Slack.getInstance()
+
+    /**
+     * Not `Slack.getInstance()`: that one carries the SDK's own HTTP client and
+     * would post to Slack without ever asking whether a proxy rule covers the
+     * address. See [SlackClients].
+     */
+    private val slack = slackClients.webApi
 
     /**
      * @param target a channel id, a channel name, or a user id — Slack accepts

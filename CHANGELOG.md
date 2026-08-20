@@ -71,6 +71,24 @@ have failed.
 
 ### Fixed
 
+- **Slack went round the proxy rules entirely.** On a network where outbound
+  traffic has to go through a proxy, a rule matching `slack.com` was shown on
+  the rules page as the rule that answers and was never once consulted: the
+  messages this product posts went out through the SDK's own HTTP client, and
+  the Socket Mode websocket dialled out through its own websocket stack. Both
+  now go through the rules like every other outbound call, credentials
+  included - `chat.postMessage` per call, and the websocket by the rule matching
+  the address Slack issued that session, re-asked on every reconnect.
+
+  Worth knowing if you had worked around this: an `HTTPS_PROXY` or
+  `http.proxyHost` in the environment used to reach Slack, because its SDK reads
+  them. It no longer does, for the same reason nothing else here does - a proxy
+  this installation uses should be a rule somebody can see. Write it as one.
+
+  A websocket through a proxy is a `CONNECT` tunnel, so the proxy has to permit
+  one to the Slack host. If yours does not, Socket Mode fails where the rule
+  pointed rather than silently going somewhere else.
+
 - **The diagnostics page could not say anything on SQLite** - every check
   answered with an error, because one query asked for a table SQLite does not
   have and was the one part of the page not wrapped in a catch. So the easiest

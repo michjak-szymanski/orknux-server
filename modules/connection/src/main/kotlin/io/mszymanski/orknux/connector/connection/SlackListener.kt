@@ -23,7 +23,9 @@ import java.util.concurrent.TimeUnit
  *
  * Socket Mode dials out, so nothing here needs a public URL, an inbound
  * firewall rule or a request signature — which is what makes a self-hosted
- * orknux able to receive Slack events at all.
+ * orknux able to receive Slack events at all. Dialling out is still an outbound
+ * call, so it goes through the proxy rules like any other; [SlackClients] is
+ * how, and why it takes two lines here rather than one.
  *
  * What arrives is published as an [IncomingEvent]; matching it to a trigger and
  * starting a workflow belongs to whoever owns those, not to this module.
@@ -39,6 +41,7 @@ class SlackListener(
     private val workspaceConnections: WorkspaceConnectionRepository,
     private val events: ApplicationEventPublisher,
     private val properties: SlackProperties,
+    private val slackClients: SlackClients,
 ) {
 
     /** Open sockets by workspace connection id. */
@@ -97,15 +100,29 @@ class SlackListener(
     private fun open(id: Long, connection: WorkspaceConnection) {
         val workspaceId = connection.workspaceId
         try {
-            val app = App(AppConfig.builder().singleTeamBotToken(connection.secret).build())
+            // The Slack instance the app is built on is the one the whole
+            // session runs through - the `apps.connections.open` that issues the
+            // websocket URL, every call a handler makes, and the socket itself.
+            // Giving it one that consults the proxy rules is what puts Slack
+            // under the same rules as everything else outbound.
+            val routed = slackClients.forSocketMode()
+            val app = App(
+                AppConfig.builder()
+                    .singleTeamBotToken(connection.secret)
+                    .slack(routed.slack)
+                    .build(),
+            )
             app.event(AppMentionEvent::class.java) { payload, context ->
                 publish(id, workspaceId, payload.event, payload.teamId)
                 context.ack()
             }
 
             // Tyrus is the websocket client the standalone bundle provides; the
-            // JDK has none of its own.
+            // JDK has none of its own. It takes a proxy, but only one address
+            // and only when it connects, so it is pointed at the URL Slack has
+            // by then issued this session rather than at a rule chosen now.
             val socket = SocketModeApp(connection.appToken, SocketModeClient.Backend.Tyrus, app)
+            routed.routeAgainst { socket.client?.wssUri?.toString() }
             socket.startAsync()
             sessions[id] = SlackSession(socket, connection.credentialsFingerprint())
             failures.remove(id)

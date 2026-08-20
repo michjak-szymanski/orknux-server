@@ -15,6 +15,22 @@ have failed.
 
 ## Unreleased
 
+### Added
+
+- **A whole component travels, not only the self-contained ones.** Agents,
+  workflows, actions and triggers join the five kinds that could already be
+  exported and imported. What a component points at comes with it: an agent
+  brings its tools and the skills in the catalogues it was granted, a workflow
+  brings everything its nodes reach.
+- **What cannot travel is asked for on arrival.** A model, a connection and an
+  MCP server are kept beside a credential, so an envelope names them and
+  carries nothing else. The import plan reports each one it cannot satisfy and
+  the import asks which of this workspace's rows it means, refusing rather than
+  guessing. A row of the same name here binds itself.
+- Nothing arrives switched on. A trigger is created disabled, a workflow arrives
+  as a draft, and an agent that was granted shell or Orknux access says so in
+  the plan before anything is written.
+
 ### Fixed
 
 - **A page that is still reading says so.** Fifteen settings and editor screens

@@ -13,6 +13,22 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Fixed
+
+- **A page that is still reading says so.** Fifteen settings and editor screens
+  drew their whole form while the record they are a form for was still on its
+  way - every field blank, every toggle off - so an empty form looked exactly
+  like a record with nothing in it, and anything typed into one was overwritten
+  when the real values landed. Two of them drew nothing at all below the
+  heading. The workflow editor did the same with its canvas, which said the
+  workflow was empty and then filled in. Pages that double as create-new forms
+  are unchanged: there a blank field is the point.
+- **A workspace that cannot be read says why.** Its settings page kept the
+  message inside the form, and a load that failed never reached the form, so
+  the failure was a heading over blank space.
+
 ## 0.7.0
 
 ### Added

@@ -125,8 +125,25 @@ password="$(docker exec "$APP" cat /var/lib/orknux/admin-password)" || die "No a
 # It has to be in the log as well as in the file. Somebody starting this image in
 # the foreground is told the password there and nowhere else, and a banner that
 # stops being printed is a lockout nobody notices until they are locked out.
-docker logs "$APP" 2>&1 | grep -qF "$password" \
-  || die "The generated password is in the file but was never printed; nobody running this in the foreground would know it"
+#
+# Read into a variable rather than piped into `grep -q`. Under `pipefail` that
+# pipeline reports the *producer's* death rather than the match: `grep -q` exits
+# the moment it finds the password, `docker logs` is left writing into a closed
+# pipe, and the 141 it dies with becomes the status of the whole pipeline. A
+# password printed perfectly well is then reported as never printed. It only
+# bites once the log outgrows the pipe buffer, which is why this passed for a
+# fortnight and then failed on a release: the server says more on the way up
+# than it used to.
+logged="$(docker logs "$APP" 2>&1)"
+case "$logged" in
+  *"$password"*) ;;
+  *)
+    # What it did say, so the next person does not have to reproduce it.
+    printf '%s
+' "$logged" | tail -40
+    die "The generated password is in the file but was never printed; nobody running this in the foreground would know it"
+    ;;
+esac
 ok "A ${#password}-character password was generated and printed"
 
 signed_in="$(curl -fsS -m 15 -X POST "$BASE/api/session" \

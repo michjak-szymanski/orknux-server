@@ -97,7 +97,7 @@ class DoctorOnSqliteTest {
 
             assertThat(stored.verdict).isEqualTo(DoctorVerdict.OK)
             assertThat(stored.detail).doesNotContain("None stored yet")
-            assertThat(stored.detail).containsPattern("All [1-9][0-9]* readable")
+            assertThat(stored.detail).containsPattern("All [1-9][0-9]* values readable")
         } finally {
             jdbc.update("DELETE FROM workspace WHERE name = 'doctor-scan-probe'")
         }

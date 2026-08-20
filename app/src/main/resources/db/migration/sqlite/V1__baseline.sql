@@ -303,6 +303,28 @@ CREATE TABLE llm_model
     constraint llm_model_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES model_provider(id) ON DELETE CASCADE
 );
 
+CREATE TABLE llm_session
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    session_key                  varchar(300) not null,
+    key_prefix                   varchar(120),
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    last_event_at                timestamp,
+    constraint llm_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE llm_session_event
+(
+    id                           integer not null primary key autoincrement,
+    session_id                   integer not null,
+    kind                         varchar(16) not null,
+    actor                        varchar(200) not null,
+    content                      text,
+    at                           timestamp not null default CURRENT_TIMESTAMP,
+    constraint llm_session_event_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE CASCADE
+);
+
 CREATE TABLE mcp_server
 (
     id                           integer not null primary key autoincrement,
@@ -1086,6 +1108,9 @@ CREATE INDEX idx_execution_log_execution ON execution_log (execution_id, sequenc
 CREATE INDEX idx_execution_step_execution ON execution_step (execution_id, step_order);
 CREATE INDEX issue_news_audience_idx ON issue_news (workspace_id, audience_kind, audience_name, id);
 CREATE INDEX idx_llm_model_provider ON llm_model (provider_id);
+CREATE UNIQUE INDEX llm_session_key_key ON llm_session (workspace_id, session_key);
+CREATE INDEX llm_session_recent_idx ON llm_session (workspace_id, last_event_at DESC);
+CREATE INDEX llm_session_event_session_idx ON llm_session_event (session_id, at, id);
 CREATE INDEX idx_mcp_server_workspace_id ON mcp_server (workspace_id);
 CREATE INDEX idx_memory_catalog ON memory (catalog_id);
 CREATE INDEX idx_memory_modified ON memory (catalog_id, last_modified_at DESC);

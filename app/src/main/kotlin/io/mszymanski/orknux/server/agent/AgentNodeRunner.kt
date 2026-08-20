@@ -4,9 +4,12 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
+import io.mszymanski.orknux.server.llm.LlmSessionKeyTooLongException
+import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
 import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
+import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.workflow.execution.NodeKind
 import io.mszymanski.orknux.workflow.execution.NodeRunner
 import io.mszymanski.orknux.workflow.execution.LogLevel
@@ -17,6 +20,7 @@ import io.mszymanski.orknux.workflow.execution.StepStatus
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
+import tools.jackson.databind.JsonNode
 
 /**
  * Runs an agent node: asks the agent what it makes of what reached it.
@@ -43,6 +47,7 @@ class AgentNodeRunner(
     private val conversation: AgentConversation,
     private val expressions: NodeExpressions,
     private val runLog: RunLogger,
+    private val sessions: LlmSessionRecorder,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.AGENT
@@ -90,10 +95,22 @@ class AgentNodeRunner(
             ?.takeIf { it.isNotBlank() }
             ?: briefing.of(agent)
 
+        val question = prompt ?: input ?: "There is no input for this step. Say what you would do."
         val turns = buildList {
             system?.let { add(ChatTurn("system", it)) }
-            add(ChatTurn("user", prompt ?: input ?: "There is no input for this step. Say what you would do."))
+            add(ChatTurn("user", question))
         }
+
+        /*
+         * The session this node writes into, if it names one.
+         *
+         * Written before the model is asked, not after: a run that dies waiting
+         * on a model should still leave the question in the transcript, since a
+         * session with an answer and no question is worse than one with a
+         * question and no answer.
+         */
+        val session = sessionFor(step, agent, mappings, payload, started)
+        session?.let { sessions.userSaid(it, step.name, question) }
 
         /*
          * Said before the model is asked, not after.
@@ -109,7 +126,7 @@ class AgentNodeRunner(
             "${agent.name} is thinking — waiting on the model",
         )
 
-        return when (val answer = conversation.answer(modelId, agent, turns)) {
+        return when (val answer = conversation.answer(modelId, agent, turns, session)) {
             // Named, the answer is handed on as an object holding it, so the next
             // node can refer to it by that name. Prose has no fields, and a
             // node cannot refer to something that has no name.
@@ -122,11 +139,67 @@ class AgentNodeRunner(
         }
     }
 
+    /**
+     * The LLM session this node was told to talk into, or null for a node that
+     * names none.
+     *
+     * Two parameters rather than one, because the halves come from different
+     * places: the prefix is nearly always something the author typed — the name
+     * of the conversation this workflow has — while the key is nearly always
+     * read off what arrived, a thread, a ticket, a customer. Joining them here
+     * is what makes two workflows land in one session on purpose: the same
+     * halves, however each of them arrived at them, are the same session.
+     *
+     * A node with no key records nothing and asks nothing of the database. That
+     * is every agent node drawn before this existed, so nothing anybody has
+     * already built pays for this.
+     */
+    private fun sessionFor(
+        step: ExecutionStep,
+        agent: Agent,
+        mappings: Map<String, NodeBinding>,
+        payload: JsonNode?,
+        started: JsonNode?,
+    ): Long? {
+        fun resolved(name: String) = mappings[name]
+            ?.let { expressions.textOf(it, payload, started) }
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+        val key = resolved(SESSION_KEY) ?: return null
+
+        return try {
+            sessions.open(agent.workspaceId, resolved(SESSION_KEY_PREFIX), key)
+        } catch (refused: LlmSessionKeyTooLongException) {
+            /*
+             * Refused rather than trimmed to fit. Two long keys cut to the same
+             * length would be one session, and quietly pouring two
+             * conversations into one is worse than stopping to say the key
+             * cannot be stored — which is a mapping to fix, not a run to retry.
+             */
+            throw StepFailedException(
+                step.nodeKey,
+                "${step.name} cannot record its session: ${refused.message}",
+                permanent = true,
+            )
+        }
+    }
+
     private companion object {
         /** What the node asks. Blank or absent leaves the edge's value as the question. */
         const val PROMPT = "prompt"
 
         /** Replaces the agent's own briefing for this node only. */
         const val SYSTEM_PROMPT = "systemPrompt"
+
+        /**
+         * Which conversation this node's turn belongs to. Blank or absent means
+         * the turn is not kept anywhere, which is what an agent node has always
+         * done.
+         */
+        const val SESSION_KEY = "sessionKey"
+
+        /** What the key is namespaced under. Optional; see LlmSessionKey. */
+        const val SESSION_KEY_PREFIX = "sessionKeyPrefix"
     }
 }

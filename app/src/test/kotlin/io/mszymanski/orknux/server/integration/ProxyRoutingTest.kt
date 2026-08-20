@@ -53,6 +53,9 @@ class ProxyRoutingTest {
     /** The paths the target was asked for directly. Empty means nothing reached it. */
     private val direct = CopyOnWriteArrayList<String>()
 
+    /** Any proxy credential that reached the target itself, which none ever should. */
+    private val leaked = CopyOnWriteArrayList<String>()
+
     /** Set to make the proxy demand credentials before it will do anything. */
     private var demandsCredentials = false
 
@@ -61,6 +64,7 @@ class ProxyRoutingTest {
         proxied.clear()
         proxyCredentials.clear()
         direct.clear()
+        leaked.clear()
         demandsCredentials = false
 
         proxy = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -68,7 +72,9 @@ class ProxyRoutingTest {
             val offered = exchange.requestHeaders.getFirst("Proxy-Authorization")
             if (demandsCredentials && offered == null) {
                 // The challenge a proxy sends when it wants to know who is
-                // asking. The client only sends credentials in answer to one.
+                // asking. Nothing here should ever see it: the credentials go
+                // out on the request, so a proxy that would have challenged is
+                // already answered. A recorded 407 would mean they did not.
                 exchange.responseHeaders.add("Proxy-Authenticate", """Basic realm="orknux"""")
                 exchange.sendResponseHeaders(407, -1)
                 exchange.close()
@@ -86,6 +92,7 @@ class ProxyRoutingTest {
         target = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         target.createContext("/") { exchange ->
             direct += exchange.requestURI.path
+            exchange.requestHeaders.getFirst("Proxy-Authorization")?.let { leaked += it }
             respond(exchange, """{"through":"nothing","data":[{"id":"one"}]}""")
         }
         target.start()
@@ -163,6 +170,26 @@ class ProxyRoutingTest {
     }
 
     @Test
+    fun `a request no rule routes carries no proxy credential to the target`() {
+        // The rule holds an account and points at the proxy; it simply does not
+        // match this URL. So the request goes direct - and the credential a
+        // different rule would have used has no business on it.
+        val http = outgoing(
+            rule(
+                name = "somewhere else",
+                pattern = """entra\.example\.com""",
+                username = "sentry",
+                password = "open-sesame",
+            ),
+        )
+
+        http.call("${targetUrl()}/report", "GET", emptyMap(), null)
+
+        assertThat(direct).containsExactly("/report")
+        assertThat(leaked).isEmpty()
+    }
+
+    @Test
     fun `a rule whose pattern will not compile is left out rather than breaking every call`() {
         val broken = rule(name = "broken", pattern = "(unclosed", position = 0)
         val working = rule(name = "the target", pattern = targetHost(), position = 1)
@@ -183,7 +210,7 @@ class ProxyRoutingTest {
         val router = ProxyRouter(ProxyRuleSource { listOf(rule(name = "Entra", pattern = "/oauth2/")) })
         val properties = ConnectionProperties(entraAuthority = targetUrl())
         val probe = ModelProviderProbe(
-            ConnectionProbe(properties, router),
+            ConnectionProbe(properties, router, SecretCipher(TEST_KEY)),
             properties,
             ObjectMapper(),
             SecretCipher(TEST_KEY),
@@ -212,7 +239,7 @@ class ProxyRoutingTest {
     private fun outgoing(vararg rules: ProxyRule): OutgoingHttp {
         val router = ProxyRouter(ProxyRuleSource { rules.toList() })
         val properties = ConnectionProperties()
-        return OutgoingHttp(properties, ConnectionProbe(properties, router), router)
+        return OutgoingHttp(properties, ConnectionProbe(properties, router, SecretCipher(TEST_KEY)), router)
     }
 
     /** A rule pointing at the proxy stub, which is the only proxy in this file. */

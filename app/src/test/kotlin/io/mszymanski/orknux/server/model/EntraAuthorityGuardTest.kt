@@ -104,7 +104,7 @@ class EntraAuthorityGuardTest {
     private fun probeAt(entraAuthority: String): ModelProviderProbe {
         val properties = ConnectionProperties(entraAuthority = entraAuthority)
         return ModelProviderProbe(
-            ConnectionProbe(properties, proxies),
+            ConnectionProbe(properties, proxies, SecretCipher("")),
             properties,
             ObjectMapper(),
             // Never asked to decrypt anything: the secret here is plain text,

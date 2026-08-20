@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.connection
 
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.security.SecretCipher
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
 import java.net.InetAddress
@@ -101,6 +102,8 @@ fun McpServer.target(): ConnectionTarget = ConnectionTarget(address, authType, s
 class ConnectionProbe(
     private val properties: ConnectionProperties,
     private val proxies: ProxyRouter,
+    /** Only to recognise a credential that never came out of its envelope. */
+    private val cipher: SecretCipher,
 ) {
 
     // Built by the router, so a probe obeys the same proxy rules a real call
@@ -156,9 +159,31 @@ class ConnectionProbe(
      */
     fun check(target: ConnectionTarget, type: ConnectionType?): CheckResult =
         if (type == ConnectionType.SLACK) {
-            checkSlack(target)
+            unreadable(target) ?: checkSlack(target)
         } else {
             check(target)
+        }
+
+    /**
+     * The failure to report when the stored credential never came out of its
+     * envelope, and null when there is no such problem.
+     *
+     * Sending it as it stands would put the envelope in the header and come back
+     * a 401, which reads as a wrong credential rather than an unreadable one -
+     * and those two want opposite things done about them. One is retyped; the
+     * other is the secret key this installation is running with. The doctor page
+     * says this plainly and there is no reason for this screen to guess when it
+     * can ask the same question.
+     */
+    private fun unreadable(target: ConnectionTarget): CheckResult? =
+        if (cipher.isEncrypted(target.secret)) {
+            CheckResult(
+                CheckOutcome.FAILED,
+                "The stored credential cannot be read with the current secret key. " +
+                    "Enter it again, or restore the key it was saved with.",
+            )
+        } else {
+            null
         }
 
     /**
@@ -202,6 +227,7 @@ class ConnectionProbe(
     }
 
     fun check(target: ConnectionTarget): CheckResult {
+        unreadable(target)?.let { return it }
         vet(target.url)?.let { return CheckResult(CheckOutcome.FAILED, it) }
         val uri = URI(target.url)
 

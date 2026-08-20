@@ -4,13 +4,28 @@ import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.io.IOException
 import java.net.Authenticator
+import java.net.CookieHandler
+import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.PasswordAuthentication
 import java.net.Proxy
 import java.net.ProxySelector
 import java.net.SocketAddress
 import java.net.URI
 import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.net.http.WebSocket
+import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.util.Base64
+import java.util.Optional
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.Executor
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLParameters
+
+/** The header a client answers a proxy's `407` with, and the one this sends. */
+internal const val PROXY_AUTHORIZATION = "Proxy-Authorization"
 
 /**
  * Decides which proxy, if any, an outbound request goes through, and hands out
@@ -51,6 +66,20 @@ import java.net.http.HttpClient
  * out would mean one bad row stops every outbound call this installation makes,
  * including the ones that would tell somebody about it. The rule is left out of
  * the snapshot and logged instead, which costs that one rule and nothing else.
+ *
+ * **Why no [java.net.Authenticator], ever.** Proxy credentials used to be handed
+ * over by one, and it was careful - it answered nothing but a proxy, and only the
+ * proxy its own rule named. It never leaked anything. What it cost was paid by
+ * every other call in the application: `HttpClient` throws
+ * `IOException("WWW-Authenticate header missing for response code 401")` when a
+ * `401` arrives without that header **and an authenticator is set**, before the
+ * authenticator's own judgement is ever asked for. Azure's token endpoint answers
+ * exactly that shape, so the most ordinary failure anybody has - a wrong or
+ * expired key - was reported as a sentence about a header nobody sent, on screens
+ * that never mention proxies. The credentials go on the request as
+ * `Proxy-Authorization` instead (see [authorized]), the way the Slack clients
+ * already send them, and no client built here has an authenticator for the JDK to
+ * find.
  */
 @Component
 class ProxyRouter(private val source: ProxyRuleSource) {
@@ -64,12 +93,18 @@ class ProxyRouter(private val source: ProxyRuleSource) {
     private var snapshot: List<CompiledRule>? = null
 
     private val selector = RuleSelector()
-    private val authenticator = ProxyCredentials()
 
-    /** A client that consults the rules. Everything outbound is built from this. */
-    fun builder(): HttpClient.Builder = HttpClient.newBuilder()
-        .proxy(selector)
-        .authenticator(authenticator)
+    /**
+     * A client that consults the rules. Everything outbound is built from this.
+     *
+     * What comes back is not the JDK's builder but one wrapping it, so that the
+     * client it builds is wrapped too. That is deliberate and it is the same
+     * argument as [builder] itself: a proxy credential attached at each call site
+     * is a credential the next call site forgets, and the one it forgets is
+     * indistinguishable from a proxy that is refusing to talk. Attaching it where
+     * every request already passes costs one place to be right.
+     */
+    fun builder(): HttpClient.Builder = RoutedBuilder(HttpClient.newBuilder().proxy(selector), this)
 
     /**
      * The rules as a [ProxySelector], for a client this cannot build.
@@ -100,6 +135,34 @@ class ProxyRouter(private val source: ProxyRuleSource) {
     /** The rule that will be used for this URL, or null to go direct. */
     fun resolve(url: String): ProxyChoice? = matching(url).firstOrNull()
 
+    /**
+     * The same request, carrying the proxy credentials its rule holds.
+     *
+     * **Why the credential cannot reach the wrong ear.** The rule is looked up
+     * from the request's own URL - the very lookup [RuleSelector] makes for the
+     * very same URL a moment later - so the proxy that receives this header is by
+     * construction the proxy the rule named. That is a stronger guarantee than
+     * the authenticator's was: it compared a challenger's address against the
+     * rule and could decline, where this never has an address to compare because
+     * only one was ever in play.
+     *
+     * **Why it does not leak past the proxy either.** The JDK strips `proxy-*`
+     * headers from any request that is not going to a proxy, and from the request
+     * sent inside an established tunnel - so this reaches the `CONNECT` and never
+     * the service on the other side of it. A request that matches no rule is
+     * returned untouched rather than copied.
+     *
+     * A caller that set the header itself is left alone; whoever wrote that knew
+     * something this did not.
+     */
+    fun authorized(request: HttpRequest): HttpRequest {
+        if (request.headers().firstValue(PROXY_AUTHORIZATION).isPresent) return request
+        val header = resolve(request.uri().toString())?.basicAuthorization() ?: return request
+        return HttpRequest.newBuilder(request) { _, _ -> true }
+            .header(PROXY_AUTHORIZATION, header)
+            .build()
+    }
+
     private fun compiled(): List<CompiledRule> = snapshot ?: build().also { snapshot = it }
 
     private fun build(): List<CompiledRule> = source.rules().mapNotNull { rule ->
@@ -124,10 +187,6 @@ class ProxyRouter(private val source: ProxyRuleSource) {
          * one request's own call.
          */
         fun matches(url: String): Boolean = expression.containsMatchIn(url)
-
-        /** Whether this rule is the reason a particular proxy is being talked to. */
-        fun answersFor(host: String?, port: Int): Boolean =
-            rule.proxyHost.equals(host, ignoreCase = true) && rule.proxyPort == port && !rule.username.isNullOrBlank()
 
         val choice: ProxyChoice
             get() = ProxyChoice(
@@ -166,39 +225,6 @@ class ProxyRouter(private val source: ProxyRuleSource) {
         }
     }
 
-    /**
-     * Answers a proxy's `407`.
-     *
-     * Keyed off the URL that was being fetched rather than off the proxy's own
-     * address, so two rules pointing at one proxy with different accounts each
-     * get their own. Only a proxy is ever answered; a `401` from the service at
-     * the other end is the caller's business and gets nothing from here.
-     */
-    private inner class ProxyCredentials : Authenticator() {
-
-        override fun getPasswordAuthentication(): PasswordAuthentication? {
-            if (requestorType != RequestorType.PROXY) return null
-
-            /*
-             * The rule the request was routed by, when the JDK says which request
-             * it was. When it does not, the only thing left to go on is which
-             * proxy is asking, so the first enabled rule pointing at it answers -
-             * which is exact unless two rules share one proxy under different
-             * accounts, and that is the ambiguity, not a wrong guess.
-             */
-            val choice = requestingURL?.let { resolve(it.toString()) }
-                ?: compiled().firstOrNull { it.rule.enabled && it.answersFor(requestingHost, requestingPort) }?.choice
-                ?: return null
-
-            // Whatever it was found by, the credentials only go to the proxy the
-            // rule names, never to whoever happened to send the challenge.
-            if (!choice.host.equals(requestingHost, ignoreCase = true) || choice.port != requestingPort) return null
-
-            val user = choice.username ?: return null
-            return PasswordAuthentication(user, choice.password.orEmpty().toCharArray())
-        }
-    }
-
     private companion object {
         val log = LoggerFactory.getLogger(ProxyRouter::class.java)
 
@@ -213,6 +239,10 @@ class ProxyRouter(private val source: ProxyRuleSource) {
          * for - the endpoint that needs a proxy here is an HTTPS one - so it is
          * lifted, and only when the operator has not already said what they want
          * by setting the property themselves.
+         *
+         * It governs the header [authorized] sets just as it governed the
+         * authenticator that used to set it: the JDK filters a `Proxy-Authorization`
+         * carrying a disabled scheme off the `CONNECT` whoever put it there.
          *
          * It has to happen before the JDK reads it, which it does once, when its
          * HTTP client machinery is first loaded. Every client in this
@@ -230,8 +260,9 @@ class ProxyRouter(private val source: ProxyRuleSource) {
 /**
  * A proxy a request will go through, and the rule that said so.
  *
- * [password] never leaves this module: it is here because the authenticator
- * needs it, and everything the API returns is built from the fields beside it.
+ * [password] never leaves this module: it is here because the one thing that
+ * writes a `Proxy-Authorization` needs it, and everything the API returns is
+ * built from the fields beside it.
  */
 data class ProxyChoice(
     val ruleId: Long?,
@@ -241,3 +272,122 @@ data class ProxyChoice(
     val username: String?,
     val password: String?,
 )
+
+/**
+ * The proxy this rule names, as the header a `407` is answered with.
+ *
+ * Null when the rule holds no account, which is a proxy that does not ask.
+ */
+internal fun ProxyChoice.basicAuthorization(): String? {
+    val user = username ?: return null
+    val credentials = "$user:${password.orEmpty()}".toByteArray(StandardCharsets.ISO_8859_1)
+    return "Basic ${Base64.getEncoder().encodeToString(credentials)}"
+}
+
+/** Whether this rule is the reason that proxy is the one being spoken to. */
+internal fun ProxyChoice.answers(address: InetSocketAddress): Boolean =
+    host.equals(address.hostString, ignoreCase = true) && port == address.port
+
+/**
+ * The JDK's builder, building a client that carries proxy credentials.
+ *
+ * Every fluent method is overridden to return this rather than the object it
+ * delegates to. That is not decoration: the JDK's builder returns itself, so a
+ * caller writing `builder().connectTimeout(x).build()` would otherwise be
+ * holding the plain builder by the time it said `build`, and would get a plain
+ * client - proxied correctly, and silently unable to authenticate to the proxy.
+ */
+private class RoutedBuilder(
+    private val delegate: HttpClient.Builder,
+    private val router: ProxyRouter,
+) : HttpClient.Builder by delegate {
+
+    override fun cookieHandler(handler: CookieHandler): HttpClient.Builder = also { delegate.cookieHandler(handler) }
+
+    override fun connectTimeout(duration: Duration): HttpClient.Builder = also { delegate.connectTimeout(duration) }
+
+    override fun sslContext(context: SSLContext): HttpClient.Builder = also { delegate.sslContext(context) }
+
+    override fun sslParameters(parameters: SSLParameters): HttpClient.Builder =
+        also { delegate.sslParameters(parameters) }
+
+    override fun executor(executor: Executor): HttpClient.Builder = also { delegate.executor(executor) }
+
+    override fun followRedirects(policy: HttpClient.Redirect): HttpClient.Builder =
+        also { delegate.followRedirects(policy) }
+
+    override fun version(version: HttpClient.Version): HttpClient.Builder = also { delegate.version(version) }
+
+    override fun priority(priority: Int): HttpClient.Builder = also { delegate.priority(priority) }
+
+    override fun proxy(selector: ProxySelector): HttpClient.Builder = also { delegate.proxy(selector) }
+
+    /**
+     * Passed on rather than refused, because refusing a method of an interface
+     * this implements is worse than the mistake it would prevent. Nothing here
+     * calls it, and [ProxyRouter] says at length why nothing should.
+     */
+    override fun authenticator(authenticator: Authenticator): HttpClient.Builder =
+        also { delegate.authenticator(authenticator) }
+
+    override fun localAddress(address: InetAddress?): HttpClient.Builder = also { delegate.localAddress(address) }
+
+    override fun build(): HttpClient = RoutedClient(delegate.build(), router)
+}
+
+/**
+ * A client that puts the proxy credentials on every request it sends.
+ *
+ * Nothing but [send] and [sendAsync] is this class's business; the rest is the
+ * JDK's client answering for itself. It is a subclass rather than a wrapper
+ * interface because [java.net.http.HttpClient] is a class, which is also why
+ * this file has to say `delegate` a dozen times to add one header.
+ */
+private class RoutedClient(private val delegate: HttpClient, private val router: ProxyRouter) : HttpClient() {
+
+    override fun <T> send(request: HttpRequest, handler: HttpResponse.BodyHandler<T>): HttpResponse<T> =
+        delegate.send(router.authorized(request), handler)
+
+    override fun <T> sendAsync(
+        request: HttpRequest,
+        handler: HttpResponse.BodyHandler<T>,
+    ): CompletableFuture<HttpResponse<T>> = delegate.sendAsync(router.authorized(request), handler)
+
+    override fun <T> sendAsync(
+        request: HttpRequest,
+        handler: HttpResponse.BodyHandler<T>,
+        promises: HttpResponse.PushPromiseHandler<T>?,
+    ): CompletableFuture<HttpResponse<T>> = delegate.sendAsync(router.authorized(request), handler, promises)
+
+    override fun cookieHandler(): Optional<CookieHandler> = delegate.cookieHandler()
+
+    override fun connectTimeout(): Optional<Duration> = delegate.connectTimeout()
+
+    override fun followRedirects(): Redirect = delegate.followRedirects()
+
+    override fun proxy(): Optional<ProxySelector> = delegate.proxy()
+
+    override fun sslContext(): SSLContext = delegate.sslContext()
+
+    override fun sslParameters(): SSLParameters = delegate.sslParameters()
+
+    override fun authenticator(): Optional<Authenticator> = delegate.authenticator()
+
+    override fun version(): Version = delegate.version()
+
+    override fun executor(): Optional<Executor> = delegate.executor()
+
+    override fun newWebSocketBuilder(): WebSocket.Builder = delegate.newWebSocketBuilder()
+
+    override fun shutdown() = delegate.shutdown()
+
+    override fun shutdownNow() = delegate.shutdownNow()
+
+    override fun isTerminated(): Boolean = delegate.isTerminated
+
+    override fun awaitTermination(duration: Duration): Boolean = delegate.awaitTermination(duration)
+
+    override fun close() = delegate.close()
+
+    override fun toString(): String = delegate.toString()
+}

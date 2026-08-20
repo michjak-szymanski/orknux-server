@@ -93,9 +93,11 @@ class ModelProviderProbe(
             val response = client.send(request.build(), HttpResponse.BodyHandlers.ofString())
             when (val status = response.statusCode()) {
                 in 200..299 -> Listing.Models(names(response.body()))
-                401, 403 -> Listing.Failed("The provider rejected the credentials ($status)")
+                401, 403 -> Listing.Failed(
+                    "The provider rejected the credentials ($status)" + said(response.body()),
+                )
                 404 -> Listing.Failed("No model list at $url — check the endpoint")
-                else -> Listing.Failed("The provider answered $status")
+                else -> Listing.Failed("The provider answered $status" + said(response.body()))
             }
         } catch (failure: Exception) {
             Listing.Failed(failure.message ?: "The provider could not be reached")
@@ -152,6 +154,41 @@ class ModelProviderProbe(
         return tree.path("models")
             .mapNotNull { entry -> entry.path("name").stringValue() ?: entry.path("model").stringValue() }
             .distinct()
+    }
+
+    /**
+     * What the other end said about the refusal, ready to append, or nothing.
+     *
+     * A status on its own says the credential was refused but not which
+     * credential or why, and every one of these services is willing to say:
+     * Entra answers a bad client secret with `AADSTS7000215: Invalid client
+     * secret provided`, which is the difference between retyping a secret and
+     * hunting a tenant. Three spellings because three vendors chose three -
+     * `error_description` is Entra's, `error.message` is OpenAI's and Azure
+     * OpenAI's, `message` is what most self-hosted servers answer with - and a
+     * body that is none of them, or is not JSON at all, adds nothing rather than
+     * putting a page of HTML on the screen.
+     *
+     * Trimmed to a sentence's worth. Entra's description carries a correlation
+     * id, a timestamp and a URL after the part worth reading.
+     */
+    private fun said(body: String): String {
+        val tree = try {
+            mapper.readTree(body)
+        } catch (_: Exception) {
+            return ""
+        }
+
+        val error = tree.path("error")
+        // stringValueOpt rather than stringValue: the latter throws on a node
+        // that is not a string, and every one of these is a guess about a body
+        // this code did not write.
+        val message = listOf(tree.path("error_description"), error.path("message"), error, tree.path("message"))
+            .firstNotNullOfOrNull { it.stringValueOpt().orElse(null) }
+            ?: return ""
+
+        val said = message.trim().lineSequence().first().trim().take(MESSAGE_LIMIT)
+        return if (said.isEmpty()) "" else ": $said"
     }
 
     /**
@@ -295,7 +332,9 @@ class ModelProviderProbe(
         return try {
             val response = client.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() != 200) {
-                return EntraToken.Failed("Entra ID refused the credentials (${response.statusCode()})")
+                return EntraToken.Failed(
+                    "Entra ID refused the credentials (${response.statusCode()})" + said(response.body()),
+                )
             }
             val answer = mapper.readTree(response.body())
             val token = answer.path("access_token").stringValue()
@@ -326,5 +365,8 @@ class ModelProviderProbe(
 
         /** Held back from the expiry, so a token cannot lapse mid-request. */
         const val EXPIRY_MARGIN = 60L
+
+        /** How much of a provider's own complaint is worth repeating. */
+        const val MESSAGE_LIMIT = 200
     }
 }

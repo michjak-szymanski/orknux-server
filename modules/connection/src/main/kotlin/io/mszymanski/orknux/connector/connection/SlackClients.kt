@@ -3,8 +3,11 @@ package io.mszymanski.orknux.connector.connection
 import com.slack.api.Slack
 import com.slack.api.SlackConfig
 import com.slack.api.util.http.SlackHttpClient
+import io.mszymanski.orknux.connector.proxy.PROXY_AUTHORIZATION
 import io.mszymanski.orknux.connector.proxy.ProxyChoice
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.answers
+import io.mszymanski.orknux.connector.proxy.basicAuthorization
 import okhttp3.Authenticator
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -12,11 +15,6 @@ import okhttp3.Response
 import okhttp3.Route
 import org.springframework.stereotype.Component
 import java.net.InetSocketAddress
-import java.nio.charset.StandardCharsets
-import java.util.Base64
-
-/** The header a client answers a proxy's `407` with. */
-private const val PROXY_AUTHORIZATION = "Proxy-Authorization"
 
 /**
  * The Slack clients this application talks to Slack with, built so that the
@@ -179,13 +177,3 @@ class SocketModeSlack internal constructor(val slack: Slack, private val config:
     }
 }
 
-/** The proxy this rule names, as the header a `407` is answered with. */
-private fun ProxyChoice.basicAuthorization(): String? {
-    val user = username ?: return null
-    val credentials = "$user:${password.orEmpty()}".toByteArray(StandardCharsets.ISO_8859_1)
-    return "Basic ${Base64.getEncoder().encodeToString(credentials)}"
-}
-
-/** Whether this rule is the reason that proxy is the one being spoken to. */
-private fun ProxyChoice.answers(address: InetSocketAddress): Boolean =
-    host.equals(address.hostString, ignoreCase = true) && port == address.port

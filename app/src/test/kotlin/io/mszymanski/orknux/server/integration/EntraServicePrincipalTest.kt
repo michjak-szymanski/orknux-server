@@ -42,16 +42,27 @@ class EntraServicePrincipalTest {
     private val grants = AtomicInteger()
     private var lastForm: String = ""
 
+    /**
+     * What Entra answers the next grant with.
+     *
+     * Set by the test that wants a refusal. The 401 it uses carries no
+     * `WWW-Authenticate` header, which is what Entra's token endpoint actually
+     * sends and is the whole point of the test that sets it.
+     */
+    private var refusal: Pair<Int, String>? = null
+
     @BeforeEach
     fun start() {
+        refusal = null
         entra = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         entra.createContext("/") { exchange ->
             grants.incrementAndGet()
             lastForm = exchange.requestBody.reader().use { it.readText() }
-            val body = """{"token_type":"Bearer","expires_in":3600,"access_token":"issued-token"}"""
-                .toByteArray(StandardCharsets.UTF_8)
+            val (status, text) = refusal
+                ?: (200 to """{"token_type":"Bearer","expires_in":3600,"access_token":"issued-token"}""")
+            val body = text.toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("Content-Type", "application/json")
-            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.sendResponseHeaders(status, body.size.toLong())
             exchange.responseBody.use { it.write(body) }
             exchange.close()
         }
@@ -121,6 +132,51 @@ class EntraServicePrincipalTest {
         assertThat(grants.get()).isEqualTo(2)
     }
 
+    @Test
+    fun `a client secret Entra refuses is reported as a refusal, in Entra's own words`() {
+        // The 401 the stub sends has no WWW-Authenticate header, because Entra's
+        // does not. Every client in this application used to carry a
+        // java.net.Authenticator so proxy credentials could be supplied, and the
+        // JDK throws IOException("WWW-Authenticate header missing for response
+        // code 401") for exactly this answer whenever one is set - so this
+        // screen reported a sentence about a header nobody sent, in place of the
+        // one fact worth having.
+        refusal = 401 to (
+            "{\"error\":\"invalid_client\",\"error_description\":\"AADSTS7000215: " +
+                "Invalid client secret provided.\\r\\nTrace ID: 4c4a\\r\\nCorrelation ID: 9b0f\"}"
+        )
+
+        val result = probe().check(provider())
+
+        assertThat(result.outcome).isEqualTo(CheckOutcome.FAILED)
+        // The status says it was refused; Entra's own code says which credential
+        // and what to do about it. The trace and correlation ids are not on the
+        // screen - they are on the line below the one worth reading.
+        assertThat(result.message).isEqualTo(
+            "Entra ID refused the credentials (401): AADSTS7000215: Invalid client secret provided.",
+        )
+    }
+
+    @Test
+    fun `a credential this installation cannot decrypt is not sent to Entra at all`() {
+        // What every provider on an installation running with the wrong
+        // ORKNUX_SECRET_KEY holds: the envelope, handed back by decrypt because
+        // it would not open.
+        val stored = SecretCipher(OTHER_KEY).encrypt("the-secret")
+        val provider = provider().apply { secret = SecretCipher(TEST_KEY).decrypt(stored) }
+
+        val result = probe().check(provider)
+
+        assertThat(result.outcome).isEqualTo(CheckOutcome.FAILED)
+        assertThat(result.message).isEqualTo(
+            "This provider's credential cannot be read with the current secret key. " +
+                "Enter it again, or restore the key it was saved with.",
+        )
+        // Nothing went out. An envelope posted as a client secret comes back a
+        // 401 and reads as a wrong secret, which is the wrong thing to fix.
+        assertThat(grants.get()).isZero()
+    }
+
     private fun probe(): ModelProviderProbe {
         val properties = ConnectionProperties(entraAuthority = url(entra))
         // A real cipher with a real key: these providers hold plaintext secrets
@@ -128,7 +184,7 @@ class EntraServicePrincipalTest {
         // is only asked whether one is.
         val router = ProxyRouter(ProxyRuleSource { emptyList() })
         return ModelProviderProbe(
-            ConnectionProbe(properties, router),
+            ConnectionProbe(properties, router, SecretCipher(TEST_KEY)),
             properties,
             ObjectMapper(),
             SecretCipher(TEST_KEY),
@@ -154,7 +210,10 @@ class EntraServicePrincipalTest {
     private fun url(server: HttpServer) = "http://${server.address.hostString}:${server.address.port}"
 
     private companion object {
-        /** Any valid AES-256 key; nothing here is encrypted with it. */
+        /** Any valid AES-256 key; the providers here hold plaintext secrets. */
         const val TEST_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+        /** A second one, so a value written with it is unreadable with the first. */
+        const val OTHER_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
     }
 }

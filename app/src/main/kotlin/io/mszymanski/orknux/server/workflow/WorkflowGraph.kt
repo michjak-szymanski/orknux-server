@@ -271,7 +271,40 @@ class WorkflowNode(
     /** How long to leave a failed attempt alone before the next; null is none. */
     @Column(name = "retry_backoff_seconds")
     var retryBackoffSeconds: Int? = null,
+
+    /**
+     * How that wait grows from one attempt to the next; null is
+     * [RetryBackoff.FIXED], which is what every node saved before curves
+     * existed meant and goes on meaning.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "retry_backoff", length = 16)
+    var retryBackoff: RetryBackoff? = null,
 )
+
+/**
+ * How the wait between two attempts grows.
+ *
+ * A word rather than a flag, because what somebody is choosing between is
+ * curves and there will be a third one - and because "exponential = false" is a
+ * worse thing to read on a node than "fixed".
+ */
+enum class RetryBackoff {
+
+    /** The same wait before every retry. */
+    FIXED,
+
+    /**
+     * Doubling: each retry waits twice as long as the one before it.
+     *
+     * For the failure that is a queue rather than a blip - a rate limit, a
+     * provider still coming back up - where three attempts on the same short
+     * clock are three attempts spent inside the same bad minute. The engine caps
+     * what one wait may come to, so the numbers on the node cannot multiply out
+     * into a run that disappears for a week.
+     */
+    EXPONENTIAL,
+}
 
 @Entity
 @Table(name = "workflow_edge")

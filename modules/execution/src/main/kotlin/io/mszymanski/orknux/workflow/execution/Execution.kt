@@ -215,6 +215,16 @@ class ExecutionStep(
     val retryBackoffSeconds: Int? = null,
 
     /**
+     * How that wait grows from one attempt to the next; null is fixed.
+     *
+     * Copied like the two above it: a node switched to doubling while this step
+     * sits between attempts must not change the clock this run is already on.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "retry_backoff", length = 16)
+    val retryBackoff: RetryBackoff? = null,
+
+    /**
      * How many attempts this step has spent.
      *
      * On the row rather than counted by whatever is driving, because an attempt

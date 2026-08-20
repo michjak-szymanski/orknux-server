@@ -174,6 +174,26 @@ class FailureHandlingTest(
         assertThat(recorded.getValue("ok-onwards").status).isEqualTo(StepStatus.SKIPPED)
     }
 
+    /**
+     * The curve, as far as a run can show it: what the second wait is.
+     *
+     * Seconds, because this engine spends the wait on the thread carrying the
+     * run - so the numbers are the smallest ones that can still be told apart,
+     * and the arithmetic itself is asserted in RetryPolicyTest where it costs
+     * nothing.
+     */
+    @Test
+    fun `a doubling node waits longer before each attempt than before the last`() {
+        graph(nodes = listOf(doubling("boom", attempts = 3, seconds = 1)), edges = emptyList())
+        val run = engine.start(WORKSPACE, WORKFLOW, ExecutionTrigger.API, INPUT)
+
+        assertThat(run.status).isEqualTo(ExecutionStatus.FAILED)
+        assertThat(stepsBy(run).getValue("boom").attempts).isEqualTo(3)
+        // The log says what was actually waited, not what is written on the node.
+        assertThat(linesOf(run)).anyMatch { it.contains("attempt 1 of 3") && it.contains("Trying again in 1s") }
+        assertThat(linesOf(run)).anyMatch { it.contains("attempt 2 of 3") && it.contains("Trying again in 2s") }
+    }
+
     /** A node whose failure is handled, with an ordinary node on its happy path. */
     private fun withFallback(key: String) = graph(
         nodes = listOf(node(key), node("ok-onwards"), node("ok-rescue")),
@@ -193,6 +213,16 @@ class FailureHandlingTest(
     /** No wait between attempts: what is being tested is the count, not the clock. */
     private fun retrying(key: String, attempts: Int) =
         GraphNode(key = key, kind = NodeKind.ACTION, name = key, retryAttempts = attempts, retryBackoffSeconds = 0)
+
+    /** The same, on the doubling curve, with a wait small enough to sit out. */
+    private fun doubling(key: String, attempts: Int, seconds: Int) = GraphNode(
+        key = key,
+        kind = NodeKind.ACTION,
+        name = key,
+        retryAttempts = attempts,
+        retryBackoffSeconds = seconds,
+        retryBackoff = RetryBackoff.EXPONENTIAL,
+    )
 
     private fun stepsBy(execution: WorkflowExecution) =
         steps.findByExecutionIdOrderByOrderAsc(requireNotNull(execution.id)).associateBy { it.nodeKey }

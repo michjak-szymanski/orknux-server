@@ -958,6 +958,8 @@ type WorkflowNode {
     retryAttempts: Int
     "How long to leave a failed attempt alone before the next; null is none."
     retryBackoffSeconds: Int
+    "How that wait grows from one attempt to the next; null is FIXED."
+    retryBackoff: RetryBackoff
     x: Float!
     y: Float!
     "What the node needs, read off whatever it points at."
@@ -986,6 +988,26 @@ type NodeMapping {
     mode: MappingMode!
     "Which node produces the referenced field; what the canvas draws a line from."
     sourceNodeKey: String
+}
+
+"""
+How the wait between two attempts of a node grows.
+
+Null is FIXED, which is what every node saved before there was a choice means.
+"""
+enum RetryBackoff {
+    "The same wait before every retry."
+    FIXED
+    """
+    Doubling: each retry waits twice as long as the one before it.
+
+    For a failure that is a queue rather than a blip — a rate limit, a provider
+    still coming back up — where several attempts on one short clock are several
+    attempts spent inside the same bad minute. One wait is capped at an hour
+    however far the doubling would have gone, so the numbers on a node cannot
+    multiply out into a run that disappears for a week.
+    """
+    EXPONENTIAL
 }
 
 "Which way out of a node an edge leaves by."
@@ -1086,10 +1108,19 @@ input WorkflowNodeInput {
     retryAttempts: Int
     """
     How long to leave a failed attempt alone before the next, in seconds; null
-    is none. Held between 0 and 3600. The same wait between every attempt: a
-    growing one is a knob nobody asked for.
+    is none. Held between 0 and 3600. Under FIXED it is the whole wait; under
+    EXPONENTIAL it is what the first retry waits, and every one after it doubles.
     """
     retryBackoffSeconds: Int
+    """
+    How that wait grows from one attempt to the next; null is FIXED. Kept on an
+    ACTION and on an AGENT only, like the two above it.
+
+    However far the doubling goes, one wait is capped at an hour where it is
+    spent — ten attempts doubling off the largest wait this takes would otherwise
+    be three weeks of run.
+    """
+    retryBackoff: RetryBackoff
     """
     What this node passes to its action. Omitted leaves it to the action's own
     suggestions, which is what a node freshly pointed at one wants. Names the

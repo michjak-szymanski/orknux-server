@@ -11,6 +11,7 @@ import io.mszymanski.orknux.workflow.execution.WorkflowGraphSource
 import io.mszymanski.orknux.workflow.execution.WorkflowNotFoundException as RunnableWorkflowNotFound
 import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
 import io.mszymanski.orknux.workflow.execution.NodeKind as RunnableNodeKind
+import io.mszymanski.orknux.workflow.execution.RetryBackoff as RunnableRetryBackoff
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -110,6 +111,7 @@ class AppWorkflowGraphSource(
                     mappings = bindings(node.mappings) + sessionOf(sessionFor[node.nodeKey]),
                     retryAttempts = node.retryAttempts,
                     retryBackoffSeconds = node.retryBackoffSeconds,
+                    retryBackoff = node.retryBackoff?.let { RunnableRetryBackoff.valueOf(it.name) },
                     x = node.positionX,
                     y = node.positionY,
                 )

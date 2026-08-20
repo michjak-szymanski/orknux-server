@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
@@ -29,6 +30,7 @@ class PluginFunctionRegistry(
     private val functions: WorkflowFunctionRepository,
     private val actions: WorkflowActionRepository,
     private val conditions: WorkflowConditionRepository,
+    private val triggers: WorkflowTriggerRepository,
     private val declarations: PluginDeclarations,
 ) {
 
@@ -99,10 +101,17 @@ class PluginFunctionRegistry(
             .associate { it.name to callersOf(requireNotNull(it.id)) }
             .filterValues { it.isNotEmpty() }
 
-    /** Actions and conditions that name this function. */
+    /**
+     * Actions, conditions and webhooks that name this function.
+     *
+     * The webhooks are here because a webhook may authenticate with one of these,
+     * and a gatekeeper that has been cascaded away refuses every caller — the one
+     * kind of breakage nobody is watching when it happens.
+     */
     private fun callersOf(functionId: Long): List<String> =
         actions.findByFunctionId(functionId).map { it.name } +
-            conditions.findAll().filter { it.functionId == functionId }.map { it.name }
+            conditions.findAll().filter { it.functionId == functionId }.map { it.name } +
+            triggers.findByAuthFunctionId(functionId).map { it.name }
 
     /**
      * `teammates_isTeammate` — the plugin's id, then the name it declared.

@@ -2,9 +2,14 @@ package io.mszymanski.orknux.server.trigger
 
 import io.mszymanski.orknux.server.obj.ObjectProperty
 import io.mszymanski.orknux.server.obj.PropertyKind
+import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
+import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
@@ -53,6 +58,9 @@ class WebhookAPI(
     private val runner: TriggerRunner,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val pluginRunner: PluginRunner,
+    private val plugins: PluginRepository,
+    private val pluginParameters: PluginParameters,
     private val externals: VariableArguments,
     private val mapper: ObjectMapper,
 ) {
@@ -173,7 +181,21 @@ class WebhookAPI(
         val byName = request.mapValues { (_, value) -> mapper.writeValueAsString(value) }
         val arguments = function.params.map { byName[it.name] ?: "null" } + externals.of(function)
 
-        return when (val result = scripts.call(function.source, function.name, arguments)) {
+        /*
+         * A plugin's function is not this workspace's JavaScript — its source
+         * column holds a note saying where the implementation lives — so it is
+         * asked of the plugin, in the plugin's own sandbox, the same way a
+         * condition asks one. Running the note as a script would fail, and a
+         * failure here is a no: the webhook would refuse every caller and the
+         * history would blame the gatekeeper for a mistake nobody made.
+         */
+        val call = if (function.scope == FunctionScope.PLUGIN) {
+            askPlugin(trigger, function, arguments)
+        } else {
+            scripts.call(function.source, function.name, arguments)
+        }
+
+        return when (val result = call) {
             is ScriptResult.Returned -> when (result.json) {
                 "true" -> Verdict(true)
                 else -> Verdict(false, "${function.name} did not accept the caller")
@@ -181,6 +203,44 @@ class WebhookAPI(
 
             is ScriptResult.Failed -> Verdict(false, "${function.name} ${result.reason}")
         }
+    }
+
+    /**
+     * Asks a function one of the plugins declared.
+     *
+     * Unloaded, or configured with something still missing, is a no like any
+     * other — there is nobody to ask and a caller cannot be let in on that — but
+     * the reason is written into the history in those words, so whoever set the
+     * webhook up reads "the plugin has not been told its secret" rather than
+     * watching every request bounce.
+     */
+    private fun askPlugin(
+        trigger: WorkflowTrigger,
+        function: WorkflowFunction,
+        arguments: List<String>,
+    ): ScriptResult {
+        val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
+            ?: return ScriptResult.Failed("is declared by a plugin that is no longer loaded", 0)
+
+        val missing = pluginParameters.missingFor(plugin, trigger.workspaceId)
+        if (missing.isNotEmpty()) {
+            return ScriptResult.Failed(
+                "cannot run: the ${plugin.key} plugin has not been told " +
+                    missing.joinToString(", ") + ". Set it on this workspace's plugins page.",
+                0,
+            )
+        }
+
+        // The name the plugin gave it, not the prefixed one a workspace picks it
+        // by: the prefix exists so two plugins can both declare `verify`, and the
+        // plugin never agreed to answer to it.
+        val declared = function.name.removePrefix("${plugin.key}_")
+        return pluginRunner.call(
+            plugin.source,
+            declared,
+            arguments,
+            pluginParameters.settingsFor(plugin, trigger.workspaceId),
+        )
     }
 
     /** What was called, with the mapping's own prefix taken off. */

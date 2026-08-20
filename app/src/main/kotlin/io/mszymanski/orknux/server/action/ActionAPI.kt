@@ -243,10 +243,20 @@ class ActionAPI(
                 action.method = action.method?.ifBlank { null } ?: "GET"
             }
 
+            /*
+             * A plugin's functions belong to no workspace and are offered in
+             * every one — the picker lists them, the runner calls them in the
+             * plugin's own sandbox without asking whose they are, and unloading
+             * a plugin counts the actions naming them. Only another workspace's
+             * own function is out of reach, so that is the only one refused:
+             * asking for "a function this workspace owns" about one the picker
+             * had just offered described a box somebody had already filled in.
+             */
             ActionSubtype.FUNCTION -> {
                 val functionId = action.functionId ?: throw ActionSettingMissingException("a function")
                 val function = functions.findByIdOrNull(functionId)
-                if (function == null || function.workspaceId != action.workspaceId) {
+                if (function == null) throw ActionSettingMissingException("a function")
+                if (function.scope != FunctionScope.PLUGIN && function.workspaceId != action.workspaceId) {
                     throw ActionSettingMissingException("a function this workspace owns")
                 }
             }

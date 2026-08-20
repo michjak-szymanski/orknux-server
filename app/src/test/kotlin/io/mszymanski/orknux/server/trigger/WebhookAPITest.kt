@@ -1,6 +1,12 @@
 package io.mszymanski.orknux.server.trigger
 
+import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
+import io.mszymanski.orknux.server.plugin.Plugin
+import io.mszymanski.orknux.server.plugin.PluginDeclarations
+import io.mszymanski.orknux.server.plugin.PluginFunctionRegistry
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
 import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
 import io.mszymanski.orknux.server.workflow.WorkflowRepository
@@ -11,6 +17,8 @@ import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionLogRepository
 import io.mszymanski.orknux.workflow.execution.ExecutionStepRepository
 import io.mszymanski.orknux.workflow.execution.WorkflowExecutionRepository
+import io.mszymanski.orknux.workflow.script.PluginInspection
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -50,6 +58,11 @@ class WebhookAPITest(
     @Autowired val triggers: WorkflowTriggerRepository,
     @Autowired val firings: TriggerFiringRepository,
     @Autowired val objects: WorkflowObjectRepository,
+    @Autowired val functions: WorkflowFunctionRepository,
+    @Autowired val plugins: PluginRepository,
+    @Autowired val registry: PluginFunctionRegistry,
+    @Autowired val declarations: PluginDeclarations,
+    @Autowired val pluginRunner: PluginRunner,
     @Autowired val executions: WorkflowExecutionRepository,
     @Autowired val steps: ExecutionStepRepository,
     @Autowired val logs: ExecutionLogRepository,
@@ -64,6 +77,7 @@ class WebhookAPITest(
     private lateinit var mockMvc: MockMvc
     private var workspaceId: Long = 0
     private var triggerId: Long = 0
+    private var objectId: Long = 0
 
     @BeforeEach
     fun reset() {
@@ -78,6 +92,8 @@ class WebhookAPITest(
 
         firings.deleteAll()
         triggers.deleteAll()
+        functions.deleteAll()
+        plugins.deleteAll()
         logs.deleteAll()
         steps.deleteAll()
         executions.deleteAll()
@@ -93,7 +109,7 @@ class WebhookAPITest(
         val workflowId = graphQlTester.document(
             """mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "Triage" }) { workflowId } }""",
         ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
-        val objectId = graphQlTester.document(
+        objectId = graphQlTester.document(
             """
             mutation {
               createObject(input: {
@@ -180,6 +196,64 @@ class WebhookAPITest(
         })
     }
 
+    /**
+     * A webhook may be guarded by a function a plugin declared.
+     *
+     * Two things were wrong at once, and either alone would have made the
+     * gatekeeper useless. Choosing one was refused as "no function chosen",
+     * because the gate compared the function's workspace with the trigger's and
+     * a plugin's function belongs to no workspace. And had one been chosen, the
+     * endpoint would have run its source column — which for a plugin holds a
+     * note saying where the implementation lives, not code — so the gatekeeper
+     * would have thrown, and a gatekeeper that throws refuses everybody.
+     */
+    @Test
+    fun `a webhook guarded by a plugin's function lets the right caller in`() {
+        val declared = pluginFunction()
+        val guarded = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Guarded", type: WEBHOOK,
+                webhookPath: "zendesk/guarded", objectId: $objectId,
+                authType: FUNCTION, authFunctionId: $declared
+              }) { id }
+            }
+            """,
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+
+        val allowed = call("zendesk/guarded", """{"id":"T-1","token":"let-me-in"}""")
+        assertThat(allowed.status).isEqualTo(202)
+
+        val refused = call("zendesk/guarded", """{"id":"T-2","token":"guess"}""")
+        assertThat(refused.status).isEqualTo(401)
+
+        // The reason is the gatekeeper's answer, not a crash: a note run as a
+        // script would have written "SyntaxError" here for both calls.
+        assertThat(firings.findAll().filter { it.triggerId == guarded }.map { it.detail })
+            .contains("gatekeeper_verify did not accept the caller")
+    }
+
+    /** A plugin loaded from its own source, and its functions materialised. */
+    private fun pluginFunction(): Long {
+        val read = pluginRunner.inspect(GATEKEEPER) as PluginInspection.Read
+        val plugin = plugins.save(
+            Plugin(
+                key = read.id,
+                name = "gatekeeper",
+                filename = "gatekeeper.js",
+                source = GATEKEEPER,
+                sizeBytes = GATEKEEPER.length.toLong(),
+                apiVersion = read.apiVersion,
+                sha256 = "0".repeat(64),
+                declaredFunctions = declarations.validated(read.functions),
+                declaredParameters = declarations.validatedParameters(read.parameters),
+            ),
+        )
+        registry.reconcile(plugin)
+        return requireNotNull(functions.findAll().first { it.scope == FunctionScope.PLUGIN }.id)
+    }
+
     /** One anonymous call, the way anything out there would make it. */
     private fun call(path: String, body: String) = mockMvc.perform(
         post("/api/webhooks/$path")
@@ -208,5 +282,25 @@ class WebhookAPITest(
         graphQlTester.document(
             """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflow) { status } }""",
         ).execute()
+    }
+
+    private companion object {
+        val GATEKEEPER = """
+            export default class Gatekeeper extends OrknuxPlugin {
+              id() { return 'gatekeeper'; }
+              apiVersion() { return 1; }
+
+              functions() {
+                return [
+                  new OrknuxFunction({
+                    name: 'verify',
+                    params: [{ name: 'body', type: 'map' }],
+                    returnType: 'boolean',
+                    run: (body) => body !== null && body.token === 'let-me-in',
+                  }),
+                ];
+              }
+            }
+        """.trimIndent()
     }
 }

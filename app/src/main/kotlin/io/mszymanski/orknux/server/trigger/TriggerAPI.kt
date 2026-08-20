@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.trigger
 import io.mszymanski.orknux.connector.connection.DeliverableActions
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
@@ -349,11 +350,18 @@ class TriggerAPI(
                  * Checked when it is chosen rather than when a request arrives:
                  * a webhook whose gatekeeper answers an object would refuse
                  * everything, at the one moment nobody is watching.
+                 *
+                 * A plugin's functions belong to no workspace and are offered in
+                 * every one — the picker lists them and the endpoint asks them in
+                 * the plugin's own sandbox — so only another workspace's own
+                 * function is out of reach. Refusing a plugin's as "no function
+                 * chosen" described a box somebody had already filled in.
                  */
                 if (trigger.authType == WebhookAuthType.FUNCTION) {
                     val functionId = trigger.authFunctionId ?: throw TriggerWebhookAuthFunctionRequiredException()
                     val function = functions.findByIdOrNull(functionId)
-                    if (function == null || function.workspaceId != trigger.workspaceId) {
+                        ?: throw TriggerWebhookAuthFunctionRequiredException()
+                    if (function.scope != FunctionScope.PLUGIN && function.workspaceId != trigger.workspaceId) {
                         throw TriggerWebhookAuthFunctionRequiredException()
                     }
                     if (function.returnType != ValueType.BOOLEAN) {

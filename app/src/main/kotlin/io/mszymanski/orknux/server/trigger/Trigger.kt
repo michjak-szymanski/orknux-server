@@ -161,6 +161,9 @@ interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
     /** Which triggers ask this question, so it cannot be deleted from under them. */
     fun findByConditionId(conditionId: Long): List<WorkflowTrigger>
 
+    /** Which webhooks this function guards, so unloading a plugin can say so. */
+    fun findByAuthFunctionId(authFunctionId: Long): List<WorkflowTrigger>
+
     /** What an arriving event asks: who is waiting for this, on this connection? */
     fun findByConnectionIdAndActionAndEnabledTrue(
         connectionId: Long,

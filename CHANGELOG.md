@@ -13,6 +13,92 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **A node can be told what to do when it fails.** An action or an agent now
+  carries a retry policy - how many attempts, and how long to wait between them
+  - and can be given a second way out of the node, drawn as a red **If fails**
+  line beside the green **If works** one. A failed step still records its
+  failure; the difference is that the run can carry on down the other line
+  instead of stopping.
+
+  The wait can be **fixed or doubling**, so a provider asking to be left alone
+  is left alone for longer each time rather than being knocked on at the same
+  interval.
+
+  A failure already known to be final never spends an attempt. A thrown function
+  will throw the same way next time, and so will a provider that refused the
+  request it was sent; only the failures that might come out differently - a
+  timeout, a 429, a 5xx, a dropped connection - are asked again. Worth knowing
+  before you turn retries on for an agent: **every attempt is another billed
+  call**, and nothing caps that.
+
+- **The chat shows the lookups an agent made**, not only the words it said, so a
+  continued conversation reads as what happened rather than as an answer with no
+  visible reason. What the model is sent is unchanged.
+
+- **A turn carried into a chat says who said it**, which matters once a session
+  has been picked up by hand and holds both an agent's turns and a person's.
+
+- **Turning a node is offered on the node**, above the selected one beside its
+  resize handles. `R` and the details panel still do it; all three go through
+  the same action.
+
+- **The object a function parameter names is one link away**, beside the
+  selector, so the shape the code is being written against can be read without
+  hunting for it.
+
+### Changed
+
+- **Deleting an issue asks first.** It used to delete on the click that reached
+  it. If you have anything scripted against that button, it now opens a dialog.
+
+- **The loader waits three seconds before it appears**, everywhere it is used.
+  It was five, which was not a quiet period but a mute button - no screen ever
+  reached it, so the loading marks the interface already had were never drawn.
+  Three seconds is a deliberate choice: ordinary loads here finish well inside
+  it and still pass in silence, and only a wait long enough to look broken says
+  anything.
+
+- **A bent line in the workflow editor is one curve through the point** rather
+  than two half-curves meeting at it. Lines you have already bent keep their
+  shape; what changes is that dragging one now moves it by as much as you
+  dragged, and a line can no longer be pulled into a loop that cannot be undone.
+
+- **The readmes name the other three addresses** the site answers to.
+
+### Fixed
+
+- **The diagnostics page could not say anything on SQLite** - every check
+  answered with an error, because one query asked for a table SQLite does not
+  have and was the one part of the page not wrapped in a catch. So the easiest
+  way to try this product shipped with the screen that exists to say what is
+  wrong as the only screen that could not. Each check now runs in its own catch:
+  one that cannot answer costs its own card and no other.
+
+- **The stored-secrets check could never fail.** It compared a decryption
+  against itself, so it reported everything readable whatever the truth was. It
+  now asks the cipher a question the cipher can answer, and names the columns and
+  counts when the answer is no. If you restart with a different
+  `ORKNUX_SECRET_KEY` than your secrets were written with, this is the screen
+  that will tell you.
+
+- **An agent's failures were retried three times by the platform underneath it**,
+  including the ones that could only fail the same way - so a refused request
+  cost three calls and returned the same message. It is asked once now unless the
+  failure is the kind that might come out differently.
+
+- **The foot of the preferences page fell outside what scrolled** when the frame
+  was held to the window, taking the last card's clearance with it.
+
+- **Choosing "No one" for an issue's assignee** now clears it.
+
+- **A condition, an action and a webhook can call a plugin's function.** The
+  pickers offered them and the save refused them, with a message that said a
+  function was needed when one had been chosen.
+
 ## 0.8.0
 
 ### Added

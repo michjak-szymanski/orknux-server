@@ -2,7 +2,10 @@ package io.mszymanski.orknux.server.workflow
 
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.workflow.execution.EdgeBranch as RunnableEdgeBranch
+import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphVersion
+import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -59,6 +62,15 @@ class PublishedGraphTest(
         graphQlTester.document(
             """mutation { saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
                  nodes: [{ key: "one", kind: AGENT, name: "$nodeName", x: 0, y: 0 }], edges: []
+               }) { status } }""",
+        ).execute().path("saveWorkflowGraph.status").entity(String::class.java).isEqualTo("DRAFT")
+    }
+
+    /** A whole graph, the way the editor sends one: every node and every edge. */
+    private fun save(nodes: String, edges: String) {
+        graphQlTester.document(
+            """mutation { saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                 nodes: [$nodes], edges: [$edges]
                }) { status } }""",
         ).execute().path("saveWorkflowGraph.status").entity(String::class.java).isEqualTo("DRAFT")
     }
@@ -146,5 +158,128 @@ class PublishedGraphTest(
         publish()
 
         assertThat(publications.findById(workflowId).get().publishedBy).isEqualTo("alice")
+    }
+
+    /**
+     * A session is a declaration, and publishing has to fold it away exactly as
+     * running the draft does.
+     *
+     * `drafted()` is where a session stops being a node: what it holds is put
+     * onto every agent an edge leads from it to, and neither it nor its edges
+     * reach the engine. Publishing writes that copy down, so a divergence would
+     * hide here and nowhere else - the engine's vocabulary has no SESSION kind,
+     * so a snapshot that kept the node would not read back at all.
+     */
+    @Test
+    fun `a published session is folded onto its agent, exactly as the draft is`() {
+        save(
+            nodes = """
+                { key: "start", kind: TRIGGER, name: "Something happened", x: 0, y: 0 },
+                { key: "chat", kind: SESSION, name: "The incident", x: 0, y: 120, mappings: [
+                  { name: "sessionKeyPrefix", expression: "issue", mode: VALUE },
+                  { name: "sessionKey", expression: "ticket", mode: REFERENCE, sourceNodeKey: "start" }
+                ] },
+                { key: "think", kind: AGENT, name: "Answer politely", x: 200, y: 0, mappings: [
+                  { name: "prompt", expression: "Say something kind", mode: VALUE }
+                ] }
+            """,
+            edges = """
+                { source: "start", target: "think" },
+                { source: "chat", target: "think" }
+            """,
+        )
+        publish()
+
+        val live = source.graph(workspaceId, workflowId, GraphVersion.PUBLISHED)
+
+        // Not a step, so not in what runs - and neither is the edge that said
+        // which agent reads it.
+        assertThat(live.nodes.map { it.key }).containsExactly("start", "think")
+        assertThat(live.edges).containsExactly(GraphEdge("start", "think", null))
+
+        // What it held arrives on the agent instead, under the names the runner
+        // reads, a referenced key still a reference to the node that makes it.
+        assertThat(live.nodes.single { it.key == "think" }.mappings)
+            .containsEntry("sessionKeyPrefix", NodeBinding("issue"))
+            .containsEntry("sessionKey", NodeBinding("ticket", reference = true, from = "start"))
+            .containsEntry("prompt", NodeBinding("Say something kind"))
+
+        // And the published copy is the draft, field for field. Anything the
+        // snapshot dropped on the way through would come out here.
+        assertThat(live).isEqualTo(source.graph(workspaceId, workflowId, GraphVersion.DRAFT))
+    }
+
+    /**
+     * The folding happens when the copy is taken, not when it is read.
+     *
+     * Deleting the session afterwards leaves the graph on the screen without
+     * one, and the workflow that was published still talks into that
+     * conversation - which is the whole point of publishing a copy.
+     */
+    @Test
+    fun `a session deleted after publishing does not change what an event runs`() {
+        save(
+            nodes = """
+                { key: "chat", kind: SESSION, name: "The incident", x: 0, y: 120, mappings: [
+                  { name: "sessionKeyPrefix", expression: "issue", mode: VALUE },
+                  { name: "sessionKey", expression: "42", mode: VALUE }
+                ] },
+                { key: "think", kind: AGENT, name: "Answer politely", x: 200, y: 0 }
+            """,
+            edges = """{ source: "chat", target: "think" }""",
+        )
+        publish()
+
+        // The session node is taken off the canvas.
+        save(nodes = """{ key: "think", kind: AGENT, name: "Answer politely", x: 200, y: 0 }""", edges = "")
+
+        assertThat(source.graph(workspaceId, workflowId, GraphVersion.PUBLISHED).nodes.single().mappings)
+            .containsEntry("sessionKey", NodeBinding("42"))
+        // While the draft is what it now says: no session, nothing folded on.
+        assertThat(source.graph(workspaceId, workflowId, GraphVersion.DRAFT).nodes.single().mappings).isEmpty()
+    }
+
+    /**
+     * The newest thing a node carries: what it does when it fails.
+     *
+     * The two halves are kept in different places - a retry policy is on the
+     * node, and the fallback is the FAILURE edge, because the engine has no
+     * flag for it - so both have to survive being written down and read back.
+     * Losing either would leave a published workflow with handling the canvas
+     * shows and the run does not have.
+     */
+    @Test
+    fun `an action's retries and its failure edge survive publishing`() {
+        save(
+            nodes = """
+                { key: "call", kind: ACTION, name: "Tell the customer", x: 0, y: 0,
+                  fallbackEnabled: true, retryAttempts: 3, retryBackoffSeconds: 30 },
+                { key: "report", kind: AGENT, name: "Say it went out", x: 200, y: 0 },
+                { key: "apologise", kind: AGENT, name: "Say it did not", x: 200, y: 120 }
+            """,
+            edges = """
+                { source: "call", target: "report" },
+                { source: "call", target: "apologise", branch: FAILURE }
+            """,
+        )
+        publish()
+
+        val live = source.graph(workspaceId, workflowId, GraphVersion.PUBLISHED)
+
+        val action = live.nodes.single { it.key == "call" }
+        assertThat(action.retryAttempts).isEqualTo(3)
+        assertThat(action.retryBackoffSeconds).isEqualTo(30)
+
+        // The fallback is the edge: a run that could not do the work leaves by
+        // the marked one, and the unmarked one is still the way out when it did.
+        assertThat(live.edges).containsExactly(
+            GraphEdge("call", "report", null),
+            GraphEdge("call", "apologise", RunnableEdgeBranch.FAILURE),
+        )
+        // The switch itself stays where the editor put it, which is what keeps
+        // that edge legal the next time this graph is saved.
+        assertThat(nodes.findByWorkflowId(workflowId).single { it.nodeKey == "call" }.fallbackEnabled).isTrue()
+
+        assertThat(live).isEqualTo(source.graph(workspaceId, workflowId, GraphVersion.DRAFT))
     }
 }

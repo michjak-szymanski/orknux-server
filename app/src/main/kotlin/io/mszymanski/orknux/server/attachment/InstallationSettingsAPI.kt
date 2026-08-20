@@ -36,6 +36,8 @@ class InstallationSettingsAPI(
         attachmentMaxFileSizeMb = settings.maxFileSizeMb().toInt(),
         chatEnabled = settings.chatEnabled(),
         chatConfigurable = settings.chatConfigurable(),
+        metricsAnonymous = settings.metricsAnonymous(),
+        metricsAnonymousConfigured = settings.metricsAnonymousConfigured(),
     )
 
     @MutationMapping
@@ -66,6 +68,33 @@ class InstallationSettingsAPI(
         return installationSettings()
     }
 
+    /**
+     * Opens the metrics to anybody who can reach the port, or closes them again.
+     *
+     * No `configurable` gate, unlike the two above: the file's default for this
+     * one is already the closed answer, so a gate would be a way of saying no
+     * twice and the switch would never be pressable. What stands in its place is
+     * the audit entry — turning this on publishes counters about this
+     * installation to whoever can reach it, and that is worth a line with a name
+     * against it.
+     */
+    @MutationMapping
+    fun setMetricsAnonymous(@Argument enabled: Boolean): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setMetricsAnonymous(enabled, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            if (enabled) {
+                "Metrics opened to callers who have not signed in"
+            } else {
+                "Metrics closed to callers who have not signed in"
+            },
+        )
+        return installationSettings()
+    }
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
@@ -83,4 +112,20 @@ data class InstallationSettingsView(
     val chatEnabled: Boolean,
     /** False when the configuration file has said no, and the switch is not offered. */
     val chatConfigurable: Boolean,
+    /**
+     * Whether `/actuator/prometheus` answers a caller who has not signed in.
+     *
+     * Always switchable, and always off until somebody switches it: this is the
+     * one setting here the file does not put a floor under, because the file's
+     * default is already the closed answer.
+     */
+    val metricsAnonymous: Boolean,
+    /**
+     * What a fresh installation would have answered - ORKNUX_METRICS_ANONYMOUS.
+     *
+     * Shown so the screen can say when the stored answer differs from the
+     * configured one, rather than leaving an operator to wonder why the file
+     * they edited appears to be ignored.
+     */
+    val metricsAnonymousConfigured: Boolean,
 )

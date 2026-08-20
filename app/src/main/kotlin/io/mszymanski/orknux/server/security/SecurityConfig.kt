@@ -6,13 +6,17 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
+import org.springframework.security.authorization.AuthenticatedAuthorizationManager
+import org.springframework.security.authorization.AuthorizationDecision
+import org.springframework.security.authorization.AuthorizationManager
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
-import io.mszymanski.orknux.server.monitoring.MetricsProperties
+import io.mszymanski.orknux.server.attachment.InstallationSettings
 import io.mszymanski.orknux.server.user.TokenAuthenticationFilter
 import org.springframework.security.crypto.factory.PasswordEncoderFactories
 import org.springframework.security.crypto.password.PasswordEncoder
 import org.springframework.security.config.annotation.web.invoke
 import org.springframework.security.web.SecurityFilterChain
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter
 import org.springframework.security.web.authentication.HttpStatusEntryPoint
 import org.springframework.security.web.util.matcher.DispatcherTypeRequestMatcher
@@ -21,7 +25,7 @@ import org.springframework.web.cors.CorsConfigurationSource
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(WebProperties::class, SecurityProperties::class, MetricsProperties::class)
+@EnableConfigurationProperties(WebProperties::class, SecurityProperties::class)
 class SecurityConfig {
 
     /**
@@ -38,7 +42,7 @@ class SecurityConfig {
     fun securityFilterChain(
         http: HttpSecurity,
         properties: SecurityProperties,
-        metrics: MetricsProperties,
+        settings: InstallationSettings,
         tokens: TokenAuthenticationFilter,
     ): SecurityFilterChain {
         http {
@@ -114,25 +118,13 @@ class SecurityConfig {
                  */
                 authorize(HttpMethod.POST, "$WEBHOOK_PATH/**", permitAll)
                 /*
-                 * The metrics, for a scraper with nowhere to keep a session —
-                 * and only where an operator has said so.
+                 * The metrics, for a scraper with nowhere to keep a session.
                  *
-                 * Authenticated is what the rule below already gives, and it is
-                 * the right default: a scrape describes the installation rather
-                 * than the machine, so an open one publishes how many workspaces
-                 * there are, how often workflows run and how often they fail. A
-                 * scraper that can carry an Authorization header needs nothing
-                 * here — an API token is read on the way in like anybody's, and
-                 * merely being somebody is enough: a scrape is aggregate counters
-                 * rather than anybody's data, and a token that had to administer
-                 * would be a far stronger credential to leave in a scrape config.
-                 *
-                 * So this exists for the deployment where the scrape crosses a
-                 * network only the scraper is on. It is a GET on one path, and
-                 * every other Actuator endpoint is unexposed rather than merely
-                 * protected, so what it opens cannot grow.
+                 * Asked rather than decided, because this one is a switch on the
+                 * Admin screen and everything else here is a fact about the
+                 * application. See [metricsAccess].
                  */
-                if (metrics.anonymous) authorize(HttpMethod.GET, PROMETHEUS_PATH, permitAll)
+                authorize(HttpMethod.GET, PROMETHEUS_PATH, metricsAccess(settings))
                 authorize(anyRequest, authenticated)
             }
             // Answer unauthenticated calls with 401 instead of redirecting to a login page.
@@ -176,6 +168,38 @@ class SecurityConfig {
         return http.build()
     }
 
+    /**
+     * Who may read the metrics, asked on every scrape rather than answered once.
+     *
+     * Authenticated is the default and the right one: a scrape describes the
+     * installation rather than the machine, so an open one publishes how many
+     * workspaces there are, how often workflows run and how often they fail. A
+     * scraper that can carry an Authorization header needs nothing opened — an
+     * API token is read on the way in like anybody's — and merely being somebody
+     * is enough, since a scrape is aggregate counters rather than anybody's data
+     * and a token that had to administer would be a far stronger credential to
+     * leave sitting in a scrape configuration.
+     *
+     * **Why a manager and not an `if`.** Every other rule above is settled when
+     * this chain is built, because every other rule is about what a path *is*.
+     * This one is a switch an administrator can press, and a rule read once at
+     * startup would mean the press took a restart to mean anything — which is
+     * the whole of what was asked for. So the question is put to
+     * [InstallationSettings] per request: one lookup by primary key on a path
+     * that is scraped every fifteen seconds, against a decision that would
+     * otherwise be a deployment.
+     *
+     * Off is still off unless somebody says otherwise, and what it opens cannot
+     * grow: one method, one path, and every other Actuator endpoint unexposed
+     * rather than merely protected.
+     */
+    private fun metricsAccess(settings: InstallationSettings): AuthorizationManager<RequestAuthorizationContext> {
+        val closed = AuthenticatedAuthorizationManager.authenticated<RequestAuthorizationContext>()
+        return AuthorizationManager { authentication, request ->
+            if (settings.metricsAnonymous()) OPEN else closed.authorize(authentication, request)
+        }
+    }
+
     @Bean
     fun corsConfigurationSource(properties: WebProperties): CorsConfigurationSource {
         val configuration = CorsConfiguration().apply {
@@ -187,6 +211,11 @@ class SecurityConfig {
         return UrlBasedCorsConfigurationSource().apply {
             registerCorsConfiguration("/**", configuration)
         }
+    }
+
+    private companion object {
+        /** What [metricsAccess] answers once an administrator has opened the door. */
+        val OPEN = AuthorizationDecision(true)
     }
 }
 
@@ -201,5 +230,5 @@ const val PASSWORD_RESET_PATH = "/api/password-reset"
 /** Where a webhook trigger answers; open, because its callers cannot sign in. */
 const val WEBHOOK_PATH = "/api/webhooks"
 
-/** Where a scrape reads. Authenticated unless `orknux.metrics.anonymous`. */
+/** Where a scrape reads. Authenticated unless an administrator has said otherwise. */
 const val PROMETHEUS_PATH = "/actuator/prometheus"

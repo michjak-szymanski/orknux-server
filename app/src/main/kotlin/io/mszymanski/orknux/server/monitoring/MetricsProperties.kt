@@ -22,6 +22,11 @@ data class MetricsProperties(
      * It opens the metrics and nothing else. Every other Actuator endpoint is
      * unexposed rather than merely protected — see the `management` block in
      * application.yml — so this cannot widen into them.
+     *
+     * And it is where a fresh installation starts rather than the last word. The
+     * same switch is on the Admin screen, and once it has been pressed the stored
+     * answer is the one that holds — see `InstallationSettings.metricsAnonymous`
+     * for why this one is not given the floor the others get.
      */
     val anonymous: Boolean = false,
 )

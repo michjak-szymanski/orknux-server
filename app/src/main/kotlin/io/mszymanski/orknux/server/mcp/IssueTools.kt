@@ -9,6 +9,8 @@ import io.mszymanski.orknux.server.issue.IssueHistoryRecorder
 import io.mszymanski.orknux.server.issue.IssueNewsDesk
 import io.mszymanski.orknux.server.issue.IssueObserver
 import io.mszymanski.orknux.server.issue.IssueObserverRepository
+import io.mszymanski.orknux.server.issue.IssueRelationRepository
+import io.mszymanski.orknux.server.issue.IssueRelations
 import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.issue.NewsReader
@@ -43,6 +45,7 @@ class IssueTools(
     private val newsDesk: IssueNewsDesk,
     private val history: IssueHistoryRecorder,
     private val observers: IssueObserverRepository,
+    private val relations: IssueRelationRepository,
     private val models: ModelService,
     private val web: WebProperties,
     private val mapper: ObjectMapper,
@@ -161,6 +164,12 @@ class IssueTools(
                 // thing said here will actually reach.
                 "observers" to observerNames(held),
                 "labels" to held.labels.sorted(),
+                // The first thing worth knowing about work before starting it,
+                // and the one thing here nothing else says: an issue that is
+                // blocked or is a duplicate should not be picked up, and an
+                // assistant reading a title and a description alone has no way
+                // to find that out.
+                "links" to linksOn(held),
                 "comments" to held.comments.map {
                     mapOf("author" to it.author, "said" to it.content, "at" to it.createdAt.toString())
                 },
@@ -436,6 +445,34 @@ class IssueTools(
                 AssigneeKind.AGENT -> agents.findByIdOrNull(watching.observerId.toLongOrNull() ?: -1)?.name
                 AssigneeKind.MODEL -> null
             }
+        }
+    }
+
+    /**
+     * What this issue has to do with others, read from its side.
+     *
+     * A sentence apiece rather than a kind and an id, because what reads this is
+     * something that has to decide with it: "is blocked by #4" is the answer to
+     * "should I start this", where a pair of fields is a thing to interpret.
+     * The number and the title together, so a decision does not need a second
+     * call to find out what #4 even is.
+     *
+     * Read only. Linking two issues is a claim about both of them and about
+     * whose work waits on whose, which is the same judgement as handing out
+     * work - the one thing [open] deliberately does not do.
+     */
+    private fun linksOn(issue: Issue): List<Map<String, Any?>> {
+        val id = issue.id ?: return emptyList()
+        return relations.touching(id).mapNotNull { link ->
+            val (kind, otherId) = IssueRelations.seenFrom(link, id)
+            val other = issues.findByIdOrNull(otherId) ?: return@mapNotNull null
+            mapOf(
+                "what" to "${kind.reads} #${other.number}",
+                "issue" to other.number,
+                "title" to other.title,
+                "status" to other.status,
+                "url" to issueLink(other.workspaceId, other.number),
+            )
         }
     }
 

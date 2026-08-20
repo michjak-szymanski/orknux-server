@@ -34,9 +34,19 @@ class IssueExceptionResolver : DataFetcherExceptionResolverAdapter() {
              * button again.
              */
             is IssueMoveRefusedException,
+            /*
+             * The three ways of linking two issues badly are all the caller's to
+             * fix and each names what is wrong: itself, somewhere else, or
+             * already linked some other way.
+             */
+            is IssueRelationToItselfException,
+            is IssueRelationElsewhereException,
+            is IssueRelationAlreadyException,
             -> ErrorType.BAD_REQUEST
 
-            is IssueLinkNotFoundException -> ErrorType.NOT_FOUND
+            is IssueLinkNotFoundException,
+            is IssueRelationNotFoundException,
+            -> ErrorType.NOT_FOUND
 
             else -> return null
         }

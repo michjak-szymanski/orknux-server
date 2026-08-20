@@ -15,7 +15,7 @@ import java.time.OffsetDateTime
 /**
  * One line in an issue's history.
  *
- * Seven kinds and only five of them are ever stored. [OPENED] is read off the
+ * Eight kinds and only six of them are ever stored. [OPENED] is read off the
  * issue itself and [COMMENT] off the comments table, because both are already
  * recorded faithfully and a second copy of a comment is a copy that goes stale
  * the moment somebody edits it. They are in the same enum because the reader
@@ -49,6 +49,15 @@ enum class IssueEventKind {
 
     /** Somebody started or stopped hearing about it. */
     OBSERVER,
+
+    /**
+     * It was linked to another issue, or the link was taken off.
+     *
+     * Written on both issues, phrased from each one's own side, because a link
+     * is one fact about two of them: the history of the issue that was named
+     * would otherwise be silent about the day somebody declared it a duplicate.
+     */
+    LINK,
 
     /** Somebody said something. Assembled from the comments table. */
     COMMENT,
@@ -179,6 +188,27 @@ class IssueHistoryRecorder(private val events: IssueEventRepository) {
 
     fun observerRemoved(issue: Issue, name: String, actor: String) =
         write(issue, IssueEventKind.OBSERVER, actor, name, null)
+
+    /**
+     * Two issues were linked, written down on both of them.
+     *
+     * Each side gets the sentence that is true of it: the blocker's line says it
+     * blocks, the blocked one's says it is blocked by. Two calls rather than one
+     * method writing both rows, because the two lines say different things and a
+     * caller that could only write one of them is a caller whose next change
+     * leaves half the record behind.
+     *
+     * Written the way [IssueRelations.said] writes it, which is also how the
+     * news says it - one encoding rather than two, since both are read by
+     * something that has to turn it back into a sentence. The number is the one
+     * the other issue had at the time, like the assignee beside it: this is a
+     * record of something that happened, not a pointer that has to keep working.
+     */
+    fun linked(issue: Issue, kind: IssueRelationKind, otherNumber: Int, actor: String) =
+        write(issue, IssueEventKind.LINK, actor, null, IssueRelations.said(kind, otherNumber))
+
+    fun unlinked(issue: Issue, kind: IssueRelationKind, otherNumber: Int, actor: String) =
+        write(issue, IssueEventKind.LINK, actor, IssueRelations.said(kind, otherNumber), null)
 
     private fun write(issue: Issue, kind: IssueEventKind, actor: String, was: String?, became: String?) {
         val issueId = issue.id ?: return

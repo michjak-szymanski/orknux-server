@@ -279,7 +279,10 @@ class OrknuxTools(
         add(
             ToolSpec(
                 name = "orknux_issue",
-                description = "One issue in full, with its description and every comment.",
+                description =
+                    "One issue in full, with its description, every comment, and what it has to do with " +
+                        "other issues - read that before starting on it, since one that is blocked or is a " +
+                        "duplicate says so there and nowhere else.",
                 parameters = listOf(ToolParameterSpec("issue", "Its number in this workspace, like 4.", required = true)),
             ),
         )

@@ -43,6 +43,19 @@ enum class IssueNewsKind {
      * and from here on you will hear about it.
      */
     OBSERVING,
+
+    /**
+     * It was linked to another issue.
+     *
+     * Labels and attachments are not news and this is, which is a line drawn
+     * where the change stops being bookkeeping and starts changing what to do
+     * next. "Blocked by #4" says do not start; "duplicates #4" says stop, the
+     * answer is over there. Somebody reading the page can see it either way -
+     * an agent working the queue through the tools cannot see anything it is
+     * not told, and it is exactly the reader most likely to pick up work that
+     * has just been declared unstartable.
+     */
+    LINKED,
 }
 
 /**

@@ -74,10 +74,28 @@ class AppWorkflowGraphSource(
 
     /** What publishing copies, and what a person pressing Run is looking at. */
     fun drafted(workflowId: Long, name: String): RunnableGraph {
+        val held = nodes.findByWorkflowId(workflowId)
+        val drawn = edges.findByWorkflowId(workflowId)
+
+        /*
+         * The session nodes, by key, and the agents each of them names.
+         *
+         * A session is a declaration on the canvas rather than a step, so this
+         * is where it stops being a node: what it holds is folded into the
+         * agents it leads to, and neither it nor its edges reach the engine.
+         * Doing it here, rather than in the runner, is what keeps a run honest -
+         * this is the copy publishing takes, so a graph redrawn afterwards does
+         * not change which conversation an already-published workflow talks into.
+         */
+        val declared = held.filter { it.kind == NodeKind.SESSION }.associateBy { it.nodeKey }
+        val sessionFor = drawn
+            .filter { it.sourceKey in declared }
+            .associate { it.targetKey to declared.getValue(it.sourceKey) }
+
         return RunnableGraph(
             workflowId = workflowId,
             name = name,
-            nodes = nodes.findByWorkflowId(workflowId).map { node ->
+            nodes = held.filterNot { it.kind == NodeKind.SESSION }.map { node ->
                 GraphNode(
                     key = node.nodeKey,
                     kind = RunnableNodeKind.valueOf(node.kind.name),
@@ -89,20 +107,46 @@ class AppWorkflowGraphSource(
                     outputName = node.outputName,
                     // What this node passes, decided on the node. Seeded from the
                     // action when the node was placed, its own from then on.
-                    mappings = node.mappings.associate {
-                        it.name to NodeBinding(
-                            expression = it.expression,
-                            reference = it.mode == MappingMode.REFERENCE,
-                            from = it.sourceNodeKey,
-                        )
-                    },
+                    mappings = bindings(node.mappings) + sessionOf(sessionFor[node.nodeKey]),
                     x = node.positionX,
                     y = node.positionY,
                 )
             },
-            edges = edges.findByWorkflowId(workflowId).map {
-                GraphEdge(it.sourceKey, it.targetKey, it.branch?.let { branch -> EdgeBranch.valueOf(branch.name) })
-            },
+            edges = drawn
+                .filterNot { it.sourceKey in declared || it.targetKey in declared }
+                .map {
+                    GraphEdge(it.sourceKey, it.targetKey, it.branch?.let { branch -> EdgeBranch.valueOf(branch.name) })
+                },
         )
+    }
+
+    private fun bindings(mappings: List<NodeMapping>): Map<String, NodeBinding> = mappings.associate {
+        it.name to NodeBinding(
+            expression = it.expression,
+            reference = it.mode == MappingMode.REFERENCE,
+            from = it.sourceNodeKey,
+        )
+    }
+
+    /**
+     * The two parameters a session node contributes to the agent it leads to.
+     *
+     * They arrive under the names the runner already reads, and they are put on
+     * *after* the agent's own, so a node still carrying the keys from before
+     * session nodes existed is overridden by the session wired to it rather than
+     * quietly winning against it. Nothing wired means nothing added, which is
+     * what leaves those older nodes running exactly as they did.
+     */
+    private fun sessionOf(session: WorkflowNode?): Map<String, NodeBinding> =
+        session?.mappings.orEmpty()
+            .filter { it.name == SESSION_KEY || it.name == SESSION_KEY_PREFIX }
+            .let(::bindings)
+
+    private companion object {
+        /** Which conversation the agents wired to a session node write into. */
+        const val SESSION_KEY = "sessionKey"
+
+        /** What that key is filed under; optional, see `LlmSessionKey`. */
+        const val SESSION_KEY_PREFIX = "sessionKeyPrefix"
     }
 }

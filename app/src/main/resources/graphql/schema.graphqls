@@ -855,6 +855,15 @@ enum NodeKind {
     CONDITION
     "Makes an object out of what the run is carrying, and hands it on."
     OBJECT
+    """
+    Names an LLM session the agent nodes wired to it talk into.
+
+    A declaration rather than a step: nothing runs it, and it produces nothing a
+    later node can read. It carries `sessionKey` and the optional
+    `sessionKeyPrefix`, and an edge from it to an agent is what says that agent
+    writes into that conversation.
+    """
+    SESSION
 }
 
 type WorkflowNode {

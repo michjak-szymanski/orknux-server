@@ -93,10 +93,13 @@ class ChatInSessionTest(
      * The chat opens as a continuation rather than as a blank box.
      *
      * What was said comes back as the chat's own messages, in the order it was
-     * said, so the person reads the conversation before adding to it. Only what
-     * was *said*: a tool call belongs on the session's page, where somebody
-     * asking how the agent worked will look for it, and pasting one into a chat
-     * would read as the agent talking to itself.
+     * said, so the person reads the conversation before adding to it - and the
+     * lookup the agent made on the way is between them, where it happened.
+     *
+     * The chat is opened to work out what an agent did. An answer shown with
+     * nothing between it and the question reads as the model having known
+     * something it went and found out, which is the one reading this page must
+     * not produce.
      */
     @Test
     fun `a chat opened from a session starts holding what was already said`() {
@@ -107,14 +110,71 @@ class ChatInSessionTest(
 
         val chatId = startChat(sessionId)
 
-        graphQlTester.document("""{ chatMessages(id: $chatId) { role content } }""")
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content actor } }""")
             .execute()
             .path("chatMessages[0].role").entity(String::class.java).isEqualTo("user")
             .path("chatMessages[0].content").entity(String::class.java)
             .isEqualTo("Why did the database fall over?")
-            .path("chatMessages[1].role").entity(String::class.java).isEqualTo("assistant")
+            // The call, under the tool's own name and with what the model sent
+            // it, exactly as the session's page draws it.
+            .path("chatMessages[1].role").entity(String::class.java).isEqualTo("tool")
+            .path("chatMessages[1].actor").entity(String::class.java).isEqualTo("skill_load")
             .path("chatMessages[1].content").entity(String::class.java)
+            .isEqualTo("""{"name":"codeReview"}""")
+            .path("chatMessages[2].role").entity(String::class.java).isEqualTo("assistant")
+            .path("chatMessages[2].content").entity(String::class.java)
             .isEqualTo("The connection pool was exhausted.")
+            .path("chatMessages").entityList(Any::class.java).hasSize(3)
+    }
+
+    /**
+     * And the model is not told about it.
+     *
+     * The two readings are different on purpose. A call replayed into a prompt
+     * is a call the model never made in this exchange with no result threaded
+     * to it, so the thread the chat sends holds what was *said* and nothing
+     * else - which is what it held before any of this, and what it must go on
+     * holding on every later send.
+     */
+    @Test
+    fun `the call shown in the chat is never put in front of the model`() {
+        val sessionId = session("issue", "42")
+        recorder.userSaid(sessionId, "Ask reviewer", "Why did the database fall over?")
+        recorder.toolCalled(sessionId, "search_tickets", """{"query":"billing export"}""")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+
+        send(chatId, "So what do we do about it?")
+
+        val asked = received.single()
+        assertThat(asked).contains("Why did the database fall over?")
+        assertThat(asked).contains("The connection pool was exhausted.")
+        assertThat(asked).doesNotContain("search_tickets")
+        assertThat(asked).doesNotContain("billing export")
+    }
+
+    /**
+     * A call outside the stretch that was carried is not drawn inside it.
+     *
+     * The names and the calls are put back by matching the thread against the
+     * session, and the match is the safe answer when it is unsure. A call made
+     * before the oldest turn the chat carried was not part of what it carried,
+     * and showing it would say the agent looked something up in the middle of
+     * an exchange that had already ended.
+     */
+    @Test
+    fun `a call made before what was carried is left where it happened`() {
+        val sessionId = session("issue", "42")
+        recorder.toolCalled(sessionId, "search_tickets", """{"query":"billing export"}""")
+        recorder.userSaid(sessionId, "Ask reviewer", "Why did the database fall over?")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+
+        val chatId = startChat(sessionId)
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role actor } }""")
+            .execute()
+            .path("chatMessages[0].role").entity(String::class.java).isEqualTo("user")
+            .path("chatMessages[1].role").entity(String::class.java).isEqualTo("assistant")
             .path("chatMessages").entityList(Any::class.java).hasSize(2)
     }
 
@@ -142,8 +202,10 @@ class ChatInSessionTest(
             // Not "alice", who is reading it - a session's question can come
             // from anywhere, and this one came from Slack.
             .path("chatMessages[0].actor").entity(String::class.java).isEqualTo("Slack: dana")
+            // The tool, under the name it was called by.
+            .path("chatMessages[1].actor").entity(String::class.java).isEqualTo("skill_load")
             // And the agent, rather than the model the chat happens to hold.
-            .path("chatMessages[1].actor").entity(String::class.java).isEqualTo("Reviewer")
+            .path("chatMessages[2].actor").entity(String::class.java).isEqualTo("Reviewer")
     }
 
     /**

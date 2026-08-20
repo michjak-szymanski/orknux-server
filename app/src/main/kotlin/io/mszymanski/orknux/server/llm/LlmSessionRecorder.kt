@@ -112,27 +112,39 @@ class LlmSessionRecorder(
      */
     fun remembered(session: Long): List<ChatTurn> =
         tail(session) { events.latest(session, SAID, PageRequest.of(0, MEMORY_TURNS)) }
-            .map { ChatTurn(it.role, it.content) }
+            .map(::turn)
+            .map { said -> ChatTurn(said.role, said.content) }
 
     /**
-     * The same tail as it stood before a moment, and who said each line of it.
+     * The same tail as it stood before a moment, read the way a person reads
+     * it: who said each line, and the calls made in between them.
      *
-     * For reading back what something else copied out of here. [remembered]
-     * answers a model, which only needs the words; this answers whoever wants
-     * to know who spoke them - which the copy could not keep, because the place
-     * it was copied into stores a role and some text and has nowhere to put a
-     * name.
+     * The other half of the split [remembered] is one side of. A model is given
+     * what was said and nothing else, for the reason written there. A person
+     * looking at the same stretch is asking how the answer was arrived at, and
+     * that stretch with the lookup taken out of it reads as the agent having
+     * simply known - which is the one thing somebody opened it to find out. So
+     * the two readings are two methods rather than one with a flag, and only
+     * this one puts the calls back.
+     *
+     * Nothing from here is ever put in front of a model. A [RememberedTurn]
+     * that is [RememberedTurn.called] has no result threaded to it and never
+     * had one; it is a line to read.
      *
      * Bounded by when the copy was taken, because a chat continuing a session
      * writes back into it: asked without the bound, a session would hand back
      * the chat's own turns as though they had been there to be copied.
      *
-     * Shaped by exactly the same rules as [remembered] - same kinds, same
-     * counts, same order - so what comes back is the tail that was copied
-     * rather than something merely like it.
+     * What was *said* is shaped by exactly the same rules as [remembered] -
+     * same kinds, same counts, same order - so the turns that come back are the
+     * tail that was copied rather than something merely like it, and the calls
+     * are threaded through it without ever counting as part of it.
      */
-    fun saidBefore(session: Long, before: OffsetDateTime): List<RememberedTurn> =
-        tail(session) { events.latestBefore(session, SAID, before, PageRequest.of(0, MEMORY_TURNS)) }
+    fun readBefore(session: Long, before: OffsetDateTime): List<RememberedTurn> =
+        withCalls(
+            session,
+            tail(session) { events.latestBefore(session, SAID, before, PageRequest.of(0, MEMORY_TURNS)) },
+        ).map(::turn)
 
     /**
      * The bounding and the ordering, in one place.
@@ -142,7 +154,7 @@ class LlmSessionRecorder(
      * Two copies of them would be two answers to "what was said", and the
      * second one to drift would be a chat labelling turns it did not carry.
      */
-    private fun tail(session: Long, read: () -> List<LlmSessionEvent>): List<RememberedTurn> {
+    private fun tail(session: Long, read: () -> List<LlmSessionEvent>): List<LlmSessionEvent> {
         val recent = try {
             read()
         } catch (failure: Exception) {
@@ -160,16 +172,68 @@ class LlmSessionRecorder(
                 room -= said.length
                 room >= 0
             }
-            .map { (event, said) ->
-                RememberedTurn(
-                    role = if (event.kind == LlmSessionEventKind.USER) "user" else "assistant",
-                    content = said,
-                    actor = event.actor,
-                )
-            }
+            .map { (event, _) -> event }
             .toList()
             .asReversed()
     }
+
+    /**
+     * The calls made between the ends of a tail, put back where they happened.
+     *
+     * Only between them. A call older than the oldest turn kept was not part of
+     * the stretch this tail covers, and one newer than the newest happened
+     * after it - so the two turns are the bounds, and a tail of fewer than two
+     * turns has no inside for anything to have happened in.
+     *
+     * The bound is a moment and an id together, because a turn writes its
+     * question, its calls and its answer inside the same millisecond: on the
+     * clock alone the first call of an exchange and the question that caused it
+     * are indistinguishable, and one of them would fall on the wrong side of
+     * the other.
+     *
+     * Failing costs the calls and not the reading. A stretch that could not be
+     * filled in is the conversation without its working, which is exactly what
+     * was shown before there was any of this.
+     */
+    private fun withCalls(session: Long, said: List<LlmSessionEvent>): List<LlmSessionEvent> {
+        if (said.size < 2) return said
+        val first = said.first()
+        val last = said.last()
+
+        val calls = try {
+            events.calledBetween(
+                session,
+                LlmSessionEventKind.TOOL,
+                first.at,
+                last.at,
+                PageRequest.of(0, MEMORY_CALLS),
+            )
+        } catch (failure: Exception) {
+            log.warn("The calls in session {} could not be read back", session, failure)
+            return said
+        }
+
+        val inside = calls.filter { ORDER.compare(first, it) < 0 && ORDER.compare(it, last) < 0 }
+        if (inside.isEmpty()) return said
+        return (said + inside).sortedWith(ORDER)
+    }
+
+    /**
+     * One recorded line, in the terms whoever reads it back needs.
+     *
+     * A call keeps a role of its own rather than being folded into the turn it
+     * was made for, because the whole point of putting it back is that a reader
+     * can tell the two apart.
+     */
+    private fun turn(event: LlmSessionEvent) = RememberedTurn(
+        role = when (event.kind) {
+            LlmSessionEventKind.USER -> "user"
+            LlmSessionEventKind.TOOL -> RememberedTurn.CALL
+            else -> "assistant"
+        },
+        content = event.content.orEmpty(),
+        actor = event.actor,
+    )
 
     /**
      * Saves the line, and moves the session's clock with it.
@@ -216,8 +280,24 @@ class LlmSessionRecorder(
          */
         const val MEMORY_CHARS = 24_000
 
+        /**
+         * And how many calls may be threaded back through them.
+         *
+         * A ceiling rather than a budget. The stretch is already bounded at
+         * both ends by turns somebody said, so this only bites on the agent
+         * that made hundreds of lookups inside one exchange - and a page nobody
+         * can scroll is not a better reading of that than a page that stops.
+         */
+        const val MEMORY_CALLS = 200
+
         /** The kinds that were said by somebody, and so can be said again. */
         val SAID = listOf(LlmSessionEventKind.USER, LlmSessionEventKind.AGENT)
+
+        /**
+         * The order a session reads in: when a line was written, and then which
+         * of the lines written in that same instant came first.
+         */
+        val ORDER = compareBy<LlmSessionEvent>({ it.at }, { it.id ?: 0L })
 
         val log = LoggerFactory.getLogger(LlmSessionRecorder::class.java)
     }
@@ -231,4 +311,25 @@ class LlmSessionRecorder(
  * anybody reading a transcript needs to know which agent, tool or person the
  * words belong to.
  */
-data class RememberedTurn(val role: String, val content: String, val actor: String)
+data class RememberedTurn(val role: String, val content: String, val actor: String) {
+
+    /**
+     * True for a line that was a call rather than something anybody said.
+     *
+     * Asked rather than compared against a string wherever it matters, so there
+     * is one spelling of what a call reads as and nothing can drift from it.
+     */
+    val called: Boolean get() = role == CALL
+
+    companion object {
+        /**
+         * The role a call reads under.
+         *
+         * The word a provider uses for the same thing, so a reader that already
+         * knows the roles a message can have does not have to learn another
+         * one. It never reaches a provider: nothing built for a prompt is built
+         * out of these.
+         */
+        const val CALL = "tool"
+    }
+}

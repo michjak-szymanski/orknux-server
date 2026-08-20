@@ -1413,16 +1413,25 @@ type ChatSession {
     lastMessageAt: String
 }
 
-"One message out of the history. Role is user, assistant, system or tool."
+"""
+One line of a chat, as it is read.
+
+Role is user, assistant, system or tool. A `tool` line is a call the agent made
+in the LLM session this chat continues, shown between the turns it was made
+between so an answer is not read as something the agent simply knew - `content`
+is the arguments as the model sent them, and `actor` is the tool. It is not part
+of the conversation and was never in the thread: what goes to the model is what
+was said, and only that.
+"""
 type ChatMessage {
     role: String!
     content: String!
     """
-    Who said it - the agent, the tool or the person - for a turn carried into
+    Who said it - the agent, the tool or the person - for a line carried into
     this chat from the LLM session it continues.
 
     Null for everything the chat itself said, which the model or agent named on
-    the chat answered. So it is also the boundary: turns with an actor were
+    the chat answered. So it is also the boundary: lines with an actor were
     already there when the chat opened, turns without were said in it.
     """
     actor: String

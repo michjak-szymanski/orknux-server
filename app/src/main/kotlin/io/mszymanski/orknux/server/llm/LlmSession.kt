@@ -291,6 +291,39 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
     ): List<LlmSessionEvent>
 
     /**
+     * The calls made inside a stretch of a session, oldest first.
+     *
+     * For putting a tail back together as it actually read. [latestBefore]
+     * answers what was *said*, because that is what a thread was seeded from
+     * and what a prompt may hold; this is the working that went on between
+     * those turns, which the page it is shown on wants and the model must not
+     * be given.
+     *
+     * Bounded by the two ends of that tail rather than by a count of turns, so
+     * what comes back is what happened inside it and nothing on either side.
+     * Both ends are inclusive here and narrowed by the caller, because two
+     * lines of one exchange are written in the same instant and only the id
+     * tells them apart.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.kind = :kind
+          and e.at >= :from
+          and e.at <= :to
+        order by e.at asc, e.id asc
+        """,
+    )
+    fun calledBetween(
+        sessionId: Long,
+        kind: LlmSessionEventKind,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        page: Pageable,
+    ): List<LlmSessionEvent>
+
+    /**
      * The counts for a whole page at once.
      *
      * One query rather than one per row: a list of twenty sessions that each

@@ -1,0 +1,298 @@
+package io.mszymanski.orknux.server.chat
+
+import com.sun.net.httpserver.HttpServer
+import io.mszymanski.orknux.connector.model.LlmModelRepository
+import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentSkillRepository
+import io.mszymanski.orknux.server.agent.SkillCatalogRepository
+import io.mszymanski.orknux.server.llm.LlmSessionEventKind
+import io.mszymanski.orknux.server.llm.LlmSessionEventRepository
+import io.mszymanski.orknux.server.llm.LlmSessionRecorder
+import io.mszymanski.orknux.server.llm.LlmSessionRepository
+import io.mszymanski.orknux.server.workspace.Workspace
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.springframework.ai.chat.memory.ChatMemoryRepository
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
+import org.springframework.security.test.context.support.WithMockUser
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.CopyOnWriteArrayList
+
+/**
+ * A person picking up a conversation an agent had.
+ *
+ * A session is written by agents going to work; nothing in it was ever said by
+ * hand. This is the one way somebody joins one, and the round trip is the whole
+ * feature: the chat opens holding what was already said, what is typed into it
+ * is written back, and the next run to read that session hears the person as
+ * plainly as it hears the agent that spoke before them.
+ *
+ * The binding is a pointer set when the chat is opened, not a key. A key is
+ * something two callers can independently arrive at, which is what makes a
+ * session shared; a key invented for a chat would name a conversation nothing
+ * else could ever reach, so a chat opened any other way still has no session at
+ * all.
+ */
+@SpringBootTest
+@AutoConfigureGraphQlTester
+@WithMockUser(username = "alice", roles = ["ADMINS"])
+class ChatInSessionTest(
+    @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
+    @Autowired val chats: ChatSessionRepository,
+    @Autowired val history: ChatMemoryRepository,
+    @Autowired val recorder: LlmSessionRecorder,
+    @Autowired val sessions: LlmSessionRepository,
+    @Autowired val events: LlmSessionEventRepository,
+    @Autowired val agents: AgentRepository,
+    @Autowired val skills: AgentSkillRepository,
+    @Autowired val catalogs: SkillCatalogRepository,
+    @Autowired val models: LlmModelRepository,
+    @Autowired val providers: ModelProviderRepository,
+    @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val audit: WorkspaceAuditRepository,
+) {
+
+    private var workspaceId: Long = 0
+    private var server: HttpServer? = null
+    private val received = CopyOnWriteArrayList<String>()
+
+    @BeforeEach
+    fun reset() {
+        chats.findAll().forEach { history.deleteByConversationId(it.conversationId) }
+        chats.deleteAll()
+        events.deleteAll()
+        sessions.deleteAll()
+        agents.deleteAll()
+        skills.deleteAll()
+        catalogs.deleteAll()
+        models.deleteAll()
+        providers.deleteAll()
+        audit.deleteAll()
+        workspaces.deleteAll()
+        received.clear()
+        workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
+    }
+
+    @AfterEach
+    fun stop() {
+        server?.stop(0)
+        server = null
+    }
+
+    /**
+     * The chat opens as a continuation rather than as a blank box.
+     *
+     * What was said comes back as the chat's own messages, in the order it was
+     * said, so the person reads the conversation before adding to it. Only what
+     * was *said*: a tool call belongs on the session's page, where somebody
+     * asking how the agent worked will look for it, and pasting one into a chat
+     * would read as the agent talking to itself.
+     */
+    @Test
+    fun `a chat opened from a session starts holding what was already said`() {
+        val sessionId = session("issue", "42")
+        recorder.userSaid(sessionId, "Ask reviewer", "Why did the database fall over?")
+        recorder.toolCalled(sessionId, "skill_load", """{"name":"codeReview"}""")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+
+        val chatId = startChat(sessionId)
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content } }""")
+            .execute()
+            .path("chatMessages[0].role").entity(String::class.java).isEqualTo("user")
+            .path("chatMessages[0].content").entity(String::class.java)
+            .isEqualTo("Why did the database fall over?")
+            .path("chatMessages[1].role").entity(String::class.java).isEqualTo("assistant")
+            .path("chatMessages[1].content").entity(String::class.java)
+            .isEqualTo("The connection pool was exhausted.")
+            .path("chatMessages").entityList(Any::class.java).hasSize(2)
+    }
+
+    /**
+     * And the transcript keeps growing, which is what a later run reads.
+     *
+     * The person's turn under their own name and the model's under the model's,
+     * appended to the same session rather than to a copy of it. Nothing here is
+     * a new session: the chat pointed at one that already existed.
+     */
+    @Test
+    fun `what is said in the chat is written back into the session`() {
+        val sessionId = session("issue", "42")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+
+        send(chatId, "So what do we do about it?")
+
+        assertThat(sessions.findAll()).hasSize(1)
+        val lines = events.findAll().sortedBy { it.id }
+        assertThat(lines.map { it.kind }).containsExactly(
+            LlmSessionEventKind.AGENT,
+            LlmSessionEventKind.USER,
+            LlmSessionEventKind.AGENT,
+        )
+        // Whoever typed it, by name - so a run reading this hears a person
+        // rather than another agent.
+        assertThat(lines[1].actor).isEqualTo("alice")
+        assertThat(lines[1].content).isEqualTo("So what do we do about it?")
+        // And what answered, under what the chat was talking to.
+        assertThat(lines[2].actor).isEqualTo("Stub")
+        assertThat(lines[2].content).isEqualTo("Raise the pool size.")
+    }
+
+    /**
+     * The model hears the session too, once - because the chat's own thread is
+     * what was copied in.
+     *
+     * Reading the session again on every send would put everything said so far
+     * in front of the model twice, and the copies would grow with the chat. The
+     * thread is the memory from the moment the chat opens.
+     */
+    @Test
+    fun `the model is asked with the session's exchange in front of it, once`() {
+        val sessionId = session("issue", "42")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+
+        send(chatId, "So what do we do about it?")
+
+        val asked = received.single()
+        assertThat(asked).contains("The connection pool was exhausted.")
+        assertThat(asked.split("The connection pool was exhausted.")).hasSize(2)
+    }
+
+    /**
+     * An agent's answer is written once, by the round that produced it.
+     *
+     * [AgentConversation] records an agent's round as it happens - the tools it
+     * called included, which nothing outside the loop could produce - so the
+     * chat must not write the answer a second time under a different name.
+     */
+    @Test
+    fun `an agent answering in the chat records its round once, under its own name`() {
+        val sessionId = session("issue", "42")
+        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+        val agentId = agent("Reviewer", chats.findAll().single().modelId!!)
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
+            .execute()
+
+        send(chatId, "So what do we do about it?")
+
+        val lines = events.findAll().sortedBy { it.id }
+        assertThat(lines.map { it.kind })
+            .containsExactly(LlmSessionEventKind.USER, LlmSessionEventKind.AGENT)
+        assertThat(lines[1].actor).isEqualTo("Reviewer")
+    }
+
+    /**
+     * A session belongs to one workspace, and so does a chat.
+     *
+     * Refused when the chat opens rather than when it is first sent to: a chat
+     * bound to a session it may not write into looks like a continuation and is
+     * not one.
+     */
+    @Test
+    fun `a session from another workspace cannot be continued here`() {
+        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "frontend")).id)
+        val sessionId = recorder.open(elsewhere, "issue", "42")
+
+        graphQlTester.document(
+            """mutation { startChat(input: {
+                 workspaceId: $workspaceId, title: "issue:42", llmSessionId: $sessionId
+               }) { id } }""",
+        ).execute()
+            .errors().satisfy { errors ->
+                assertThat(errors.first().message).contains("belongs to another workspace")
+            }
+
+        assertThat(chats.findAll()).isEmpty()
+    }
+
+    /**
+     * A chat started any other way still belongs to no session.
+     *
+     * Every chat there has ever been is this chat, and it must cost nothing: no
+     * session opened, no line written, and no key invented on anybody's behalf.
+     */
+    @Test
+    fun `a chat started the ordinary way records nothing`() {
+        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+
+        send(chatId, "Anyone there?")
+
+        assertThat(chats.findAll().single().llmSessionId).isNull()
+        assertThat(sessions.findAll()).isEmpty()
+        assertThat(events.findAll()).isEmpty()
+    }
+
+    private fun session(prefix: String, key: String): Long = recorder.open(workspaceId, prefix, key)
+
+    private fun startChat(llmSessionId: Long?, modelId: Long? = null): Long {
+        val named = llmSessionId?.let { ", llmSessionId: $it" }.orEmpty()
+        val talking = modelId?.let { ", modelId: $it" }.orEmpty()
+        return graphQlTester.document(
+            """mutation { startChat(input: {
+                 workspaceId: $workspaceId, title: "Continuing"$talking$named
+               }) { id llmSessionId } }""",
+        ).execute().path("startChat.id").entity(Long::class.java).get()
+    }
+
+    private fun send(chatId: Long, text: String) {
+        graphQlTester.document(
+            """mutation(${'$'}text: String!) {
+                 sendChatMessage(id: $chatId, text: ${'$'}text) { answer { content } }
+               }""",
+        ).variable("text", text).execute().path("sendChatMessage.answer.content").hasValue()
+    }
+
+    private fun agent(name: String, modelId: Long): Long {
+        val id = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+        graphQlTester.document(
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+        ).execute()
+        return id
+    }
+
+    private fun model(endpoint: String): Long {
+        val providerId = graphQlTester.document(
+            """mutation { createModelProvider(input: {
+                 workspaceId: $workspaceId, name: "Stub", endpoint: "$endpoint", secret: "sk-test"
+               }) { id } }""",
+        ).execute().path("createModelProvider.id").entity(Long::class.java).get()
+
+        return graphQlTester.document(
+            """mutation { createModel(input: { providerId: $providerId, name: "Stub", modelId: "stub", kind: CHAT })
+               { id } }""",
+        ).execute().path("createModel.id").entity(Long::class.java).get()
+    }
+
+    /** Answers in one round, and keeps what it was asked so the turns can be read. */
+    private fun serveAnswer(said: String): String {
+        val opened = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+        server = opened
+        opened.createContext("/chat/completions") { exchange ->
+            received += exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            val bytes = """
+                {"choices":[{"message":{"role":"assistant","content":"$said"}}],
+                 "usage":{"prompt_tokens":11,"completion_tokens":6}}
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+            exchange.close()
+        }
+        opened.start()
+        return "http://${opened.address.hostString}:${opened.address.port}"
+    }
+}

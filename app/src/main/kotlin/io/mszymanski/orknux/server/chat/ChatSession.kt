@@ -54,6 +54,24 @@ class ChatSession(
     @Column(name = "agent_id")
     var agentId: Long? = null,
 
+    /**
+     * The LLM session this chat is continuing, or null for a chat continuing
+     * nothing.
+     *
+     * A session is found by a key its caller computed, and a chat computes no
+     * key — inventing one would name a conversation nothing else can arrive at,
+     * which is the opposite of what a session is for. So the binding is a
+     * pointer, set once when the chat is opened from a session's page. Null is
+     * the ordinary case: a chat started from the sidebar has no session.
+     *
+     * Set at the start and never moved. What was already said is copied into
+     * this chat's thread when it opens, and a chat that changed session
+     * afterwards would be holding one conversation's words while writing into
+     * another's.
+     */
+    @Column(name = "llm_session_id")
+    val llmSessionId: Long? = null,
+
     @Column(nullable = false)
     var pinned: Boolean = false,
 
@@ -86,6 +104,15 @@ class ChatSessionNotFoundException(id: Long) : RuntimeException("No chat with id
 
 /** An agent that cannot answer, and why — the picker says so rather than failing later. */
 class ChatAgentUnusableException(says: String) : RuntimeException(says)
+
+/**
+ * A session that cannot be continued here, and why.
+ *
+ * Refused at the start rather than at the first send. A chat bound to a session
+ * it may not write into is a chat that looks like a continuation and is not one,
+ * and the first thing anybody would do with it is say something into nowhere.
+ */
+class ChatLlmSessionUnusableException(says: String) : RuntimeException(says)
 
 class ChatTitleInvalidException : RuntimeException("A chat needs a title")
 

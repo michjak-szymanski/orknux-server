@@ -1,0 +1,21 @@
+-- The LLM session a chat is continuing, or null for a chat that continues
+-- nothing.
+--
+-- A session is keyed by something a run computed, which is what lets two
+-- workflows land in one conversation. Nothing computed a key for a chat, and
+-- nothing should: a key invented for one would be a key nobody else can arrive
+-- at, which is the opposite of what a session is for. So the binding is not a
+-- key at all - it is this column, written once when the chat is opened from a
+-- session's page and never afterwards. Opening the chat *from* a session is the
+-- only thing that has ever answered "which session does this chat belong to",
+-- and it answers it by pointing.
+--
+-- Nullable, and null is the ordinary case. A chat started from the sidebar has
+-- no session, exactly as before.
+--
+-- SET NULL rather than CASCADE: throwing a transcript away is being rid of the
+-- record of a conversation, not of the conversation somebody is still having.
+-- The chat and everything said in it stay; only the thread it was continuing
+-- is gone.
+ALTER TABLE chat_session
+    ADD COLUMN llm_session_id BIGINT REFERENCES llm_session (id) ON DELETE SET NULL;

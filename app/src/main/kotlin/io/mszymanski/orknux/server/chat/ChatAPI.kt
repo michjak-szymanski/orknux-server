@@ -75,6 +75,7 @@ class ChatAPI(
                 userId = currentUser(),
                 title = input.title ?: "New chat",
                 modelId = input.modelId ?: defaultModel(input.workspaceId),
+                llmSessionId = input.llmSessionId,
             ),
         )
     }
@@ -169,6 +170,7 @@ class ChatAPI(
             modelName = model?.name,
             agentId = session.agentId,
             agentName = session.agentId?.let { agents.findByIdOrNull(it) }?.name,
+            llmSessionId = session.llmSessionId,
             createdAt = session.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
             lastMessageAt = session.lastMessageAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         )
@@ -206,6 +208,16 @@ data class StartChatInput(
     val workspaceId: Long,
     val title: String? = null,
     val modelId: Long? = null,
+    /**
+     * The LLM session this chat continues, when it was opened from one.
+     *
+     * A parameter on the ordinary start rather than a mutation of its own:
+     * everything else about such a chat — who owns it, what answers it, how it
+     * is sent to — is exactly a chat, and a second door would be the same door
+     * with one more argument. Null, which is every chat started from the
+     * sidebar, is a chat continuing nothing.
+     */
+    val llmSessionId: Long? = null,
 )
 
 data class ChatSessionView(
@@ -220,6 +232,8 @@ data class ChatSessionView(
     val agentId: Long?,
     /** What that agent is called, or null once it has been deleted. */
     val agentName: String?,
+    /** The LLM session this chat is continuing, or null for one continuing none. */
+    val llmSessionId: Long?,
     val createdAt: String,
     val lastMessageAt: String?,
 )

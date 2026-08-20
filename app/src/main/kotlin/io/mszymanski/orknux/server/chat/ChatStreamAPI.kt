@@ -100,7 +100,7 @@ class ChatStreamAPI(
                 val answer = if (start.agentId == null) {
                     client.stream(start.modelId, start.turns) { piece -> send("chunk", mapOf("text" to piece)) }
                 } else {
-                    conversation.answer(start.modelId, start.agentId, start.turns).also { whole ->
+                    conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId).also { whole ->
                         if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                     }
                 }

@@ -49,6 +49,14 @@ type Query {
     myNotificationCount: Int!
     "What an issue can be assigned to here: people, agents and models together."
     issueAssignees(workspaceId: ID!, search: String): [Assignee!]!
+    """
+    What this issue could be linked to, narrowed by what was typed.
+
+    The number first, with or without the hash - issues are referred to by number
+    here - and the title search behind it. Nothing already linked is offered, and
+    neither is the issue itself.
+    """
+    issuesToLink(id: ID!, search: String): [IssueRef!]!
     workspaces(page: Int = 0, size: Int = 20): WorkspacePage!
     workspace(id: ID!): Workspace
     "Audit entries, newest first. Without a workspaceId every visible workspace is included."
@@ -489,6 +497,24 @@ type Mutation {
     "Takes a link off an issue. Only whoever added it may, administrators included."
     removeIssueLink(id: ID!): Boolean!
     """
+    Says that one issue has something to do with another, in the same workspace.
+
+    The relation is given as the issue named by `id` reads it, and one row is
+    stored for the pair however it was said - so it cannot be half made, and
+    both issues show it from their own side. Twice the same way does nothing;
+    twice a different way is refused, since two issues are connected in one way
+    or not at all.
+    """
+    relateIssue(id: ID!, otherId: ID!, kind: IssueRelationKind!): Issue!
+    """
+    Takes a link between two issues off, from either end.
+
+    Anybody who can see them, unlike an address or a file: a link is a claim
+    about both issues rather than something one person said, and the team at the
+    far end never made it.
+    """
+    unrelateIssue(id: ID!): Boolean!
+    """
     Adds an observer, who then hears everything the reporter and the assignee
     hear. Naming nobody means yourself, which anybody in the workspace may do;
     naming somebody else needs a role that administers this workspace. A model
@@ -544,6 +570,17 @@ type Mutation {
     updateWorkflow(id: ID!, input: UpdateWorkflowInput!): WorkspaceWorkflow!
     "Unassigns the workflow from the workspace; the definition is kept."
     removeWorkflow(id: ID!): Boolean!
+
+    """
+    Throws a whole conversation away, with everything said in it.
+
+    Nothing creates a session - one appears because a run computed its key - so
+    this is not the other half of a create. It is how somebody is rid of a
+    conversation that should not have been kept: a mistyped key, or a run they
+    were only trying out. False when there was no such session to remove, or
+    none this caller can see.
+    """
+    removeLlmSession(id: ID!): Boolean!
     "Replaces the whole graph and puts the workflow back into draft."
     saveWorkflowGraph(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
     publishWorkflow(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
@@ -3350,6 +3387,14 @@ enum NotificationKind {
     MENTIONED
     "You were made an observer of it, and will hear about it from now on."
     OBSERVING
+    """
+    It was linked to another issue - `says` holds which relation and which
+    issue, read from this one's side, as "BLOCKS #4".
+
+    Only the making of a link. One taken off is most often a correction, and a
+    bell that rings for corrections is a bell people learn to ignore.
+    """
+    LINKED
 }
 
 "One thing that happened, as the bell shows it."
@@ -3448,6 +3493,65 @@ type IssueLink {
 }
 
 """
+What one issue has to do with another.
+
+Three relations and five names, because two of the three read differently from
+each end: BLOCKS and BLOCKED_BY are one fact seen from its two sides, and so are
+DUPLICATES and DUPLICATED_BY. RELATES_TO is its own opposite. Only one row is
+ever stored for a link, facing whichever way reads actively, and it is turned
+round for whichever issue is being read.
+
+Parent and child are deliberately absent. A parent is a promise about
+aggregation - a status read off its children, a tree to walk - and this tracker
+has a flat list and a number.
+"""
+enum IssueRelationKind {
+    "Read that one too, and nothing more than that."
+    RELATES_TO
+    "Nothing can be done about the other one until this is finished."
+    BLOCKS
+    "Nothing can be done about this until the other one is finished."
+    BLOCKED_BY
+    "This is the second report of what the other one already describes."
+    DUPLICATES
+    "The other one is a second report of what this describes."
+    DUPLICATED_BY
+}
+
+"""
+Another issue this one is linked to, read from this one's side.
+
+The far issue's number, title and status travel with it, because whether the
+thing blocking this one is closed is the whole question somebody has when they
+read the word "blocked".
+"""
+type IssueRelation {
+    "The link's own id, which is what taking it off again needs."
+    id: ID!
+    "The relation as the issue being read sees it."
+    kind: IssueRelationKind!
+    "The issue at the far end."
+    issueId: ID!
+    number: Int!
+    title: String!
+    status: IssueStatus!
+    linkedBy: String!
+    "ISO-8601 offset date-time."
+    linkedAt: String!
+}
+
+"""
+An issue as something to pick out of a list: enough to recognise it by, and the
+id a mutation is given.
+"""
+type IssueRef {
+    id: ID!
+    number: Int!
+    title: String!
+    status: IssueStatus!
+}
+
+"""
 Somebody who asked to hear about an issue without being given it. A person or
 an agent; never a model, which has nowhere to read its news. Explicit only - the
 reporter and the assignee already hear about everything and are shown in their
@@ -3497,6 +3601,8 @@ type Issue {
     attachments: [IssueAttachment!]!
     "Addresses hung on the issue, oldest first."
     links: [IssueLink!]!
+    "Other issues this one is linked to, oldest first, each read from this one's side."
+    related: [IssueRelation!]!
     "Whoever asked to hear about it, oldest first. Only the ones explicitly added."
     observers: [IssueObserver!]!
     comments: [IssueComment!]!
@@ -3516,7 +3622,7 @@ type IssuePage {
 """
 What kind of change one line in an issue's history is.
 
-Five of these are stored when they happen; OPENED is read off the issue itself
+Six of these are stored when they happen; OPENED is read off the issue itself
 and COMMENT off the comments table, because both were already recorded
 faithfully and a second copy of a comment is a copy that goes stale the moment
 somebody edits it.
@@ -3540,6 +3646,14 @@ enum IssueEventKind {
     ASSIGNEE
     "Somebody started or stopped hearing about it."
     OBSERVER
+    """
+    It was linked to another issue, or the link was taken off.
+
+    Written on both issues, phrased from each one's own side. `was` and
+    `became` hold the relation and the other issue's number at the time, as
+    "BLOCKS #4".
+    """
+    LINK
     "Somebody said something."
     COMMENT
 }

@@ -89,6 +89,30 @@ class IssueNewsDesk(
         write(issue, IssueNewsKind.STATUS, actor, says = issue.status.name, to = watchers(issue))
     }
 
+    /**
+     * It was linked to another issue.
+     *
+     * Only the making of a link, never the taking off of one. What this news
+     * carries is a thing that has become true - it is blocked, it is a duplicate
+     * - and a link removed is most often somebody correcting a number they
+     * mistyped a minute earlier. A bell that rings for corrections is a bell
+     * people learn to ignore, and the history keeps both halves for whoever asks
+     * later why this said blocked yesterday.
+     *
+     * Called once per issue rather than once per link, and that is the point:
+     * the two issues have different audiences and the sentence reads differently
+     * from each end, so the blocker's watchers are told it blocks and the
+     * blocked one's are told it is blocked. One call writing both would have to
+     * decide which of the two rooms to lie to.
+     *
+     * What [says] holds is what [IssueRelations.said] wrote, so whoever renders
+     * it - the bell, an inbox, the tools - reads one encoding.
+     */
+    @Transactional
+    fun linked(issue: Issue, actor: String, says: String) {
+        write(issue, IssueNewsKind.LINKED, actor, says = says, to = watchers(issue))
+    }
+
     /** Somebody said something. The same audience, and the words with it. */
     @Transactional
     fun commented(issue: Issue, actor: String, said: String) {

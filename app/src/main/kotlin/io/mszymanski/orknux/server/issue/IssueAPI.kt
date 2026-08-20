@@ -61,6 +61,7 @@ class IssueAPI(
     private val history: IssueHistoryRecorder,
     private val attachments: IssueAttachmentRepository,
     private val links: IssueLinkRepository,
+    private val relations: IssueRelationRepository,
     private val observers: IssueObserverRepository,
     private val store: AttachmentStore,
     private val installation: InstallationSettings,
@@ -400,6 +401,7 @@ class IssueAPI(
             issue,
             files,
             links.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)),
+            relations.touching(requireNotNull(issue.id)),
             observers.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id)),
         )
     }
@@ -408,6 +410,7 @@ class IssueAPI(
         issue: Issue,
         files: List<IssueAttachment>,
         addresses: List<IssueLink>,
+        linked: List<IssueRelation>,
         watching: List<IssueObserver>,
     ) = IssueView(
         id = requireNotNull(issue.id),
@@ -421,6 +424,7 @@ class IssueAPI(
         labels = issue.labels.sorted(),
         attachments = files.filter { it.commentId == null }.map(::describeFile),
         links = addresses.map(::describeLink),
+        related = describeRelations(issue, linked),
         observers = watching.map { describeObserver(issue.workspaceId, it) },
         comments = issue.comments.map { comment ->
             IssueCommentView(
@@ -587,6 +591,174 @@ class IssueAPI(
     /** What to call a link where one line is all there is: the page's own order. */
     private fun nameOf(link: IssueLink) =
         link.title ?: GitHubAddress.shortNameOf(link.url) ?: link.url
+
+    /**
+     * The other issues this one is linked to, each read from this one's side.
+     *
+     * A row is the whole link and is stored facing one way, so the same row is
+     * "blocks #7" on one issue and "is blocked by #4" on the other. Turning it
+     * round happens here, once, rather than in whatever is drawing it - a page
+     * that had to know which end it was looking at is a page that will one day
+     * get it backwards.
+     *
+     * The far ends are read in one go. An issue with six links would otherwise
+     * be six queries to discover six titles.
+     */
+    private fun describeRelations(issue: Issue, linked: List<IssueRelation>): List<IssueRelationView> {
+        val here = requireNotNull(issue.id)
+        val ends = linked.map { IssueRelations.seenFrom(it, here) }
+        val others = issues.findAllById(ends.map { it.second }).associateBy { requireNotNull(it.id) }
+        return linked.mapIndexedNotNull { at, relation ->
+            val (kind, otherId) = ends[at]
+            val other = others[otherId] ?: return@mapIndexedNotNull null
+            IssueRelationView(
+                id = requireNotNull(relation.id),
+                kind = kind,
+                issueId = otherId,
+                number = other.number,
+                title = other.title,
+                status = other.status,
+                linkedBy = relation.linkedBy,
+                linkedAt = relation.linkedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            )
+        }
+    }
+
+    /**
+     * What this issue could be linked to, narrowed by what was typed.
+     *
+     * Issues are referred to by number here - the page turns `#124` in a comment
+     * into a link, and that is how people say them out loud - so the number is
+     * what the box has to find first, with or without the hash. The text search
+     * runs as well and behind it, because "#12" is also a perfectly good thing
+     * to have in a title, and somebody who typed a number and meant the words is
+     * better served by a short list than by a refusal.
+     *
+     * Nothing already linked is offered, and neither is the issue itself: a row
+     * that can only be refused is a row that should not be in the list.
+     */
+    @QueryMapping
+    @Transactional(readOnly = true)
+    fun issuesToLink(@Argument id: Long, @Argument search: String?): List<IssueRefView> {
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
+
+        val wanted = search?.trim().orEmpty()
+        val byNumber = wanted.removePrefix("#").toIntOrNull()
+            ?.let { issues.findByWorkspaceIdAndNumber(held.workspaceId, it) }
+        /*
+         * Newest first when nothing has been typed, which is what an empty box
+         * should offer: an issue is nearly always linked to something filed
+         * around the same time as it.
+         */
+        val byText = issues.search(
+            held.workspaceId,
+            wanted,
+            PageRequest.of(0, SOME, Sort.by(Sort.Direction.DESC, "number")),
+        ).content
+
+        val taken = relations.touching(requireNotNull(held.id))
+            .map { IssueRelations.seenFrom(it, requireNotNull(held.id)).second }
+            .toSet() + requireNotNull(held.id)
+
+        return (listOfNotNull(byNumber) + byText)
+            .distinctBy { requireNotNull(it.id) }
+            .filterNot { requireNotNull(it.id) in taken }
+            .take(SOME)
+            .map { IssueRefView(requireNotNull(it.id), it.number, it.title, it.status) }
+    }
+
+    /**
+     * Says that one issue has something to do with another.
+     *
+     * The relation is given as this issue reads it - "is blocked by" is a thing
+     * somebody chooses from a list on this page - and [IssueRelations.of] turns
+     * it round into the one row that will be stored. Both issues are written to:
+     * the history of the issue that was named would otherwise be silent about
+     * the day it acquired a duplicate.
+     *
+     * Twice the same way is not an error, for the reason a second press of the
+     * watch button is not: it is the state somebody asked for, and it is already
+     * so. Twice a different way is refused rather than replaced, because two
+     * issues are connected in one way or not at all and changing which way is a
+     * thing to do on purpose.
+     */
+    @MutationMapping
+    @Transactional
+    fun relateIssue(
+        @Argument id: Long,
+        @Argument otherId: Long,
+        @Argument kind: IssueRelationKind,
+    ): IssueView {
+        val held = issues.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueNotFoundException(id)
+        if (id == otherId) throw IssueRelationToItselfException()
+
+        /*
+         * The far end has to be in the same workspace, and one that is not reads
+         * as being somewhere else rather than as not existing - the caller has
+         * an id in their hand either way, and which of the two it is tells them
+         * nothing they could act on differently.
+         */
+        val other = issues.findByIdOrNull(otherId)?.takeIf { it.workspaceId == held.workspaceId }
+            ?: throw IssueRelationElsewhereException()
+
+        relations.between(id, otherId)?.let { already ->
+            val (facing, _) = IssueRelations.seenFrom(already, id)
+            if (facing == kind) return describe(held)
+            throw IssueRelationAlreadyException("#${held.number} ${facing.reads} #${other.number}")
+        }
+
+        relations.save(IssueRelations.of(id, otherId, kind, currentUser()))
+
+        history.linked(held, kind, other.number, currentUser())
+        history.linked(other, kind.opposite, held.number, currentUser())
+        audit.record(
+            held.workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Issue #${held.number} ${kind.reads} #${other.number}",
+        )
+        newsDesk.linked(held, currentUser(), IssueRelations.said(kind, other.number))
+        newsDesk.linked(other, currentUser(), IssueRelations.said(kind.opposite, held.number))
+        return describe(held)
+    }
+
+    /**
+     * Takes a link between two issues off again.
+     *
+     * Anybody who can see them, which is where this parts company with the
+     * address links and the files beside it. Those are things one person put on
+     * an issue and are part of what that person said; a link between two issues
+     * is a claim about both of them, maintained the way the labels are. The team
+     * at the far end never made it and must be able to take it off, and a wrong
+     * "duplicates #4" that only its author can remove is a wrong answer the rest
+     * of the tracker has to work around after they leave.
+     *
+     * Written into both histories, like the making of it, so neither issue is
+     * left saying something the other has forgotten.
+     */
+    @MutationMapping
+    @Transactional
+    fun unrelateIssue(@Argument id: Long): Boolean {
+        val link = relations.findByIdOrNull(id) ?: throw IssueRelationNotFoundException(id)
+        // The argument is a link's id, so a link between issues the caller
+        // cannot see reads as a link that is not there. The same silence
+        // removeIssueLink keeps, for the same reason.
+        val held = issues.findByIdOrNull(link.issueId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueRelationNotFoundException(id)
+        val other = issues.findByIdOrNull(link.otherIssueId) ?: throw IssueRelationNotFoundException(id)
+
+        relations.delete(link)
+
+        history.unlinked(held, link.kind, other.number, currentUser())
+        history.unlinked(other, link.kind.opposite, held.number, currentUser())
+        audit.record(
+            held.workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Issue #${held.number} unlinked from #${other.number}",
+        )
+        return true
+    }
 
     /**
      * Asking to hear about an issue.
@@ -841,6 +1013,15 @@ class IssueAPI(
     private companion object {
         /** Enough of anything to choose from in a box that also has a search. */
         const val MANY = 200
+
+        /**
+         * As many issues as a box offering something to link to should show.
+         *
+         * A tenth of [MANY]: this list is read by somebody who already knows
+         * which issue they mean and is typing its number, and a long one would
+         * be scrolled past rather than read.
+         */
+        const val SOME = 10
     }
 }
 
@@ -860,6 +1041,8 @@ data class IssueView(
     val attachments: List<IssueAttachmentView>,
     /** Addresses hung on the issue, oldest first. */
     val links: List<IssueLinkView>,
+    /** Other issues this one is linked to, each read from this one's side. */
+    val related: List<IssueRelationView>,
     /**
      * Whoever asked to hear about it, oldest first.
      *
@@ -925,6 +1108,47 @@ data class IssueLinkView(
     val addedAt: String,
     /** Whether the person reading this added it, and so may remove it. */
     val mine: Boolean,
+)
+
+/**
+ * Another issue this one is linked to, as the page shows it.
+ *
+ * The relation is the one facing the reader: the same stored row is "blocks
+ * #7" on one issue and "is blocked by #4" on the other, and which of the two
+ * this is has already been decided by the time it gets here.
+ *
+ * The far issue's number, title and status travel with it because the row is
+ * read rather than clicked through. Whether the thing blocking this one is
+ * closed is the entire question somebody has when they see the word "blocked",
+ * and a link that made them open another page to answer it is a link that will
+ * be ignored.
+ */
+data class IssueRelationView(
+    /** The link's own id, which is what taking it off again needs. */
+    val id: Long,
+    val kind: IssueRelationKind,
+    /** The issue at the far end - its row id, since that is what a mutation takes. */
+    val issueId: Long,
+    val number: Int,
+    val title: String,
+    val status: IssueStatus,
+    val linkedBy: String,
+    val linkedAt: String,
+)
+
+/**
+ * An issue as something to be picked out of a list, and nothing more.
+ *
+ * What a box offering something to link to needs: the number to recognise it
+ * by, the title to be sure, the status to know whether it matters, and the id
+ * the mutation is given. Not the whole issue - the list is ten of them, and
+ * nine will be scrolled past.
+ */
+data class IssueRefView(
+    val id: Long,
+    val number: Int,
+    val title: String,
+    val status: IssueStatus,
 )
 
 /** Something an issue can be assigned to, as the box shows it. */

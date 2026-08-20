@@ -221,6 +221,10 @@ class IssueNewsMailer(
             IssueNewsKind.COMMENT -> "${item.actor} commented on $issue"
             IssueNewsKind.MENTIONED -> "${item.actor} mentioned you on $issue"
             IssueNewsKind.OBSERVING -> "${item.actor} added you to $issue"
+            // The relation is the point, not the linking: "#7 is blocked by #4"
+            // is a sentence somebody can act on where "linked #7" is a sentence
+            // that has to be opened to mean anything.
+            IssueNewsKind.LINKED -> "${item.actor} recorded that $issue ${IssueRelations.reading(item.says)}"
         }
     }
 

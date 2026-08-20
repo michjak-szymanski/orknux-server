@@ -38,6 +38,10 @@ import java.time.OffsetDateTime
  * number, which is per workspace and has to be one that is free where it is
  * going, and its news, which is a record of what was announced where and when.
  *
+ * Nor does a link to another issue, which is why one standing there refuses the
+ * move outright: that link is drawn as a number, and a number means one thing
+ * per workspace.
+ *
  * Administrators of both workspaces, and seeing them is not enough - a move
  * takes an issue out of one team's tracker and puts it in another's, and the
  * number it had is immediately free for the next issue filed there, so it is
@@ -56,6 +60,7 @@ class IssueMoveAPI(
     private val models: ModelService,
     private val attachments: IssueAttachmentRepository,
     private val observers: IssueObserverRepository,
+    private val relations: IssueRelationRepository,
     private val store: AttachmentStore,
     private val audit: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
@@ -184,6 +189,31 @@ class IssueMoveAPI(
                         "which is not in ${destination.name}. Change the assignee, then move it.",
                 )
             }
+        }
+
+        /*
+         * A link between two issues is a link within one tracker, because what
+         * it draws is a number and a number means one thing per workspace. An
+         * issue carried out of here would leave its links pointing at whatever
+         * eventually holds those numbers - which is precisely the mistake the
+         * page's address avoided by carrying the number rather than the id, and
+         * it is worse here because nothing would look wrong.
+         *
+         * Refused rather than quietly dropped, like everything else in this
+         * method: somebody who wrote down that this blocks three other things
+         * should be the one who decides those three facts are no longer worth
+         * keeping.
+         */
+        val linked = relations.touching(requireNotNull(issue.id))
+        if (linked.isNotEmpty()) {
+            val named = linked
+                .map { IssueRelations.seenFrom(it, requireNotNull(issue.id)).second }
+                .mapNotNull { issues.findByIdOrNull(it)?.number }
+                .joinToString(", ") { "#$it" }
+            throw IssueMoveRefusedException(
+                "This issue is linked to $named, which cannot follow it to ${destination.name}. " +
+                    "Take the links off, then move it.",
+            )
         }
 
         val stranded = observers.findByIssueIdOrderByAddedAtAscIdAsc(requireNotNull(issue.id))

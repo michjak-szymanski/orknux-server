@@ -1040,6 +1040,18 @@ CREATE TABLE workspace_issue_observer
     constraint workspace_issue_observer_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
 );
 
+CREATE TABLE workspace_issue_relation
+(
+    id                           integer not null primary key autoincrement,
+    issue_id                     integer not null,
+    other_issue_id               integer not null,
+    kind                         varchar(16) not null,
+    linked_at                    timestamp not null default CURRENT_TIMESTAMP,
+    linked_by                    varchar(120) not null default '',
+    constraint workspace_issue_relation_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE,
+    constraint workspace_issue_relation_other_issue_id_fkey FOREIGN KEY (other_issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workspace_role
 (
     workspace_id                 integer not null,
@@ -1170,6 +1182,8 @@ CREATE INDEX workspace_issue_comment_issue_idx ON workspace_issue_comment (issue
 CREATE INDEX workspace_issue_event_issue_idx ON workspace_issue_event (issue_id, at, id);
 CREATE INDEX workspace_issue_link_issue_idx ON workspace_issue_link (issue_id, added_at);
 CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (issue_id, observer_kind, observer_id);
+CREATE UNIQUE INDEX workspace_issue_relation_pair_key ON workspace_issue_relation (issue_id, other_issue_id);
+CREATE INDEX workspace_issue_relation_other_idx ON workspace_issue_relation (other_issue_id, linked_at);
 CREATE INDEX idx_workspace_variable_catalog ON workspace_variable (catalog_id);
 CREATE INDEX idx_workspace_variable_workspace ON workspace_variable (workspace_id);
 CREATE INDEX idx_workspace_workflow_workspace_id ON workspace_workflow (workspace_id);

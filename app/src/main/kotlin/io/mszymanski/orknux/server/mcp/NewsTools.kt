@@ -5,6 +5,7 @@ import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.IssueNewsDesk
 import io.mszymanski.orknux.server.issue.IssueNewsItem
 import io.mszymanski.orknux.server.issue.IssueNewsKind
+import io.mszymanski.orknux.server.issue.IssueRelations
 import io.mszymanski.orknux.server.issue.NewsReader
 import io.mszymanski.orknux.server.security.WebProperties
 import org.springframework.beans.factory.DisposableBean
@@ -193,6 +194,10 @@ class NewsTools(
             // issue behind it.
             IssueNewsKind.OPENED -> "opened"
             IssueNewsKind.OBSERVING -> "made you an observer"
+            // Read from the side of the issue this is news about, so an
+            // assistant deciding what to pick up next is told the thing that
+            // decides it: this one is blocked, this one is a duplicate.
+            IssueNewsKind.LINKED -> IssueRelations.reading(item.says) ?: "linked"
         },
         "issue" to item.issueNumber,
         "title" to item.issueTitle,

@@ -170,8 +170,10 @@ CREATE TABLE chat_session
     created_at                   timestamp not null,
     last_message_at              timestamp,
     agent_id                     integer,
+    llm_session_id               integer,
     constraint uk_chat_session_conversation UNIQUE (conversation_id),
     constraint chat_session_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
+    constraint chat_session_llm_session_id_fkey FOREIGN KEY (llm_session_id) REFERENCES llm_session(id) ON DELETE SET NULL,
     constraint chat_session_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint chat_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );

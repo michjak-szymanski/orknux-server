@@ -6,6 +6,8 @@ import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.llm.LlmSessionRecorder
+import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
@@ -41,6 +43,8 @@ class ChatService(
     private val briefing: AgentBriefing,
     private val conversation: AgentConversation,
     private val entityManager: EntityManager,
+    private val llmSessions: LlmSessionRepository,
+    private val recorder: LlmSessionRecorder,
 ) {
 
     fun sessions(workspaceId: Long, userId: String): List<ChatSession> =
@@ -87,18 +91,78 @@ class ChatService(
     fun messages(session: ChatSession): List<ChatMessage> =
         history.findByConversationId(session.conversationId).map(::ChatMessage)
 
+    /**
+     * Opens a chat, optionally continuing an LLM session.
+     *
+     * @param llmSessionId the session this chat carries on, or null for the
+     *   ordinary chat that carries on nothing. What was already said there is
+     *   copied into this chat's thread as it opens, which is what makes it a
+     *   continuation rather than a blank box — and is why nothing reads the
+     *   session again on any later send: the thread already holds it, and
+     *   putting it in front of the model twice would have it hear everything
+     *   said so far in duplicate.
+     */
     @Transactional
-    fun start(workspaceId: Long, userId: String, title: String, modelId: Long?): ChatSession {
+    fun start(
+        workspaceId: Long,
+        userId: String,
+        title: String,
+        modelId: Long?,
+        llmSessionId: Long? = null,
+    ): ChatSession {
         val trimmed = title.trim().ifEmpty { throw ChatTitleInvalidException() }
-        return sessions.save(
+        // Checked before anything is written: a chat bound to a session it may
+        // not write into looks like a continuation and is not one.
+        llmSessionId?.let { continuable(workspaceId, it) }
+
+        val opened = sessions.save(
             ChatSession(
                 workspaceId = workspaceId,
                 conversationId = UUID.randomUUID().toString(),
                 title = trimmed.take(TITLE_LENGTH),
                 userId = userId,
                 modelId = modelId ?: defaultModel(workspaceId, userId),
+                llmSessionId = llmSessionId,
                 createdAt = OffsetDateTime.now(),
             ),
+        )
+        llmSessionId?.let { seed(opened, it) }
+        return opened
+    }
+
+    /**
+     * Refuses a session this workspace has no business continuing.
+     *
+     * A session belongs to one workspace, the same way an agent does, and the
+     * chat is opened from that workspace's page — so the only way the two
+     * disagree is somebody naming an id that is not theirs. Refused by name
+     * rather than by silence, because the caller who meant the right session and
+     * mistyped deserves to know which half was wrong.
+     */
+    private fun continuable(workspaceId: Long, llmSessionId: Long) {
+        val session = llmSessions.findByIdOrNull(llmSessionId)
+            ?: throw ChatLlmSessionUnusableException("That session no longer exists")
+        if (session.workspaceId != workspaceId) {
+            throw ChatLlmSessionUnusableException("That session belongs to another workspace")
+        }
+    }
+
+    /**
+     * Puts what was already said into the new chat's thread.
+     *
+     * [LlmSessionRecorder.remembered] rather than the whole transcript: it is
+     * already the tail a model can be shown — what was *said*, bounded, oldest
+     * first — and the chat wants exactly that. Tool calls and system notes stay
+     * on the session's own page, where somebody reading how the agent worked
+     * will look for them; they are not turns in a conversation and pasting them
+     * into one would read as the agent talking to itself.
+     */
+    private fun seed(chat: ChatSession, llmSessionId: Long) {
+        val said = recorder.remembered(llmSessionId)
+        if (said.isEmpty()) return
+        history.saveAll(
+            chat.conversationId,
+            said.map { if (it.role == "user") UserMessage(it.content) else AssistantMessage(it.content) },
         )
     }
 
@@ -206,11 +270,18 @@ class ChatService(
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(message))
         session.lastMessageAt = OffsetDateTime.now()
+        recordSaid(session, message)
 
         val turns = briefed(session) + (thread + UserMessage(message)).map { ChatTurn(role(it), it.text.orEmpty()) }
         // An agent may need its tools before it can answer; a bare model cannot.
         val asked = session.agentId?.let { agents.findByIdOrNull(it) }
-        return when (val answer = if (asked == null) models.complete(modelId, turns) else conversation.answer(modelId, asked, turns)) {
+        return when (
+            val answer = if (asked == null) {
+                models.complete(modelId, turns)
+            } else {
+                conversation.answer(modelId, asked, turns, session.llmSessionId)
+            }
+        ) {
             is ChatCompletion.Failed -> throw ChatModelUnusableException(answer.reason)
             // The loop runs tools to a conclusion, so nothing reaching here is
             // still asking for one.
@@ -222,6 +293,7 @@ class ChatService(
                     history.findByConversationId(session.conversationId) + AssistantMessage(answer.content),
                 )
                 session.lastMessageAt = OffsetDateTime.now()
+                recordAnswer(session, answer.content)
                 ChatExchange(session, answer.content, answer.millis)
             }
         }
@@ -252,10 +324,12 @@ class ChatService(
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(message))
         session.lastMessageAt = OffsetDateTime.now()
+        recordSaid(session, message)
 
         return ChatSendStart(
             modelId = modelId,
             agentId = session.agentId,
+            llmSessionId = session.llmSessionId,
             conversationId = session.conversationId,
             turns = briefed(session) +
                 (thread + UserMessage(message)).mapIndexed { at, held ->
@@ -282,6 +356,43 @@ class ChatService(
             history.findByConversationId(session.conversationId) + AssistantMessage(answer),
         )
         session.lastMessageAt = OffsetDateTime.now()
+        recordAnswer(session, answer)
+    }
+
+    /**
+     * What the person said, into the session this chat is continuing.
+     *
+     * Under their own name rather than the chat's title, because a transcript
+     * that cannot say who spoke is not a transcript — and the point of this is
+     * that a later run reading the session finds what a person told it, not
+     * another line from an agent.
+     *
+     * Written before the model is asked, for the same reason the user's turn
+     * goes into the history first: a provider that fails should leave the
+     * session holding what was actually said.
+     */
+    private fun recordSaid(session: ChatSession, said: String) {
+        session.llmSessionId?.let { recorder.userSaid(it, session.userId, said) }
+    }
+
+    /**
+     * And what answered, once the answer is whole.
+     *
+     * Only for a bare model. An agent's answer is already written by
+     * [AgentConversation] as its round ends — tool calls and all, which is a
+     * record this could not produce — and writing it again here would put every
+     * agent answer in the session twice. A bare model has no such round, so
+     * nothing else would ever write the line.
+     *
+     * Called from the end of a send rather than from the stream, so an answer
+     * that arrives in eighty pieces is one line in the transcript rather than
+     * eighty.
+     */
+    private fun recordAnswer(session: ChatSession, answer: String) {
+        val into = session.llmSessionId ?: return
+        if (session.agentId != null) return
+        val named = session.modelId?.let { catalogue.model(it) }?.name ?: FALLBACK_ACTOR
+        recorder.agentSaid(into, named, answer)
     }
 
     /** Spring AI's types, in the words a provider's API uses. */
@@ -295,6 +406,9 @@ class ChatService(
     private companion object {
         /** Matches the column. */
         const val TITLE_LENGTH = 200
+
+        /** What a bare model's answer is signed with once the model it named is gone. */
+        const val FALLBACK_ACTOR = "model"
     }
 
     /**
@@ -328,6 +442,13 @@ data class ChatSendStart(
     val conversationId: String,
     val turns: List<ChatTurn>,
     val agentId: Long? = null,
+    /**
+     * The LLM session this round is recorded into, or null for a chat
+     * continuing none. Carried here for the same reason [agentId] is: the
+     * streaming endpoint runs outside the transaction that read the chat and
+     * cannot ask it again.
+     */
+    val llmSessionId: Long? = null,
 )
 
 /** What one send produced: the answer, and how long the model took over it. */

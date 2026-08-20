@@ -1336,6 +1336,8 @@ type ChatSession {
     agentId: ID
     "What that agent is called, or null once it has been deleted."
     agentName: String
+    "The LLM session this chat is continuing, or null for one continuing none."
+    llmSessionId: ID
     "ISO-8601 offset date-times. `lastMessageAt` is null until something is said."
     createdAt: String!
     lastMessageAt: String
@@ -1358,6 +1360,16 @@ input StartChatInput {
     workspaceId: ID!
     title: String
     modelId: ID
+    """
+    The LLM session this chat continues, when it was opened from one.
+
+    What the person says goes into that session as USER and what answers goes
+    in as AGENT, so the transcript keeps growing and a later run reading it
+    finds what a person said. The session must belong to the same workspace;
+    anything else is refused. Null - every chat started from the sidebar - is a
+    chat continuing nothing, exactly as before.
+    """
+    llmSessionId: ID
 }
 
 "What Validate found, in the tool and skill editors. `column` is null for a skill."

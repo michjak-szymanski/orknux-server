@@ -23,3 +23,8 @@ logs/
 # Runtime data: what the application writes while it runs, including
 # whatever anybody attached to a chat. Not the repository’s to carry.
 app/data/
+
+# Claude Code's own working directory: per-machine settings and the throwaway
+# worktrees agents are given. Untracked, it showed in every `git status` and was
+# one stray `git add .` away from being committed.
+.claude/

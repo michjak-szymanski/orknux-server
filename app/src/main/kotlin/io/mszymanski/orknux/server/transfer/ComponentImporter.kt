@@ -58,6 +58,31 @@ class ComponentImporter(
     fun plan(workspaceId: Long, envelope: String): ImportPlan = plan(workspaceId, parse(envelope))
 
     /**
+     * What an envelope says about itself, without a workspace in the question.
+     *
+     * A stored template is described on a screen — its format version, and what
+     * kinds it holds — before anybody has said which workspace it would go into,
+     * and the parser that answers that has to be *this* parser. A second reader
+     * that only wanted the header is a second opinion about what the file is,
+     * and it would be the lenient one: it would describe happily a file this
+     * refuses, and somebody would be offered a template that cannot be used.
+     *
+     * Throws exactly what [plan] throws, for exactly the same files.
+     */
+    fun describe(envelope: String): EnvelopeSummary = parse(envelope).let { parsed ->
+        EnvelopeSummary(
+            formatVersion = parsed.formatVersion,
+            producedBy = parsed.producedBy,
+            depth = parsed.depth,
+            // In the catalogue's own order rather than the file's, so two
+            // templates holding the same kinds read the same way in a list.
+            kinds = parsed.components.map { it.kind }.distinct().sortedBy { it.ordinal },
+            componentCount = parsed.components.size,
+            names = parsed.components.map { it.kind to it.name },
+        )
+    }
+
+    /**
      * Creates everything the plan said it would, or nothing.
      *
      * One transaction, and the refusal for an unresolvable reference happens
@@ -684,4 +709,24 @@ data class ImportPlan(
     val entries: List<ImportEntry>,
     /** Empty when importable; otherwise what has to be fixed first. */
     val problems: List<String>,
+)
+
+/**
+ * What one envelope holds, read without deciding where it would go.
+ *
+ * The header of the file plus an inventory of it: enough for a list to say what
+ * a template contains and which version wrote it, and nothing that depends on a
+ * target workspace — a collision, a rename or a missing variable is a fact about
+ * a pairing rather than about the file, and lives in [ImportPlan].
+ */
+data class EnvelopeSummary(
+    val formatVersion: Int,
+    /** Quoted in messages only. Nothing branches on it. */
+    val producedBy: String?,
+    val depth: ExportDepth,
+    /** Which kinds are in it, each once, in the catalogue's order. */
+    val kinds: List<ComponentKind>,
+    val componentCount: Int,
+    /** Every component, as it is named in the file. */
+    val names: List<Pair<ComponentKind, String>>,
 )

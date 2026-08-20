@@ -24,11 +24,17 @@ class WorkspaceAccess(
 ) {
 
     fun roles(): Set<String> {
-        val authentication = SecurityContextHolder.getContext().authentication
-        if (authentication == null || !authentication.isAuthenticated || authentication is AnonymousAuthenticationToken) {
-            return emptySet()
-        }
+        if (!signedIn()) return emptySet()
+        val authentication = SecurityContextHolder.getContext().authentication ?: return emptySet()
         return authentication.authorities.mapNotNull(GrantedAuthority::getAuthority).toSet()
+    }
+
+    /** Somebody rather than nobody: authenticated, and not the anonymous token. */
+    fun signedIn(): Boolean {
+        val authentication = SecurityContextHolder.getContext().authentication
+        return authentication != null &&
+            authentication.isAuthenticated &&
+            authentication !is AnonymousAuthenticationToken
     }
 
     fun isAdmin(): Boolean = resolver.administers(roles())
@@ -139,6 +145,27 @@ class WorkspaceAccess(
     }
 
     /**
+     * Somebody, rather than nobody. The weakest check on this platform, and the
+     * only one that fits a list which belongs to the installation rather than to
+     * a workspace.
+     *
+     * The component templates are the case it exists for: they are published
+     * installation-wide precisely so that a workspace this caller has nothing to
+     * do with can offer its work to one they do. There is no workspace to name in
+     * the question, so [requireVisible] cannot be asked, and [requireAdmin] would
+     * be the wrong answer - it would mean only administrators could see what is
+     * on offer, which is the opposite of publishing.
+     *
+     * Written out rather than left to the filter chain because "every resolver
+     * checks access first" is a rule that only holds if the resolvers that decide
+     * *not* to narrow say so out loud. A resolver with no check at all reads as
+     * one where somebody forgot.
+     */
+    fun requireSignedIn() {
+        if (!signedIn()) throw SignInRequiredException()
+    }
+
+    /**
      * The workspace behind an id, for a caller who has to administer it.
      *
      * Two refusals, and the difference between them is on purpose. A workspace the
@@ -183,6 +210,9 @@ class WorkspaceForbiddenException :
     RuntimeException("That does not exist, or you do not have access to it")
 
 class AdminRequiredException : RuntimeException("This action requires the administrator role")
+
+/** Nobody is signed in. Says nothing about what was asked for, because it did not look. */
+class SignInRequiredException : RuntimeException("Sign in to see this")
 
 /**
  * Says which workspace, unlike [WorkspaceForbiddenException], and can afford to.

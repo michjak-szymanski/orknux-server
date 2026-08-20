@@ -141,10 +141,18 @@ class SessionAPI(
          * be this installation disagreeing with itself about where their mail
          * goes.
          */
-        val recorded = users.findByUsername(user.username)?.email?.takeIf(String::isNotBlank)
+        val held = users.findByUsername(user.username)
+        val recorded = held?.email?.takeIf(String::isNotBlank)
         return user.copy(
             admin = resolver.administers(user.roles.toSet()),
             email = recorded ?: user.email,
+            /*
+             * Sent with the session because the preferences page is where it is
+             * changed and the session is what that page already has. True for
+             * somebody with no row yet, which is what the column defaults to -
+             * the row appears the first time they sign in.
+             */
+            emailNotifications = held?.emailNotifications ?: true,
         )
     }
 
@@ -176,6 +184,12 @@ data class SessionUser @JsonCreator constructor(
      * moment between arriving at the door and being written down.
      */
     @JsonProperty("email") val email: String? = null,
+    /**
+     * Whether issue news is posted to that address as well as rung on the bell.
+     * Theirs to change on the preferences page, which is why it arrives here
+     * rather than being asked for separately.
+     */
+    @JsonProperty("emailNotifications") val emailNotifications: Boolean = true,
 ) {
     constructor(authentication: Authentication) : this(
         username = authentication.name,

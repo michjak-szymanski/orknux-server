@@ -8,6 +8,7 @@ import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.LlmSessionRepository
+import io.mszymanski.orknux.server.llm.RememberedTurn
 import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
@@ -87,9 +88,64 @@ class ChatService(
 
     fun session(id: Long): ChatSession? = sessions.findByIdOrNull(id)
 
-    /** Everything said in one chat, oldest first, as the store kept it. */
-    fun messages(session: ChatSession): List<ChatMessage> =
-        history.findByConversationId(session.conversationId).map(::ChatMessage)
+    /**
+     * Everything said in one chat, oldest first, as the store kept it - and for
+     * a chat continuing a session, who said the part it did not say itself.
+     *
+     * The store keeps a role and some text, so a turn carried in from a session
+     * comes back indistinguishable from one this chat produced, and the screen
+     * signs every one of them with the chat's own model. In a chat opened to
+     * work out what an agent did, that is the most misleading line on the page:
+     * the agent's own words, under somebody else's name. So the names are put
+     * back here, from the session they came out of.
+     */
+    fun messages(session: ChatSession): List<ChatMessage> {
+        val thread = history.findByConversationId(session.conversationId).map(::ChatMessage)
+        val llmSessionId = session.llmSessionId ?: return thread
+        return carried(thread, recorder.saidBefore(llmSessionId, session.createdAt))
+    }
+
+    /**
+     * Puts the session's names back on the turns that came from it.
+     *
+     * Matched rather than counted. Nothing recorded how many turns were seeded,
+     * and nothing should have to: [seed] copies a run of the session's lines
+     * into the head of the thread, so the run can be found again by looking for
+     * it - the longest stretch of the thread's opening that reads word for word
+     * like a stretch of the session.
+     *
+     * Which makes the wrong answer the safe one. A thread that does not line up
+     * - because the session was emptied, or because the bounds on what is
+     * remembered have since moved - names fewer turns rather than naming them
+     * wrongly, and a chat that names none of them is exactly the chat we had
+     * before.
+     */
+    private fun carried(thread: List<ChatMessage>, said: List<RememberedTurn>): List<ChatMessage> {
+        if (thread.isEmpty() || said.isEmpty()) return thread
+
+        var found = 0
+        var from = 0
+        for (start in said.indices.reversed()) {
+            var run = 0
+            while (
+                run < thread.size &&
+                start + run < said.size &&
+                thread[run].role == said[start + run].role &&
+                thread[run].content == said[start + run].content
+            ) {
+                run++
+            }
+            if (run > found) {
+                found = run
+                from = start
+            }
+        }
+
+        if (found == 0) return thread
+        return thread.mapIndexed { at, message ->
+            if (at < found) message.copy(actor = said[from + at].actor) else message
+        }
+    }
 
     /**
      * Opens a chat, optionally continuing an LLM session.
@@ -425,8 +481,14 @@ class ChatService(
     }
 }
 
-/** One message out of the history. */
-data class ChatMessage(val role: String, val content: String) {
+/**
+ * One message out of the history.
+ *
+ * [actor] is who said it in the session this chat is continuing, and is null
+ * for everything the chat said itself. Null is therefore also the boundary: the
+ * turns that were already there when the chat opened, and the ones said since.
+ */
+data class ChatMessage(val role: String, val content: String, val actor: String? = null) {
     constructor(message: Message) : this(message.messageType.name.lowercase(), message.text.orEmpty())
 }
 

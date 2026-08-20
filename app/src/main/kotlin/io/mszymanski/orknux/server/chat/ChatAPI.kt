@@ -62,7 +62,7 @@ class ChatAPI(
     fun chatMessages(@Argument id: Long): List<ChatMessageView> {
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
-        return chats.messages(session).map { ChatMessageView(it.role, it.content) }
+        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor) }
     }
 
     @MutationMapping
@@ -238,7 +238,16 @@ data class ChatSessionView(
     val lastMessageAt: String?,
 )
 
-data class ChatMessageView(val role: String, val content: String)
+data class ChatMessageView(
+    val role: String,
+    val content: String,
+    /**
+     * Who said it, for a turn carried in from the session this chat continues.
+     * Null for everything the chat said itself, which is what the screen uses
+     * to tell the two apart.
+     */
+    val actor: String? = null,
+)
 
 data class ChatAnswerView(
     val session: ChatSessionView,

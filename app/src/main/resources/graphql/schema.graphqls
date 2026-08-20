@@ -1417,6 +1417,15 @@ type ChatSession {
 type ChatMessage {
     role: String!
     content: String!
+    """
+    Who said it - the agent, the tool or the person - for a turn carried into
+    this chat from the LLM session it continues.
+
+    Null for everything the chat itself said, which the model or agent named on
+    the chat answered. So it is also the boundary: turns with an actor were
+    already there when the chat opened, turns without were said in it.
+    """
+    actor: String
 }
 
 type ChatAnswer {

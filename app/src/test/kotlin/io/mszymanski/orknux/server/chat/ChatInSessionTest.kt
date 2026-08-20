@@ -119,6 +119,79 @@ class ChatInSessionTest(
     }
 
     /**
+     * And each of them still says who said it.
+     *
+     * The store the chat's thread lives in keeps a role and some text, so a
+     * carried turn arrives with nowhere to put a name and the screen signs
+     * every answer with the model the chat is talking to now. In a chat opened
+     * to work out what an agent did, that is the agent's own words under
+     * somebody else's name. The names come back off the session the turns were
+     * taken from.
+     */
+    @Test
+    fun `the turns carried in keep the name of whoever said them`() {
+        val sessionId = session("issue", "42")
+        recorder.userSaid(sessionId, "Slack: dana", "Why did the database fall over?")
+        recorder.toolCalled(sessionId, "skill_load", """{"name":"codeReview"}""")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+
+        val chatId = startChat(sessionId)
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content actor } }""")
+            .execute()
+            // Not "alice", who is reading it - a session's question can come
+            // from anywhere, and this one came from Slack.
+            .path("chatMessages[0].actor").entity(String::class.java).isEqualTo("Slack: dana")
+            // And the agent, rather than the model the chat happens to hold.
+            .path("chatMessages[1].actor").entity(String::class.java).isEqualTo("Reviewer")
+    }
+
+    /**
+     * What the chat says itself carries no name, which is where the carried
+     * part ends.
+     *
+     * The boundary is the thing a diagnostic reader is looking for - what was
+     * already there against what they have just added - so it is answered by
+     * the same field rather than by counting. It survives the chat writing back
+     * into the session: the turns this chat put there are not turns it carried
+     * out of it.
+     */
+    @Test
+    fun `the chat's own turns are not attributed to the session`() {
+        val sessionId = session("issue", "42")
+        recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
+        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+
+        send(chatId, "So what do we do about it?")
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content actor } }""")
+            .execute()
+            .path("chatMessages[0].actor").entity(String::class.java).isEqualTo("Reviewer")
+            .path("chatMessages[1].actor").valueIsNull()
+            .path("chatMessages[2].actor").valueIsNull()
+            .path("chatMessages").entityList(Any::class.java).hasSize(3)
+    }
+
+    /**
+     * A chat continuing nothing names nobody.
+     *
+     * There is no session to have carried anything out of, so every turn is the
+     * chat's own - which is also the chat that existed before any of this, and
+     * it must read exactly as it did.
+     */
+    @Test
+    fun `an ordinary chat attributes none of its turns`() {
+        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+
+        send(chatId, "Anyone there?")
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content actor } }""")
+            .execute()
+            .path("chatMessages[0].actor").valueIsNull()
+            .path("chatMessages[1].actor").valueIsNull()
+    }
+
+    /**
      * And the transcript keeps growing, which is what a later run reads.
      *
      * The person's turn under their own name and the model's under the model's,

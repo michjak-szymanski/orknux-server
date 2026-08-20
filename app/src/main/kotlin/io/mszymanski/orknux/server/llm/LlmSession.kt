@@ -263,6 +263,34 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
     fun latest(sessionId: Long, kinds: Collection<LlmSessionEventKind>, page: Pageable): List<LlmSessionEvent>
 
     /**
+     * The same tail, as it stood before a moment.
+     *
+     * For reading a session the way something else read it earlier. A chat
+     * opened from a session copies [latest] into its own thread and then writes
+     * back into the session, so asking again afterwards returns a different
+     * tail - the chat's own turns included. Bounded by when the reader read, it
+     * returns what was there to be copied and nothing the copy caused.
+     *
+     * Strictly before, so nothing the reader itself went on to write can come
+     * back as something it had read.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.kind in :kinds
+          and e.at < :before
+        order by e.at desc, e.id desc
+        """,
+    )
+    fun latestBefore(
+        sessionId: Long,
+        kinds: Collection<LlmSessionEventKind>,
+        before: OffsetDateTime,
+        page: Pageable,
+    ): List<LlmSessionEvent>
+
+    /**
      * The counts for a whole page at once.
      *
      * One query rather than one per row: a list of twenty sessions that each

@@ -73,6 +73,30 @@ class ScriptRunnerTest {
     }
 
     @Test
+    fun `a script that threw is settled, and one that ran out of budget is not`() {
+        /*
+         * What decides whether the engine tries the step again. A script can
+         * reach nothing - no clock, no network, no file - so one that threw will
+         * throw again and asking twice more only writes the same line in the
+         * run's history twice more. Being stopped by the clock is the other
+         * case: that was about how busy the machine was, not about the script.
+         */
+        val threw = runner.call(
+            """export default function boom() { throw new Error("no thanks"); }""",
+            "boom",
+            emptyList(),
+        )
+        assertThat((threw as ScriptResult.Failed).settled).isTrue()
+
+        val spun = runner.call(
+            """export default function spin() { while (true) { } }""",
+            "spin",
+            emptyList(),
+        )
+        assertThat((spun as ScriptResult.Failed).settled).isFalse()
+    }
+
+    @Test
     fun `a regex that backtracks is stopped by the clock, which the statement limit cannot see`() {
         // The hole the statement limit does not cover: one statement, and the
         // whole budget spent inside it. A backreference is what does it - it

@@ -113,7 +113,11 @@ class PluginRunner(private val properties: PluginProperties) {
                 }
             }
         } catch (failure: PolyglotException) {
-            ScriptResult.Failed(describe(failure, doing = "running"), millis(started))
+            ScriptResult.Failed(
+                describe(failure, doing = "running"),
+                millis(started),
+                settled = !(failure.isCancelled || failure.isResourceExhausted),
+            )
         } catch (failure: ScriptContractException) {
             ScriptResult.Failed(failure.message ?: "did not return", millis(started))
         } catch (failure: IllegalStateException) {

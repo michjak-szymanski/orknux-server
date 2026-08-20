@@ -25,6 +25,10 @@ have failed.
   heading. The workflow editor did the same with its canvas, which said the
   workflow was empty and then filled in. Pages that double as create-new forms
   are unchanged: there a blank field is the point.
+- **Interrupting voice mode no longer silences it for the rest of the session.**
+  Cutting in while the panel was speaking stopped that sentence and every one
+  after it: the microphone went on working and the answers went on arriving,
+  but nothing was ever read aloud again, and nothing said so.
 - **A workspace that cannot be read says why.** Its settings page kept the
   message inside the form, and a load that failed never reached the form, so
   the failure was a heading over blank space.

@@ -388,6 +388,40 @@ class GraphValidatorTest(
     }
 
     /**
+     * The same two settings on an agent, which is the other node that calls
+     * something outside the graph.
+     *
+     * A model is reached over the network and bills for every call, so both
+     * halves matter here: a rate limit is worth waiting out, and a run whose
+     * agent could not answer usually has somewhere better to go than stopping.
+     */
+    @Test
+    fun `an agent can be given a failure edge and a retry policy of its own`() {
+        val actionId = wait("Tell someone")
+        val problems = save(
+            nodes = """
+                { key: "ask", kind: AGENT, name: "Ask", fallbackEnabled: true,
+                  yesLabel: "Answered", noLabel: "Could not answer",
+                  retryAttempts: 3, retryBackoffSeconds: 20, x: 0, y: 0 },
+                { key: "onwards", kind: ACTION, name: "Onwards", actionId: $actionId, x: 200, y: 0 },
+                { key: "rescue", kind: ACTION, name: "Tell someone", actionId: $actionId, x: 200, y: 200 }
+            """,
+            edges = """
+                { source: "ask", target: "onwards" },
+                { source: "ask", target: "rescue", branch: FAILURE }
+            """,
+        )
+        assertThat(problems).noneMatch { it.startsWith("ERROR") }
+
+        val ask = nodes.findByWorkflowId(workflowId).single { it.nodeKey == "ask" }
+        assertThat(ask.fallbackEnabled).isTrue()
+        assertThat(ask.retryAttempts).isEqualTo(3)
+        assertThat(ask.retryBackoffSeconds).isEqualTo(20)
+        assertThat(ask.yesLabel).isEqualTo("Answered")
+        assertThat(ask.noLabel).isEqualTo("Could not answer")
+    }
+
+    /**
      * The shape that reads as working and cannot: an edge no run will ever take,
      * because the node it leaves has not been told it handles failure.
      */

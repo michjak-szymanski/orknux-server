@@ -147,7 +147,7 @@ class WorkflowGraphAPI(
                 // out of a node that does not handle failure is one of the
                 // shapes a save refuses, and without this it would be judged
                 // against a node that never handles it.
-                fallbackEnabled = node.fallbackEnabled && node.kind == NodeKind.ACTION,
+                fallbackEnabled = node.fallbackEnabled && handlesFailure(node.kind),
                 positionX = node.x,
                 positionY = node.y,
             )
@@ -271,23 +271,35 @@ class WorkflowGraphAPI(
         orientation = node.orientation,
         positionX = node.x,
         positionY = node.y,
-        // Only a node with two ways out has them to name: a condition, or an
-        // action that handles its own failure.
+        // Only a node with two ways out has them to name: a condition, or a
+        // node that handles its own failure.
         yesLabel = node.yesLabel?.trim()?.ifEmpty { null }?.takeIf { forks(node) },
         noLabel = node.noLabel?.trim()?.ifEmpty { null }?.takeIf { forks(node) },
-        // Only an action can fail in a way the graph goes on from; a condition
-        // that does not hold is an answer, not a failure.
-        fallbackEnabled = node.fallbackEnabled && node.kind == NodeKind.ACTION,
+        fallbackEnabled = node.fallbackEnabled && handlesFailure(node.kind),
         retryAttempts = node.retryAttempts?.coerceIn(MIN_ATTEMPTS, MAX_ATTEMPTS)
-            ?.takeIf { it > MIN_ATTEMPTS && node.kind == NodeKind.ACTION },
+            ?.takeIf { it > MIN_ATTEMPTS && handlesFailure(node.kind) },
         retryBackoffSeconds = node.retryBackoffSeconds?.coerceIn(0, MAX_BACKOFF_SECONDS)
-            ?.takeIf { node.kind == NodeKind.ACTION },
+            ?.takeIf { handlesFailure(node.kind) },
         mappings = mappingsFor(node, refusing),
     )
 
+    /**
+     * Whether a failure here is the node's own business rather than the run's.
+     *
+     * An action calls something outside this installation, and an agent calls a
+     * model, which is the same bet with a longer wait and a bill attached: both
+     * fail for reasons that have nothing to do with the graph, and both fail in
+     * ways a second go or a different edge is the honest answer to. The rest
+     * cannot. A condition that does not hold has answered, not failed; a
+     * trigger is what started the run; an object node assembles what it was
+     * already handed, so a second attempt assembles the same thing.
+     */
+    private fun handlesFailure(kind: NodeKind): Boolean =
+        kind == NodeKind.ACTION || kind == NodeKind.AGENT
+
     /** Whether this node has two ways out, and so two labels worth keeping. */
     private fun forks(node: WorkflowNodeInput): Boolean =
-        node.kind == NodeKind.CONDITION || (node.kind == NodeKind.ACTION && node.fallbackEnabled)
+        node.kind == NodeKind.CONDITION || (handlesFailure(node.kind) && node.fallbackEnabled)
 
     /**
      * What this node will pass, resolved against the action it points at.
@@ -498,11 +510,11 @@ data class WorkflowNodeInput(
     val yesLabel: String? = null,
     val noLabel: String? = null,
     /**
-     * Whether this action has a second way out for when it fails; ignored on
-     * every other kind.
+     * Whether this node has a second way out for when it fails; kept on an
+     * action and on an agent, ignored on every other kind.
      */
     val fallbackEnabled: Boolean = false,
-    /** How many times in all this action may be attempted; null or 1 is once. */
+    /** How many times in all this node may be attempted; null or 1 is once. */
     val retryAttempts: Int? = null,
     /** How long to leave a failed attempt alone before the next; null is none. */
     val retryBackoffSeconds: Int? = null,
@@ -549,9 +561,9 @@ data class WorkflowNodeView(
     /** What a node's two ways out are called; null leaves it to the interface. */
     val yesLabel: String?,
     val noLabel: String?,
-    /** Whether this action has a second way out for when it fails. */
+    /** Whether this node has a second way out for when it fails. */
     val fallbackEnabled: Boolean,
-    /** How many times in all this action may be attempted; null is once. */
+    /** How many times in all this node may be attempted; null is once. */
     val retryAttempts: Int?,
     val retryBackoffSeconds: Int?,
     val x: Double,

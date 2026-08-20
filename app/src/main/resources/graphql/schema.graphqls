@@ -941,20 +941,20 @@ type WorkflowNode {
     orientation: NodeOrientation
     """
     What a node's two ways out are called; null leaves it to the interface,
-    which says Yes and No for a condition and "If works" / "If fails" for an
-    action that handles its own failure.
+    which says Yes and No for a condition and "If works" / "If fails" for a node
+    that handles its own failure.
     """
     yesLabel: String
     noLabel: String
     """
-    Whether this action has a second way out for the case where it fails.
+    Whether this node has a second way out for the case where it fails.
 
     On, the node has a FAILURE handle to draw from, and a run that could not do
-    the work follows that edge instead of stopping. Off — and on every other
-    kind — a failure ends the run exactly as it always has.
+    the work follows that edge instead of stopping. Off — and on every kind but
+    ACTION and AGENT — a failure ends the run exactly as it always has.
     """
     fallbackEnabled: Boolean!
-    "How many times in all a run may attempt this action; null is once."
+    "How many times in all a run may attempt this node; null is once."
     retryAttempts: Int
     "How long to leave a failed attempt alone before the next; null is none."
     retryBackoffSeconds: Int
@@ -994,11 +994,11 @@ enum EdgeBranch {
     YES
     NO
     """
-    The way out an action takes when it could not do its work.
+    The way out an action or an agent takes when it could not do its work.
 
-    Only the exception is marked: an action's happy path stays the unmarked edge
-    it has always been, so switching a fallback on adds an edge rather than
-    rewriting the one already drawn.
+    Only the exception is marked: the happy path stays the unmarked edge it has
+    always been, so switching a fallback on adds an edge rather than rewriting
+    the one already drawn.
     """
     FAILURE
 }
@@ -1059,28 +1059,29 @@ input WorkflowNodeInput {
     orientation: NodeOrientation
     """
     What a node's two ways out are called; null leaves it to the interface.
-    Kept on a condition, and on an action with `fallbackEnabled`; dropped on the
-    rest, which have only one way out to name.
+    Kept on a condition, and on an action or agent with `fallbackEnabled`;
+    dropped on the rest, which have only one way out to name.
     """
     yesLabel: String
     noLabel: String
     """
-    Whether this action has a second way out for the case where it fails;
-    ignored on every other kind.
+    Whether this node has a second way out for the case where it fails; kept on
+    an ACTION and on an AGENT, ignored on every other kind.
 
     Sending true is the whole of "fallback enabled": the node grows a FAILURE
     handle, and an edge sent with `branch: FAILURE` is what a run follows when
-    the action could not do its work. A FAILURE edge out of a node that does not
+    the node could not do its work. A FAILURE edge out of a node that does not
     have this set is refused — nothing would ever leave by it.
     """
     fallbackEnabled: Boolean = false
     """
-    How many times in all a run may attempt this action; null or 1 is once.
-    Held between 1 and 10, and ignored on every kind but ACTION.
+    How many times in all a run may attempt this node; null or 1 is once.
+    Held between 1 and 10, and kept on an ACTION and on an AGENT only.
 
     A failure the runner has already settled — a channel that does not exist, a
-    request refused for what it said — is never attempted again whatever this
-    says.
+    request refused for what it said, a model that answered 400 — is never
+    attempted again whatever this says. A model that timed out, was rate
+    limited, or answered 5xx is not settled, and is asked again.
     """
     retryAttempts: Int
     """
@@ -1111,8 +1112,8 @@ input WorkflowEdgeInput {
     target: String!
     """
     Which way out of its source this edge leaves by. YES or NO out of a
-    condition, FAILURE out of an action with `fallbackEnabled`, and null for
-    everything else — including an action's happy path, which stays unmarked.
+    condition, FAILURE out of an action or agent with `fallbackEnabled`, and
+    null for everything else — including the happy path, which stays unmarked.
     """
     branch: EdgeBranch
 }

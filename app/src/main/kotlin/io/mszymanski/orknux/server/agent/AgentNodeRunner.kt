@@ -34,6 +34,13 @@ import tools.jackson.databind.JsonNode
  * What the node is handed becomes the question, and what the agent says becomes
  * the step's output, so the node after it is handed an answer the way it would
  * be handed a function's return value.
+ *
+ * A model is the one thing a node here talks to that can fail for reasons that
+ * are nothing to do with the graph, so every failure leaving this runner says
+ * whether it is settled. That word is what the node's retry policy spends
+ * attempts on and what Temporal reads before retrying an activity: a request the
+ * provider refused for what it said is asked once, and a provider that timed out
+ * or said not now is asked again.
  */
 @Component
 // Ordered like its siblings. Without this it sat where an unannotated bean sits
@@ -68,7 +75,13 @@ class AgentNodeRunner(
         // A model is the one thing it cannot do without, and being told so is
         // more useful than an empty answer.
         val modelId = agent.modelId
-            ?: throw StepFailedException(step.nodeKey, "${agent.name} has no model chosen, so it cannot answer")
+            ?: throw StepFailedException(
+                step.nodeKey,
+                "${agent.name} has no model chosen, so it cannot answer",
+                // An agent nobody has finished configuring is the same agent on
+                // the second attempt. This is a form to fill in, not a wait.
+                permanent = true,
+            )
 
         /*
          * The node's own wording, if it was given any.
@@ -148,11 +161,31 @@ class AgentNodeRunner(
             // node can refer to it by that name. Prose has no fields, and a
             // node cannot refer to something that has no name.
             is ChatCompletion.Answered -> StepResult(StepStatus.COMPLETED, expressions.named(step.outputName, answer.content))
-            is ChatCompletion.Failed -> throw StepFailedException(step.nodeKey, "${agent.name} could not answer: ${answer.reason}")
+
+            /*
+             * Whether this is worth asking again is not the node's to guess.
+             *
+             * The layer that made the call is the only one that saw the status
+             * and the exception, so it is the one that decides, and the node
+             * carries that decision through unchanged. Deciding here would mean
+             * reading it back out of the sentence — and a node that matched on
+             * the words would start retrying a 400 the day a provider reworded
+             * its errors.
+             */
+            is ChatCompletion.Failed -> throw StepFailedException(
+                step.nodeKey,
+                "${agent.name} could not answer: ${answer.reason}",
+                permanent = answer.permanent,
+            )
+
             // The loop runs tools to a conclusion, so nothing here is still
-            // asking for one.
-            is ChatCompletion.CalledTools ->
-                throw StepFailedException(step.nodeKey, "${agent.name} asked for a tool that could not be run")
+            // asking for one. A round that ended this way ends it the same way
+            // next time: it is the agent's tools, not the moment.
+            is ChatCompletion.CalledTools -> throw StepFailedException(
+                step.nodeKey,
+                "${agent.name} asked for a tool that could not be run",
+                permanent = true,
+            )
         }
     }
 

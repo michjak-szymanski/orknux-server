@@ -245,7 +245,7 @@ class WorkflowNode(
     var noLabel: String? = null,
 
     /**
-     * Whether this action has a second way out for the case where it fails.
+     * Whether this node has a second way out for the case where it fails.
      *
      * Kept on the node rather than inferred from an edge carrying
      * [EdgeBranch.FAILURE], because the handle has to be there for somebody to
@@ -257,12 +257,13 @@ class WorkflowNode(
     var fallbackEnabled: Boolean = false,
 
     /**
-     * How many times in all a run may attempt this action; null is once.
+     * How many times in all a run may attempt this node; null is once.
      *
      * Attempts rather than retries, so the number on the node is the number of
      * times the work is performed at worst. A failure the runner has already
      * called final is never one of them: nothing about a channel that does not
-     * exist changes between one attempt and the next.
+     * exist, or a request the model refused for what it said, changes between
+     * one attempt and the next.
      */
     @Column(name = "retry_attempts")
     var retryAttempts: Int? = null,

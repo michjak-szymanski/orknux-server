@@ -25,6 +25,15 @@ have failed.
   heading. The workflow editor did the same with its canvas, which said the
   workflow was empty and then filled in. Pages that double as create-new forms
   are unchanged: there a blank field is the point.
+- **A workspace script that ran out of memory is told that, rather than being
+  told it ran too many statements.** The two arrive as the same flag and mean
+  opposite things to whoever has to fix the script.
+- **An action or a webhook may call a function a plugin declared.** The
+  condition catalogue already allowed it; the other two still asked whether the
+  workspace owned a function that belongs to no workspace, and refused a choice
+  their own picker had just offered. A webhook guarded by one would also have
+  refused every caller, since it ran the plugin's source column - which holds a
+  note, not code.
 - **Interrupting voice mode no longer silences it for the rest of the session.**
   Cutting in while the panel was speaking stopped that sentence and every one
   after it: the microphone went on working and the answers went on arriving,

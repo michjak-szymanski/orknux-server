@@ -45,13 +45,33 @@ class BranchGate(edges: List<GraphEdge>) {
      * that carries no answer at all is taken either way - it is not part of the
      * question, and treating it as one would silently drop a path somebody drew
      * before branches existed.
+     *
+     * A failure edge is the one exception to that generosity, and in the other
+     * direction: it is taken only where the node actually failed, and nothing
+     * else out of the node is taken then. Otherwise a node that did its work
+     * would open the path drawn for the case where it could not, which is the
+     * one reading of an unmarked edge nobody means.
      */
     fun follow(nodeKey: String, branch: EdgeBranch?) {
         val out = outgoing[nodeKey] ?: return
-        taken += if (branch == null) out else out.filter { it.branch == null || it.branch == branch }
+        taken += when (branch) {
+            EdgeBranch.FAILURE -> out.filter { it.branch == EdgeBranch.FAILURE }
+            null -> out.filterNot { it.branch == EdgeBranch.FAILURE }
+            else -> out.filter { it.branch == null || it.branch == branch }
+        }
     }
 
     /** Whether this node's answer decides anything: a condition with branch edges. */
     fun branches(nodeKey: String): Boolean =
-        outgoing[nodeKey].orEmpty().any { it.branch != null }
+        outgoing[nodeKey].orEmpty().any { it.branch == EdgeBranch.YES || it.branch == EdgeBranch.NO }
+
+    /**
+     * Whether a failure here is something the graph has an answer for.
+     *
+     * Asked by both engines the moment a step throws: with an edge to follow the
+     * run carries on down it, and without one the failure ends the run exactly
+     * as it always has.
+     */
+    fun catchesFailure(nodeKey: String): Boolean =
+        outgoing[nodeKey].orEmpty().any { it.branch == EdgeBranch.FAILURE }
 }

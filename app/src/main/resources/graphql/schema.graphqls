@@ -939,9 +939,25 @@ type WorkflowNode {
     icon: String
     "Which way round the node faces on the canvas; null is left to right."
     orientation: NodeOrientation
-    "What a condition node's two ways out are called; null means Yes and No."
+    """
+    What a node's two ways out are called; null leaves it to the interface,
+    which says Yes and No for a condition and "If works" / "If fails" for an
+    action that handles its own failure.
+    """
     yesLabel: String
     noLabel: String
+    """
+    Whether this action has a second way out for the case where it fails.
+
+    On, the node has a FAILURE handle to draw from, and a run that could not do
+    the work follows that edge instead of stopping. Off — and on every other
+    kind — a failure ends the run exactly as it always has.
+    """
+    fallbackEnabled: Boolean!
+    "How many times in all a run may attempt this action; null is once."
+    retryAttempts: Int
+    "How long to leave a failed attempt alone before the next; null is none."
+    retryBackoffSeconds: Int
     x: Float!
     y: Float!
     "What the node needs, read off whatever it points at."
@@ -972,16 +988,25 @@ type NodeMapping {
     sourceNodeKey: String
 }
 
-"Which way out of a condition an edge leaves by."
+"Which way out of a node an edge leaves by."
 enum EdgeBranch {
+    "A condition's two answers."
     YES
     NO
+    """
+    The way out an action takes when it could not do its work.
+
+    Only the exception is marked: an action's happy path stays the unmarked edge
+    it has always been, so switching a fallback on adds an edge rather than
+    rewriting the one already drawn.
+    """
+    FAILURE
 }
 
 type WorkflowEdge {
     source: String!
     target: String!
-    "The answer this edge carries; null for every edge that is not leaving a condition."
+    "The answer this edge carries; null for every edge that is not leaving a condition or handling a failure."
     branch: EdgeBranch
 }
 
@@ -1032,9 +1057,38 @@ input WorkflowNodeInput {
     icon: String
     "Which way round the node faces on the canvas; null is left to right."
     orientation: NodeOrientation
-    "What a condition node's two ways out are called; null means Yes and No."
+    """
+    What a node's two ways out are called; null leaves it to the interface.
+    Kept on a condition, and on an action with `fallbackEnabled`; dropped on the
+    rest, which have only one way out to name.
+    """
     yesLabel: String
     noLabel: String
+    """
+    Whether this action has a second way out for the case where it fails;
+    ignored on every other kind.
+
+    Sending true is the whole of "fallback enabled": the node grows a FAILURE
+    handle, and an edge sent with `branch: FAILURE` is what a run follows when
+    the action could not do its work. A FAILURE edge out of a node that does not
+    have this set is refused — nothing would ever leave by it.
+    """
+    fallbackEnabled: Boolean = false
+    """
+    How many times in all a run may attempt this action; null or 1 is once.
+    Held between 1 and 10, and ignored on every kind but ACTION.
+
+    A failure the runner has already settled — a channel that does not exist, a
+    request refused for what it said — is never attempted again whatever this
+    says.
+    """
+    retryAttempts: Int
+    """
+    How long to leave a failed attempt alone before the next, in seconds; null
+    is none. Held between 0 and 3600. The same wait between every attempt: a
+    growing one is a knob nobody asked for.
+    """
+    retryBackoffSeconds: Int
     """
     What this node passes to its action. Omitted leaves it to the action's own
     suggestions, which is what a node freshly pointed at one wants. Names the
@@ -1055,6 +1109,11 @@ input NodeMappingInput {
 input WorkflowEdgeInput {
     source: String!
     target: String!
+    """
+    Which way out of its source this edge leaves by. YES or NO out of a
+    condition, FAILURE out of an action with `fallbackEnabled`, and null for
+    everything else — including an action's happy path, which stays unmarked.
+    """
     branch: EdgeBranch
 }
 
@@ -2179,8 +2238,14 @@ type ExecutionStep {
     "The catalogue entry the step ran, so the run can link back to it."
     actionId: ID
     conditionId: ID
-    "Which way out of a condition this step sent the run; null for every other kind."
+    """
+    Which way out this step sent the run; null where it answered nothing.
+    FAILURE on a failed step means the run went on down its failure edge rather
+    than stopping there.
+    """
     branch: EdgeBranch
+    "How many attempts the step spent; more than one only where its node was given a retry policy and needed it."
+    attempts: Int!
     "Copied from an earlier run rather than performed here, which is what every step ahead of a re-run's starting point is."
     carriedOver: Boolean!
     x: Float!

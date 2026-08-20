@@ -183,6 +183,11 @@ data class ExecutionStepView(
     /** Which way out of a condition this step sent the run; null for the rest. */
     val branch: EdgeBranch?,
     /**
+     * How many attempts the step spent. One for almost everything; more only
+     * where the node was given a retry policy and needed it.
+     */
+    val attempts: Int,
+    /**
      * Copied from an earlier run rather than performed by this one, which is
      * what every step ahead of the one a re-run started at looks like.
      */
@@ -205,6 +210,7 @@ data class ExecutionStepView(
         actionId = step.actionId,
         conditionId = step.conditionId,
         branch = step.branch,
+        attempts = step.attempts,
         carriedOver = step.carriedOver,
         x = step.x,
         y = step.y,

@@ -226,18 +226,50 @@ class WorkflowNode(
     var positionY: Double,
 
     /**
-     * What this condition's two ways out are called.
+     * What this node's two ways out are called.
      *
-     * Null means the default - "Yes" and "No" - which is what most conditions
-     * want. A question like "is it urgent" reads better as "Escalate" and
-     * "File it", and those words are most of what makes a graph legible at a
-     * glance, so they belong to the node rather than to the edges.
+     * Null means the default, which the interface supplies: "Yes" and "No" for
+     * a condition, and "If works" and "If fails" for an action that handles its
+     * own failure. A question like "is it urgent" reads better as "Escalate"
+     * and "File it", and those words are most of what makes a graph legible at
+     * a glance, so they belong to the node rather than to the edges.
+     *
+     * One pair for both, rather than a second pair for actions, because there
+     * is only ever one question a node answers: which of my two exits did this
+     * run leave by.
      */
     @Column(name = "yes_label", length = 40)
     var yesLabel: String? = null,
 
     @Column(name = "no_label", length = 40)
     var noLabel: String? = null,
+
+    /**
+     * Whether this action has a second way out for the case where it fails.
+     *
+     * Kept on the node rather than inferred from an edge carrying
+     * [EdgeBranch.FAILURE], because the handle has to be there for somebody to
+     * draw from before any such edge exists — and because turning it off should
+     * be a decision recorded on the node, not a graph that quietly loses its
+     * fallback when the last edge is deleted.
+     */
+    @Column(name = "fallback_enabled", nullable = false)
+    var fallbackEnabled: Boolean = false,
+
+    /**
+     * How many times in all a run may attempt this action; null is once.
+     *
+     * Attempts rather than retries, so the number on the node is the number of
+     * times the work is performed at worst. A failure the runner has already
+     * called final is never one of them: nothing about a channel that does not
+     * exist changes between one attempt and the next.
+     */
+    @Column(name = "retry_attempts")
+    var retryAttempts: Int? = null,
+
+    /** How long to leave a failed attempt alone before the next; null is none. */
+    @Column(name = "retry_backoff_seconds")
+    var retryBackoffSeconds: Int? = null,
 )
 
 @Entity
@@ -257,8 +289,8 @@ class WorkflowEdge(
     val targetKey: String,
 
     /**
-     * Which way out of a condition this edge leaves by, or null for an edge
-     * that is not answering anything.
+     * Which way out of its node this edge leaves by, or null for an edge that
+     * is not answering anything.
      *
      * Null is what every edge between two ordinary nodes is, and what every
      * edge was before branches existed - so a graph drawn last week means
@@ -269,10 +301,21 @@ class WorkflowEdge(
     val branch: EdgeBranch? = null,
 )
 
-/** The two answers a condition has, as the edges leaving it are labelled. */
+/** The ways out of a node, as the edges leaving it are labelled. */
 enum class EdgeBranch {
+    /** A condition's two answers. */
     YES,
     NO,
+
+    /**
+     * The exit an action takes when it could not do its work.
+     *
+     * Only the exception is marked. An action's happy path stays the unmarked
+     * edge it has always been, so enabling a fallback adds an edge instead of
+     * rewriting the one already drawn, and a graph saved without this is
+     * untouched by it.
+     */
+    FAILURE,
 }
 
 interface WorkflowNodeRepository : JpaRepository<WorkflowNode, Long> {

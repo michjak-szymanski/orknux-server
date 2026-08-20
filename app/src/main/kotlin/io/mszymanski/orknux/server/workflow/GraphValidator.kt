@@ -281,6 +281,22 @@ class GraphValidator(
                     message = "${source.name} can only lead to an agent: ${target.name} does not talk to a model.",
                 )
             }
+            /*
+             * A failure edge out of a node that does not handle failure.
+             *
+             * The engines take a failure edge only where the node failed and
+             * the node says it has somewhere to go, so this one would never be
+             * taken by anything: a path drawn on the canvas that no run can
+             * reach. Refused rather than warned about, because the graph looks
+             * exactly like one that works.
+             */
+            if (edge.branch == EdgeBranch.FAILURE && !source.fallbackEnabled) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.ERROR,
+                    nodeKey = target.nodeKey,
+                    message = "${source.name} does not handle failure, so nothing ever leaves it for ${target.name}.",
+                )
+            }
         }
 
         /*
@@ -337,6 +353,23 @@ class GraphValidator(
                 )
             }
 
+            /*
+             * A fallback nothing is wired to.
+             *
+             * The node handles its own failure and the graph has nowhere for it
+             * to go, so a failure still ends the run - which is the opposite of
+             * what switching it on says. Advice rather than a refusal: the
+             * handle exists so somebody can draw from it, and there is a moment
+             * between the two.
+             */
+            if (node.fallbackEnabled && known.none { it.sourceKey == node.nodeKey && it.branch == EdgeBranch.FAILURE }) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.WARNING,
+                    nodeKey = node.nodeKey,
+                    message = "${node.name} handles failure but nothing leads out of it, so a failure still stops the run.",
+                )
+            }
+
             // A session nothing is wired to is a conversation nobody joins.
             if (node.kind == NodeKind.SESSION && known.none { it.sourceKey == node.nodeKey }) {
                 problems += GraphProblem(
@@ -385,7 +418,15 @@ class GraphValidator(
         val incoming = mutableMapOf<String, Reachable>()
 
         order.forEach { node ->
-            val sources = edges.filter { it.targetKey == node.nodeKey }.mapNotNull { produced[it.sourceKey] }
+            /*
+             * Down a failure edge, what arrives is what reached the node that
+             * failed - not what that node produces, because it produced nothing.
+             * Offering its outputs here would tell somebody they could read a
+             * field that only exists when the step they are handling the failure
+             * of actually worked.
+             */
+            val sources = edges.filter { it.targetKey == node.nodeKey }
+                .mapNotNull { if (it.branch == EdgeBranch.FAILURE) incoming[it.sourceKey] else produced[it.sourceKey] }
             val reaching = sources.fold(Reachable()) { all, one -> all.merge(one) }
             incoming[node.nodeKey] = reaching
 

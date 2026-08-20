@@ -19,6 +19,9 @@ data class StepOutcome(
     val resumeAfter: Duration? = null,
 )
 
+/** How many attempts a node is allowed, and how long between them. */
+private data class RetryPolicy(val attempts: Int, val backoff: Duration)
+
 /**
  * Implemented by a failure that knows whether it is worth trying again.
  *
@@ -35,8 +38,11 @@ interface PermanentFailure {
  * @param permanent whether trying again could ever give a different answer. A
  *   channel that does not exist will not start existing on the second attempt,
  *   and a run that retries it three times only takes longer to say so; a network
- *   that dropped might well work. Temporal reads this to decide whether to
- *   retry, and the inline engine has no retries to decide about.
+ *   that dropped might well work. Read twice: by a node's own retry policy,
+ *   which will not spend an attempt on something already settled, and by
+ *   Temporal, which will not retry an activity that says so. A policy the step
+ *   has already exhausted is settled by the same definition, which is what
+ *   stops the two layers being multiplied together.
  */
 class StepFailedException(
     val nodeKey: String,
@@ -96,6 +102,9 @@ class StepRunner(
         if (!resuming) {
             step.startedAt = OffsetDateTime.now()
             step.waitUntil = null
+            // A resumed wait is the same attempt asking again; anything else is
+            // a new one, which is what a retry policy is counting.
+            step.attempts += 1
         }
         step.status = StepStatus.RUNNING
         step.finishedAt = null
@@ -113,7 +122,24 @@ class StepRunner(
             // with the step: Temporal reads it and stops retrying something that
             // cannot come out differently.
             val permanent = (failure as? PermanentFailure)?.permanent == true
-            failStep(executionId, step, failure.message ?: failure::class.simpleName ?: "the step failed", permanent)
+            val reason = failure.message ?: failure::class.simpleName ?: "the step failed"
+
+            val policy = retryOf(step)
+            if (policy != null && !permanent && step.attempts < policy.attempts) {
+                return parkForRetry(executionId, step, input, reason, policy)
+            }
+
+            /*
+             * A node's own policy is the whole of its retries.
+             *
+             * Temporal retries an activity three times of its own accord, so a
+             * policy left to throw would be multiplied by three - five attempts
+             * asked for and fifteen performed. Exhausting the policy settles the
+             * failure by definition: there is nothing left to try, which is
+             * exactly what `permanent` means to the activity that reads it.
+             * A node with no policy keeps the arrangement it has always had.
+             */
+            failStep(executionId, step, reason, permanent || policy != null)
         }
 
         if (result.status == StepStatus.WAITING) {
@@ -155,6 +181,65 @@ class StepRunner(
             result.output ?: "${step.name} ${result.status.name.lowercase()}",
         )
         return StepOutcome(result.status, result.output, result.halt, result.branch)
+    }
+
+    /**
+     * The node's retry policy, or null where it has none.
+     *
+     * One attempt is no policy at all rather than a policy of one, so a node
+     * carrying the number the editor shows by default costs nothing.
+     */
+    private fun retryOf(step: ExecutionStep): RetryPolicy? = step.retryAttempts
+        ?.takeIf { it > 1 }
+        ?.let { RetryPolicy(it, Duration.ofSeconds((step.retryBackoffSeconds ?: 0).coerceAtLeast(0).toLong())) }
+
+    /**
+     * Parks a failed attempt instead of throwing, so the next one is asked for
+     * the way a wait is.
+     *
+     * Retrying through the wait both engines already honour is what keeps the
+     * policy from being applied twice: the activity answers normally, so
+     * Temporal has no failure to retry on top, and the backoff runs down on a
+     * durable timer rather than inside an activity holding a worker and burning
+     * its start-to-close timeout.
+     */
+    private fun parkForRetry(
+        executionId: Long,
+        step: ExecutionStep,
+        input: String?,
+        reason: String,
+        policy: RetryPolicy,
+    ): StepOutcome {
+        step.status = StepStatus.WAITING
+        step.error = reason.take(ERROR_LENGTH)
+        // The deadline a parked runner wrote belongs to the attempt that wrote
+        // it; the next attempt starts its own clock.
+        step.waitUntil = null
+        steps.save(step)
+
+        log.write(
+            executionId,
+            step.nodeKey,
+            LogLevel.INFO,
+            "${step.name} failed on attempt ${step.attempts} of ${policy.attempts}: $reason. " +
+                "Trying again in ${policy.backoff.toSeconds()}s",
+        )
+        // It produced nothing, so the next attempt is handed what this one was.
+        return StepOutcome(StepStatus.WAITING, input, resumeAfter = policy.backoff)
+    }
+
+    /**
+     * Records that a failed step's failure edge is the way the run went on.
+     *
+     * Written down for the same reason a condition's answer is: a later run
+     * starting partway down cannot otherwise tell a step whose failure was
+     * handled from one that stopped the run where it stood.
+     */
+    fun recordFailureExit(executionId: Long, nodeKey: String): ExecutionStep {
+        val step = stepOf(executionId, nodeKey)
+        step.branch = EdgeBranch.FAILURE
+        log.write(executionId, nodeKey, LogLevel.INFO, "${step.name} failed; the run is taking its failure branch")
+        return steps.save(step)
     }
 
     /**

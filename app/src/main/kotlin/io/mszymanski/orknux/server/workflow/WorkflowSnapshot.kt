@@ -46,6 +46,8 @@ object WorkflowSnapshot {
                             "from" to binding.from,
                         )
                     },
+                    "retryAttempts" to node.retryAttempts,
+                    "retryBackoffSeconds" to node.retryBackoffSeconds,
                     "x" to node.x,
                     "y" to node.y,
                 )
@@ -80,6 +82,10 @@ object WorkflowSnapshot {
                             from = text(binding, "from"),
                         )
                     },
+                    // Absent from every snapshot published before a node could
+                    // be told to try again, which reads as the once it had.
+                    retryAttempts = number(node, "retryAttempts")?.toInt(),
+                    retryBackoffSeconds = number(node, "retryBackoffSeconds")?.toInt(),
                     x = node.path("x").asDouble(),
                     y = node.path("y").asDouble(),
                 )

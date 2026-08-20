@@ -4,6 +4,7 @@ import io.mszymanski.orknux.server.OrknuxServer
 import io.mszymanski.orknux.workflow.execution.ExecutionPlanner
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
 import io.mszymanski.orknux.workflow.execution.ExecutionStepRepository
+import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
 import io.mszymanski.orknux.workflow.execution.ExecutionLogRepository
 import io.mszymanski.orknux.workflow.execution.FakeWorkflowGraphSource
@@ -174,6 +175,87 @@ class ExecutionWorkflowTest(
         assertThat(failures.last().message).contains("stopped at boom with 1 steps unreached")
     }
 
+    /**
+     * The same run the inline engine takes, carried by Temporal: a step whose
+     * failure the graph has an answer for leaves by its failure edge, and the
+     * run finishes rather than stopping. A run that took different paths
+     * depending on which engine carried it would be the worst kind of
+     * difference, so this is the inline test said again here.
+     */
+    @Test
+    fun `a failure the graph has an answer for takes the failure edge and the run finishes`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Nightly Report",
+                nodes = listOf(node("boom"), node("ok-onwards"), node("ok-rescue")),
+                edges = listOf(
+                    GraphEdge("boom", "ok-onwards"),
+                    GraphEdge("boom", "ok-rescue", EdgeBranch.FAILURE),
+                ),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        assertThat(status).isEqualTo(ExecutionStatus.COMPLETED)
+        val recorded = steps.findByExecutionIdOrderByOrderAsc(plan.executionId).associateBy { it.nodeKey }
+        assertThat(recorded.getValue("boom").status).isEqualTo(StepStatus.FAILED)
+        assertThat(recorded.getValue("boom").branch).isEqualTo(EdgeBranch.FAILURE)
+        assertThat(recorded.getValue("ok-rescue").status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(recorded.getValue("ok-onwards").status).isEqualTo(StepStatus.SKIPPED)
+    }
+
+    /**
+     * The reconciliation, asserted where it could go wrong.
+     *
+     * Temporal retries an activity of its own accord — twice, in this worker —
+     * so a node's own policy left to throw would be multiplied by that. It is
+     * not, because a policy retries by parking the step and asking again, which
+     * the activity reports as an ordinary answer: three attempts asked for,
+     * three performed, and the third one works.
+     */
+    @Test
+    fun `a node's own retry policy is what it gets, and not that times Temporal's`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Nightly Report",
+                nodes = listOf(retrying("flaky-post", attempts = 3)),
+                edges = emptyList(),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        assertThat(status).isEqualTo(ExecutionStatus.COMPLETED)
+        val flaky = steps.findByExecutionIdOrderByOrderAsc(plan.executionId).single()
+        assertThat(flaky.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(flaky.attempts).isEqualTo(3)
+    }
+
+    /**
+     * And the other end of it: a policy that runs out is a settled failure, so
+     * Temporal does not start again underneath it. Two attempts asked for, two
+     * performed — not two more on top.
+     */
+    @Test
+    fun `a policy that runs out is not tried again by Temporal`() {
+        val plan = plan(
+            WorkflowGraph(
+                workflowId = WORKFLOW,
+                name = "Nightly Report",
+                nodes = listOf(retrying("boom", attempts = 2)),
+                edges = emptyList(),
+            ),
+        )
+
+        val status = workflow().run(plan)
+
+        assertThat(status).isEqualTo(ExecutionStatus.FAILED)
+        assertThat(steps.findByExecutionIdOrderByOrderAsc(plan.executionId).single().attempts).isEqualTo(2)
+    }
+
     private fun workflow() = environment.workflowClient.newWorkflowStub(
         ExecutionWorkflow::class.java,
         WorkflowOptions.newBuilder().setTaskQueue(QUEUE).build(),
@@ -188,10 +270,15 @@ class ExecutionWorkflowTest(
             workflowName = planned.execution.workflowName,
             steps = planned.steps.map { it.nodeKey },
             input = "start here",
+            edges = planned.edges.map { PlanEdge(it.source, it.target, it.branch) },
         )
     }
 
     private fun node(key: String) = GraphNode(key = key, kind = NodeKind.ACTION, name = key)
+
+    /** No wait between attempts: what is under test is the count, not the clock. */
+    private fun retrying(key: String, attempts: Int) =
+        GraphNode(key = key, kind = NodeKind.ACTION, name = key, retryAttempts = attempts, retryBackoffSeconds = 0)
 
     private companion object {
         const val QUEUE = "execution-workflow-test"

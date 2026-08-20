@@ -59,26 +59,48 @@ data class GraphNode(
      * else by the time this finishes.
      */
     val mappings: Map<String, NodeBinding> = emptyMap(),
+    /**
+     * How many times in all this node may be attempted; null is once.
+     *
+     * The node's own policy is the whole of its retries. Where it is set, a
+     * failure that is not already settled parks the step and comes back rather
+     * than ending the run, and the attempt it exhausts is settled by definition
+     * — which is what stops Temporal starting again underneath it.
+     */
+    val retryAttempts: Int? = null,
+    /** How long to leave a failed attempt alone before the next; null is none. */
+    val retryBackoffSeconds: Int? = null,
     val x: Double = 0.0,
     val y: Double = 0.0,
 )
 
 /**
- * Which way out of a condition an edge leaves by.
+ * Which way out of a node an edge leaves by.
  *
  * The engine's own copy of the word: a run walks the graph it was handed, and
- * the graph says which edges answer YES and which answer NO.
+ * the graph says which edges answer YES, which answer NO, and which are there
+ * for the case where the node could not do its work at all.
  */
 enum class EdgeBranch {
     YES,
     NO,
+
+    /**
+     * The way out a node takes when it failed.
+     *
+     * Marked on the exception rather than on both exits, so every edge drawn
+     * before this existed still means what it meant: an unmarked edge is the
+     * way out when the work was done, and enabling a fallback adds an edge
+     * rather than rewriting one.
+     */
+    FAILURE,
 }
 
 /**
  * One edge, and which answer it carries.
  *
- * Null for everything that is not leaving a condition, which is most edges and
- * every edge drawn before branches existed.
+ * Null for everything that is not answering, which is most edges and every edge
+ * drawn before branches existed.
  */
 data class GraphEdge(val source: String, val target: String, val branch: EdgeBranch? = null)
 

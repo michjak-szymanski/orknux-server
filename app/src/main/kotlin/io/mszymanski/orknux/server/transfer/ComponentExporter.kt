@@ -493,6 +493,9 @@ class ComponentExporter(
         put("y", held.positionY)
         put("yesLabel", held.yesLabel)
         put("noLabel", held.noLabel)
+        put("fallbackEnabled", held.fallbackEnabled)
+        put("retryAttempts", held.retryAttempts)
+        put("retryBackoffSeconds", held.retryBackoffSeconds)
         // The one the node's kind uses, and only that one: an id left behind by
         // a node that changed kind is not something this workflow points at.
         put("agentRef", held.agentId.takeIf { held.kind == NodeKind.AGENT }?.let { agents.findByIdOrNull(it)?.name })

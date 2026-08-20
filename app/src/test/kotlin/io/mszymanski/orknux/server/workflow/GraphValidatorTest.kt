@@ -339,6 +339,118 @@ class GraphValidatorTest(
     }
 
     /** Saves the graph and answers with its problems, as "SEVERITY message". */
+    /**
+     * The whole of what the editor sends to turn a fallback on: the flag, the
+     * two labels, and one extra edge marked FAILURE. The happy path is the
+     * unmarked edge it always was.
+     */
+    @Test
+    fun `an action can be given a failure edge, a retry policy and its own two labels`() {
+        val actionId = wait("Post it")
+        val problems = save(
+            nodes = """
+                { key: "post", kind: ACTION, name: "Post", actionId: $actionId, fallbackEnabled: true,
+                  yesLabel: "Posted", noLabel: "Could not post", retryAttempts: 4, retryBackoffSeconds: 30,
+                  x: 0, y: 0 },
+                { key: "onwards", kind: ACTION, name: "Onwards", actionId: $actionId, x: 200, y: 0 },
+                { key: "rescue", kind: ACTION, name: "Tell someone", actionId: $actionId, x: 200, y: 200 }
+            """,
+            edges = """
+                { source: "post", target: "onwards" },
+                { source: "post", target: "rescue", branch: FAILURE }
+            """,
+        )
+        assertThat(problems).noneMatch { it.startsWith("ERROR") }
+
+        val saved = graphQlTester.document(
+            """
+            query {
+              workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                nodes { key fallbackEnabled retryAttempts retryBackoffSeconds yesLabel noLabel }
+                edges { source target branch }
+              }
+            }
+            """,
+        ).execute()
+
+        val post = saved.path("workflowGraph.nodes[*]").entityList(Map::class.java).get().first { it["key"] == "post" }
+        assertThat(post["fallbackEnabled"]).isEqualTo(true)
+        assertThat(post["retryAttempts"]).isEqualTo(4)
+        assertThat(post["retryBackoffSeconds"]).isEqualTo(30)
+        assertThat(post["yesLabel"]).isEqualTo("Posted")
+        assertThat(post["noLabel"]).isEqualTo("Could not post")
+
+        val drawn = saved.path("workflowGraph.edges[*]").entityList(Map::class.java).get()
+        assertThat(drawn).contains(mapOf("source" to "post", "target" to "rescue", "branch" to "FAILURE"))
+        // The happy path is not marked; nothing had to be rewritten to add the
+        // other one.
+        assertThat(drawn).contains(mapOf("source" to "post", "target" to "onwards", "branch" to null))
+    }
+
+    /**
+     * The shape that reads as working and cannot: an edge no run will ever take,
+     * because the node it leaves has not been told it handles failure.
+     */
+    @Test
+    fun `a failure edge out of a node that does not handle failure is refused`() {
+        val actionId = wait("Post it")
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "post", kind: ACTION, name: "Post", actionId: $actionId, x: 0, y: 0 },
+                  { key: "rescue", kind: ACTION, name: "Tell someone", actionId: $actionId, x: 200, y: 0 }
+                ],
+                edges: [{ source: "post", target: "rescue", branch: FAILURE }]
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().errors().expect { it.message?.contains("does not handle failure") == true }.verify()
+
+        assertThat(nodes.findByWorkflowId(workflowId)).isEmpty()
+    }
+
+    /** Advice, not a refusal: there is a moment between the handle and the edge. */
+    @Test
+    fun `a fallback with nothing wired to it says so`() {
+        val actionId = wait("Post it")
+        val problems = save(
+            nodes = """
+                { key: "post", kind: ACTION, name: "Post", actionId: $actionId, fallbackEnabled: true, x: 0, y: 0 },
+                { key: "onwards", kind: ACTION, name: "Onwards", actionId: $actionId, x: 200, y: 0 }
+            """,
+            edges = """{ source: "post", target: "onwards" }""",
+        )
+
+        assertThat(problems).anyMatch { it.startsWith("WARNING") && it.contains("handles failure but nothing leads out") }
+        // Saved all the same.
+        assertThat(nodes.findByWorkflowId(workflowId)).hasSize(2)
+    }
+
+    /**
+     * A condition has two ways out and no failure to handle, and everything
+     * else has neither. Kept off the row rather than refused, so an editor
+     * sending the same node shape for every kind cannot leave a setting behind
+     * that quietly does nothing.
+     */
+    @Test
+    fun `fallback and a retry policy are dropped on a kind that cannot use them`() {
+        val triggerId = scheduled("nightly", null)
+        save(
+            nodes = """
+                { key: "start", kind: TRIGGER, name: "Nightly", triggerId: $triggerId,
+                  fallbackEnabled: true, retryAttempts: 5, retryBackoffSeconds: 10, x: 0, y: 0 }
+            """,
+            edges = "",
+        )
+
+        val start = nodes.findByWorkflowId(workflowId).single()
+        assertThat(start.fallbackEnabled).isFalse()
+        assertThat(start.retryAttempts).isNull()
+        assertThat(start.retryBackoffSeconds).isNull()
+    }
+
     private fun save(nodes: String, edges: String): List<String> = graphQlTester.document(
         """
         mutation {

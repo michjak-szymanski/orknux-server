@@ -108,6 +108,8 @@ class AppWorkflowGraphSource(
                     // What this node passes, decided on the node. Seeded from the
                     // action when the node was placed, its own from then on.
                     mappings = bindings(node.mappings) + sessionOf(sessionFor[node.nodeKey]),
+                    retryAttempts = node.retryAttempts,
+                    retryBackoffSeconds = node.retryBackoffSeconds,
                     x = node.positionX,
                     y = node.positionY,
                 )

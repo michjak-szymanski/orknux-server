@@ -32,6 +32,42 @@ seam to pull on if one of them ever has to become its own service.
 [orknux-ui](https://github.com/michjak-szymanski/orknux-ui) is the React front
 end, and talks only to this service.
 
+## What it looks like
+
+The interface's own pictures, taken by its capture script against a workspace
+built to be photographed — so they are the interface as it is now rather than
+the one somebody screenshotted once. They are linked out of that repository
+rather than copied here: it is a submodule, and GitHub renders a submodule as a
+link, not as files it will serve an image from.
+
+![A workflow on the canvas: the graph, what each edge carries, and the selected
+node's settings](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/editor.png)
+
+*A workflow. Edges are labelled with the fields that travel along them.*
+
+![A run: its summary, and the graph as it ran, each node marked with what it
+did](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/execution-detail.png)
+
+*A run, node by node — what each step was given, and what it returned.*
+
+![A chat with one of the workspace's models](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/chat.png)
+
+*Chat, against whichever model the workspace is pointed at.*
+
+![The issue tracker inside a workspace, with labels, assignees and
+filters](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/issues.png)
+
+*The tracker every workspace has. The MCP endpoint below speaks to this one, so
+an agent can file and read issues without a browser.*
+
+![Monitoring: each component with its version, and what it is
+answering](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/monitoring.png)
+
+*What is running, and whether it is answering.*
+
+The rest — the catalogues, the admin section, the command palette — are in
+[the manual](https://orknux.io/docs).
+
 ## Running
 
 Two things go by that name here, and neither is a smaller version of the other.

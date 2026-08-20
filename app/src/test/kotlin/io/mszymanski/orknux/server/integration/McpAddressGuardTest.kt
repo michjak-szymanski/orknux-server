@@ -11,6 +11,7 @@ import io.mszymanski.orknux.connector.connection.McpProperties
 import io.mszymanski.orknux.connector.connection.McpServer
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
+import io.mszymanski.orknux.connector.security.SecretCipher
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -50,7 +51,7 @@ class McpAddressGuardTest {
     private val client = McpClient(
         ObjectMapper(),
         McpProperties(),
-        ConnectionProbe(ConnectionProperties(), proxies),
+        ConnectionProbe(ConnectionProperties(), proxies, SecretCipher("")),
         proxies,
     )
 

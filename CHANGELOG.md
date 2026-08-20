@@ -22,6 +22,13 @@ have failed.
   exported and imported. What a component points at comes with it: an agent
   brings its tools and the skills in the catalogues it was granted, a workflow
   brings everything its nodes reach.
+- **An LLM session: a conversation that outlives the run that started it.** An
+  agent node can be given a session key, and everything that happens in its turn
+  is recorded against it - what was asked, what the agent answered, which tools
+  it called and with what, and a note when something went wrong. Two runs that
+  compute the same key write into the same conversation, which is the point: a
+  ticket seen by two different workflows has one history, not two. Nothing is
+  recorded for a node that names no session.
 - **What cannot travel is asked for on arrival.** A model, a connection and an
   MCP server are kept beside a credential, so an envelope names them and
   carries nothing else. The import plan reports each one it cannot satisfy and
@@ -54,6 +61,9 @@ have failed.
   Cutting in while the panel was speaking stopped that sentence and every one
   after it: the microphone went on working and the answers went on arriving,
   but nothing was ever read aloud again, and nothing said so.
+- **A shell's account is optional, the way it is at `ssh`.** Leaving it out
+  means the account the server runs as, and the Shell page names which account
+  that is rather than leaving an administrator to find out by failing.
 - **A workspace that cannot be read says why.** Its settings page kept the
   message inside the form, and a load that failed never reached the form, so
   the failure was a heading over blank space.

@@ -111,31 +111,42 @@ class DoctorAPI(
      * with. Rotating one without re-encrypting leaves a server that starts, reports
      * a usable key, and cannot read a single secret it holds — the failure looks
      * like corruption rather than like configuration.
+     *
+     * Asked of the cipher, for the same reason the key is. This used to catch
+     * around `decrypt` and treat a thrown failure as the finding — and `decrypt`
+     * does not throw, by design, so the answer was "all readable" whatever the
+     * key was. The one page somebody opens to ask whether their credentials are
+     * in trouble said no in exactly the case it exists for. `canRead` is the
+     * question the cipher can actually answer.
      */
     private fun storedSecrets(): DoctorCheckView {
         val stored = encryptedValues()
         if (stored.isEmpty()) return ok("Stored secrets", "None stored yet; nothing to read back.")
 
         val usable = cipher.keyStatus() == SecretCipher.KeyStatus.Usable
-        val unreadable = if (usable) {
-            stored.filter { runCatching { cipher.decrypt(it.ciphertext) }.isFailure }
-        } else {
-            stored
+        val unreadable = if (usable) stored.filterNot { cipher.canRead(it.ciphertext) } else stored
+
+        if (unreadable.isEmpty()) {
+            return ok("Stored secrets", "All ${stored.size} values readable with the configured key.")
         }
 
-        if (unreadable.isEmpty()) return ok("Stored secrets", "All ${stored.size} readable with the configured key.")
-
         /*
-         * Named, not counted. "4 could not be decrypted" is a fact nobody can act on:
-         * the next step is a database query, which is what this screen exists to save
-         * somebody from. What is listed is where each one lives — never the value,
-         * which cannot be read anyway and must not be shown if it could.
+         * Counted and named, because the two answer different halves of it. The count
+         * is the size of the problem — one credential lost is an afternoon, all of
+         * them is a restore — and the names are where to go next, which is what this
+         * screen exists to save somebody a database query for. A column holding
+         * several says so once, with how many: the seeded shells put the same column
+         * on the list a dozen times over, which reads as a dozen problems.
+         *
+         * Never the value, which cannot be read anyway and must not be shown if it
+         * could.
          */
-        val named = unreadable.joinToString("; ") { it.where }
+        val named = unreadable.groupingBy { it.where }.eachCount()
+            .entries.joinToString("; ") { (where, count) -> if (count == 1) where else "$where ($count)" }
         val why = if (usable) "— this is not the key they were written with" else "because the key above is not usable"
         return fail(
             "Stored secrets",
-            "${unreadable.size} of ${stored.size} cannot be read $why: $named. " +
+            "${unreadable.size} of ${stored.size} values cannot be read $why: $named. " +
                 "They have to be entered again, or the original key restored.",
         )
     }

@@ -500,7 +500,7 @@ CREATE TABLE shell
     name                         varchar(120) not null,
     host                         varchar(255) not null,
     port                         integer not null default 22,
-    username                     varchar(255) not null,
+    username                     varchar(255),
     private_key                  text,
     key_passphrase               varchar(4000),
     enabled                      boolean not null default true,

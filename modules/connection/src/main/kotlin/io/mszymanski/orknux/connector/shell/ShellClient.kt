@@ -101,8 +101,23 @@ class ShellClient(private val properties: ShellProperties) {
         val expectation = HostKeyExpectation(shell.hostKey)
         val context = AttributeRepository.ofKeyValuePair(EXPECTATION, expectation)
 
+        /*
+         * A shell with no username connects as the account this process runs
+         * as, which is [Shell.account] and is what `ssh build.internal` does.
+         *
+         * Worked out here rather than handed to MINA as an empty string,
+         * because MINA does not fall back on this path. `SshClient.connect`
+         * only consults `OsUtils.getCurrentUser` inside a host config entry
+         * resolver, and the default resolver matches nothing and builds a
+         * synthetic entry out of whatever it was given - so an empty username
+         * stays empty, goes on the wire as a user name of zero length, and
+         * comes back as an authentication failure that names nobody. The
+         * fallback being ours means it is the same account the page shows.
+         */
+        val account = shell.account
+
         val session = try {
-            client.connect(shell.username.trim(), shell.host.trim(), shell.port, context, null)
+            client.connect(account, shell.host.trim(), shell.port, context, null)
                 .verify(properties.connectTimeout)
                 .session
         } catch (failure: Exception) {
@@ -114,7 +129,7 @@ class ShellClient(private val properties: ShellProperties) {
                 open.addPublicKeyIdentity(key)
                 open.auth().verify(properties.connectTimeout)
             } catch (failure: Exception) {
-                throw unreachable(shell, expectation, "${shell.username}@${shell.host} was refused", failure)
+                throw unreachable(shell, expectation, "$account@${shell.host} was refused", failure)
             }
             work(open, expectation.fingerprint)
         }

@@ -12,6 +12,7 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import org.apache.sshd.common.util.OsUtils
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.data.jpa.repository.JpaRepository
 import java.time.Duration
@@ -31,7 +32,7 @@ import java.time.OffsetDateTime
  * denylist that is nearly right is worse than none, since it tells an
  * administrator they are protected while `sh -c "$(curl …)"` walks straight
  * past it. The design is that a shell points at a virtual machine or a container
- * the administrator chose and is willing to lose, that the account in [username]
+ * the administrator chose and is willing to lose, that the account in [account]
  * has exactly the privileges they meant to give away, and that everything run
  * through it is written down where they can read it.
  */
@@ -51,8 +52,17 @@ class Shell(
     @Column(nullable = false)
     var port: Int = 22,
 
-    @Column(nullable = false, length = 255)
-    var username: String = "",
+    /**
+     * The account on the far side, or null to let [account] decide.
+     *
+     * Optional, because `ssh build.internal` is optional about it too: leaving
+     * it out is a thing an administrator already knows the meaning of, and the
+     * meaning is "the account I am". Made nullable rather than blank-means-unset
+     * so that the database says which it is, and so that a screen can tell an
+     * unset username apart from one somebody cleared.
+     */
+    @Column(length = 255)
+    var username: String? = null,
 
     /**
      * The private key, in OpenSSH or PEM form, encrypted in the database; see
@@ -108,10 +118,44 @@ class Shell(
     var lastModifiedAt: OffsetDateTime = OffsetDateTime.now(),
 ) {
 
+    /**
+     * The account commands actually run as.
+     *
+     * [username] when there is one, and otherwise the account this server
+     * process runs as - which is what `ssh build.internal` does with no user in
+     * front of it, and what MINA SSHD itself falls back to when an `ssh_config`
+     * entry matches but names no user. Doing it here rather than leaving the
+     * username empty is the difference between a decision and an accident: the
+     * empty string is not a fallback to MINA on the path this code takes, it is
+     * a user name of zero length put on the wire for the far side to refuse.
+     *
+     * Resolved on every read rather than cached, because [OsUtils] caches it
+     * already and a value frozen at class-load time would be a value no test
+     * could change.
+     */
+    val account: String
+        get() = username?.trim()?.ifEmpty { null } ?: localAccount()
+
     /** Whether there is anything to connect with. */
     val configured: Boolean
-        get() = host.isNotBlank() && username.isNotBlank() && !privateKey.isNullOrBlank()
+        get() = host.isNotBlank() && !privateKey.isNullOrBlank()
 }
+
+/**
+ * The account this server process runs as, as `ssh` would read it.
+ *
+ * Through MINA's own accessor rather than `user.name` directly, so that a shell
+ * with no username resolves to exactly what the library would have resolved -
+ * including the `org.apache.sshd.currentUser` override, which is the only way a
+ * test can say who it is pretending to be.
+ *
+ * Empty when there is no answer, which no JVM this runs on gives. Empty rather
+ * than an invented name all the same: a zero-length user the far side refuses by
+ * name is a truer report than `root` tried on a machine nobody meant to give
+ * root on.
+ */
+internal fun localAccount(): String =
+    runCatching { OsUtils.getCurrentUser() }.getOrNull()?.trim().orEmpty()
 
 /**
  * What the last probe found.

@@ -1531,8 +1531,23 @@ type Shell {
     name: String!
     host: String!
     port: Int!
-    "The account on the far side. Which account it is is the whole of the privilege question."
-    username: String!
+    """
+    The account on the far side, or null when none was given.
+
+    Optional in the way it is optional at `ssh build.internal`: leaving it out
+    means the account this server itself runs as. See `account` for what that
+    resolves to.
+    """
+    username: String
+    """
+    The account commands actually run as: `username` when there is one, and the
+    account this server process runs as when there is not.
+
+    Here rather than worked out by whatever is showing it, because nothing
+    outside this process knows what account it runs as, and a screen that
+    guessed would be guessing about privilege.
+    """
+    account: String!
     "Whether a private key is stored. The key itself is never returned."
     privateKeySet: Boolean!
     "Whether the key has a passphrase. It is never returned either."
@@ -1569,7 +1584,12 @@ input ShellInput {
     name: String!
     host: String!
     port: Int! = 22
-    username: String!
+    """
+    The account on the far side. Optional, and blank is the same as absent:
+    either way commands run as the account this server itself runs as, which is
+    what `ssh build.internal` does with no user in front of it.
+    """
+    username: String
     """
     The private key, in OpenSSH or PEM form. Null leaves the stored one alone;
     an empty string clears it. Never read back.

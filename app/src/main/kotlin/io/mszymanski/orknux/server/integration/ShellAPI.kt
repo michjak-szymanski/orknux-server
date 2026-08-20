@@ -54,7 +54,11 @@ class ShellAPI(
         auditRecorder.record(
             null,
             WorkspaceAuditCategory.SHELL,
-            "Shell ${created.name} added for ${created.username}@${created.host}:${created.port}",
+            // The account it will actually connect as, which is not always the one
+            // typed: a shell with no username runs as the account this server
+            // runs as, and an audit entry that left that blank would be telling
+            // an administrator less than the page does.
+            "Shell ${created.name} added for ${created.account}@${created.host}:${created.port}",
         )
         return created
     }

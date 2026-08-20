@@ -151,8 +151,81 @@ class IntegrationAPITest(
     }
 
     @Test
+    fun `the app-level token can be read back, and the entry says which credential it was`() {
+        val id = createWorkspaceConnection("Slack")
+
+        graphQlTester.document(
+            """
+            mutation {
+              updateWorkspaceConnection(id: $id, input: { secret: "xoxb-token", appToken: "xapp-1-token" })
+              { secretSet appTokenSet }
+            }
+            """,
+        ).execute()
+            .path("updateWorkspaceConnection.appTokenSet").entity(Boolean::class.java).isEqualTo(true)
+
+        graphQlTester.document("""mutation { revealWorkspaceConnectionAppToken(id: $id) }""")
+            .execute()
+            .path("revealWorkspaceConnectionAppToken").entity(String::class.java).isEqualTo("xapp-1-token")
+
+        // Named, not "Credentials": two credentials can be revealed now and a
+        // line that does not say which answers nothing.
+        val entry = audit.findAll().single { it.message.startsWith("App-level token for") }
+        assertThat(entry.message).isEqualTo("App-level token for Slack revealed")
+        assertThat(entry.workspaceId).isEqualTo(workspaceId)
+        assertThat(entry.userId).isEqualTo("alice")
+    }
+
+    @Test
+    fun `a Slack connection is given its endpoint and its authentication rather than asked for them`() {
+        // The form has one answer to either question, so it stops asking: there
+        // is one Slack Web API base, and a bot token is a bearer token.
+        val id = graphQlTester.document(
+            """
+            mutation {
+              createWorkspaceConnection(input: { workspaceId: $workspaceId, name: "Slack", type: SLACK })
+              { id url authType }
+            }
+            """,
+        ).execute()
+            .path("createWorkspaceConnection.url").entity(String::class.java).isEqualTo("https://slack.com/api")
+            .path("createWorkspaceConnection.authType").entity(String::class.java).isEqualTo("BEARER_TOKEN")
+            .path("createWorkspaceConnection.id").entity(Long::class.java).get()
+
+        // And an update cannot take them away again.
+        graphQlTester.document(
+            """
+            mutation {
+              updateWorkspaceConnection(id: $id, input: { url: "https://elsewhere.test", authType: NONE })
+              { url authType }
+            }
+            """,
+        ).execute()
+            .path("updateWorkspaceConnection.url").entity(String::class.java).isEqualTo("https://slack.com/api")
+            .path("updateWorkspaceConnection.authType").entity(String::class.java).isEqualTo("BEARER_TOKEN")
+    }
+
+    @Test
+    fun `a Slack connection is configured by its bot token alone`() {
+        val id = createWorkspaceConnection("Slack")
+        graphQlTester.document("""query { workspaceConnection(id: $id) { status } }""")
+            .execute()
+            .path("workspaceConnection.status").entity(String::class.java).isEqualTo("NOT_CONFIGURED")
+
+        // No app token: the connection sends and never listens, which is a whole
+        // integration and must not report itself as half-finished.
+        graphQlTester.document(
+            """mutation { updateWorkspaceConnection(id: $id, input: { secret: "xoxb-token" }) { status } }""",
+        ).execute()
+            .path("updateWorkspaceConnection.status").entity(String::class.java).isEqualTo("NOT_CHECKED")
+    }
+
+    @Test
     fun `a check reports what the service answered`() {
-        val id = createWorkspaceConnection("Slack", url = "https://orknux-test.invalid/hook")
+        // Not a Slack connection: that type now always points at slack.com, and
+        // a check on one would call Slack for real. A webhook keeps the URL it
+        // was given, which is what makes this test stay on the machine.
+        val id = createWorkspaceConnection("Slack", url = "https://orknux-test.invalid/hook", type = "WEBHOOK")
         graphQlTester.document(
             """mutation { updateWorkspaceConnection(id: $id, input: { secret: "x" }) { secretSet } }""",
         ).execute()
@@ -228,11 +301,15 @@ class IntegrationAPITest(
         """mutation { createConnection(input: { name: "$name", type: $type, url: "https://example.test" }) { id } }""",
     ).execute().path("createConnection.id").entity(Long::class.java).get()
 
-    private fun createWorkspaceConnection(name: String, url: String = "https://example.test"): Long =
+    private fun createWorkspaceConnection(
+        name: String,
+        url: String = "https://example.test",
+        type: String = "SLACK",
+    ): Long =
         graphQlTester.document(
             """
             mutation {
-              createWorkspaceConnection(input: { workspaceId: $workspaceId, name: "$name", type: SLACK, url: "$url" }) { id }
+              createWorkspaceConnection(input: { workspaceId: $workspaceId, name: "$name", type: $type, url: "$url" }) { id }
             }
             """,
         ).execute().path("createWorkspaceConnection.id").entity(Long::class.java).get()

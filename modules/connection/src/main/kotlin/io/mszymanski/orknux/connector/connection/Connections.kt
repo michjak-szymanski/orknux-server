@@ -20,16 +20,30 @@ import io.mszymanski.orknux.connector.security.SecretCipher
 import io.mszymanski.orknux.connector.security.SecretConverter
 import java.time.OffsetDateTime
 
+/**
+ * Where Slack's Web API lives.
+ *
+ * A constant rather than something the form asks for: there is one Slack, it has
+ * one API base, and a person setting up a connection has no useful other answer.
+ * It is only ever used by [ConnectionProbe], which calls `auth.test` under it -
+ * [OutgoingMessages] posts through the Slack SDK, which carries its own endpoint
+ * and never reads a connection's URL at all.
+ */
+const val SLACK_API_URL = "https://slack.com/api"
+
 /** The external services a connection can point at. */
 enum class ConnectionType {
-    SLACK,
-
     /**
-     * Slack over Socket Mode: a bot token to call the API with and an
-     * app-level token to open the websocket. This is the type orknux listens
-     * on, and the one that asks for both credentials.
+     * Slack: a bot token to call the API with, and optionally an app-level
+     * token to open a websocket with.
+     *
+     * One type rather than two, because there was only ever one thing. The
+     * app-level token is not a different kind of connection, it is the extra
+     * credential that makes orknux listen as well as send - which is exactly
+     * what [SlackListener] has always decided by looking at the token rather
+     * than at the type.
      */
-    SLACK_SOCKET_MODE,
+    SLACK,
     GITHUB,
     JIRA,
     TEAMS,
@@ -167,6 +181,9 @@ class WorkspaceConnection(
      * A second credential, for services that need one to open a listening
      * socket: Slack's Socket Mode wants an app-level token (`xapp-...`) as well
      * as the bot token that [secret] holds.
+     *
+     * Optional. A Slack connection without one sends and never listens, which is
+     * a whole integration on its own; with one, [SlackListener] opens a socket.
      */
     @Convert(converter = SecretConverter::class)
     @Column(name = "app_token", length = SECRET_COLUMN_LENGTH)
@@ -227,13 +244,15 @@ class WorkspaceConnection(
 
     val effectiveUrl: String get() = urlOverride?.takeIf { it.isNotBlank() } ?: url
 
-    /**
-     * Whether anything has been configured to authenticate with. Socket Mode
-     * needs both credentials: one opens the socket, the other answers on it.
-     */
+    /** Whether anything has been configured to authenticate with. */
     val configured: Boolean
         get() = when (type) {
-            ConnectionType.SLACK_SOCKET_MODE -> !secret.isNullOrBlank() && !appToken.isNullOrBlank()
+            /*
+             * The bot token alone. [appToken] is what makes the connection
+             * listen, not what makes it work, so a Slack connection that only
+             * ever posts is configured and must not be reported otherwise.
+             */
+            ConnectionType.SLACK -> !secret.isNullOrBlank()
 
             /*
              * A mail server needs somewhere to send from before it needs a

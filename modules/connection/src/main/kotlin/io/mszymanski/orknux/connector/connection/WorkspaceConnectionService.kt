@@ -12,8 +12,8 @@ import java.time.format.DateTimeFormatter
 /**
  * The connections one workspace holds: the admin defaults it was provisioned
  * with plus any it added itself. Credentials are always the workspace's own and are
- * never returned by a listing; [revealWorkspaceConnectionSecret] hands them over once
- * and logs that it did.
+ * never returned by a listing; [revealWorkspaceConnectionSecret] and
+ * [revealWorkspaceConnectionAppToken] hand them over once and log that they did.
  *
  * Workspace visibility is orknux-server's to enforce — it knows the directory groups
  * and the connector does not — so a `workspaceId` that arrives here is already
@@ -36,7 +36,12 @@ class WorkspaceConnectionService(
     @Transactional
     fun createWorkspaceConnection(input: CreateWorkspaceConnectionInput): WorkspaceConnectionView {
         val name = input.name.trim()
-        val url = input.url.trim()
+        val slack = input.type == ConnectionType.SLACK
+        // A Slack connection has one endpoint and one way of authenticating, so
+        // neither is asked for: the form that asks has only one answer to offer
+        // and one more field to get wrong. Filled in here rather than in the
+        // caller so that every caller gets it.
+        val url = if (slack) SLACK_API_URL else input.url.orEmpty().trim()
         if (name.isEmpty()) throw ConnectionNameInvalidException()
         if (url.isEmpty()) throw ConnectionUrlInvalidException()
         if (workspaceConnections.findByWorkspaceIdAndName(input.workspaceId, name) != null) {
@@ -49,7 +54,7 @@ class WorkspaceConnectionService(
                 name = name,
                 type = input.type,
                 url = url,
-                authType = input.authType ?: AuthType.NONE,
+                authType = if (slack) AuthType.BEARER_TOKEN else input.authType ?: AuthType.NONE,
                 secret = input.secret?.trim()?.ifEmpty { null },
                 appToken = input.appToken?.trim()?.ifEmpty { null },
                 smtpPort = input.smtpPort,
@@ -98,6 +103,13 @@ class WorkspaceConnectionService(
         input.smtpFrom?.let { connection.smtpFrom = it.trim().ifEmpty { null } }
         input.smtpSecurity?.let { connection.smtpSecurity = it }
         input.headers?.let { connection.headers = it.toHttpHeaders() }
+        // Last, so that neither a URL in the input nor a type changed by this
+        // very call can leave a Slack connection pointing anywhere but Slack.
+        // Same reason as on create: there is one answer, so nothing asks.
+        if (connection.type == ConnectionType.SLACK) {
+            connection.url = SLACK_API_URL
+            connection.authType = AuthType.BEARER_TOKEN
+        }
         // Whatever the last probe found described the old configuration.
         connection.forgetLastCheck()
 
@@ -167,6 +179,23 @@ class WorkspaceConnectionService(
         return connection.secret
     }
 
+    /**
+     * The same for the app-level token, which is stored the same way and until
+     * now could only be written: a token nobody can read back cannot be compared
+     * with the one in Slack, so the only way to answer "is the right one in
+     * there" was to type it again.
+     *
+     * A method of its own rather than a flag on [revealWorkspaceConnectionSecret],
+     * because the log line is the point of both and it has to say which of the
+     * two credentials left.
+     */
+    @Transactional
+    fun revealWorkspaceConnectionAppToken(id: Long): String? {
+        val connection = workspaceConnections.findByIdOrNull(id) ?: throw ConnectionNotFoundException(id)
+        log.info("App-level token for connection {} (workspace {}) revealed", connection.name, connection.workspaceId)
+        return connection.appToken
+    }
+
     private companion object {
         val log = LoggerFactory.getLogger(WorkspaceConnectionService::class.java)
     }
@@ -184,10 +213,12 @@ data class CreateWorkspaceConnectionInput(
     val workspaceId: Long,
     val name: String,
     val type: ConnectionType,
-    val url: String,
+    /** Required, except for the types that have one address: Slack is filled in. */
+    val url: String? = null,
+    /** Ignored for Slack, which is always a bearer token. */
     val authType: AuthType? = null,
     val secret: String? = null,
-    /** Slack's Socket Mode app-level token, when the type wants one. */
+    /** Slack's app-level token. Optional: with one the connection also listens. */
     val appToken: String? = null,
     /** Where the mail server listens; null takes the port [smtpSecurity] implies. */
     val smtpPort: Int? = null,
@@ -207,7 +238,7 @@ data class UpdateWorkspaceConnectionInput(
     val authType: AuthType? = null,
     /** Null leaves the stored credentials alone; empty clears them. */
     val secret: String? = null,
-    /** The Socket Mode app-level token, with the same null and empty meaning. */
+    /** The Slack app-level token, with the same null and empty meaning. */
     val appToken: String? = null,
     val smtpPort: Int? = null,
     val smtpUsername: String? = null,
@@ -233,7 +264,7 @@ data class WorkspaceConnectionView(
     /** True while the workspace follows an admin default. */
     val inherited: Boolean,
     val secretSet: Boolean,
-    /** Whether an app-level token is stored, which is what opens a listening socket. */
+    /** Whether an app-level token is stored, which is what makes Slack listen as well as send. */
     val appTokenSet: Boolean,
     /** Where a mail connection sends: the port it uses, whoever it logs in as, and who it is from. */
     val smtpPort: Int?,

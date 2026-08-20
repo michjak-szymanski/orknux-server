@@ -30,7 +30,7 @@ class ConnectionService(
     @Transactional
     fun createConnection(input: ConnectionInput): CreatedConnectionView {
         val name = input.name.trim()
-        val url = input.url.trim()
+        val url = input.slackAwareUrl()
         if (name.isEmpty()) throw ConnectionNameInvalidException()
         if (url.isEmpty()) throw ConnectionUrlInvalidException()
         if (connections.findByName(name) != null) throw ConnectionNameTakenException(name)
@@ -51,7 +51,7 @@ class ConnectionService(
     @Transactional
     fun updateConnection(id: Long, input: ConnectionInput): ConnectionView {
         val name = input.name.trim()
-        val url = input.url.trim()
+        val url = input.slackAwareUrl()
         if (name.isEmpty()) throw ConnectionNameInvalidException()
         if (url.isEmpty()) throw ConnectionUrlInvalidException()
 
@@ -85,10 +85,18 @@ class ConnectionService(
     }
 }
 
+/**
+ * A Slack default points at Slack, whatever arrived. There is one Web API base
+ * and no reason to let an administrator type a different one; see [SLACK_API_URL].
+ */
+private fun ConnectionInput.slackAwareUrl(): String =
+    if (type == ConnectionType.SLACK) SLACK_API_URL else url.orEmpty().trim()
+
 data class ConnectionInput(
     val name: String,
     val type: ConnectionType,
-    val url: String,
+    /** Required, except for the types that have one address: Slack is filled in. */
+    val url: String? = null,
     /**
      * Defaults reach new workspaces as they are created; this also gives it to the
      * workspaces that already exist. Ignored when updating.

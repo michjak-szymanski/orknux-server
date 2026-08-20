@@ -737,6 +737,8 @@ type Mutation {
     testWorkspaceConnection(id: ID!): WorkspaceConnection!
     "Returns the stored credentials and records that they were revealed."
     revealWorkspaceConnectionSecret(id: ID!): String
+    "Returns the stored app-level token and records that it was revealed."
+    revealWorkspaceConnectionAppToken(id: ID!): String
     createMcpServer(input: CreateMcpServerInput!): McpServer!
     updateMcpServer(id: ID!, input: UpdateMcpServerInput!): McpServer!
     removeMcpServer(id: ID!): Boolean!
@@ -1729,9 +1731,11 @@ type WorkspaceAuditPage {
 }
 
 enum ConnectionType {
+    """
+    Slack: a bot token to call the API with, and optionally an app-level token.
+    Given the app-level token orknux also listens on it; without one it only sends.
+    """
     SLACK
-    "Slack over Socket Mode: a bot token and an app-level token, and orknux listens on it."
-    SLACK_SOCKET_MODE
     GITHUB
     JIRA
     TEAMS
@@ -1788,7 +1792,8 @@ type ConnectionPage {
 input ConnectionInput {
     name: String!
     type: ConnectionType!
-    url: String!
+    "Required, except for the types that have one address: Slack is filled in."
+    url: String
     "Also hand the connection to the workspaces that already exist. Ignored on update."
     addToExistingWorkspaces: Boolean
 }
@@ -2001,10 +2006,12 @@ input CreateWorkspaceConnectionInput {
     workspaceId: ID!
     name: String!
     type: ConnectionType!
-    url: String!
+    "Required, except for the types that have one address: Slack is filled in."
+    url: String
+    "Ignored for Slack, which is always a bearer token."
     authType: AuthType
     secret: String
-    "Slack's Socket Mode app-level token, for the type that opens a websocket."
+    "Slack's app-level token. Optional: with one the connection also listens."
     appToken: String
     "Where the mail server listens; null takes the port the security implies."
     smtpPort: Int
@@ -2024,7 +2031,7 @@ input UpdateWorkspaceConnectionInput {
     authType: AuthType
     "Null leaves the stored credentials alone; empty clears them."
     secret: String
-    "Slack's Socket Mode app-level token, with the same null and empty meaning."
+    "Slack's app-level token, with the same null and empty meaning."
     appToken: String
     smtpPort: Int
     smtpUsername: String

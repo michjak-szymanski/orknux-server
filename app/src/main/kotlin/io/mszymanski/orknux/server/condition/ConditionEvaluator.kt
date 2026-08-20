@@ -177,11 +177,45 @@ class ConditionEvaluator(
             ConditionCheck.IN_LIST, ConditionCheck.WORKSPACEMATE -> condition.values.any { it.equalsIgnoringCase(value) }
             ConditionCheck.EQUALS -> condition.values.firstOrNull()?.equalsIgnoringCase(value) == true
             ConditionCheck.CONTAINS -> condition.values.any { value.contains(it, ignoreCase = true) }
-            ConditionCheck.MATCHES -> condition.values.firstOrNull()
-                ?.let { pattern -> runCatching { Regex(pattern).containsMatchIn(value) }.getOrElse { false } } == true
+            ConditionCheck.MATCHES -> matches(condition, value)
 
             ConditionCheck.BETWEEN -> false
         }
+    }
+
+    /**
+     * Whether the workspace's pattern matches, with both sides bounded first.
+     *
+     * The pattern is the workspace's to write, but the value is whatever a
+     * webhook body or a Slack message left in the run's input — so this is the
+     * one check where a stranger has a say in how much work the host does, and
+     * it is done here, on the thread carrying the run, outside the script
+     * sandbox and the watchdog that bounds it. `runCatching` catches a pattern
+     * that does not compile; it cannot catch one that is slow, because a regex
+     * that backtracks is not throwing, it is working.
+     *
+     * Nothing has been shown to blow up on this runtime — the textbook
+     * backtracking shapes all come back in about a millisecond here — so these
+     * two are a bound rather than a fix for something observed, and both sit
+     * far above anything real. [MAX_PATTERN] is the width of the column the
+     * pattern is stored in, so it cannot refuse a pattern that could have been
+     * saved; [MAX_VALUE] is past any message a chat will render, and the
+     * properties this check is offered for — an author, a channel, a priority,
+     * a status, a type, a message — are none of them long.
+     */
+    private fun matches(condition: WorkflowCondition, value: String): Boolean {
+        val pattern = condition.values.firstOrNull() ?: return false
+        if (pattern.length > MAX_PATTERN || value.length > MAX_VALUE) {
+            // Neither is logged: one is a workspace's, the other a stranger's.
+            log.warn(
+                "{} did not run its pattern: {} pattern characters against {} value characters is past what is matched here",
+                condition.name,
+                pattern.length,
+                value.length,
+            )
+            return false
+        }
+        return runCatching { Regex(pattern).containsMatchIn(value) }.getOrElse { false }
     }
 
     /** Whether the clock is between the two listed times, as HH:mm. */
@@ -233,6 +267,19 @@ class ConditionEvaluator(
 
         /** A composite of composites is fine; a hundred of them is a mistake. */
         const val MAX_DEPTH = 10
+
+        /**
+         * The longest pattern MATCHES will run. `workflow_condition_value.value`
+         * is VARCHAR(500), so a pattern longer than this was never stored.
+         */
+        const val MAX_PATTERN = 500
+
+        /**
+         * The longest value MATCHES will run a pattern against. A Slack message
+         * a block will render stops at 3,000 characters, and the other
+         * properties a pattern is offered for are a word or two.
+         */
+        const val MAX_VALUE = 10_000
     }
 }
 

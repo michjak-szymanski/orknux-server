@@ -119,7 +119,8 @@ CREATE TABLE app_user
     last_modified_by             varchar(120) not null default 'system',
     password_hash                varchar(100),
     email                        varchar(320),
-    email_chosen                 boolean not null default false
+    email_chosen                 boolean not null default false,
+    email_notifications          boolean not null default true
 );
 
 CREATE TABLE app_user_role
@@ -173,6 +174,18 @@ CREATE TABLE chat_session
     constraint chat_session_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
     constraint chat_session_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint chat_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE component_template
+(
+    id                           integer not null primary key autoincrement,
+    name                         varchar(120) not null,
+    description                  varchar(1000),
+    envelope                     text not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    created_by                   varchar(255) not null,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(255) not null
 );
 
 CREATE TABLE connection
@@ -1068,6 +1081,7 @@ CREATE INDEX app_user_token_user_idx ON app_user_token (user_id);
 CREATE INDEX idx_chat_attachment_session ON chat_attachment (chat_session_id);
 CREATE INDEX idx_chat_attachment_workspace ON chat_attachment (workspace_id);
 CREATE INDEX idx_chat_session_owner ON chat_session (workspace_id, user_id, last_message_at DESC);
+CREATE UNIQUE INDEX component_template_name_key ON component_template (name);
 CREATE INDEX idx_execution_log_execution ON execution_log (execution_id, sequence_no);
 CREATE INDEX idx_execution_step_execution ON execution_step (execution_id, step_order);
 CREATE INDEX issue_news_audience_idx ON issue_news (workspace_id, audience_kind, audience_name, id);

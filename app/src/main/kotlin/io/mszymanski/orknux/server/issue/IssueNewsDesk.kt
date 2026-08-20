@@ -35,6 +35,7 @@ class IssueNewsDesk(
     private val agents: AgentRepository,
     private val models: ModelService,
     private val observers: IssueObserverRepository,
+    private val mailer: IssueNewsMailer,
 ) {
 
     /*
@@ -203,7 +204,7 @@ class IssueNewsDesk(
         val told = to.filter { !it.name.equals(actor, ignoreCase = true) }.distinctBy { it.kind to it.name.lowercase() }
         if (told.isEmpty()) return
 
-        news.saveAll(
+        val written = news.saveAll(
             told.map { reader ->
                 IssueNewsItem(
                     workspaceId = issue.workspaceId,
@@ -220,6 +221,58 @@ class IssueNewsDesk(
             },
         )
         wake()
+        queueForPosting(written)
+    }
+
+    /**
+     * The same news, on its way to an inbox.
+     *
+     * It is handed the rows that were written rather than the audience they were
+     * written for, which is the whole arrangement: who hears about an issue is
+     * decided here, once, and the mail follows what was decided instead of
+     * working it out again. The actor has already been dropped by the time
+     * anything reaches this.
+     *
+     * Collected for the whole transaction rather than posted per call, because
+     * one thing a person did can be two rows on purpose - [commented] writes a
+     * comment and a mention - and while the bell wants both, an inbox does not
+     * want two messages about one comment. Posting per call would put them beyond
+     * reach of each other.
+     *
+     * Kept until the commit, and dropped if there is not one. Mail about a save
+     * that rolled back is worse than no mail: it cannot be taken back, and it
+     * points at something that never happened.
+     */
+    private fun queueForPosting(written: List<IssueNewsItem>) {
+        if (written.isEmpty()) return
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            mailer.post(written)
+            return
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val queued = TransactionSynchronizationManager.getResource(POSTING) as MutableList<IssueNewsItem>?
+        if (queued != null) {
+            queued += written
+            return
+        }
+
+        val collecting = written.toMutableList()
+        TransactionSynchronizationManager.bindResource(POSTING, collecting)
+        TransactionSynchronizationManager.registerSynchronization(
+            object : TransactionSynchronization {
+                override fun afterCommit() = mailer.post(collecting)
+
+                /*
+                 * Unbound however it ended, and after the posting above, so a
+                 * thread taken from the pool for the next request does not find
+                 * this transaction's news still attached to it.
+                 */
+                override fun afterCompletion(status: Int) {
+                    TransactionSynchronizationManager.unbindResourceIfPossible(POSTING)
+                }
+            },
+        )
     }
 
     /**
@@ -318,5 +371,14 @@ class IssueNewsDesk(
             AssigneeKind.MODEL -> models.models(issue.workspaceId).firstOrNull { it.id.toString() == id }?.name
         } ?: return null
         return NewsReader(kind, name, id)
+    }
+
+    private companion object {
+        /**
+         * What this transaction's news is held under while it is still a
+         * transaction. An object of its own rather than a string, so nothing
+         * else can bind the same key by choosing the same words.
+         */
+        val POSTING = Any()
     }
 }

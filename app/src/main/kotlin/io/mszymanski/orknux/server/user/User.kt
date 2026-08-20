@@ -112,6 +112,22 @@ class AppUser(
     @Column(name = "email_chosen", nullable = false)
     var emailChosen: Boolean = false,
 
+    /**
+     * Whether the news the bell rings is also posted to [email].
+     *
+     * The one preference, rather than one per kind of news: who hears about an
+     * issue is settled once, by the news desk, and a per-kind switch here would
+     * be a second place deciding audience. This says only whether what was
+     * already decided reaches an inbox as well.
+     *
+     * True by default. Nothing is sent at all on an installation with no mail
+     * server configured, so the operator's switch is already the one that
+     * protects somebody who has not asked for this; defaulting it off here would
+     * only mean a feature nobody has until they find the Preferences page.
+     */
+    @Column(name = "email_notifications", nullable = false)
+    var emailNotifications: Boolean = true,
+
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
 

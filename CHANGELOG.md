@@ -17,6 +17,68 @@ have failed.
 
 ### Added
 
+- **Templates: a component published once, for every workspace to take.** A new
+  **Templates** page under Admin holds exported components under a name and a
+  description, and every catalogue page - Functions, Objects, Conditions, Tools,
+  Skills - has a **Use template** button beside Import. A template is nothing
+  more than one of those exported files kept by the installation, so using one
+  is the import that already exists: it shows what it would create before it
+  creates it, renames rather than replaces anything already called the same, and
+  refuses outright while it points at a variable the workspace does not have.
+  **Publishing is an installation administrator's**, because a template is
+  offered to workspaces its author may never see; **using one is anybody who can
+  already add a function to that workspace**, which is the point of publishing
+  it. Either upload an exported file on the Templates page, or press **Save as
+  template** on the component itself - the second is the same file, exported by
+  the server, without the trip through a Downloads folder. **A template holds a
+  copy taken when it was published and follows nothing**: editing the function
+  one was made from does not change it, deleting a template does not touch what
+  it has already created, and replacing its file is how one is brought up to
+  date. Nothing secret travels, the same as the export it is made of - a
+  variable a function is handed appears by name and the workspace it lands in
+  supplies its own value. A template written by a newer Orknux than the one
+  reading it is still listed, saying so in words, rather than failing when
+  somebody presses the button.
+
+- **The tracker can write to you.** Everything the bell already shows - an issue
+  you filed, hold or observe being opened, assigned, commented on or closed, and
+  any comment with your name in it - is now also posted to your address. It is
+  the same news from the same desk rather than a second set of rules about who
+  hears what, so nothing changes about the audience: you are still never told
+  about your own doing, and a comment that both names you and reaches you as a
+  watcher is one message rather than two. The subject says who did what to which
+  issue and carries the issue's title, and never a word of what was written -
+  that is the part a phone shows on a locked screen. **It sends only where an
+  installation has configured `ORKNUX_MAIL_HOST` and `ORKNUX_MAIL_FROM`**, the
+  same relay the password reset link goes through, and the default installation
+  has none and posts nothing. Somebody with no address on file is passed over
+  quietly, which is the ordinary state of an internal account an administrator
+  made. **Each person can turn it off** under Preferences → Notifications; it is
+  on to begin with, since an installation that has configured a relay has said
+  it wants to send mail. The mail is a courtesy on top of the bell and never the
+  record of what happened: it is handed over after the save has committed, on a
+  thread of its own, and a relay that is down or refusing costs a log line and
+  nothing else.
+
+- **A role can now administer one workspace without administering the
+  installation.** The workspace settings form has an *Administers* tick beside
+  each role it is assigned, and whoever holds a ticked one may change that
+  workspace's name and description, put somebody else on one of its issues as an
+  observer, and move an issue in or out of it. Only that workspace: the same
+  person can lead the support workspace and merely work in the backend one,
+  which is the whole reason it is per workspace rather than one blanket
+  "workspace admins" role. The name and description are edited from the
+  workspace's own Settings page, since an Admin section they cannot reach would
+  be no use to them. Nothing installation-wide comes with it - connections,
+  proxy rules, shells, users, roles, the installation settings, and creating or
+  deleting a workspace all still need an installation administrator, and so does
+  the workspace's role list: whoever edits that decides who else gets in and
+  could take the role off everybody else, which is a bigger promise than
+  changing settings and the one that cannot be walked back. An installation
+  administrator administers every workspace without being named on any of them,
+  and an installation that upgrades has no workspace administrators anywhere
+  until somebody ticks a box.
+
 - **`orknux/orknux-one`: the whole thing in one container.** The interface, the
   server and a SQLite file, published beside the other two images and under the
   same tags. `docker run -p 8080:8080 -v orknux-data:/var/lib/orknux

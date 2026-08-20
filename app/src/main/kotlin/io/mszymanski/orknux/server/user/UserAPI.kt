@@ -151,13 +151,7 @@ class UserAPI(
     @MutationMapping
     @Transactional
     fun setUserEmail(@Argument id: Long?, @Argument email: String?): UserView {
-        val held = if (id == null) {
-            users.findByUsername(editor()) ?: throw UserNotFoundException(-1)
-        } else {
-            val found = users.findByIdOrNull(id) ?: throw UserNotFoundException(id)
-            if (!found.username.equals(editor(), ignoreCase = true)) access.requireAdmin()
-            found
-        }
+        val held = mineOr(id)
 
         val wanted = email?.trim().orEmpty()
         if (wanted.isEmpty()) {
@@ -171,6 +165,46 @@ class UserAPI(
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = editor()
         return describe(users.save(held))
+    }
+
+    /**
+     * Whether the news that rings somebody's bell is posted to them as well.
+     *
+     * Theirs to decide, which is why it is here beside the address rather than in
+     * an administrator's screen: what the tracker tells somebody is not something
+     * to be arranged for them. An administrator can still set it - the same rule
+     * as the address, and for the same reason, since somebody who has left is
+     * still receiving mail until somebody can turn it off.
+     *
+     * Allowed for an external user too. Nothing about it comes from the identity
+     * provider, so there is nothing here for the next sign-in to overwrite.
+     */
+    @MutationMapping
+    @Transactional
+    fun setUserEmailNotifications(@Argument id: Long?, @Argument enabled: Boolean): UserView {
+        val held = mineOr(id)
+        held.emailNotifications = enabled
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = editor()
+        return describe(users.save(held))
+    }
+
+    /**
+     * The account this call is allowed to change: mine when no id was given,
+     * anybody's for an administrator.
+     *
+     * One helper rather than the same six lines beside each field somebody may
+     * set on themselves. Note what it does not do: it never asks whether the user
+     * is INTERNAL. Both fields it guards are this installation's own record of
+     * somebody rather than the provider's, so an external user may set them and
+     * the next sign-in has nothing to overwrite them with.
+     */
+    private fun mineOr(id: Long?): AppUser = if (id == null) {
+        users.findByUsername(editor()) ?: throw UserNotFoundException(-1)
+    } else {
+        val found = users.findByIdOrNull(id) ?: throw UserNotFoundException(id)
+        if (!found.username.equals(editor(), ignoreCase = true)) access.requireAdmin()
+        found
     }
 
     /** The tokens somebody has, which never includes the secrets themselves. */
@@ -252,6 +286,7 @@ class UserAPI(
         displayName = user.displayName,
         email = user.email,
         emailChosen = user.emailChosen,
+        emailNotifications = user.emailNotifications,
         type = user.type,
         roles = user.roles.map { RoleRef(requireNotNull(it.id), it.name) }.sortedBy { it.name.lowercase() },
         editable = user.editable,
@@ -269,6 +304,8 @@ data class UserView(
     val email: String?,
     /** True where the address was typed rather than inherited from the provider. */
     val emailChosen: Boolean,
+    /** Whether the news that rings their bell is posted to them as well. */
+    val emailNotifications: Boolean,
     val type: UserType,
     val roles: List<RoleRef>,
     /** False for anybody the identity provider defines. */

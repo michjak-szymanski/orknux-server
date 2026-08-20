@@ -209,8 +209,8 @@ while the log says what is missing.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_MAIL_HOST` | The relay this server sends its own mail through - the installation's own, not a workspace's SMTP connection. Empty means no password reset. | *none* | **Yes** for password resets |
-| `ORKNUX_MAIL_FROM` | What the mail is from. A relay will not take a message without one. | *none* | **Yes** for password resets |
+| `ORKNUX_MAIL_HOST` | The relay this server sends its own mail through - the installation's own, not a workspace's SMTP connection. Empty means no password reset and no issue mail. | *none* | **Yes** to send mail |
+| `ORKNUX_MAIL_FROM` | What the mail is from. A relay will not take a message without one. | *none* | **Yes** to send mail |
 | `ORKNUX_MAIL_PORT` | Empty takes what the security below usually listens on: 587, 465 or 25. | *by security* | No |
 | `ORKNUX_MAIL_USERNAME` | Empty sends without authenticating, which is what an internal relay usually wants. | *none* | No |
 | `ORKNUX_MAIL_PASSWORD` | That account's password. | *none* | No |

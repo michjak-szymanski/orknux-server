@@ -162,8 +162,8 @@ orknux:
     # Anything larger is refused with 413 and never reaches a trigger.
     max-body-size: ${ORKNUX_WEBHOOK_MAX_BODY_SIZE:1MB}
   mail:
-    # The mail server this installation sends its own mail through - today, the
-    # password reset link and nothing else.
+    # The mail server this installation sends its own mail through: the password
+    # reset link, and issue notifications for anybody who has not turned them off.
     #
     # Not a workspace's SMTP connection, deliberately. Those exist so a team's
     # workflows can send from the team's address with a credential a workspace
@@ -173,8 +173,10 @@ orknux:
     #
     # Empty host or from means this installation cannot send its own mail. That is
     # a supported state rather than a misconfiguration - it simply cannot offer a
-    # password reset, and says so in the log rather than borrowing somebody's
-    # relay. Set both to turn the feature on.
+    # password reset, and rings the tracker's bell without also posting it. It
+    # says so in the log rather than borrowing somebody's relay. Set both to turn
+    # sending on; each person then decides for themselves, under Preferences,
+    # whether their notifications are posted as well as shown.
     host: ${ORKNUX_MAIL_HOST:}
     # Empty takes whatever the security below usually listens on: 587 for
     # STARTTLS, 465 for TLS, 25 for none.

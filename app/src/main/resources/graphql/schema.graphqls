@@ -202,6 +202,31 @@ type Query {
     it cannot be used to find out what a workspace one cannot see already holds.
     """
     componentImportPlan(workspaceId: ID!, envelope: String!): ComponentImportPlan!
+    """
+    The templates this installation publishes, by name.
+
+    Signed in, and nothing more: a template is published installation-wide on
+    purpose, so that one workspace's work is offered to every workspace. Narrow
+    it with `holding` to the ones that carry a kind, which is what the Use
+    template button on a page of functions asks for.
+    """
+    componentTemplates(holding: ComponentKind): [ComponentTemplate!]!
+    componentTemplate(id: ID!): ComponentTemplate
+    """
+    The stored file itself. Administrators only.
+
+    Everybody else gets what is inside a template by using it, which creates the
+    components in a workspace they may already write to. Handing over the file is
+    how a template leaves for another installation.
+    """
+    componentTemplateEnvelope(id: ID!): String!
+    """
+    What using this template on this workspace would do, before it is done.
+
+    The same plan an upload shows, from the same reader, because it is the same
+    file — a template is a stored envelope and Use template is Import.
+    """
+    componentTemplatePlan(workspaceId: ID!, templateId: ID!): ComponentImportPlan!
     "The workspace's catalogs, by name, each with what it holds."
     variableCatalogs(workspaceId: ID!): [VariableCatalog!]!
     """
@@ -264,6 +289,54 @@ type Mutation {
     saying which. Answers the same plan `componentImportPlan` showed.
     """
     importComponents(workspaceId: ID!, envelope: String!): ComponentImportPlan!
+    """
+    Publishes an exported file as a template. Administrators only.
+
+    A template is installation-wide, so publishing one offers a workspace's work
+    to workspaces its author may never see. `envelope` is required here, and is
+    read before the row is written: a file this installation cannot read is
+    refused at the form rather than at the button somebody presses later.
+    """
+    createComponentTemplate(input: ComponentTemplateInput!): ComponentTemplate!
+    """
+    Publishes a component the caller is looking at, exporting it here rather
+    than round the browser. Administrator, and the workspace must be visible.
+
+    `input.envelope` is ignored: what is stored is what `exportComponent` would
+    have written for the same id and depth.
+    """
+    saveComponentAsTemplate(
+        workspaceId: ID!,
+        kind: ComponentKind!,
+        id: ID!,
+        depth: ExportDepth = DEEP,
+        input: ComponentTemplateInput!
+    ): ComponentTemplate!
+    """
+    Renames it, rewords it, or replaces the file. Administrators only.
+
+    Leaving `envelope` out keeps the stored one, so fixing a description cannot
+    rewrite what is inside. Replacing it is the only way a template is brought up
+    to date: it holds a copy taken when it was published and follows nothing.
+    """
+    updateComponentTemplate(id: ID!, input: ComponentTemplateInput!): ComponentTemplate!
+    """
+    Takes it off the list. Administrators only.
+
+    What it already created in the workspaces that used it stays where it is — a
+    template is a copy, and removing the thing somebody copied from removes
+    nothing they have.
+    """
+    deleteComponentTemplate(id: ID!): Boolean!
+    """
+    Creates everything a template holds in this workspace, or nothing at all.
+
+    Checked exactly as an upload is, and it is an upload: the stored envelope
+    goes to the same importer, with the same renaming on collision and the same
+    refusal for a variable this workspace does not have. Anybody who may write to
+    the workspace may use a template.
+    """
+    useComponentTemplate(workspaceId: ID!, templateId: ID!): ComponentImportPlan!
     """
     Takes a plugin out of the installation. Administrators only.
 
@@ -367,6 +440,12 @@ type Mutation {
     address somebody has typed.
     """
     setUserEmail(id: ID, email: String): AppUser!
+    """
+    Turns issue mail on or off. Yours when id is absent; anybody's, for an
+    administrator. It only decides whether what the bell already shows is posted
+    as well - who hears about an issue is not changed by it.
+    """
+    setUserEmailNotifications(id: ID, enabled: Boolean!): AppUser!
     "Mints a token. Yours when id is absent; anybody's, for an administrator."
     createUserToken(id: ID, name: String!): NewUserToken!
     deleteUserToken(id: ID!): Boolean!
@@ -2874,6 +2953,67 @@ type ComponentImportPlan {
     problems: [String!]!
 }
 
+"""
+An export this installation keeps under a name, for anybody to use.
+
+A template *is* the envelope `exportComponent` writes — there is no second
+format and no second table of components — so everything the file already
+settled holds here too: no ids, no secrets, a name already taken is renamed
+rather than replaced, and a version this installation does not read is refused.
+
+It holds a copy taken when it was published, and follows nothing. Editing the
+function a template was made from does not change the template; replacing its
+file is the only thing that does.
+
+Every field below `description` is read out of the stored envelope rather than
+stored beside it, which is why they can be null: a template published under a
+newer Orknux and then rolled back is still listed, with `usable` false and
+`problem` saying so in words.
+"""
+type ComponentTemplate {
+    id: ID!
+    name: String!
+    description: String
+    "The version the stored file claims. Null when it could not be read."
+    formatVersion: Int
+    "What wrote it. Quoted in messages; nothing branches on it."
+    producedBy: String
+    depth: ExportDepth
+    "Which kinds are inside, each once — the summary a list shows."
+    kinds: [ComponentKind!]!
+    componentCount: Int!
+    "Everything inside, as the file names it."
+    contents: [TemplateComponent!]!
+    "False when this installation cannot read the stored envelope."
+    usable: Boolean!
+    "Why not, in the format's own words, when `usable` is false."
+    problem: String
+    createdAt: String!
+    createdBy: String!
+    lastModifiedAt: String!
+    lastModifiedBy: String!
+}
+
+"One thing inside a template, as the stored file names it."
+type TemplateComponent {
+    kind: ComponentKind!
+    name: String!
+}
+
+"What the New Template and Edit Template forms send."
+input ComponentTemplateInput {
+    name: String!
+    description: String
+    """
+    The exported file.
+
+    Required when publishing an upload. On an update, leaving it out keeps the
+    stored one. Ignored by `saveComponentAsTemplate`, which exports the component
+    itself.
+    """
+    envelope: String
+}
+
 "What a role lets somebody do, beyond the workspaces it is assigned to."
 enum RoleScope {
     "Sees the Admin section and every workspace, whatever else is assigned."
@@ -2923,6 +3063,12 @@ type AppUser {
     email: String
     "True where the address was typed here, so sign-in leaves it alone."
     emailChosen: Boolean!
+    """
+    Whether the news that rings their bell is posted to their address as well.
+    True unless they have turned it off; nothing is sent at all on an
+    installation with no mail server configured.
+    """
+    emailNotifications: Boolean!
     type: UserType!
     roles: [RoleRef!]!
     "False for anybody the identity provider defines."

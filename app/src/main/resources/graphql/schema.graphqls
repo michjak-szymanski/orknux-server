@@ -192,7 +192,10 @@ type Query {
     has the rest.
 
     No ids travel, and no secrets: a variable a function is handed appears under
-    `requires` by name and shape, and the target workspace supplies its own.
+    `requires` by name and shape, and the target workspace supplies its own. The
+    same goes for what an agent thinks with and what an action sends through — a
+    model, a connection, an MCP server is written as a name and a type, and what
+    it means in the workspace the file lands in is bound there.
     """
     exportComponent(workspaceId: ID!, kind: ComponentKind!, id: ID!, depth: ExportDepth = DEEP): ComponentExport!
     """
@@ -200,8 +203,18 @@ type Query {
 
     Writes nothing. Checked against the workspace exactly as the mutation is, so
     it cannot be used to find out what a workspace one cannot see already holds.
+
+    This is also the binding step, and there is no other: what the file names but
+    could never carry comes back as an entry with `external` set and `MISSING`
+    against it, and answering means asking again with those answers in
+    `bindings`. Ask with none to find out what is wanted; ask with them to find
+    out whether anything still is.
     """
-    componentImportPlan(workspaceId: ID!, envelope: String!): ComponentImportPlan!
+    componentImportPlan(
+        workspaceId: ID!,
+        envelope: String!,
+        bindings: [ComponentBindingInput!] = []
+    ): ComponentImportPlan!
     """
     The templates this installation publishes, by name.
 
@@ -226,7 +239,11 @@ type Query {
     The same plan an upload shows, from the same reader, because it is the same
     file — a template is a stored envelope and Use template is Import.
     """
-    componentTemplatePlan(workspaceId: ID!, templateId: ID!): ComponentImportPlan!
+    componentTemplatePlan(
+        workspaceId: ID!,
+        templateId: ID!,
+        bindings: [ComponentBindingInput!] = []
+    ): ComponentImportPlan!
     "The workspace's catalogs, by name, each with what it holds."
     variableCatalogs(workspaceId: ID!): [VariableCatalog!]!
     """
@@ -287,8 +304,18 @@ type Mutation {
     name. A reference the file does not carry and this workspace does not have —
     a variable especially, since values never travel — refuses the whole import,
     saying which. Answers the same plan `componentImportPlan` showed.
+
+    `bindings` says what the file's models, connections and MCP servers mean
+    here. One of this workspace's own under the same name needs no binding; a
+    name it does not have refuses the import until it is given one. A binding
+    naming a row this workspace does not hold is refused rather than ignored,
+    and nothing is written.
     """
-    importComponents(workspaceId: ID!, envelope: String!): ComponentImportPlan!
+    importComponents(
+        workspaceId: ID!,
+        envelope: String!,
+        bindings: [ComponentBindingInput!] = []
+    ): ComponentImportPlan!
     """
     Publishes an exported file as a template. Administrators only.
 
@@ -336,7 +363,11 @@ type Mutation {
     refusal for a variable this workspace does not have. Anybody who may write to
     the workspace may use a template.
     """
-    useComponentTemplate(workspaceId: ID!, templateId: ID!): ComponentImportPlan!
+    useComponentTemplate(
+        workspaceId: ID!,
+        templateId: ID!,
+        bindings: [ComponentBindingInput!] = []
+    ): ComponentImportPlan!
     """
     Takes a plugin out of the installation. Administrators only.
 
@@ -2874,10 +2905,15 @@ type ObjectPage {
 """
 What can be exported and imported as JSON.
 
-The self-contained half of the catalogue: everything here reaches only other
-things on this list. Agents and workflows are not on it — they reach models and
-connections, which hold credentials, and that needs the import to ask a question
-this one never has to.
+The whole catalogue. The first five reach only each other and travel whole; the
+last four reach outward as well — an agent names a model, an action and a trigger
+name a connection — and what they reach out to is kept beside a credential, so it
+cannot be carried. That is what `ExternalKind` is, and answering it is the binding
+step: everything in an envelope is still written by name, and the import still
+creates all of it or none of it.
+
+The order is the order things are written in, which is the order they depend on
+each other in: nothing here reaches anything below it.
 """
 enum ComponentKind {
     OBJECT
@@ -2885,6 +2921,44 @@ enum ComponentKind {
     CONDITION
     TOOL
     SKILL
+    ACTION
+    TRIGGER
+    AGENT
+    WORKFLOW
+}
+
+"""
+What an envelope points at and can never carry.
+
+Each of these is a row with an encrypted column in it, so what travels is the
+name and the type. An import that finds nothing of that name here is refused
+until it is told what the name means — a connection invented from a name would be
+a connection to nowhere, and one invented from a name and somebody else's token
+would be worse.
+"""
+enum ExternalKind {
+    "One model, reached through one provider; both are named in the file."
+    MODEL
+    "One of the workspace's connections to a service."
+    CONNECTION
+    "One MCP server the workspace has registered."
+    MCP_SERVER
+}
+
+"""
+One answer to something an envelope could not carry.
+
+`name` is the file's, exactly as the plan gave it back — for a model, the
+provider's name and the model's with a slash between them. `targetId` is what it
+means here: an id rather than a name, because a binding is a statement about this
+installation made from a list this installation drew.
+"""
+input ComponentBindingInput {
+    kind: ExternalKind!
+    "The name in the file, as the plan gave it."
+    name: String!
+    "Which of this workspace's rows it means."
+    targetId: ID!
 }
 
 "How much of what a component reaches travels with it."
@@ -2923,11 +2997,17 @@ enum ImportDisposition {
 }
 
 type ComponentImportEntry {
-    "Null for a variable, which is pointed at and never created."
+    "The kind, for something the file carries or would have carried."
     kind: ComponentKind
-    "The name in the file."
+    """
+    The kind, for something no file could carry. Set only where `kind` is not,
+    and what a binding names. Both are null for a variable, which is neither: it
+    is pointed at, never created, and never bound.
+    """
+    external: ExternalKind
+    "The name in the file; for a model, the provider's name and the model's."
     name: String!
-    "The name it will have here; different from `name` when it was renamed."
+    "The name it will have here; different from `name` when it was renamed or bound."
     targetName: String!
     disposition: ImportDisposition!
     "Why, in words to show unchanged."

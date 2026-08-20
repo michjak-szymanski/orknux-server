@@ -1,15 +1,25 @@
 package io.mszymanski.orknux.server.transfer
 
+import io.mszymanski.orknux.server.action.ActionSubtype
+import io.mszymanski.orknux.server.action.ActionType
+import io.mszymanski.orknux.server.action.ArgumentMapping
+import io.mszymanski.orknux.server.action.ConnectionAction
 import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.MessageTarget
 import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.action.WorkflowAction
+import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.agent.AgentSkill
 import io.mszymanski.orknux.server.agent.AgentSkillRepository
 import io.mszymanski.orknux.server.agent.AgentTool
 import io.mszymanski.orknux.server.agent.AgentToolRepository
+import io.mszymanski.orknux.server.agent.AgentType
 import io.mszymanski.orknux.server.agent.SkillCatalog
 import io.mszymanski.orknux.server.agent.SkillCatalogRepository
 import io.mszymanski.orknux.server.agent.SkillFormat
@@ -18,11 +28,31 @@ import io.mszymanski.orknux.server.condition.ConditionProperty
 import io.mszymanski.orknux.server.condition.ConditionType
 import io.mszymanski.orknux.server.condition.WorkflowCondition
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.memory.MemoryCatalog
+import io.mszymanski.orknux.server.memory.MemoryCatalogRepository
 import io.mszymanski.orknux.server.obj.ObjectProperty
 import io.mszymanski.orknux.server.obj.PropertyKind
 import io.mszymanski.orknux.server.obj.WorkflowObject
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
+import io.mszymanski.orknux.server.trigger.TriggerAction
+import io.mszymanski.orknux.server.trigger.TriggerType
+import io.mszymanski.orknux.server.trigger.WebhookAuthType
+import io.mszymanski.orknux.server.trigger.WorkflowTrigger
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
+import io.mszymanski.orknux.server.workflow.EdgeBranch
+import io.mszymanski.orknux.server.workflow.MappingMode
+import io.mszymanski.orknux.server.workflow.NodeKind
+import io.mszymanski.orknux.server.workflow.NodeMapping
+import io.mszymanski.orknux.server.workflow.NodeOrientation
+import io.mszymanski.orknux.server.workflow.Workflow
+import io.mszymanski.orknux.server.workflow.WorkflowEdge
+import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowNode
+import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowRepository
+import io.mszymanski.orknux.server.workflow.WorkspaceWorkflow
+import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import org.springframework.security.core.context.SecurityContextHolder
@@ -40,6 +70,15 @@ import java.time.OffsetDateTime
  * preview trustworthy: [plan] and [apply] disagree only in that the second one
  * saves. Anything the first says is impossible, the second refuses outright,
  * and it refuses before writing rather than partway through.
+ *
+ * Both take the same bindings, and that is the whole of the binding step: what
+ * a file points at but could never carry — a model, a connection, an MCP
+ * server — is matched against the target workspace by name, and whatever does
+ * not match comes back as [ImportDisposition.MISSING] with the kind and the
+ * name of what is wanted. Answering those is another call to the same [plan]
+ * with the answers attached, which either comes back importable or says what is
+ * still outstanding. There is no third call that only asks what needs binding:
+ * that is what the plan already is, and a second one could disagree with it.
  */
 @Service
 class ComponentImporter(
@@ -50,12 +89,22 @@ class ComponentImporter(
     private val skills: AgentSkillRepository,
     private val catalogs: SkillCatalogRepository,
     private val variables: WorkspaceVariableRepository,
+    private val actions: WorkflowActionRepository,
+    private val triggers: WorkflowTriggerRepository,
+    private val agents: AgentRepository,
+    private val workflows: WorkflowRepository,
+    private val assignments: WorkspaceWorkflowRepository,
+    private val nodes: WorkflowNodeRepository,
+    private val edges: WorkflowEdgeRepository,
+    private val memoryCatalogs: MemoryCatalogRepository,
+    private val externals: ComponentExternals,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val mapper: ObjectMapper,
 ) {
 
     /** What the confirmation dialog shows. Reads nothing into the workspace. */
-    fun plan(workspaceId: Long, envelope: String): ImportPlan = plan(workspaceId, parse(envelope))
+    fun plan(workspaceId: Long, envelope: String, bindings: List<ComponentBinding> = emptyList()): ImportPlan =
+        plan(workspaceId, parse(envelope), bindings)
 
     /**
      * What an envelope says about itself, without a workspace in the question.
@@ -90,10 +139,21 @@ class ComponentImporter(
      * typed against an object that is not there, which is worse than no import.
      */
     @Transactional
-    fun apply(workspaceId: Long, envelope: String): ImportPlan {
+    fun apply(workspaceId: Long, envelope: String, bindings: List<ComponentBinding> = emptyList()): ImportPlan {
         val parsed = parse(envelope)
-        val plan = plan(workspaceId, parsed)
+        val plan = plan(workspaceId, parsed, bindings)
         if (!plan.importable) throw ImportNotPossibleException(plan.problems)
+
+        // What the file could not carry, settled before anything is written:
+        // by name where the target has one, and by what the caller bound where
+        // it does not. Resolved through the same function the plan used, so what
+        // was previewed and what is written cannot come apart.
+        val told = bindings.associateBy { it.kind to it.name }
+        val bound = parsed.components.flatMap(::externalsOf).distinct()
+            .mapNotNull { reference ->
+                boundTo(workspaceId, reference, told)?.let { (reference.kind to reference.label) to it }
+            }
+            .toMap()
 
         // Every reference resolves through this: an envelope name to the id it
         // means here. Filled as things are created, so a renamed component is
@@ -121,7 +181,13 @@ class ComponentImporter(
         val written = objects +
             parsed.components.filter { it.kind == ComponentKind.FUNCTION } +
             dependenciesFirst(parsed.components.filter { it.kind == ComponentKind.CONDITION }) +
-            parsed.components.filter { it.kind == ComponentKind.TOOL || it.kind == ComponentKind.SKILL }
+            // Everything after a condition in the catalogue, in the catalogue's
+            // order — which is a dependency order, so an action is written after
+            // the function it calls, an agent after the tools it was granted and
+            // a workflow after every one of them. A stable sort, so two of a kind
+            // are still written in the order the file put them in.
+            parsed.components.filter { it.kind.ordinal > ComponentKind.CONDITION.ordinal }
+                .sortedBy { it.kind.ordinal }
 
         objects.forEach { component ->
             resolved[component.kind to component.name] =
@@ -130,7 +196,7 @@ class ComponentImporter(
         objects.forEach { component -> wireObject(workspaceId, component, resolved) }
         written.filter { it.kind != ComponentKind.OBJECT }.forEach { component ->
             val here = named.getValue(component.kind to component.name)
-            resolved[component.kind to component.name] = create(workspaceId, component, here, resolved)
+            resolved[component.kind to component.name] = create(workspaceId, component, here, resolved, bound)
         }
 
         plan.entries.filter { it.kind != null && it.disposition != ImportDisposition.REUSE }.forEach { entry ->
@@ -146,7 +212,7 @@ class ComponentImporter(
 
     // ---------------------------------------------------------------- planning
 
-    private fun plan(workspaceId: Long, parsed: Parsed): ImportPlan {
+    private fun plan(workspaceId: Long, parsed: Parsed, bindings: List<ComponentBinding>): ImportPlan {
         val carried = parsed.components.map { it.kind to it.name }.toSet()
         val entries = mutableListOf<ImportEntry>()
         val problems = mutableListOf<String>()
@@ -166,7 +232,7 @@ class ComponentImporter(
                     name = component.name,
                     targetName = name,
                     disposition = ImportDisposition.CREATE,
-                    detail = "New ${component.kind.label} in this workspace",
+                    detail = "New ${component.kind.label} in this workspace." + caution(component),
                 )
             } else {
                 ImportEntry(
@@ -176,7 +242,7 @@ class ComponentImporter(
                     disposition = ImportDisposition.RENAME,
                     detail = "This workspace already has ${component.kind.indefinite} called ${component.name}, " +
                         "so this one arrives as $name. Everything else in this file that pointed at it " +
-                        "points at $name.",
+                        "points at $name." + caution(component),
                 )
             }
         }
@@ -207,6 +273,52 @@ class ComponentImporter(
                         targetName = name,
                         disposition = ImportDisposition.REUSE,
                         detail = "Already here; the imported ${component.name} will point at it.",
+                    )
+                }
+            }
+        }
+
+        /*
+         * Then what no export could have carried.
+         *
+         * A workspace of its own by that name is the ordinary answer and needs
+         * nobody: a file moving between two workspaces of one installation
+         * usually finds the same connections waiting. Anything else is the
+         * binding step — the caller says which of this workspace's rows the name
+         * means, and until it has, the import is refused rather than left to
+         * invent a connection or leave an agent thinking with nothing.
+         */
+        val told = bindings.associateBy { it.kind to it.name }
+        val asked = mutableSetOf<Pair<ExternalKind, String>>()
+        parsed.components.forEach { component ->
+            externalsOf(component).forEach { reference ->
+                if (!asked.add(reference.kind to reference.label)) return@forEach
+                val kind = reference.kind
+                val was = reference.type?.let { " (${it.lowercase().replace('_', ' ')})" }.orEmpty()
+                val here = boundTo(workspaceId, reference, told)
+                    ?.let { externals.labelOf(workspaceId, kind, it) }
+                if (here == null) {
+                    entries += ImportEntry(
+                        kind = null,
+                        external = kind,
+                        name = reference.label,
+                        targetName = reference.label,
+                        disposition = ImportDisposition.MISSING,
+                        detail = "${component.name} points at ${kind.indefinite} called ${reference.label}$was. " +
+                            "A ${kind.label} is kept beside a credential, so no export carries one — say which " +
+                            "of this workspace's own it means, or make one and import again.",
+                    )
+                    problems += "There is no ${kind.label} called ${reference.label} here, and " +
+                        "${component.name} needs one."
+                } else {
+                    entries += ImportEntry(
+                        kind = null,
+                        external = kind,
+                        name = reference.label,
+                        targetName = here,
+                        disposition = ImportDisposition.REUSE,
+                        detail = "The imported ${component.name} will point at $here. Its credentials are this " +
+                            "workspace's own; nothing came from the file but the name.",
                     )
                 }
             }
@@ -266,7 +378,94 @@ class ComponentImporter(
                     listOfNotNull(node.text("functionRef")).map { ComponentKind.FUNCTION to it }
 
             ComponentKind.TOOL, ComponentKind.SKILL -> emptyList()
+
+            ComponentKind.ACTION ->
+                listOfNotNull(node.text("functionRef")).map { ComponentKind.FUNCTION to it } +
+                    listOfNotNull(node.text("conditionRef")).map { ComponentKind.CONDITION to it }
+
+            ComponentKind.TRIGGER ->
+                listOfNotNull(node.text("objectRef")).map { ComponentKind.OBJECT to it } +
+                    listOfNotNull(node.text("authFunctionRef")).map { ComponentKind.FUNCTION to it } +
+                    listOfNotNull(node.text("conditionRef")).map { ComponentKind.CONDITION to it }
+
+            // The grants that name a component. The catalogs an agent may read
+            // are not among them: a catalog holds nothing but a name, so one
+            // this workspace lacks is made rather than asked about, which is the
+            // answer a skill's own folder already gets.
+            ComponentKind.AGENT -> node.names("toolRefs").map { ComponentKind.TOOL to it }
+
+            ComponentKind.WORKFLOW -> node.path("nodes").values().flatMap { drawn ->
+                listOfNotNull(
+                    drawn.text("agentRef")?.let { ComponentKind.AGENT to it },
+                    drawn.text("triggerRef")?.let { ComponentKind.TRIGGER to it },
+                    drawn.text("actionRef")?.let { ComponentKind.ACTION to it },
+                    drawn.text("conditionRef")?.let { ComponentKind.CONDITION to it },
+                    drawn.text("objectRef")?.let { ComponentKind.OBJECT to it },
+                )
+            }
         }
+    }
+
+    /** Every reference one component makes that no envelope could have carried. */
+    private fun externalsOf(component: ParsedComponent): List<ExternalReference> {
+        val node = component.node
+        return when (component.kind) {
+            ComponentKind.AGENT ->
+                listOfNotNull(externalIn(node.path("modelRef"), ExternalKind.MODEL)) +
+                    node.names("mcpServerRefs").map { externals.mcpServerReference(it) }
+
+            ComponentKind.ACTION, ComponentKind.TRIGGER ->
+                listOfNotNull(externalIn(node.path("connectionRef"), ExternalKind.CONNECTION))
+
+            else -> emptyList()
+        }
+    }
+
+    /** One `{ name, provider, type }` the export wrote, or nothing where it wrote null. */
+    private fun externalIn(node: JsonNode, kind: ExternalKind): ExternalReference? {
+        if (!node.isObject) return null
+        val name = node.text("name")?.trim()?.ifEmpty { null } ?: return null
+        return ExternalReference(kind, name, node.text("provider"), node.text("type"))
+    }
+
+    /**
+     * Which of this workspace's rows a reference means, or null while nothing does.
+     *
+     * The one place that answers this, so the preview and the import cannot
+     * differ. A binding wins over a match by name: somebody who has said which
+     * connection they mean has said it about this import, and a row that happens
+     * to share the name is not a better answer than the one they gave.
+     */
+    private fun boundTo(
+        workspaceId: Long,
+        reference: ExternalReference,
+        told: Map<Pair<ExternalKind, String>, ComponentBinding>,
+    ): Long? {
+        val binding = told[reference.kind to reference.label] ?: return externals.find(workspaceId, reference)
+        externals.labelOf(workspaceId, reference.kind, binding.targetId)
+            ?: throw ImportBindingInvalidException(reference.kind, reference.label, binding.targetId)
+        return binding.targetId
+    }
+
+    /**
+     * What is worth saying out loud about a component before it is created.
+     *
+     * Two things are, and both are about a file that came from somewhere else
+     * doing something the moment it lands. Neither is a secret and neither
+     * refuses the import — they are what somebody should have read before
+     * pressing the button rather than after.
+     */
+    private fun caution(component: ParsedComponent): String = when {
+        component.kind == ComponentKind.TRIGGER ->
+            " It arrives switched off, so nothing it listens for starts anything until it is switched on here."
+
+        component.kind == ComponentKind.AGENT && component.node.path("shellAccess").asBoolean(false) ->
+            " It was granted shell access, which lets it run commands on one of this installation's machines."
+
+        component.kind == ComponentKind.AGENT && component.node.path("orknuxAccess").asBoolean(false) ->
+            " It was granted access to Orknux itself, which lets it read this installation and start workflows."
+
+        else -> ""
     }
 
     // ----------------------------------------------------------------- writing
@@ -344,11 +543,13 @@ class ComponentImporter(
         component: ParsedComponent,
         name: String,
         resolved: Map<Pair<ComponentKind, String>, Long>,
+        bound: Map<Pair<ExternalKind, String>, Long>,
     ): Long {
         val node = component.node
         val now = OffsetDateTime.now()
         val who = currentUser()
         fun idOf(kind: ComponentKind, of: String) = idFor(workspaceId, kind, of, resolved)
+        fun boundId(reference: ExternalReference?): Long? = reference?.let { bound[it.kind to it.label] }
 
         return when (component.kind) {
             // Written by createObject, in two passes; nothing reaches here.
@@ -437,7 +638,185 @@ class ComponentImporter(
                     ),
                 ).id!!
             }
+
+            ComponentKind.ACTION -> actions.save(
+                WorkflowAction(
+                    workspaceId = workspaceId,
+                    name = name,
+                    type = node.enumOf<ActionType>("type", null, component),
+                    subtype = node.enumOf<ActionSubtype>("subtype", null, component),
+                    connectionId = boundId(externalIn(node.path("connectionRef"), ExternalKind.CONNECTION)),
+                    connectionAction = node.enumOrNull<ConnectionAction>("connectionAction", component),
+                    content = node.text("content"),
+                    target = node.enumOrNull<MessageTarget>("target", component),
+                    targetName = node.text("targetName"),
+                    emailTo = node.text("emailTo"),
+                    emailCc = node.text("emailCc"),
+                    emailSubject = node.text("emailSubject"),
+                    emailReplyTo = node.text("emailReplyTo"),
+                    url = node.text("url"),
+                    method = node.text("method"),
+                    headers = node.text("headers"),
+                    functionId = node.text("functionRef")?.let { idOf(ComponentKind.FUNCTION, it) },
+                    mappings = node.path("mappings").values().map { mapping ->
+                        ArgumentMapping(
+                            argument = mapping.text("argument").orEmpty(),
+                            expression = mapping.text("expression").orEmpty(),
+                        )
+                    }.toMutableList(),
+                    conditionExpression = node.text("conditionExpression"),
+                    conditionId = node.text("conditionRef")?.let { idOf(ComponentKind.CONDITION, it) },
+                    timeoutSeconds = node.integer("timeoutSeconds"),
+                    retryIntervalSeconds = node.integer("retryIntervalSeconds"),
+                    durationSeconds = node.integer("durationSeconds"),
+                    icon = node.text("icon"),
+                ),
+            ).id!!
+
+            ComponentKind.TRIGGER -> triggers.save(
+                WorkflowTrigger(
+                    workspaceId = workspaceId,
+                    name = name,
+                    type = node.enumOf<TriggerType>("type", null, component),
+                    connectionId = boundId(externalIn(node.path("connectionRef"), ExternalKind.CONNECTION)),
+                    action = node.enumOrNull<TriggerAction>("action", component),
+                    cron = node.text("cron"),
+                    timezone = node.text("timezone"),
+                    webhookPath = node.text("webhookPath")?.let { freeWebhookPath(it) },
+                    objectId = node.text("objectRef")?.let { idOf(ComponentKind.OBJECT, it) },
+                    authType = node.enumOf("authType", WebhookAuthType.NONE, component),
+                    authFunctionId = node.text("authFunctionRef")?.let { idOf(ComponentKind.FUNCTION, it) },
+                    conditionId = node.text("conditionRef")?.let { idOf(ComponentKind.CONDITION, it) },
+                    payload = node.text("payload"),
+                    // Never on arrival, whatever it was where it came from. A
+                    // file is opened in a workspace nobody has read it in yet,
+                    // and a trigger that arrived listening would be answering
+                    // somebody else's events before anybody had looked at it.
+                    enabled = false,
+                    icon = node.text("icon"),
+                ),
+            ).id!!
+
+            ComponentKind.AGENT -> agents.save(
+                Agent(
+                    workspaceId = workspaceId,
+                    name = name,
+                    type = node.enumOf("type", AgentType.LLM, component),
+                    description = node.text("description"),
+                    systemPrompt = node.text("systemPrompt"),
+                    enabled = node.path("enabled").asBoolean(true),
+                    modelId = boundId(externalIn(node.path("modelRef"), ExternalKind.MODEL)),
+                    orknuxAccess = node.path("orknuxAccess").asBoolean(false),
+                    shellAccess = node.path("shellAccess").asBoolean(false),
+                    // The bound server's name here, which is not always the name
+                    // the file used: an agent holds the name, so binding "Jira"
+                    // to this workspace's "Jira (staging)" has to write the
+                    // second one or the grant would point at nothing.
+                    mcpServers = node.names("mcpServerRefs").mapNotNull { server ->
+                        bound[ExternalKind.MCP_SERVER to server]
+                            ?.let { externals.labelOf(workspaceId, ExternalKind.MCP_SERVER, it) }
+                    }.toMutableList(),
+                    // A tool it was granted may have been renamed on the way in,
+                    // and the grant follows it, exactly as every other reference
+                    // in the file does.
+                    tools = node.names("toolRefs")
+                        .map { toolNameFor(workspaceId, it, resolved) }
+                        .toMutableList(),
+                    skillCatalogs = node.names("skillCatalogs")
+                        .onEach { catalogFor(workspaceId, it, who) }
+                        .toMutableList(),
+                    memoryCatalogs = node.names("memoryCatalogs")
+                        .onEach { memoryCatalogFor(workspaceId, it, who) }
+                        .toMutableList(),
+                    icon = node.text("icon"),
+                ),
+            ).id!!
+
+            ComponentKind.WORKFLOW -> createWorkflow(workspaceId, component, name, resolved)
         }
+    }
+
+    /**
+     * The definition, the assignment that makes it this workspace's, and the graph.
+     *
+     * Arrives as a draft whatever it was where it came from. Publishing takes a
+     * copy of the graph to run from, and a workflow that landed published would
+     * be promising to run a copy nobody has made — so the first publish here is
+     * somebody's own decision, taken after they have looked at what arrived.
+     *
+     * Node keys travel unchanged and are the one identifier that does. They are
+     * the workflow's own rather than the database's: an edge names them, and a
+     * node's parameter names the node it reads from, so they mean in the target
+     * exactly what they meant in the source.
+     */
+    private fun createWorkflow(
+        workspaceId: Long,
+        component: ParsedComponent,
+        name: String,
+        resolved: Map<Pair<ComponentKind, String>, Long>,
+    ): Long {
+        val node = component.node
+        val workflow = workflows.save(Workflow(name = name, description = node.text("description")))
+        val workflowId = requireNotNull(workflow.id)
+        assignments.save(WorkspaceWorkflow(workspaceId = workspaceId, workflow = workflow, enabled = true))
+
+        fun idOf(kind: ComponentKind, of: String) = idFor(workspaceId, kind, of, resolved)
+        nodes.saveAll(
+            node.path("nodes").values().map { drawn ->
+                WorkflowNode(
+                    workflowId = workflowId,
+                    nodeKey = drawn.text("key")?.trim()?.ifEmpty { null }
+                        ?: throw EnvelopeInvalidException("A node of the workflow ${component.name} has no key"),
+                    kind = drawn.enumOf<NodeKind>("kind", null, component),
+                    name = drawn.text("name")?.trim()?.ifEmpty { null } ?: "Untitled node",
+                    description = drawn.text("description"),
+                    agentId = drawn.text("agentRef")?.let { idOf(ComponentKind.AGENT, it) },
+                    triggerId = drawn.text("triggerRef")?.let { idOf(ComponentKind.TRIGGER, it) },
+                    actionId = drawn.text("actionRef")?.let { idOf(ComponentKind.ACTION, it) },
+                    conditionId = drawn.text("conditionRef")?.let { idOf(ComponentKind.CONDITION, it) },
+                    objectId = drawn.text("objectRef")?.let { idOf(ComponentKind.OBJECT, it) },
+                    outputName = drawn.text("outputName"),
+                    orientation = drawn.enumOrNull<NodeOrientation>("orientation", component),
+                    icon = drawn.text("icon"),
+                    positionX = drawn.path("x").asDouble(0.0),
+                    positionY = drawn.path("y").asDouble(0.0),
+                    yesLabel = drawn.text("yesLabel"),
+                    noLabel = drawn.text("noLabel"),
+                    mappings = drawn.path("mappings").values().map { mapping ->
+                        NodeMapping(
+                            name = mapping.text("name").orEmpty(),
+                            expression = mapping.text("expression").orEmpty(),
+                            mode = mapping.enumOf("mode", MappingMode.VALUE, component),
+                            sourceNodeKey = mapping.text("sourceNodeKey"),
+                        )
+                    }.toMutableList(),
+                )
+            },
+        )
+
+        val keys = node.path("nodes").values().mapNotNull { it.text("key") }.toSet()
+        edges.saveAll(
+            node.path("edges").values().map { edge ->
+                val source = edge.text("source").orEmpty()
+                val target = edge.text("target").orEmpty()
+                // A hand-edited file is the only way to get here, and an edge
+                // between nodes that are not in the graph would draw a line from
+                // nowhere. Refused by name rather than saved and puzzled over.
+                if (source !in keys || target !in keys) {
+                    throw EnvelopeInvalidException(
+                        "The workflow ${component.name} has a line from $source to $target, " +
+                            "and one of those is not a node in it",
+                    )
+                }
+                WorkflowEdge(
+                    workflowId = workflowId,
+                    sourceKey = source,
+                    targetKey = target,
+                    branch = edge.enumOrNull<EdgeBranch>("branch", component),
+                )
+            },
+        )
+        return workflowId
     }
 
     /**
@@ -468,6 +847,48 @@ class ComponentImporter(
         val wanted = name?.trim()?.ifEmpty { null } ?: DEFAULT_CATALOG
         catalogs.findByWorkspaceIdAndName(workspaceId, wanted)?.let { return it.id!! }
         return catalogs.save(SkillCatalog(workspaceId = workspaceId, name = wanted, createdBy = who)).id!!
+    }
+
+    /**
+     * The memory catalog an imported agent was granted, made if it is not here.
+     *
+     * Matched rather than renamed, for the same reason a skill's folder is: a
+     * catalog holds nothing but a name, and an agent granted "Runbooks" means
+     * this workspace's Runbooks. What is written in it stays this workspace's —
+     * a memory is not a component and never travels.
+     */
+    private fun memoryCatalogFor(workspaceId: Long, name: String, who: String): Long {
+        val wanted = name.trim().ifEmpty { DEFAULT_CATALOG }
+        memoryCatalogs.findByWorkspaceIdAndName(workspaceId, wanted)?.let { return it.id!! }
+        return memoryCatalogs.save(MemoryCatalog(workspaceId = workspaceId, name = wanted, createdBy = who)).id!!
+    }
+
+    /** What a granted tool is called here, which a rename on the way in may have changed. */
+    private fun toolNameFor(
+        workspaceId: Long,
+        name: String,
+        resolved: Map<Pair<ComponentKind, String>, Long>,
+    ): String = tools.findById(idFor(workspaceId, ComponentKind.TOOL, name, resolved)).orElseThrow().name
+
+    /**
+     * The URL half a webhook trigger answers on, free across the installation.
+     *
+     * Unique installation-wide rather than per workspace, because the URL is:
+     * two workspaces cannot both answer at `/api/webhooks/build`. So it is
+     * suffixed the way a taken name is, and for the same reason — somebody
+     * else's endpoint is theirs, and quietly taking it over would answer their
+     * callers with this workspace's workflow.
+     */
+    private fun freeWebhookPath(wanted: String): String {
+        if (triggers.findByWebhookPath(wanted) == null) return wanted
+        for (attempt in 2..MAX_RENAME) {
+            val candidate = "$wanted-$attempt"
+            if (triggers.findByWebhookPath(candidate) == null) return candidate
+        }
+        throw EnvelopeInvalidException(
+            "This installation already answers at $wanted and at $MAX_RENAME paths like it. " +
+                "Change the path in the file before importing.",
+        )
     }
 
     // ------------------------------------------------------------------ naming
@@ -533,21 +954,37 @@ class ComponentImporter(
         // The width of the column, and for the three identifiers what the name
         // regexes already say. A rename that overflowed either would fail on save.
         ComponentKind.OBJECT, ComponentKind.FUNCTION, ComponentKind.TOOL -> 64
-        ComponentKind.CONDITION, ComponentKind.SKILL -> 120
+        ComponentKind.CONDITION, ComponentKind.SKILL, ComponentKind.ACTION -> 120
+        ComponentKind.TRIGGER, ComponentKind.AGENT, ComponentKind.WORKFLOW -> 255
     }
 
+    /**
+     * The id this workspace already has under that name, if any.
+     *
+     * A workflow is the exception and is asked of the installation rather than
+     * of the workspace: the definition's name is unique across all of them, and
+     * one that is taken is taken whether or not this workspace can see it. So a
+     * workflow arriving beside one of the same name is renamed even when the
+     * name belongs to a workspace somebody has never heard of — which is also
+     * why removing a workflow from a workspace does not free its name.
+     */
     private fun findByName(workspaceId: Long, kind: ComponentKind, name: String): Long? = when (kind) {
         ComponentKind.OBJECT -> objects.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.FUNCTION -> functions.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.CONDITION -> conditions.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.TOOL -> tools.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.SKILL -> skills.findByWorkspaceIdAndName(workspaceId, name)?.id
+        ComponentKind.ACTION -> actions.findByWorkspaceIdAndName(workspaceId, name)?.id
+        ComponentKind.TRIGGER -> triggers.findByWorkspaceIdAndName(workspaceId, name)?.id
+        ComponentKind.AGENT -> agents.findByWorkspaceIdAndName(workspaceId, name)?.id
+        ComponentKind.WORKFLOW -> workflows.findByName(name)?.id
     }
 
     private fun categoryOf(kind: ComponentKind): WorkspaceAuditCategory = when (kind) {
         ComponentKind.OBJECT -> WorkspaceAuditCategory.OBJECT
         ComponentKind.FUNCTION, ComponentKind.CONDITION -> WorkspaceAuditCategory.WORKFLOW
-        ComponentKind.TOOL, ComponentKind.SKILL -> WorkspaceAuditCategory.AGENT
+        ComponentKind.TOOL, ComponentKind.SKILL, ComponentKind.AGENT -> WorkspaceAuditCategory.AGENT
+        ComponentKind.ACTION, ComponentKind.TRIGGER, ComponentKind.WORKFLOW -> WorkspaceAuditCategory.WORKFLOW
     }
 
     private fun currentUser(): String = SecurityContextHolder.getContext().authentication?.name ?: "system"
@@ -636,6 +1073,16 @@ class ComponentImporter(
         fun JsonNode.text(field: String): String? = path(field).takeIf { it.isString }?.stringValue()
 
         /**
+         * A whole number, or nothing.
+         *
+         * Refuses rather than coerces, the same way [text] does: a timeout
+         * written as `"30"` by something that was not this exporter is a field
+         * this does not understand, and a null timeout is a shape the catalogue
+         * already allows.
+         */
+        fun JsonNode.integer(field: String): Int? = path(field).takeIf { it.isIntegralNumber }?.asInt()
+
+        /**
          * An array of names, with anything that is not a name left out.
          *
          * `stringValue` refuses a node that is not text rather than coercing it,
@@ -678,18 +1125,39 @@ class ComponentImporter(
 /**
  * What the import will do about one thing the envelope mentions.
  *
- * [kind] is null for a variable, which is the one thing here that is pointed at
- * and never created.
+ * At most one of [kind] and [external] is set, and which tells the reader what
+ * sort of thing this is. Both are null for a variable, which is neither: it is
+ * pointed at, never created, and never bound — a value is the workspace's own
+ * and there is nothing to choose between.
  */
 data class ImportEntry(
+    /** The kind, for something the file carries or would have carried. */
     val kind: ComponentKind?,
-    /** The name in the file. */
+    /** The kind, for something no file could carry. Set only when [kind] is not. */
+    val external: ExternalKind? = null,
+    /** The name in the file; for a model, the provider's name and the model's. */
     val name: String,
-    /** The name it will have here, which differs when it was renamed. */
+    /** The name it will have here, which differs when it was renamed or bound. */
     val targetName: String,
     val disposition: ImportDisposition,
     /** Why, in words a screen shows unchanged. */
     val detail: String,
+)
+
+/**
+ * One answer to something the envelope could not carry.
+ *
+ * [name] is the file's — exactly as the plan gave it back, which for a model is
+ * the provider's name and the model's with a slash between them — and
+ * [targetId] is what it means here. An id rather than a name because a binding
+ * is not part of the file: it is a statement about this installation, made from
+ * a list this installation drew, and an id is the one thing about a row that
+ * cannot be ambiguous.
+ */
+data class ComponentBinding(
+    val kind: ExternalKind,
+    val name: String,
+    val targetId: Long,
 )
 
 /**

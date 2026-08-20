@@ -22,6 +22,14 @@ import org.springframework.stereotype.Controller
  *
  * Both directions check the workspace first. An import is a write, so it is
  * checked like one: the same `requireVisible` an editor's save goes through.
+ *
+ * The binding step is not a third call. A file that names a model or a
+ * connection is described by the plan exactly as one that names a missing
+ * object is — kind, name, and what has to happen — so asking what needs binding
+ * is asking for the plan, and answering is asking for the plan again with the
+ * answers attached. A call of its own that only listed the unbound would be a
+ * second reader of the same file, and the lenient one: it could offer a form for
+ * a file the import then refuses for some other reason entirely.
  */
 @Controller
 class ComponentTransferAPI(
@@ -55,9 +63,13 @@ class ComponentTransferAPI(
      * already holds by asking what would collide.
      */
     @QueryMapping
-    fun componentImportPlan(@Argument workspaceId: Long, @Argument envelope: String): ImportPlan {
+    fun componentImportPlan(
+        @Argument workspaceId: Long,
+        @Argument envelope: String,
+        @Argument bindings: List<ComponentBinding>?,
+    ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.plan(workspaceId, envelope)
+        return importer.plan(workspaceId, envelope, bindings.orEmpty())
     }
 
     /**
@@ -68,9 +80,13 @@ class ComponentTransferAPI(
      * and one that showed it can compare.
      */
     @MutationMapping
-    fun importComponents(@Argument workspaceId: Long, @Argument envelope: String): ImportPlan {
+    fun importComponents(
+        @Argument workspaceId: Long,
+        @Argument envelope: String,
+        @Argument bindings: List<ComponentBinding>?,
+    ): ImportPlan {
         access.requireVisible(workspaceId)
-        return importer.apply(workspaceId, envelope)
+        return importer.apply(workspaceId, envelope, bindings.orEmpty())
     }
 }
 
@@ -86,6 +102,7 @@ class ComponentTransferExceptionResolver : DataFetcherExceptionResolverAdapter()
             is EnvelopeVersionUnknownException,
             is EnvelopeInvalidException,
             is ImportNotPossibleException,
+            is ImportBindingInvalidException,
             -> ErrorType.BAD_REQUEST
 
             is ComponentNotExportableException -> ErrorType.NOT_FOUND

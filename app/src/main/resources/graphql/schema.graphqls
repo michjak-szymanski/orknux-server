@@ -1757,7 +1757,6 @@ enum ConnectionType {
     SLACK
     GITHUB
     JIRA
-    TEAMS
     "A mail server to send through. Its url is a host name, not a URL."
     SMTP
     "Anything that is just an HTTP endpoint, until it earns a type of its own."

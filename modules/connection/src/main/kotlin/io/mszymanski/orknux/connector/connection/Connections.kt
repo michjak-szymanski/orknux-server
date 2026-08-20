@@ -46,7 +46,6 @@ enum class ConnectionType {
     SLACK,
     GITHUB,
     JIRA,
-    TEAMS,
 
     /**
      * A mail server to send through. The only type that is not an HTTP endpoint,

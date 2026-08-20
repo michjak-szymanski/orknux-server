@@ -95,7 +95,9 @@ class SecretCipher(
      * unreadable value is a fact about that value, not about the page.
      *
      * What went wrong is not lost — the doctor reads these columns directly and
-     * reports exactly which cannot be opened.
+     * reports exactly which cannot be opened. It asks [canRead], which is the
+     * only honest way to ask: this never throws, so a caller testing for a thrown
+     * failure is testing for something that cannot happen.
      */
     fun decrypt(stored: String?): String? {
         if (stored.isNullOrBlank() || !stored.startsWith(PREFIX)) return stored
@@ -120,6 +122,29 @@ class SecretCipher(
 
     /** Whether a stored value has already been through this. */
     fun isEncrypted(stored: String?): Boolean = stored != null && stored.startsWith(PREFIX)
+
+    /**
+     * Whether [decrypt] can actually open this value with the configured key.
+     *
+     * It has to be asked, because it cannot be caught. [decrypt] swallows its own
+     * failure on purpose — one credential nobody can read must not take down the
+     * screen somebody would go to in order to enter it again — so wrapping a call
+     * in `runCatching` and testing `isFailure` answers "readable" for every value
+     * on earth, including the ones written with a key this installation lost. A
+     * check built that way cannot report the one thing it exists to report, and
+     * one was.
+     *
+     * So the question is answered where the swallowing happens. What comes back
+     * from a failed read is the stored value, still in its envelope; what comes
+     * back from a successful one is the plaintext, which can never be in an
+     * envelope because [encrypt] refuses to wrap a value that already looks like
+     * one. Still sealed after decrypting therefore means it did not open.
+     *
+     * Anything that was never encrypted — plaintext from before this existed,
+     * null, blank — reads as readable, because it is: [decrypt] hands it back as
+     * it is and callers get the value they stored.
+     */
+    fun canRead(stored: String?): Boolean = !isEncrypted(decrypt(stored))
 
     /**
      * Whether the key is usable, without using it.

@@ -96,20 +96,37 @@ class AgentNodeRunner(
             ?: briefing.of(agent)
 
         val question = prompt ?: input ?: "There is no input for this step. Say what you would do."
-        val turns = buildList {
-            system?.let { add(ChatTurn("system", it)) }
-            add(ChatTurn("user", question))
-        }
 
         /*
          * The session this node writes into, if it names one.
          *
+         * Opened before the turns are built, because what is already in it goes
+         * into them: a session that is only written to is a transcript, and what
+         * this feature is for is an agent that remembers. The second workflow to
+         * compute this key asks its question of a model that has heard the first
+         * one's exchange.
+         */
+        val session = sessionFor(step, agent, mappings, payload, started)
+
+        /*
+         * Read before this turn's question is recorded, not after - otherwise
+         * the question would come back as part of its own history and the model
+         * would be shown it twice.
+         */
+        val remembered = session?.let { sessions.remembered(it) }.orEmpty()
+
+        val turns = buildList {
+            system?.let { add(ChatTurn("system", it)) }
+            addAll(remembered)
+            add(ChatTurn("user", question))
+        }
+
+        /*
          * Written before the model is asked, not after: a run that dies waiting
          * on a model should still leave the question in the transcript, since a
          * session with an answer and no question is worse than one with a
          * question and no answer.
          */
-        val session = sessionFor(step, agent, mappings, payload, started)
         session?.let { sessions.userSaid(it, step.name, question) }
 
         /*

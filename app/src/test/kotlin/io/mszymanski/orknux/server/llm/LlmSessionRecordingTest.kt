@@ -170,6 +170,31 @@ class LlmSessionRecordingTest(
     }
 
     /**
+     * And the second run *hears* the first, which is the whole point.
+     *
+     * Recording without reading back would be a transcript: an agent that
+     * writes everything down and remembers none of it, asking each question of
+     * a model that has never heard the last one. What proves the difference is
+     * not the rows in the session but what went to the model - so this asserts
+     * on the request body the second run sent.
+     */
+    @Test
+    fun `the second run is asked with the first run's exchange in front of it`() {
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+        val first = received.size
+        start()
+
+        // Everything the second run sent; the first run's requests are behind it.
+        val asked = received.drop(first).joinToString(" ")
+        assertThat(asked).contains("The database was the cause.")
+        // And it is offered as something already said, not as a fresh question.
+        assertThat(asked).contains("assistant")
+    }
+
+    /**
      * A node that names no session costs nothing.
      *
      * Every agent node drawn before this existed is this node, so "nothing" has

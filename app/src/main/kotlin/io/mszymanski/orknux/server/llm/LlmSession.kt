@@ -240,6 +240,26 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
     fun countBySessionId(sessionId: Long): Long
 
     /**
+     * The tail of a session, oldest first, for putting back in front of a model.
+     *
+     * Ordered newest-first here and reversed by the caller, because what a
+     * limited read wants is the *most recent* N and a database cannot take the
+     * last N of an ascending order without reading all of it. The id joins the
+     * sort for the reason the transcript's does: a turn writes its question, its
+     * tool calls and its answer inside the same millisecond, and a memory that
+     * reorders itself between two runs is worse than no memory.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.kind in :kinds
+        order by e.at desc, e.id desc
+        """,
+    )
+    fun latest(sessionId: Long, kinds: Collection<LlmSessionEventKind>, page: Pageable): List<LlmSessionEvent>
+
+    /**
      * The counts for a whole page at once.
      *
      * One query rather than one per row: a list of twenty sessions that each

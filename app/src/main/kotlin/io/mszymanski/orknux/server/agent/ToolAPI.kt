@@ -1,5 +1,9 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.action.typeScriptType
+import io.mszymanski.orknux.server.obj.ObjectNotFoundException
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -30,6 +34,7 @@ class ToolAPI(
     private val tools: AgentToolRepository,
     private val scripts: ScriptRunner,
     private val workspaces: WorkspaceRepository,
+    private val objects: WorkflowObjectRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
@@ -54,7 +59,14 @@ class ToolAPI(
         if (!IDENTIFIER.matches(name)) throw ToolNameInvalidException(name)
         if (tools.findByWorkspaceIdAndName(input.workspaceId, name) != null) throw ToolNameTakenException(name)
 
-        val code = codeFrom(input.source, input.typescript) ?: starter(name)
+        /*
+         * A tool that says nothing about what it takes takes what every tool used
+         * to take: one object called `input`. Left as a default rather than as an
+         * empty list, so a caller written before parameters existed - the MCP
+         * tools, a duplicate, a test - still creates a tool an agent can call.
+         */
+        val params = (input.params ?: listOf(DEFAULT_PARAM)).toParams(input.workspaceId)
+        val code = codeFrom(input.source, input.typescript) ?: starter(name, params)
         requireParses(code.javascript)
 
         val tool = tools.save(
@@ -64,6 +76,7 @@ class ToolAPI(
                 description = input.description?.trim()?.ifEmpty { null },
                 source = code.javascript,
                 typescript = code.typescript,
+                params = params,
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -97,6 +110,12 @@ class ToolAPI(
             tool.source = code.javascript
             tool.typescript = code.typescript
         }
+        /*
+         * Null leaves them alone, an empty list takes them all off - the same
+         * bargain a function's parameters are saved under, so a client that only
+         * meant to rename a tool does not have to resend its signature to keep it.
+         */
+        input.params?.let { tool.params = it.toParams(tool.workspaceId) }
         tool.lastModifiedAt = OffsetDateTime.now()
         tool.lastModifiedBy = currentUser()
 
@@ -151,6 +170,15 @@ class ToolAPI(
         description = tool.description,
         source = tool.source,
         typescript = tool.typescript,
+        params = tool.params.map { param ->
+            ToolParamView(
+                name = param.name,
+                type = param.type,
+                objectId = param.objectId,
+                objectName = param.objectId?.let { objects.findByIdOrNull(it)?.name },
+            )
+        },
+        signature = tool.signature,
         enabled = tool.enabled,
         lastModifiedAt = tool.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = tool.lastModifiedBy,
@@ -166,19 +194,69 @@ class ToolAPI(
      * comment what the agent will be reading when it decides to call it.
      */
     /**
-     * What a new tool starts as.
+     * What a new tool starts as: a declaration that already takes what the tool
+     * says it takes.
      *
-     * The stub takes no annotations, so the same text is both halves: it is
-     * valid TypeScript, and it is what the sandbox would run.
+     * Printed twice from one list, the way a function's stub is: the TypeScript
+     * is what somebody opens and the JavaScript is what runs, and the only
+     * difference between them is the annotations. They are not two versions that
+     * could drift.
      */
-    private fun starter(name: String): ToolCode {
-        val stub = """
-            export default async function $name(input) {
+    private fun starter(name: String, params: List<AgentToolParam>): ToolCode {
+        fun body(arguments: String) = """
+            export default async function $name($arguments) {
               // What this returns is handed back to the agent that called it.
               return { ok: true };
             }
         """.trimIndent()
-        return ToolCode(javascript = stub, typescript = stub)
+
+        val annotated = params.joinToString(", ") {
+            "${it.name}: ${typeScriptType(it.type, it.objectId?.let { id -> objects.findByIdOrNull(id)?.name })}"
+        }
+        return ToolCode(javascript = body(params.joinToString(", ") { it.name }), typescript = body(annotated))
+    }
+
+    /**
+     * The stored parameters, from what arrived.
+     *
+     * Names are checked the way a function's are - a parameter the sandbox
+     * cannot bind is not a parameter - and so is uniqueness, which a function
+     * does not have to check because it passes its arguments positionally and
+     * nothing addresses them by name. A tool's are addressed by name, by the
+     * model, so two alike is a hole rather than a curiosity.
+     */
+    private fun List<ToolParamInput>.toParams(workspaceId: Long): MutableList<AgentToolParam> {
+        val seen = mutableSetOf<String>()
+        return map { param ->
+            val name = param.name.trim()
+            if (!IDENTIFIER.matches(name)) throw ToolParamInvalidException(name)
+            if (!seen.add(name)) throw ToolParamDuplicateException(name)
+            AgentToolParam(
+                name = name,
+                type = param.type,
+                // Only an object parameter keeps one. Anything else is cleared
+                // rather than carried: a stale id under a string is one that
+                // comes back the day the type changes again.
+                objectId = if (param.type == ValueType.OBJECT) {
+                    requireObject(param.objectId, workspaceId, name)
+                } else {
+                    null
+                },
+            )
+        }.toMutableList()
+    }
+
+    /**
+     * The object a parameter names, checked against the workspace claiming it.
+     *
+     * An id from another workspace is answered as though it does not exist,
+     * because from where the caller stands it does not.
+     */
+    private fun requireObject(objectId: Long?, workspaceId: Long, param: String): Long {
+        val id = objectId ?: throw ToolObjectRequiredException(param)
+        val found = objects.findByIdOrNull(id) ?: throw ObjectNotFoundException(id)
+        if (found.workspaceId != workspaceId) throw ObjectNotFoundException(id)
+        return id
     }
 
     /**
@@ -207,8 +285,25 @@ class ToolAPI(
     private companion object {
         /** A name JavaScript can call: what the source is written against. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
+
+        /**
+         * What a tool takes when nobody said: one object, called `input`.
+         *
+         * The signature every tool had before they had signatures. Kept as the
+         * default so the description an agent reads - "it takes whatever it
+         * needs in `input`" - goes on being true for a tool created without one.
+         */
+        val DEFAULT_PARAM = ToolParamInput(name = "input", type = ValueType.MAP)
     }
 }
+
+/** One argument a tool takes, as the editor sends it. */
+data class ToolParamInput(
+    val name: String,
+    val type: ValueType,
+    /** Required when the type is OBJECT, and ignored otherwise. */
+    val objectId: Long? = null,
+)
 
 data class CreateToolInput(
     val workspaceId: Long,
@@ -217,6 +312,8 @@ data class CreateToolInput(
     /** Both left out for a new tool, which starts from a stub that parses. */
     val source: String? = null,
     val typescript: String? = null,
+    /** Left out means the one every tool used to take: an object called `input`. */
+    val params: List<ToolParamInput>? = null,
 )
 
 data class UpdateToolInput(
@@ -224,6 +321,17 @@ data class UpdateToolInput(
     val description: String? = null,
     val source: String? = null,
     val typescript: String? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val params: List<ToolParamInput>? = null,
+)
+
+data class ToolParamView(
+    val name: String,
+    val type: ValueType,
+    /** Which object, when the type is OBJECT. Null otherwise. */
+    val objectId: Long?,
+    /** What that object is called, resolved here for the editor's annotations. */
+    val objectName: String?,
 )
 
 /** What runs, and what it was written as. Saved together, always. */
@@ -236,6 +344,9 @@ data class ToolView(
     val description: String?,
     val source: String,
     val typescript: String,
+    val params: List<ToolParamView>,
+    /** "(city: string, days: number)", ready for the list. */
+    val signature: String,
     val enabled: Boolean,
     val lastModifiedAt: String,
     val lastModifiedBy: String,

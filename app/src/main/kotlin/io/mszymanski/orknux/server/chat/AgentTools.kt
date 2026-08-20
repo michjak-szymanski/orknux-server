@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.chat
 import io.mszymanski.orknux.connector.model.ToolCall
 import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.McpToolCaller
 import io.mszymanski.orknux.server.agent.SkillTool
@@ -79,18 +80,43 @@ class AgentTools(
                 add(
                     ToolSpec(
                         name = tool.name,
-                        description = tool.description
-                            ?: "One of this workspace's tools. It takes whatever it needs in `input`.",
-                        parameters = listOf(
+                        description = tool.description ?: "One of this workspace's tools.",
+                        /*
+                         * What the tool says it takes. Every tool used to be shown
+                         * as taking one optional `input`, whatever it actually
+                         * wanted, so the only account of its arguments the model
+                         * ever got was the sentence above. A declared parameter is
+                         * required: a tool that asked for it is a tool that needs it.
+                         */
+                        parameters = tool.params.map { param ->
                             ToolParameterSpec(
-                                name = "input",
-                                description = "A JSON object holding whatever this tool needs.",
-                                required = false,
-                            ),
-                        ),
+                                name = param.name,
+                                description = meaning(param.type),
+                                required = true,
+                            )
+                        },
                     ),
                 )
             }
+    }
+
+    /**
+     * What to put in one argument, in a sentence.
+     *
+     * Everything in a tool schema is declared a string on the way out, so the
+     * shape a parameter wants can only be said in words. An object parameter is
+     * described as a JSON object rather than by the name of the object it
+     * points at: that name means something in the editor, where the shape is a
+     * click away, and nothing at all to a model that has never seen it.
+     */
+    private fun meaning(type: ValueType): String = when (type) {
+        ValueType.STRING -> "Text."
+        ValueType.NUMBER -> "A number."
+        ValueType.BOOLEAN -> "true or false."
+        ValueType.OBJECT, ValueType.MAP -> "A JSON object."
+        ValueType.ARRAY -> "A JSON array."
+        // Never stored on a parameter; only a function's return type is nothing.
+        ValueType.NONE -> "Nothing."
     }
 
     /**
@@ -154,7 +180,7 @@ class AgentTools(
                 val tool = workspaceTools.granted(agent).firstOrNull { it.name == call.name }
                 val remote = mcpTools.resolve(agent, call.name)
                 when {
-                    tool != null -> workspaceTools.call(agent, tool, inputOf(call))
+                    tool != null -> workspaceTools.call(agent, tool, call.arguments)
                     // An MCP tool takes its own named arguments, so the whole
                     // object goes through rather than being unwrapped.
                     remote != null -> mcpTools.call(remote.first, remote.second, call.arguments)
@@ -166,25 +192,6 @@ class AgentTools(
         log.warn("Tool {} failed for agent {}", call.name, agent.name, failure)
         mapper.writeValueAsString(mapOf("error" to (failure.message ?: "That tool could not be run")))
     }
-
-    /**
-     * What to hand a workspace tool.
-     *
-     * The model is asked to put everything in `input`, and what it puts there is
-     * usually an object rather than a string — so the subtree is taken whole
-     * rather than read as text. A model that ignored the instruction and sent
-     * its arguments flat gets them passed through, which is more useful than
-     * handing the tool nothing on a technicality.
-     */
-    private fun inputOf(call: ToolCall): String = runCatching {
-        val given = mapper.readTree(call.arguments).path("input")
-        when {
-            given.isMissingNode || given.isNull -> call.arguments
-            // Some models stringify the object; that string is the JSON.
-            given.isString -> given.stringValue().orEmpty()
-            else -> mapper.writeValueAsString(given)
-        }
-    }.getOrDefault(call.arguments)
 
     /** Arguments arrive as a JSON object in a string, whichever shape asked. */
     private fun argument(call: ToolCall, name: String): String? = runCatching {

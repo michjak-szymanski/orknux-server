@@ -82,6 +82,63 @@ class ToolAndSkillAPITest(
     }
 
     /** Half of it is refused: the editor and the sandbox would disagree. */
+    /**
+     * The editor writes a tool's signature, and reading the tool back gives it
+     * again - which is the whole of what issue #140 asked for.
+     */
+    @Test
+    fun `a tool's parameters are saved from the editor and read back`() {
+        val id = graphQlTester.document(
+            """mutation { createTool(input: { workspaceId: $workspaceId, name: "forecast" }) { id } }""",
+        ).execute().path("createTool.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateTool(id: $id, input: {
+                 params: [{ name: "city", type: STRING }, { name: "days", type: NUMBER }],
+                 source: "export default function forecast(city, days) { return {}; }",
+                 typescript: "export default function forecast(city: string, days: number) { return {}; }"
+               }) { params { name type } signature } }""",
+        ).execute()
+            .path("updateTool.params[*].name").entityList(String::class.java).containsExactly("city", "days")
+            .path("updateTool.signature").entity(String::class.java).isEqualTo("(city: string, days: number)")
+
+        graphQlTester.document("""query { tool(id: $id) { signature } }""").execute()
+            .path("tool.signature").entity(String::class.java).isEqualTo("(city: string, days: number)")
+    }
+
+    /** A new tool takes what it says it takes, from the stub onwards. */
+    @Test
+    fun `a stub is printed taking the parameters the tool was created with`() {
+        graphQlTester.document(
+            """mutation { createTool(input: { workspaceId: $workspaceId, name: "forecast",
+                 params: [{ name: "city", type: STRING }, { name: "days", type: NUMBER }] })
+               { source typescript } }""",
+        ).execute()
+            .path("createTool.source").entity(String::class.java)
+            .satisfies { assertThat(it).contains("function forecast(city, days)") }
+            .path("createTool.typescript").entity(String::class.java)
+            .satisfies { assertThat(it).contains("function forecast(city: string, days: number)") }
+    }
+
+    /**
+     * Two parameters of one name is a hole rather than a curiosity: the model
+     * addresses them by name, so one of them is unreachable.
+     */
+    @Test
+    fun `a tool cannot take two parameters of the same name`() {
+        val id = graphQlTester.document(
+            """mutation { createTool(input: { workspaceId: $workspaceId, name: "forecast" }) { id } }""",
+        ).execute().path("createTool.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateTool(id: $id, input: {
+                 params: [{ name: "city", type: STRING }, { name: "city", type: NUMBER }]
+               }) { id } }""",
+        ).execute().errors().satisfy { failures ->
+            assertThat(failures.first().message).contains("already takes a parameter called")
+        }
+    }
+
     @Test
     fun `a tool saved with one half of its code is refused`() {
         val id = tool("shout")

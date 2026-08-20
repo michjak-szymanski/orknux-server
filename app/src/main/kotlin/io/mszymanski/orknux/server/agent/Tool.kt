@@ -1,15 +1,58 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ValueType
+import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
+import jakarta.persistence.ElementCollection
+import jakarta.persistence.Embeddable
 import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
+import jakarta.persistence.FetchType
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
+import jakarta.persistence.JoinColumn
+import jakarta.persistence.OrderColumn
 import jakarta.persistence.Table
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import java.time.OffsetDateTime
+
+/**
+ * One argument a tool takes, in the order it takes them.
+ *
+ * The same shape a function's parameter has, and deliberately so: both are
+ * arguments to a script in the same sandbox, and a workspace that has learnt
+ * what a parameter is in one editor should not have to learn it again in the
+ * other. [ValueType] is borrowed from the workflow side rather than copied for
+ * the same reason — two enumerations of the same six shapes would drift.
+ *
+ * What it is *not* is a schema the model is held to. Everything a provider is
+ * told about a tool's arguments is a string, so the type here is what the
+ * editor annotates the code with and what the agent is told the argument means;
+ * it is not a promise the argument arrives already shaped.
+ */
+@Embeddable
+class AgentToolParam(
+    @Column(name = "name", nullable = false, length = 64)
+    var name: String = "",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "type", nullable = false, length = 16)
+    var type: ValueType = ValueType.STRING,
+
+    /**
+     * Which object, when the type is one. Null for everything else.
+     *
+     * Spelled the way a function's parameter spells it — a column holding an id,
+     * no foreign key — so a deleted object leaves a dangling id that is reported
+     * rather than a delete that is refused.
+     */
+    @Column(name = "object_id")
+    var objectId: Long? = null,
+)
 
 /**
  * A named piece of JavaScript an agent may call while it runs.
@@ -53,6 +96,23 @@ class AgentTool(
     @Column(nullable = false, columnDefinition = "text")
     var typescript: String,
 
+    /**
+     * What it takes, in the order the sandbox passes it.
+     *
+     * A tool used to take exactly one argument called `input`, hard-coded in two
+     * places: the schema the model was shown and the single-element list the
+     * sandbox was handed. That was not a signature anybody could read or change
+     * — the only account of what a tool wanted was a sentence in its
+     * description, and the model had to guess the rest.
+     *
+     * So it is stored, like a function's. Existing tools were given the one
+     * parameter they always had, which is why nothing about them changed.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "agent_tool_param", joinColumns = [JoinColumn(name = "tool_id")])
+    @OrderColumn(name = "position")
+    var params: MutableList<AgentToolParam> = mutableListOf(),
+
     /** Off leaves it defined but out of reach, which a delete would not. */
     @Column(nullable = false)
     var enabled: Boolean = true,
@@ -62,7 +122,12 @@ class AgentTool(
 
     @Column(name = "last_modified_by", nullable = false, length = 120)
     var lastModifiedBy: String = "",
-)
+) {
+
+    /** "(city: string, days: number)", as the entity can say it without names. */
+    val signature: String
+        get() = params.joinToString(", ", "(", ")") { "${it.name}: ${it.type.name.lowercase()}" }
+}
 
 interface AgentToolRepository : JpaRepository<AgentTool, Long> {
 
@@ -80,6 +145,31 @@ class ToolNameInvalidException(name: String) :
     RuntimeException("\"$name\" is not a name a script can be called by")
 
 class ToolSourceInvalidException(reason: String) : RuntimeException(reason)
+
+class ToolParamInvalidException(name: String) :
+    RuntimeException("\"$name\" is not a name a parameter can have")
+
+/**
+ * Two of a tool's parameters answer to the same name.
+ *
+ * Refused rather than kept, because the model addresses them by name: two
+ * called `query` are one the agent can fill and one it cannot reach, and which
+ * is which is decided by whatever the provider's JSON does with a repeated key.
+ */
+class ToolParamDuplicateException(name: String) :
+    RuntimeException("This tool already takes a parameter called \"$name\"")
+
+/**
+ * A parameter says it takes an object without saying which.
+ *
+ * OBJECT is a reference to something the workspace defined; on its own it is not
+ * a type at all. MAP is what to use for a shape nobody has written down — and the
+ * message says so, because that is the choice being made.
+ */
+class ToolObjectRequiredException(name: String) : RuntimeException(
+    "\"$name\" is declared as an object but no object is chosen. Pick one of this " +
+        "workspace's objects, or use map for a structure without a defined shape.",
+)
 
 /**
  * One half of a tool's code arrived without the other.

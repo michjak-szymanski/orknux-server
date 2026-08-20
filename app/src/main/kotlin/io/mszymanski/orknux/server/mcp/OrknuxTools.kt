@@ -936,12 +936,12 @@ class OrknuxTools(
                 "language" to "typescript",
                 "code" to chosen.typescript,
                 /*
-                 * Said rather than left to be inferred from the code. A tool
-                 * declares no parameters: it is handed one argument, whatever
-                 * the agent composed, and its description is what tells the
-                 * agent what belongs in there.
+                 * Said rather than left to be inferred from the code, because
+                 * the declaration in the code is one spelling of it and the
+                 * stored list is the other. This is the stored one, which is
+                 * what the model is shown and what the sandbox fills in order.
                  */
-                "takes" to "One argument, whatever the calling agent composed. A tool declares no parameters.",
+                "takes" to chosen.signature,
                 "url" to toolLink(scope.workspaceId, chosen.id),
             ),
         )

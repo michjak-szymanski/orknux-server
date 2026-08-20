@@ -289,6 +289,29 @@ class PluginRunner(private val properties: PluginProperties) {
     }
 
     /**
+     * No host access, and this time none of it.
+     *
+     * `HostAccess.NONE` denies every host method and field and then stops, one
+     * short of the default mappings of guest values onto mutable host types: a
+     * guest array handed to host code that asks it for a `List` still becomes
+     * one, and what backs it is whatever the guest felt like. Today nothing
+     * asks — a plugin's answers are read out a string, a number, an array
+     * element at a time, never converted wholesale — but "a plugin will one day
+     * be given authority a function must not have" is the premise of this class,
+     * and a mapping like this is exactly what would be found already switched on
+     * when that day came.
+     *
+     * Its own copy, like every other line here. A constant shared with
+     * [ScriptRunner] would be one place that configures both, which is what this
+     * file exists to avoid.
+     */
+    internal val hostAccess: HostAccess = HostAccess.newBuilder(HostAccess.NONE)
+        // Reads backwards: the argument lists the mappings to allow, so the
+        // empty call denies them all. Omitted, the builder allows every one.
+        .allowMutableTargetMappings()
+        .build()
+
+    /**
      * The sandbox. Every `allow…` is a decision to say no, written out even where
      * the builder would have denied it anyway — so the day a plugin is given a
      * capability, it is a visible line in this file and not a default that moved.
@@ -296,7 +319,7 @@ class PluginRunner(private val properties: PluginProperties) {
     private fun newContext(): Context = Context.newBuilder("js")
         .engine(engine)
         .allowExperimentalOptions(true)
-        .allowHostAccess(HostAccess.NONE)
+        .allowHostAccess(hostAccess)
         .allowHostClassLookup { false }
         .allowHostClassLoading(false)
         .allowIO(IOAccess.NONE)

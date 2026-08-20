@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.workflow.script
 
 import org.assertj.core.api.Assertions.assertThat
+import org.graalvm.polyglot.Context
+import org.graalvm.polyglot.HostAccess
 import org.junit.jupiter.api.Test
 
 /**
@@ -193,6 +195,37 @@ class ScriptRunnerTest {
         val result = runner.call("""export function named() { return 1; }""", "named", emptyList())
 
         assertThat((result as ScriptResult.Failed).reason).contains("no default export")
+    }
+
+    @Test
+    fun `a guest value cannot be read back as a mutable host type`() {
+        /*
+         * The one denial that could not be written as a repeated default,
+         * because the default is the other way round: HostAccess.NONE leaves the
+         * mappings of guest values onto List, Map and the rest switched on, so
+         * the policy the runner uses is NONE with those taken off it.
+         *
+         * Asked of the policy rather than through `call`, and that is not a
+         * shortcut. A script's answer leaves the sandbox as a JSON string; no
+         * live Value ever reaches this side, which is why the loosening was
+         * harmless and also why there is no script that could demonstrate it.
+         * The comparison against NONE is what makes this a test rather than a
+         * restatement: the two policies disagree, so the line that was added is
+         * doing something.
+         */
+        fun readsBackAsAMap(policy: HostAccess): Boolean =
+            Context.newBuilder("js")
+                .allowHostAccess(policy)
+                // As the runners' own engines do; the fallback runtime is
+                // expected here and the warning is six lines of it.
+                .option("engine.WarnInterpreterOnly", "false")
+                .build()
+                .use { polyglot ->
+                    runCatching { polyglot.eval("js", "({ a: 1 })").`as`(Map::class.java) }.isSuccess
+                }
+
+        assertThat(readsBackAsAMap(HostAccess.NONE)).isTrue()
+        assertThat(readsBackAsAMap(runner.hostAccess)).isFalse()
     }
 
     @Test

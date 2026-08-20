@@ -161,6 +161,20 @@ class DoctorAPI(
     private fun authentication(): DoctorCheckView = when (security.authMethod) {
         AuthMethod.LDAP -> ok("Authentication", "Username and password, against the directory.")
 
+        /*
+         * Nothing to be misconfigured, and that is the finding rather than the
+         * absence of one. Whoever reads this screen after wondering where the
+         * directory went should be told there is not one, in as many words - the
+         * monitoring screen has stopped drawing a card for it, and two surfaces
+         * that say nothing about the same thing are two surfaces that disagree
+         * with somebody's memory of yesterday.
+         */
+        AuthMethod.INTERNAL -> ok(
+            "Authentication",
+            "Username and password, against accounts this installation holds itself. " +
+                "No directory and no provider are configured, and none is contacted.",
+        )
+
         AuthMethod.OIDC -> {
             val missing = buildList {
                 if (security.oidc.issuer.isBlank()) add("issuer")

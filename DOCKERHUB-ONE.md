@@ -103,9 +103,13 @@ shape in a real deployment.
 
 **No LDAP and no OIDC.** There is no directory and no identity provider in this
 container, so nothing about directory sign-in, group mapping or SSO can be tried
-in it. The internal administrator above is the whole of the way in. Point
-`ORKNUX_LDAP_URLS` or the OIDC settings at something real if you need that, and
-you are then running a two-container installation with extra steps.
+in it. The internal administrator above is the whole of the way in, and the
+container says so: it starts with `ORKNUX_AUTH_METHOD=INTERNAL`, so the sign-in
+card offers a password box rather than single sign-on and the monitoring screen
+draws no card for a directory that is not here. Point `ORKNUX_LDAP_URLS` or the
+OIDC settings at something real if you need that - set `ORKNUX_AUTH_METHOD`
+alongside them, which overrides the default above - and you are then running a
+two-container installation with extra steps.
 
 **SQLite, so: one writer at a time, one process, one machine.** Writes are
 serialised rather than concurrent; two containers on one file over a network

@@ -24,9 +24,11 @@ import io.mszymanski.orknux.server.user.InternalAuthentication
 import org.springframework.security.authentication.AuthenticationManager
 
 /**
- * Username/password sign-in against the directory. The credentials are checked by
- * the LDAP [AuthenticationManager]; the resulting authentication is stored in the
- * HTTP session, so subsequent GraphQL calls are attributed to that LDAP user.
+ * Username/password sign-in. An account this installation holds itself is tried
+ * first, whatever the configured method; under LDAP anybody else is checked by the
+ * LDAP [AuthenticationManager], and under INTERNAL there is nobody else. The
+ * resulting authentication is stored in the HTTP session, so subsequent GraphQL
+ * calls are attributed to that user.
  *
  * This is the one door anybody may knock on, so it counts the knocking. See
  * [SignInThrottle] for what a wrong password costs the second and the tenth
@@ -91,12 +93,27 @@ class SessionAPI(
          * against an internal user on the way here, and that is real work an
          * unlimited caller would be spending.
          */
-        if (properties.authMethod != AuthMethod.LDAP) {
+        if (properties.authMethod == AuthMethod.OIDC) {
             throttle.failed(credentials.username, from)
             throw ResponseStatusException(
                 HttpStatus.CONFLICT,
                 "This installation signs in with ${properties.oidc.displayName}, not with a password.",
             )
+        }
+
+        /*
+         * Under INTERNAL the check above was the whole of the door, and it said no.
+         *
+         * Stopping here is the point of the method rather than an optimisation: the
+         * manager below binds to `spring.ldap.urls`, which under INTERNAL is nothing
+         * but a default nobody set. Falling through would spend a connection attempt
+         * on localhost:389 per wrong password and answer with whatever the directory
+         * failure happened to look like — so the plain, honest 401 is given here, and
+         * it is the same sentence a wrong password gets anywhere else.
+         */
+        if (properties.authMethod == AuthMethod.INTERNAL) {
+            throttle.failed(credentials.username, from)
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password")
         }
 
         val authentication = try {

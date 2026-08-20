@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.monitoring
 
+import io.mszymanski.orknux.server.security.AuthMethod
+import io.mszymanski.orknux.server.security.SecurityProperties
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.workflow.health.ServiceHealth
 import jakarta.persistence.EntityManager
@@ -29,6 +31,10 @@ enum class ComponentStatus {
  * own health. What is worth reporting is what it needs to do its work — the
  * database, the directory, and Temporal — so each of those is checked and named.
  * The browser adds its own card for orknux-ui, which it can speak for.
+ *
+ * What it needs, though, and not what it might have needed. A dependency this
+ * installation was never configured with is absent, not unreachable, and it is left
+ * out entirely rather than checked and found wanting.
  */
 @Controller
 class MonitoringAPI(
@@ -39,17 +45,40 @@ class MonitoringAPI(
     @Value("\${orknux.version:unknown}") private val version: String,
     private val temporal: TemporalLinks,
     private val access: WorkspaceAccess,
+    /** Read for one thing only: whether there is a directory to have an opinion about. */
+    private val security: SecurityProperties,
 ) {
 
     @QueryMapping
     fun components(): List<ComponentView> {
         access.requireAdmin()
 
-        val dependencies = listOf(
+        val dependencies = listOfNotNull(
             check("Database", "Postgres, for everything the platform stores") {
                 entityManager.createNativeQuery("SELECT 1").singleResult
             },
-            check("Directory", "LDAP, for who may sign in and what they may see") { ldap.list("") },
+            /*
+             * Only where there is one.
+             *
+             * An installation signing in with INTERNAL has no directory: nobody
+             * configured `spring.ldap.urls`, so the probe went to the default —
+             * localhost:389 — found nothing listening, and reported the whole server
+             * DEGRADED, "cannot reach directory", for a directory that was never
+             * meant to be there. That is not a fault, it is a component this
+             * installation does not have, and a card for it is a card that can only
+             * ever be red.
+             *
+             * Absent rather than reported-as-fine, because "Directory: answering"
+             * would be a second untruth in place of the first. LDAP and OIDC are
+             * untouched: OIDC has kept a directory alongside its provider since
+             * before this existed, and nothing here is going to decide for it that
+             * it has not.
+             */
+            if (security.authMethod == AuthMethod.INTERNAL) {
+                null
+            } else {
+                check("Directory", "LDAP, for who may sign in and what they may see") { ldap.list("") }
+            },
         ) + services.map(::probe)
 
         val unreachable = dependencies.filterNot { it.reachable }

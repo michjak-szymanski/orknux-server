@@ -258,14 +258,24 @@ orknux:
     password: ${ORKNUX_BOOTSTRAP_ADMIN_PASSWORD:}
   security:
     # Sees the Admin section and every workspace.
-    # LDAP or OIDC. One at a time, deliberately: both would mean an LDAP password
-    # for every account the OIDC provider governs — a second way in that its
-    # policies do not reach and its administrators do not know about.
+    # LDAP, INTERNAL or OIDC. One at a time, deliberately: two would mean an LDAP
+    # password for every account the OIDC provider governs — a second way in that
+    # its policies do not reach and its administrators do not know about.
     #
     # OIDC covers two flows at once. A browser is sent to the provider and comes
     # back with a code, which this server exchanges for the same session cookie
     # password sign-in issues; a script presents the provider's token as a bearer
     # instead, validated per request. Same provider, same claims, same roles.
+    #
+    # INTERNAL is username and password against the accounts this installation
+    # holds itself, with nothing outside it involved. It is what the all-in-one
+    # image sets, because that image ships no directory: under LDAP it announced
+    # single sign-on on the sign-in card and reported itself degraded for failing
+    # to reach a localhost:389 nobody had asked for. Under INTERNAL no directory
+    # is contacted, and the monitoring screen draws no card for one.
+    #
+    # The default is LDAP and stays LDAP. This says what an installation has, and
+    # changing the default would change what every existing one claims to have.
     auth-method: ${ORKNUX_AUTH_METHOD:LDAP}
     admin-role: ${ORKNUX_ADMIN_ROLE:ROLE_ADMINS}
     sign-in:

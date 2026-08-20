@@ -157,6 +157,35 @@ one that exists."
 fi
 
 # ---------------------------------------------------------------------------
+# How people sign in.
+#
+# There is no directory in this image and no identity provider, so the only
+# accounts it has are the ones it holds itself - the generated administrator
+# above, and whoever that administrator makes afterwards. INTERNAL is the server
+# saying exactly that.
+#
+# It matters because the default is LDAP, and the default was visibly wrong here
+# in two places at once: the sign-in card announced single sign-on and offered a
+# directory that is not in this container, and the monitoring screen probed
+# localhost:389, failed, and reported the whole server degraded. The generated
+# administrator signed in anyway - internal accounts are checked before the
+# directory - so the image worked and looked broken, which is a poor first
+# impression to make on somebody who has run one command.
+#
+# Overridable, and only a default. Anybody pointing ORKNUX_LDAP_URLS or the OIDC
+# settings at something real - which DOCKERHUB-ONE.md says how to do - sets
+# ORKNUX_AUTH_METHOD alongside them, and this leaves it alone.
+# ---------------------------------------------------------------------------
+
+ORKNUX_AUTH_METHOD="${ORKNUX_AUTH_METHOD:-INTERNAL}"
+export ORKNUX_AUTH_METHOD
+if [ "$ORKNUX_AUTH_METHOD" = "INTERNAL" ]; then
+    note "Signing in with accounts held by this installation; no directory and no provider."
+else
+    note "Signing in with $ORKNUX_AUTH_METHOD, as set in the environment."
+fi
+
+# ---------------------------------------------------------------------------
 # The interface.
 #
 # nginx serves the bundle and forwards /api, /graphql and /mcp to the server on

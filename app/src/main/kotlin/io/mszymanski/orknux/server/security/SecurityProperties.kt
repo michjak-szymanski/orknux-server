@@ -9,6 +9,23 @@ enum class AuthMethod {
     LDAP,
 
     /**
+     * Username and password, checked against the accounts this installation holds
+     * itself. No directory, no provider, nothing to reach.
+     *
+     * These accounts exist under every method — somebody has to be able to act
+     * through the API without borrowing an administrator's session — so this is not
+     * a different door, it is the *only* door: the one [InternalAuthentication]
+     * already opens first, with nothing behind it to fall through to.
+     *
+     * It is what the all-in-one image runs on. That image ships no directory, so
+     * under LDAP it described itself as reaching one, offered single sign-on, and
+     * reported itself degraded for failing to reach a thing nobody had asked for.
+     * A dependency that was never configured is absent, not unreachable, and this
+     * is the value that lets the rest of the server say so.
+     */
+    INTERNAL,
+
+    /**
      * An OpenID Connect provider, two ways at once.
      *
      * A browser is sent to the provider and comes back with a code, which this
@@ -23,11 +40,14 @@ enum class AuthMethod {
 @ConfigurationProperties(prefix = "orknux.security")
 data class SecurityProperties(
     /**
-     * Which of the two is in use. One at a time, deliberately.
+     * Which of the three is in use. One at a time, deliberately.
      *
-     * Both at once would mean an installation with an LDAP password for every
+     * Two at once would mean an installation with an LDAP password for every
      * account its OIDC provider governs — a second way in, that the provider's
      * policies do not reach and its administrators do not know about.
+     *
+     * The default is LDAP and stays LDAP: this names what an installation *has*,
+     * and every installation that had a directory yesterday still has one.
      */
     val authMethod: AuthMethod = AuthMethod.LDAP,
 

@@ -9,9 +9,15 @@ import org.springframework.web.bind.annotation.RestController
 /**
  * How to sign in to this installation, asked before anybody has.
  *
- * The sign-in screen cannot draw itself without this. Under LDAP it needs a username
- * and password box; under OIDC there is nothing to type — only a button pointing at
- * the provider, named the way the people signing in know it.
+ * The sign-in screen cannot draw itself without this. Under LDAP and under INTERNAL
+ * it needs a username and password box; under OIDC there is nothing to type — only a
+ * button pointing at the provider, named the way the people signing in know it.
+ *
+ * The two password methods draw the same form and differ only in what the card says
+ * underneath it, which is the one place the difference is worth showing: "against the
+ * directory" is a promise this installation has to be able to keep, and the all-in-one
+ * image cannot. So [displayName] carries a phrase that is true of whichever method is
+ * in use, and the screen has a sentence to put there rather than a guess.
  *
  * Open, and deliberately says nothing else. Which provider an installation uses is
  * visible to anyone who reaches the sign-in page anyway, since that is where they are
@@ -24,7 +30,17 @@ class AuthMethodAPI(private val properties: SecurityProperties) {
     @GetMapping
     fun method(): AuthMethodView = AuthMethodView(
         method = properties.authMethod.name,
-        displayName = properties.oidc.displayName,
+        /*
+         * The provider's name where there is a provider, and where there is a
+         * directory — LDAP has always been answered this way and still is. Only
+         * INTERNAL says something else, because "single sign-on" is the one thing an
+         * installation with no directory and no provider must not be described as.
+         */
+        displayName = if (properties.authMethod == AuthMethod.INTERNAL) {
+            INTERNAL_DISPLAY_NAME
+        } else {
+            properties.oidc.displayName
+        },
         // Where the browser flow starts. Spring registers this path for the
         // registration id; naming it here keeps the interface from having to know
         // Spring's URL conventions.
@@ -39,6 +55,15 @@ data class AuthMethodView @JsonCreator constructor(
     /** Where to send the browser, or null when there is a password box instead. */
     @JsonProperty("authorizeUrl") val authorizeUrl: String?,
 )
+
+/**
+ * What an installation holding its own accounts calls them.
+ *
+ * A phrase rather than a name, because there is no third party here to name: it reads
+ * as the end of "signs in with …" and as a note under the password box, which are the
+ * two places the sign-in card puts it.
+ */
+const val INTERNAL_DISPLAY_NAME = "an account on this installation"
 
 /** Spring's authorization endpoint for the registration this application configures. */
 const val OIDC_REGISTRATION_ID = "orknux"

@@ -3011,6 +3011,14 @@ type ObjectProperty {
     refObjectId: ID
     "What an array holds when it holds scalars."
     elementKind: PropertyKind
+    """
+    What this field means, for whoever - or whatever - reads it.
+
+    A name says what a field is called and nothing about what belongs in it.
+    This is where that goes, so a person and a model read the same sentence
+    rather than each inferring their own from one word.
+    """
+    description: String
     "Ready to show: `string`, `ApiResponse`, `array<FileObject>`."
     display: String!
 }
@@ -3028,6 +3036,8 @@ input ObjectPropertyInput {
     kind: PropertyKind!
     refObjectId: ID
     elementKind: PropertyKind
+    "What the field means, at most 500 characters. Blank says nothing."
+    description: String
 }
 
 input CreateObjectInput {

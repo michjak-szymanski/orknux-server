@@ -221,6 +221,18 @@ class QuickChat(
                      * and one list now: what the declaration takes is what the
                      * function takes, so the two cannot come apart.
                      */
+                    /*
+                     * The fields of a named shape, and where to find them.
+                     *
+                     * Annotating a parameter with an object's name is only half
+                     * of writing against it: the body has to read its fields,
+                     * and a model that has been told the name and not the fields
+                     * makes them up. They come back from `orknux_function`, with
+                     * whatever the author wrote about what each one means.
+                     */
+                    "When a parameter or the return type names one of this workspace's objects, `orknux_function` " +
+                    "sends that object's fields with it - each field's type and what its author says it means. " +
+                    "Write the body against those fields rather than inventing any. " +
                     "A function's parameters are the ones its declaration lists, so you can add, remove, rename " +
                     "or retype one by writing the declaration you want and offering it with the same tool - the " +
                     "parameter list is taken from it when they accept. Annotate every parameter: `string`, " +

@@ -7,6 +7,9 @@ import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.agent.AgentTool
 import io.mszymanski.orknux.server.agent.AgentToolRepository
+import io.mszymanski.orknux.server.obj.ObjectProperty
+import io.mszymanski.orknux.server.obj.PropertyKind
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import org.springframework.data.repository.findByIdOrNull
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
@@ -135,6 +138,16 @@ class OrknuxTools(
      */
     private val agentTools: AgentToolRepository,
     private val functions: WorkflowFunctionRepository,
+    /**
+     * The shapes the workspace has named, for the parameters that name one.
+     *
+     * A signature says `payload: SlackMessage` and stops there, which tells a
+     * model that something called SlackMessage exists and nothing about what is
+     * in it - so the code it writes reaches for fields it has invented. The
+     * object is where the fields are written down, descriptions included, and
+     * this is what reads them.
+     */
+    private val objects: WorkflowObjectRepository,
     /**
      * For the names of the variables a function is handed, and nothing else.
      *
@@ -404,7 +417,8 @@ class OrknuxTools(
         add(
             ToolSpec(
                 name = "orknux_function",
-                description = "One function in full, including the code it is written in.",
+                description = "One function in full: the code it is written in, and the fields of any of this " +
+                    "workspace's objects it takes or gives back, each with what it means.",
                 parameters = listOf(
                     ToolParameterSpec("function", "The function's name, or its id.", required = true),
                 ),
@@ -750,7 +764,17 @@ class OrknuxTools(
                 "editable" to chosen.editable,
                 "language" to if (chosen.typescript != null) "typescript" else "javascript",
                 "code" to (chosen.typescript ?: chosen.source),
-                "parameters" to chosen.params.map { mapOf("name" to it.name, "type" to it.type.name) },
+                "parameters" to chosen.params.map { parameter ->
+                    buildMap<String, Any?> {
+                        put("name", parameter.name)
+                        put("type", parameter.type.name)
+                        shapeOf(scope, parameter.objectId)?.let { put("object", it) }
+                    }
+                },
+                // The same for what comes back, for the same reason: a function
+                // that returns a named shape is one whose `return` statement has
+                // to name its fields.
+                "returnedObject" to shapeOf(scope, chosen.returnObjectId),
                 /*
                  * Named, not valued. An external is a workspace value and often
                  * a secret; what a model needs to write the code is that the
@@ -763,6 +787,49 @@ class OrknuxTools(
                 "url" to functionLink(scope.workspaceId, chosen.id),
             ),
         )
+    }
+
+    /**
+     * One of the workspace's shapes, spelled out for a model.
+     *
+     * Every field with what it is and what it means, because the description is
+     * the half a model cannot infer. `tier` is a word three readers read three
+     * ways; "the customer's support plan - one of free, pro or enterprise" is
+     * read one way by all of them. A field with nothing written on it is sent as
+     * a field with nothing written on it rather than with its name repeated back
+     * as prose, so what the author said and what nobody said stay distinguishable.
+     *
+     * Scoped like everything else here: a parameter pointing at another
+     * workspace's object is answered with nothing rather than with that
+     * workspace's shape.
+     */
+    private fun shapeOf(scope: OrknuxScope, objectId: Long?): Map<String, Any?>? {
+        val shape = objectId?.let { objects.findByIdOrNull(it) } ?: return null
+        if (shape.workspaceId != scope.workspaceId) return null
+        val names = objects.findByWorkspaceId(scope.workspaceId).associate { it.id to it.name }
+        return mapOf(
+            "name" to shape.name,
+            "description" to shape.description,
+            "fields" to shape.properties.map { property ->
+                mapOf(
+                    "name" to property.name,
+                    "type" to fieldType(property, names),
+                    "description" to property.description,
+                )
+            },
+        )
+    }
+
+    /** A field's type as a signature spells it: `string`, `Customer`, `array<Line>`. */
+    private fun fieldType(property: ObjectProperty, names: Map<Long?, String>): String = when (property.kind) {
+        PropertyKind.OBJECT -> names[property.refObjectId] ?: "object"
+        PropertyKind.ARRAY -> {
+            val element = property.refObjectId?.let { names[it] }
+                ?: property.elementKind?.name?.lowercase()
+                ?: "unknown"
+            "array<$element>"
+        }
+        else -> property.kind.name.lowercase()
     }
 
     /**

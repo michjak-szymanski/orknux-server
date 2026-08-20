@@ -283,6 +283,7 @@ class ComponentExporter(
                 // is a bare name; nothing has to say of what kind.
                 put("objectRef", property.refObjectId?.let { objects.findByIdOrNull(it)?.name })
                 put("elementKind", property.elementKind?.name)
+                put("description", property.description)
             }
         }
     }

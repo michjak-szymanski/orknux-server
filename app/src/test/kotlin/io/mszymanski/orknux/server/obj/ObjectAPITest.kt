@@ -177,6 +177,82 @@ class ObjectAPITest(
         ).execute().path("validateObject.valid").entity(Boolean::class.java).isEqualTo(true)
     }
 
+    /**
+     * The sentence beside a field survives the round trip, and an empty one is
+     * kept as nothing rather than as an empty string - so "nobody said" and
+     * "somebody said nothing" stay the same answer.
+     */
+    @Test
+    fun `a field keeps what its author said it means`() {
+        val id = graphQlTester.document(
+            """
+            mutation {
+              createObject(input: {
+                workspaceId: $workspaceId, name: "Customer",
+                properties: [
+                  { name: "tier", kind: STRING, description: "  The support plan: free, pro or enterprise.  " },
+                  { name: "seats", kind: NUMBER, description: "   " }
+                ]
+              }) { id properties { name description } }
+            }
+            """,
+        ).execute()
+            .path("createObject.properties[0].description").entity(String::class.java)
+            .isEqualTo("The support plan: free, pro or enterprise.")
+            .path("createObject.properties[1].description").valueIsNull()
+            .path("createObject.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              updateObject(id: $id, input: {
+                properties: [{ name: "tier", kind: STRING, description: "Which plan they pay for." }]
+              }) { properties { description } }
+            }
+            """,
+        ).execute()
+            .path("updateObject.properties[0].description").entity(String::class.java)
+            .isEqualTo("Which plan they pay for.")
+    }
+
+    /**
+     * Prose has a limit, and it is refused rather than cut.
+     *
+     * A description trimmed to fit stops mid-sentence, and a sentence that stops
+     * mid-sentence is read as the whole of what the author meant - by a person
+     * and by a model alike.
+     */
+    @Test
+    fun `a description longer than the column is refused, not trimmed`() {
+        val tooMuch = "x".repeat(501)
+        graphQlTester.document(
+            """
+            mutation {
+              createObject(input: {
+                workspaceId: $workspaceId, name: "Wordy",
+                properties: [{ name: "field", kind: STRING, description: "$tooMuch" }]
+              }) { id }
+            }
+            """,
+        ).execute().errors().satisfy { errors ->
+            assertThat(errors.first().message).contains("longer than 500 characters")
+        }
+
+        // And Validate says so rather than throwing, the way it says everything else.
+        graphQlTester.document(
+            """
+            mutation {
+              validateObject(workspaceId: $workspaceId, properties: [
+                { name: "field", kind: STRING, description: "$tooMuch" }
+              ]) { valid message }
+            }
+            """,
+        ).execute()
+            .path("validateObject.valid").entity(Boolean::class.java).isEqualTo(false)
+            .path("validateObject.message").entity(String::class.java)
+            .isEqualTo("field has a description longer than 500 characters")
+    }
+
     private fun create(name: String): Long = graphQlTester.document(
         """mutation { createObject(input: { workspaceId: $workspaceId, name: "$name" }) { id } }""",
     ).execute().path("createObject.id").entity(Long::class.java).get()

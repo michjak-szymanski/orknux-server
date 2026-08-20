@@ -140,6 +140,8 @@ class ObjectAPI(
                     "$name is an array but does not say of what"
                 property.refObjectId != null && objects.findByIdOrNull(property.refObjectId)?.workspaceId != workspaceId ->
                     "$name points at an object this workspace does not have"
+                (property.description?.trim()?.length ?: 0) > DESCRIPTION_LIMIT ->
+                    "$name has a description longer than $DESCRIPTION_LIMIT characters"
                 else -> null
             }
             if (says != null) return ObjectValidationView(valid = false, message = says)
@@ -183,6 +185,7 @@ class ObjectAPI(
                 kind = property.kind,
                 refObjectId = property.refObjectId,
                 elementKind = property.elementKind,
+                description = describedAs(name, property.description),
             )
         }.toMutableList()
     }
@@ -200,6 +203,7 @@ class ObjectAPI(
                     kind = property.kind,
                     refObjectId = property.refObjectId,
                     elementKind = property.elementKind,
+                    description = property.description,
                     display = display(property, names),
                 )
             },
@@ -229,6 +233,24 @@ class ObjectAPI(
         else -> property.kind.name.lowercase()
     }
 
+    /**
+     * A field's description, trimmed, or null where there is nothing to say.
+     *
+     * Refused rather than cut when it runs past the column. A description cut
+     * to fit stops mid-sentence, and a sentence that stops mid-sentence is
+     * worse than none: it is read as the whole of what the author meant, by a
+     * person and by a model alike.
+     */
+    private fun describedAs(name: String, said: String?): String? {
+        val trimmed = said?.trim()?.ifEmpty { null } ?: return null
+        if (trimmed.length > DESCRIPTION_LIMIT) {
+            throw ObjectPropertyInvalidException(
+                "$name has a description longer than $DESCRIPTION_LIMIT characters",
+            )
+        }
+        return trimmed
+    }
+
     /** A name a reference can point at: "oddly named" cannot. */
     private fun requireUsableName(name: String) {
         if (name.isEmpty()) throw ObjectNameInvalidException()
@@ -245,6 +267,17 @@ class ObjectAPI(
     private companion object {
         /** What can be written after a dot, which is how a property is read. */
         val NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
+
+        /**
+         * How much a field may say about itself.
+         *
+         * The same bound every other description on this side carries. Prose
+         * needs more room than a name, and it does not need an unbounded amount
+         * of it: what a field means fits in a sentence or two, and anything
+         * longer is documentation that belongs on the object rather than on one
+         * of its fields.
+         */
+        const val DESCRIPTION_LIMIT = 500
     }
 }
 
@@ -267,6 +300,8 @@ data class ObjectPropertyInput(
     val kind: PropertyKind,
     val refObjectId: Long? = null,
     val elementKind: PropertyKind? = null,
+    /** What the field means; blank is the same as saying nothing. */
+    val description: String? = null,
 )
 
 data class ObjectPropertyView(
@@ -274,6 +309,8 @@ data class ObjectPropertyView(
     val kind: PropertyKind,
     val refObjectId: Long?,
     val elementKind: PropertyKind?,
+    /** What the field means, as its author wrote it. */
+    val description: String?,
     /** Ready to show: `string`, `ApiResponse`, `array<FileObject>`. */
     val display: String,
 )

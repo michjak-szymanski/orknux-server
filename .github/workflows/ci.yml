@@ -133,6 +133,139 @@ jobs:
       - name: Build the image and start it with nothing supplied
         run: bash scripts/verify-one-image.sh
 
+  # And what somebody actually sees.
+  #
+  # `build` proves the server behaves and `image-one` proves the container
+  # starts. Neither opens a browser, and until now nothing in this file did:
+  # the interface had thirty end-to-end checks written for it, each one run once
+  # by hand and then abandoned, so every regression they were written to catch
+  # was free to come back. Two show-stoppers were found by a person clicking
+  # around on the evening this job was written.
+  #
+  # It runs against the all-in-one image rather than a dev server and a seeded
+  # database, because that image is the only thing here that needs nothing: it
+  # invents its own encryption key, its own SQLite file and its own
+  # administrator on the way up, and serves the bundle and the API on one port.
+  # So "from nothing" is `docker run`, and the fixture the checks need is built
+  # through the API by the same seed the manual's screenshots use.
+  browser:
+    name: Browser suite
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      contents: read
+
+    env:
+      # Not 8080: the runner is shared with whatever the other jobs leave about,
+      # and a port clash reads as an interface that does not work.
+      PORT: '18099'
+      BASE: http://localhost:18099
+
+    steps:
+      - uses: actions/checkout@v4
+        # The interface is a submodule, and both the image's bundle and the
+        # checks themselves live in it.
+        with:
+          submodules: true
+
+      - name: Build the all-in-one image
+        run: docker build -f Dockerfile.one -t orknux-one:suite .
+
+      # ORKNUX_ALLOWED_ORIGINS is not optional here, and the reason is worth
+      # writing down: nginx forwards `Host: $host`, which drops the port, so the
+      # server rebuilds the request's address without it while the browser sends
+      # an Origin with it. Same-origin then looks cross-origin, CORS is asked,
+      # and the list it is asked against is empty in this image - every GraphQL
+      # call from the page answers 403 while curl, which sends no Origin, is
+      # served perfectly. It is set here so the suite can run; it is a bug in
+      # the image, not in the suite, and it is why a browser check earns its
+      # place beside a curl one.
+      - name: Start it with nothing but an address
+        run: |
+          docker run -d --name orknux-one-suite \
+            -p ${{ env.PORT }}:8080 \
+            -e ORKNUX_ALLOWED_ORIGINS=${{ env.BASE }} \
+            -v orknux-one-suite-data:/var/lib/orknux \
+            orknux-one:suite
+          for _ in $(seq 1 90); do
+            if curl -fsS -m 3 "${{ env.BASE }}/api/auth/method" >/dev/null 2>&1; then
+              echo "answering"; exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' orknux-one-suite 2>/dev/null)" != "true" ]; then
+              docker logs orknux-one-suite 2>&1 | tail -40
+              echo "::error::The container exited while starting"; exit 1
+            fi
+            sleep 2
+          done
+          docker logs orknux-one-suite 2>&1 | tail -40
+          echo "::error::It never answered"; exit 1
+
+      # The account the image invented on the way up. It is written to the data
+      # directory and printed in the log; read from the file, because a log is
+      # a public artefact on a public runner and this is a password.
+      - name: Take the administrator it invented
+        run: |
+          echo "::add-mask::$(docker exec orknux-one-suite cat /var/lib/orknux/admin-password)"
+          {
+            echo "ORKNUX_USER=admin"
+            echo "ORKNUX_PASSWORD=$(docker exec orknux-one-suite cat /var/lib/orknux/admin-password)"
+            echo "ORKNUX_UI_URL=${{ env.BASE }}"
+          } >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: orknux-ui/package-lock.json
+
+      - name: Install the interface's dependencies and a browser
+        working-directory: orknux-ui
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      # The workspace the checks are written against: a model, a connection,
+      # functions, tools, conditions, actions, agents, two workflows with nodes
+      # and lines in them, runs, and a tracker with issues in it. The same seed
+      # the manual is photographed against, so the two cannot drift apart.
+      #
+      # The model it configures cannot be reached from a runner and the seed
+      # says so and carries on. Nothing in the CI suite asks a model anything -
+      # see `ci: false` in scripts/suite/suite.mjs for the one that does.
+      - name: Build the fixture
+        working-directory: orknux-ui
+        run: node scripts/seed-demo.mjs
+
+      # Which ids it got. A database built from nothing does not hand out the
+      # same numbers as the developer's, so the checks are pointed at what the
+      # seed actually made rather than at the numbers they were written with.
+      - name: Work out what the ids are
+        working-directory: orknux-ui
+        run: node scripts/suite/fixture.mjs >> "$GITHUB_ENV"
+
+      - name: Run the browser suite
+        working-directory: orknux-ui
+        run: node scripts/suite/run.mjs --ci
+
+      # Reports matter most when the job failed, which is when the step above
+      # stopped it - the same reason the server's suite uploads its own.
+      - name: Publish the report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-suite-results
+          path: |
+            orknux-ui/scripts/suite/results/*.xml
+            orknux-ui/scripts/suite/shots/*
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # What the server made of it, for a failure that is not the interface's.
+      - name: What the server said
+        if: failure()
+        run: docker logs orknux-one-suite 2>&1 | tail -100
+
   publish:
     name: Publish image
     runs-on: ubuntu-latest

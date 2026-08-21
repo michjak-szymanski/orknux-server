@@ -258,6 +258,32 @@ have failed.
 
 ### Fixed
 
+- **Deleting a chat asks first.** It did not: the trash button removed the chat
+  and every message in it on one press, with nothing said, from the title bar
+  and from the sidebar's row menu both.
+
+- **The chat's search button searches.** It used to focus a hidden read-only
+  input that existed only to be focused, so pressing it did nothing whatever. It
+  now puts the caret in the box that actually filters the list, opening the
+  sidebar first if it is shut.
+
+- **The whole message box takes a click.** Only the narrow line of text did, so
+  a press on the padding - most of what reads as the field - went nowhere. Its
+  padding is smaller as well.
+
+- **The chat's title bar is one row.** The model or agent answering sat in a bar
+  of its own below the title, carrying one word; it is beside the title now, left
+  of the controls that act on the chat.
+
+- **Every icon control in the product answers the pointer**, not only the ones on
+  the four pages this was first noticed on. The same small square had been
+  declared under five different names across sixteen stylesheets, and a fifth of
+  them did nothing at all when hovered.
+
+- **The Add menu in the workflow editor keeps the two LLM kinds together.** Its
+  order came from the order somebody had declared the labels in, which put LLM
+  Agent first and LLM Session last with three unrelated things between them.
+
 - **The small square at the end of a row lights up under the pointer, and does
   it the same way on every page.** It was declared sixteen times in sixteen
   stylesheets - identical in every respect except the one that was reported:

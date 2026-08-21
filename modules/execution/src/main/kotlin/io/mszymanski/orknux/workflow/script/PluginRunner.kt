@@ -11,8 +11,7 @@ import org.graalvm.polyglot.Value
 import org.graalvm.polyglot.io.IOAccess
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Loads a plugin, asks it what it is, and runs what it declared.
@@ -47,9 +46,21 @@ class PluginRunner(private val properties: PluginProperties) {
         .option("engine.WarnInterpreterOnly", "false")
         .build()
 
-    private val watchdog = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "plugin-watchdog").apply { isDaemon = true }
-    }
+    /**
+     * Stops a run that outstays its time, its heap, or its turn. Its own, with
+     * its own bounds: a plugin is bigger than a function and is given longer and
+     * more room, and the two must not be able to borrow each other's.
+     */
+    private val guard = ScriptGuard(
+        "plugin",
+        Bounds(
+            timeoutMillis = properties.timeoutMillis,
+            heapPressurePercent = properties.heapPressurePercent,
+            suspectAfterBytes = properties.suspectAfterBytes,
+            concurrency = properties.concurrency,
+            queueMillis = properties.queueMillis,
+        ),
+    )
 
     /**
      * Everything the server needs to know about a plugin, in one evaluation.
@@ -59,24 +70,19 @@ class PluginRunner(private val properties: PluginProperties) {
      * three times and the only way the three answers are guaranteed to come from
      * the same instance.
      */
-    fun inspect(source: String): PluginInspection = try {
-        newContext().use { polyglot ->
-            val cancel = watchdog.schedule(
-                { runCatching { polyglot.close(true) } },
-                properties.timeoutMillis,
-                TimeUnit.MILLISECONDS,
-            )
-            try {
-                read(polyglot, source)
-            } finally {
-                cancel.cancel(false)
-            }
+    fun inspect(source: String): PluginInspection {
+        val stopped = AtomicReference<Overrun?>(null)
+        return try {
+            guard.bounded(stopped, ::newContext) { read(it, source) }
+        } catch (failure: PolyglotException) {
+            PluginInspection.Unreadable(describe(failure, stopped = stopped.get()))
+        } catch (failure: ScriptBusyException) {
+            PluginInspection.Unreadable(failure.message ?: "could not be loaded")
+        } catch (failure: IllegalStateException) {
+            // Closing a cancelled context races with the call that was inside it.
+            val overrun = guard.overrunReason(stopped.get())
+            PluginInspection.Unreadable(overrun?.plus(" while loading") ?: failure.message ?: "could not be loaded")
         }
-    } catch (failure: PolyglotException) {
-        PluginInspection.Unreadable(describe(failure))
-    } catch (failure: IllegalStateException) {
-        // Closing a cancelled context races with the call that was inside it.
-        PluginInspection.Unreadable(failure.message ?: "could not be loaded")
     }
 
     /**
@@ -99,29 +105,28 @@ class PluginRunner(private val properties: PluginProperties) {
         settings: String = "{}",
     ): ScriptResult {
         val started = System.nanoTime()
+        val stopped = AtomicReference<Overrun?>(null)
         return try {
-            newContext().use { polyglot ->
-                val cancel = watchdog.schedule(
-                    { runCatching { polyglot.close(true) } },
-                    properties.timeoutMillis,
-                    TimeUnit.MILLISECONDS,
-                )
-                try {
-                    ScriptResult.Returned(invoke(polyglot, source, functionName, arguments, settings), millis(started))
-                } finally {
-                    cancel.cancel(false)
-                }
+            guard.bounded(stopped, ::newContext) {
+                ScriptResult.Returned(invoke(it, source, functionName, arguments, settings), millis(started))
             }
         } catch (failure: PolyglotException) {
             ScriptResult.Failed(
-                describe(failure, doing = "running"),
+                describe(failure, doing = "running", stopped = stopped.get()),
                 millis(started),
-                settled = !(failure.isCancelled || failure.isResourceExhausted),
+                settled = !(failure.isCancelled || failure.isResourceExhausted) && stopped.get() == null,
             )
+        } catch (failure: ScriptBusyException) {
+            ScriptResult.Failed(failure.message ?: "could not be run", millis(started), settled = false)
         } catch (failure: ScriptContractException) {
             ScriptResult.Failed(failure.message ?: "did not return", millis(started))
         } catch (failure: IllegalStateException) {
-            ScriptResult.Failed(failure.message ?: "could not be run", millis(started))
+            val overrun = guard.overrunReason(stopped.get())
+            if (overrun != null) {
+                ScriptResult.Failed("$overrun while running", millis(started), settled = false)
+            } else {
+                ScriptResult.Failed(failure.message ?: "could not be run", millis(started))
+            }
         }
     }
 
@@ -145,6 +150,9 @@ class PluginRunner(private val properties: PluginProperties) {
         bindings.putMember(PLUGIN, bindings.getMember(CONSTRUCT).execute(exported))
         bindings.putMember(WANTED, functionName)
         bindings.putMember(ARGUMENTS, "[${arguments.joinToString(",")}]")
+        // As text, like everything else that crosses, so the harness stays one
+        // cached source rather than being respliced per call.
+        bindings.putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
         polyglot.eval("js", CALL)
 
         val error = bindings.getMember(ERROR)
@@ -260,7 +268,10 @@ class PluginRunner(private val properties: PluginProperties) {
      * to run", and whoever reads the sentence needs to know which of the two they
      * are looking at.
      */
-    private fun describe(failure: PolyglotException, doing: String = "loading"): String = when {
+    private fun describe(failure: PolyglotException, doing: String = "loading", stopped: Overrun? = null): String = when {
+        // A cancelled context says only that somebody stopped it; the guard is
+        // the one who knows whether that was the clock or the heap.
+        stopped != null -> "${guard.overrunReason(stopped)} while $doing"
         failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms while $doing"
         failure.isResourceExhausted -> exhausted(failure, doing)
         // A guest exception here is usually the contract refusing something, and its
@@ -358,6 +369,7 @@ class PluginRunner(private val properties: PluginProperties) {
         const val ARGUMENTS = "__orknuxPluginArguments"
         const val RESULT = "__orknuxPluginResult"
         const val ERROR = "__orknuxPluginError"
+        const val RESULT_LIMIT = "__orknuxPluginResultLimit"
 
         /** More than a plugin has any business offering, and a bound on the answer. */
         const val MAX_FUNCTIONS = 100
@@ -400,9 +412,20 @@ class PluginRunner(private val properties: PluginProperties) {
                   return;
                 }
                 var args = JSON.parse(globalThis.$ARGUMENTS);
+                var limit = Number(globalThis.$RESULT_LIMIT);
                 Promise.resolve(wanted.run.apply(plugin, args)).then(
                   function (value) {
-                    globalThis.$RESULT = value === undefined ? null : JSON.stringify(value);
+                    var json = value === undefined ? null : JSON.stringify(value);
+                    // Measured before it crosses. What a function answers with is
+                    // written to the step, parsed into a tree, and handed to the
+                    // next node; the cheap place to refuse an oversized one is
+                    // here, where the string has only just been made.
+                    if (json !== null && json.length > limit) {
+                      globalThis.$ERROR = 'returned ' + json.length +
+                        ' characters of JSON, more than the ' + limit + ' it is allowed';
+                      return;
+                    }
+                    globalThis.$RESULT = json;
                   },
                   function (failure) {
                     globalThis.$ERROR = String((failure && failure.message) || failure);
@@ -589,4 +612,27 @@ data class PluginProperties(
 
     /** How much of a plugin may run while it is being loaded. */
     val statementLimit: Long = 10_000_000,
+
+    /**
+     * How full the heap may be, after a collection, before loads and calls start
+     * being stopped to save the server.
+     */
+    val heapPressurePercent: Int = 85,
+
+    /**
+     * How much one load or call must have allocated before the heap's trouble is
+     * put down to it. Higher than a function's, for the same reason a plugin is
+     * given longer: a plugin is a bundle, and evaluating one costs more than
+     * calling a small export.
+     */
+    val suspectAfterBytes: Long = 128L * 1024 * 1024,
+
+    /** How many plugin loads or calls may be in a sandbox at once. */
+    val concurrency: Int = 4,
+
+    /** How long one waits for its turn before it is told the server is full. */
+    val queueMillis: Long = 10_000,
+
+    /** How much JSON one call may hand back, for the server to carry and store. */
+    val resultLimitChars: Long = 4L * 1024 * 1024,
 )

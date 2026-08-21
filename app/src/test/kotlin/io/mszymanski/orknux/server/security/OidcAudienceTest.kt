@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import com.nimbusds.jose.JWSAlgorithm
 import com.nimbusds.jose.JWSHeader
 import com.nimbusds.jose.crypto.RSASSASigner
@@ -86,6 +88,10 @@ class OidcAudienceTest {
                 authMethod = AuthMethod.OIDC,
                 oidc = OidcProperties(issuer = issuer, clientId = CLIENT_ID, audiences = audiences),
             ),
+            // No rules, so the routed client goes direct - which is what reaches
+            // the provider stub on loopback. The point here is the audience
+            // check; that the fetch is routed at all is ProxyRoutingTest's.
+            OidcTransport(ProxyRouter(ProxyRuleSource { emptyList() })),
         )
 
     /**

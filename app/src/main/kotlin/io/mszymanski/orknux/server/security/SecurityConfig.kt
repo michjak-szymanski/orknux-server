@@ -10,6 +10,9 @@ import org.springframework.security.authorization.AuthenticatedAuthorizationMana
 import org.springframework.security.authorization.AuthorizationDecision
 import org.springframework.security.authorization.AuthorizationManager
 import org.springframework.security.config.annotation.web.builders.HttpSecurity
+import org.springframework.security.oauth2.client.endpoint.RestClientAuthorizationCodeTokenResponseClient
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService
+import org.springframework.security.oauth2.client.userinfo.DefaultOAuth2UserService
 import io.mszymanski.orknux.server.attachment.InstallationSettings
 import io.mszymanski.orknux.server.user.TokenAuthenticationFilter
 import org.springframework.security.crypto.factory.PasswordEncoderFactories
@@ -44,6 +47,12 @@ class SecurityConfig {
         properties: SecurityProperties,
         settings: InstallationSettings,
         tokens: TokenAuthenticationFilter,
+        /**
+         * Absent unless this installation signs in with OIDC, which is why it is
+         * nullable rather than required: under LDAP there is no provider to
+         * reach and no bean to inject.
+         */
+        transport: OidcTransport?,
     ): SecurityFilterChain {
         http {
             cors { }
@@ -149,7 +158,38 @@ class SecurityConfig {
          */
         if (properties.authMethod == AuthMethod.OIDC) {
             http {
-                oauth2Login { }
+                oauth2Login {
+                    /*
+                     * The two calls the browser flow makes to the provider after
+                     * the redirect comes back: the code is exchanged for a token,
+                     * and the token is spent on userinfo. Both are Spring
+                     * Security's own clients, and both went out direct until they
+                     * were given one built from the proxy rules - so on a proxied
+                     * network the sign-in failed at the exchange, after the person
+                     * had already typed their password at the provider, which is
+                     * the least explicable place for it to fail.
+                     *
+                     * Configured here rather than left to bean lookup: an
+                     * accidental rename would silently restore the direct client
+                     * and nothing would look different until somebody behind a
+                     * proxy tried to sign in.
+                     */
+                    transport?.let { routed ->
+                        tokenEndpoint {
+                            accessTokenResponseClient = RestClientAuthorizationCodeTokenResponseClient()
+                                .apply { setRestClient(routed.restClient()) }
+                        }
+                        userInfoEndpoint {
+                            val plain = DefaultOAuth2UserService().apply { setRestOperations(routed.restOperations()) }
+                            userService = plain
+                            // The OIDC service delegates the actual fetch to the
+                            // one above, so the route is set once for both.
+                            oidcUserService = OidcUserService().apply { setOauth2UserService(plain) }
+                        }
+                    }
+                }
+                // The decoder this uses is the bean in OidcSecurityConfig, which
+                // already fetches its keys through the rules.
                 oauth2ResourceServer { jwt { } }
             }
         }

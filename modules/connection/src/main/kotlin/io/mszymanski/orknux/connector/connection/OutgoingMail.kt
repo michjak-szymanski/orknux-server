@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.mailAddress
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
@@ -124,6 +126,8 @@ class OutgoingMail(
     private val connections: WorkspaceConnectionRepository,
     private val transport: MailTransport,
     private val probe: ConnectionProbe,
+    /** Only to know whether this process resolves the mail server's name, or the proxy does. */
+    private val proxies: ProxyRouter,
 ) {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -141,7 +145,9 @@ class OutgoingMail(
 
         // A host that must not be reached is not a transient failure, and the
         // message says what to edit rather than what timed out.
-        probe.vetHost(server.host)?.let { return MailDelivery.Refused(it, permanent = true) }
+        probe.vetHost(server.host, viaProxy = routed(server))?.let {
+            return MailDelivery.Refused(it, permanent = true)
+        }
 
         return try {
             transport.deliver(server, message)
@@ -158,7 +164,7 @@ class OutgoingMail(
     fun check(connection: WorkspaceConnection): CheckResult {
         val server = connection.smtpServer()
             ?: return CheckResult(CheckOutcome.FAILED, "No mail server and from-address are configured")
-        probe.vetHost(server.host)?.let { return CheckResult(CheckOutcome.FAILED, it) }
+        probe.vetHost(server.host, viaProxy = routed(server))?.let { return CheckResult(CheckOutcome.FAILED, it) }
 
         return try {
             transport.check(server)
@@ -166,4 +172,12 @@ class OutgoingMail(
             CheckResult(CheckOutcome.FAILED, failure.message ?: "The mail server could not be reached")
         }
     }
+
+    /**
+     * Whether a proxy rule carries this server, which decides who resolves its
+     * name. Asked here so that a mail server only the proxy can look up is not
+     * refused by a lookup made from this process first.
+     */
+    private fun routed(server: SmtpServer): Boolean =
+        proxies.resolve(mailAddress(server.host, server.port)) != null
 }

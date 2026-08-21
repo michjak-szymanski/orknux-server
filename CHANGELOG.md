@@ -258,6 +258,20 @@ have failed.
 
 ### Fixed
 
+- **The small square at the end of a row lights up under the pointer, and does
+  it the same way on every page.** It was declared sixteen times in sixteen
+  stylesheets - identical in every respect except the one that was reported:
+  three did nothing under the pointer, six lifted the border, three turned the
+  brand green, two lifted the background. On one row that drew as two buttons
+  that ignored the pointer beside a third that went green.
+
+- **A dialog explains itself behind the (?) beside its title**, rather than in a
+  paragraph above the form. Four of them - export, use a template, save as a
+  template, add a proxy rule - had grown a paragraph where the rest of the
+  product had already moved to the question mark. The last of those had four
+  question marks on its own fields and one paragraph left in the open, which is
+  the convention disagreeing with itself inside a single dialog.
+
 - **Typing quickly in a code editor no longer scrambles what you typed.** The
   editor wrote its incoming text back into the document whenever the two
   disagreed — but that work happens after the screen is painted, so a keystroke

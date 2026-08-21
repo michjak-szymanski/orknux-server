@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.revision.ComponentRevisionKind
 import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.variable.VariableNotFoundException
 import io.mszymanski.orknux.server.variable.VariableType
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
@@ -41,6 +42,7 @@ class FunctionAPI(
     private val functions: WorkflowFunctionRepository,
     private val actions: WorkflowActionRepository,
     private val conditions: WorkflowConditionRepository,
+    private val triggers: WorkflowTriggerRepository,
     private val scripts: ScriptRunner,
     private val workspaces: WorkspaceRepository,
     private val variables: WorkspaceVariableRepository,
@@ -220,10 +222,22 @@ class FunctionAPI(
         val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: return false
         val workspaceId = requireEditable(function)
 
-        // Anything pointing at a deleted function would have nothing to call,
-        // and the caller can see what to change first.
+        /*
+         * Anything pointing at a deleted function would have nothing to call,
+         * and the caller can see what to change first.
+         *
+         * The webhooks are the third of these and were the one missing. A
+         * webhook that authenticates with a function is not calling it to do
+         * work - it is asking it whether the caller may start anything - and a
+         * gatekeeper that is not there answers no. So deleting the function did
+         * not break a run: it turned the webhook into a URL that refuses
+         * everybody, and said so at request time, into a firing log, to nobody.
+         * [PluginFunctionRegistry] has asked this question all along; the
+         * workspace's own delete did not.
+         */
         val callers = actions.findByFunctionId(id).map { it.name } +
-            conditions.findByWorkspaceId(workspaceId).filter { it.functionId == id }.map { it.name }
+            conditions.findByWorkspaceId(workspaceId).filter { it.functionId == id }.map { it.name } +
+            triggers.findByAuthFunctionId(id).map { "the webhook ${it.name}" }
         if (callers.isNotEmpty()) throw FunctionInUseException(function.name, callers)
 
         functions.delete(function)

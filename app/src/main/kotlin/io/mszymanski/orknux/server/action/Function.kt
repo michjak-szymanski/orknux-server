@@ -343,5 +343,14 @@ class FunctionSignatureMismatchException(
     }
 }
 
-class FunctionInUseException(name: String, actions: List<String>) :
-    RuntimeException("$name is called by ${actions.joinToString(", ")}")
+/**
+ * A function something still calls is not one to delete.
+ *
+ * The callers are actions, conditions and the webhooks that authenticate with
+ * one. Actions and conditions arrive as bare names because a workspace's lists
+ * are what somebody is looking at when they read this; a webhook is said as "the
+ * webhook Nightly", because it is not in any of those lists and a bare name
+ * would send the reader looking for an action that does not exist.
+ */
+class FunctionInUseException(name: String, callers: List<String>) :
+    RuntimeException("$name is called by ${callers.joinToString(", ")}")

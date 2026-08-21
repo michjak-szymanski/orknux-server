@@ -26,6 +26,8 @@ class AgentExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is SkillContentInvalidException,
             is SkillCatalogNameTakenException,
             is SkillCatalogNameInvalidException,
+            is SkillCatalogInUseException,
+            is ToolInUseException,
             is AgentModelUnusableException,
             -> ErrorType.BAD_REQUEST
 

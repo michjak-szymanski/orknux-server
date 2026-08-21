@@ -234,6 +234,110 @@ class WebhookAPITest(
             .contains("gatekeeper_verify did not accept the caller")
     }
 
+    /**
+     * Issue #165: the gatekeeper cannot be deleted out from under the webhook.
+     *
+     * `deleteFunction` guarded actions and conditions and not this, so the
+     * function a webhook authenticates with could be deleted while the webhook
+     * went on pointing at it - and the endpoint reported it at request time,
+     * into a firing log, with the caller refused. `TriggerAPI` will not let a
+     * webhook be *saved* with a missing gatekeeper; deleting the function was
+     * the door that got round that rule.
+     */
+    @Test
+    fun `the function a webhook authenticates with cannot be deleted`() {
+        val guard = booleanFunction("letIn")
+        graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Guarded", type: WEBHOOK,
+                webhookPath: "zendesk/guarded", objectId: $objectId,
+                authType: FUNCTION, authFunctionId: $guard
+              }) { id }
+            }
+            """,
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+
+        graphQlTester.document("""mutation { deleteFunction(id: $guard) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).isEqualTo("letIn is called by the webhook Guarded")
+            }
+
+        // Nothing was deleted, so the webhook still has something to ask.
+        assertThat(functions.findAll().map { it.name }).contains("letIn")
+    }
+
+    /**
+     * And the guard is a guard, not a ban.
+     *
+     * A function nothing authenticates with deletes exactly as it always did.
+     * Said out loud because a refusal that fires on everything is how this
+     * change would go wrong.
+     */
+    @Test
+    fun `a function no webhook authenticates with still deletes`() {
+        val spare = booleanFunction("unused")
+
+        graphQlTester.document("""mutation { deleteFunction(id: $spare) }""")
+            .execute().path("deleteFunction").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    /**
+     * Issue #165: and neither can the shape it answers to.
+     *
+     * The one object reference that is not an annotation. A function's parameter
+     * losing its object degrades a signature somebody reads; a webhook losing
+     * its shape turns every arriving request into the 404 above - the same
+     * answer a path nobody listens on gives - so the webhook does not look
+     * broken to its caller, it looks absent. The other object references are
+     * deliberately left dangling; `deleteObject` says which and why.
+     */
+    @Test
+    fun `the object a webhook answers to cannot be deleted`() {
+        graphQlTester.document("""mutation { deleteObject(id: $objectId) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message)
+                    .isEqualTo("Ticket is used by the webhook Ticket Created, so it cannot be deleted")
+            }
+
+        // And the webhook still answers, which is the thing being protected.
+        assertThat(call("zendesk/ticket-created", """{"id":"T-1"}""").status).isEqualTo(202)
+    }
+
+    /** An object no webhook answers to still deletes. */
+    @Test
+    fun `an object no webhook answers to still deletes`() {
+        val spare = graphQlTester.document(
+            """
+            mutation {
+              createObject(input: {
+                workspaceId: $workspaceId, name: "Spare",
+                properties: [{ name: "id", kind: STRING }]
+              }) { id }
+            }
+            """,
+        ).execute().path("createObject.id").entity(Long::class.java).get()
+
+        graphQlTester.document("""mutation { deleteObject(id: $spare) }""")
+            .execute().path("deleteObject").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    /** A workspace function that can say yes or no, which is all a gatekeeper has to do. */
+    private fun booleanFunction(name: String): Long = graphQlTester.document(
+        """
+        mutation {
+          createFunction(input: {
+            workspaceId: $workspaceId, name: "$name", returnType: BOOLEAN, params: []
+          }) { id }
+        }
+        """,
+    ).execute().path("createFunction.id").entity(Long::class.java).get()
+
     /** A plugin loaded from its own source, and its functions materialised. */
     private fun pluginFunction(): Long {
         val read = pluginRunner.inspect(GATEKEEPER) as PluginInspection.Read

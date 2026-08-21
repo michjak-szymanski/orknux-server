@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.admin
 
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretColumns
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
 import io.mszymanski.orknux.server.database.isSqlite
 import io.mszymanski.orknux.server.database.jdbcUrlOf
@@ -36,6 +37,7 @@ class DoctorAPI(
     private val access: WorkspaceAccess,
     private val jdbc: JdbcTemplate,
     private val attachments: AttachmentProperties,
+    private val secrets: SecretColumns,
 ) {
 
     @QueryMapping
@@ -121,13 +123,20 @@ class DoctorAPI(
      */
     private fun storedSecrets(): DoctorCheckView {
         val stored = encryptedValues()
-        if (stored.isEmpty()) return ok("Stored secrets", "None stored yet; nothing to read back.")
+        val clear = plaintextValues()
+
+        if (stored.isEmpty()) {
+            if (clear.isEmpty()) return ok("Stored secrets", "None stored yet; nothing to read back.")
+            return fail("Stored secrets", inTheClear(clear))
+        }
 
         val usable = cipher.keyStatus() == SecretCipher.KeyStatus.Usable
         val unreadable = if (usable) stored.filterNot { cipher.canRead(it.ciphertext) } else stored
 
         if (unreadable.isEmpty()) {
-            return ok("Stored secrets", "All ${stored.size} values readable with the configured key.")
+            val readable = "All ${stored.size} values readable with the configured key"
+            if (clear.isEmpty()) return ok("Stored secrets", "$readable, and none stored in the clear.")
+            return fail("Stored secrets", "$readable. ${inTheClear(clear)}")
         }
 
         /*
@@ -144,11 +153,66 @@ class DoctorAPI(
         val named = unreadable.groupingBy { it.where }.eachCount()
             .entries.joinToString("; ") { (where, count) -> if (count == 1) where else "$where ($count)" }
         val why = if (usable) "— this is not the key they were written with" else "because the key above is not usable"
-        return fail(
-            "Stored secrets",
-            "${unreadable.size} of ${stored.size} values cannot be read $why: $named. " +
-                "They have to be entered again, or the original key restored.",
-        )
+        val lost = "${unreadable.size} of ${stored.size} values cannot be read $why: $named. " +
+            "They have to be entered again, or the original key restored."
+        return fail("Stored secrets", if (clear.isEmpty()) lost else "$lost ${inTheClear(clear)}")
+    }
+
+    /**
+     * Credentials sitting in the database as the text they are.
+     *
+     * The other half of this card, and the half it could not see. [encryptedValues]
+     * finds a secret by its envelope, which is the only way to recognise one in a
+     * column nobody named — and it is exactly why a value that was never encrypted
+     * was not merely unreadable to this check but invisible to it. Four columns
+     * were missing from the boot sweep for a year and the card said "All N values
+     * readable with the configured key" the whole time, which an operator reads as
+     * "my credentials are encrypted". An SSH private key in plain text was the one
+     * thing they had been told they did not have.
+     *
+     * Plaintext cannot be found the way ciphertext can: a credential in the clear
+     * looks like every other string in the database. So this is the one part of the
+     * page that has to be told where to look, and it is told by the entities rather
+     * than by a list — [SecretColumns] reads the `@Convert(SecretConverter)` fields,
+     * the same annotation that decides a value is encrypted at all. A column this
+     * cannot see is a column that is not encrypted anywhere, which is a different
+     * bug and not a silent one.
+     *
+     * Counted rather than fetched. There is no reason for a plaintext credential to
+     * be read into this process to be counted, and every reason not to.
+     */
+    private fun plaintextValues(): Map<String, Long> = secrets.all
+        .associate { column ->
+            val quoted = "\"${column.table}\".\"${column.column}\""
+            val count = runCatching {
+                jdbc.queryForObject(
+                    "select count(*) from \"${column.table}\" " +
+                        "where $quoted is not null and $quoted <> '' and $quoted not like ?",
+                    Long::class.java,
+                    "$ENVELOPE%",
+                )
+            }.getOrNull() ?: 0L
+            column.toString() to count
+        }
+        .filterValues { it > 0 }
+
+    /**
+     * How a plaintext credential is put to the person reading the page.
+     *
+     * Named by column and counted, like the unreadable ones, and for the same
+     * reason: the count is the size of it and the name is where to go. What is
+     * different is the sentence after — an unreadable credential is a thing to
+     * restore, and a readable one that should not be is a thing to fix now.
+     */
+    private fun inTheClear(clear: Map<String, Long>): String {
+        val named = clear.entries.joinToString("; ") { (where, count) ->
+            if (count == 1L) where else "$where ($count)"
+        }
+        val total = clear.values.sum()
+        val subject = if (total == 1L) "1 credential is" else "$total credentials are"
+        return "$subject stored in the clear, not encrypted at all: $named. " +
+            "Anyone who can read this database or a backup of it can read them. They are encrypted on " +
+            "the next start once a secret key is configured."
     }
 
     /**

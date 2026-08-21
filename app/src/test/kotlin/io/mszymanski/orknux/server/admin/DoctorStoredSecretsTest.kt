@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
+import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.security.test.context.support.WithMockUser
 import java.util.Base64
 
@@ -44,6 +45,7 @@ class DoctorStoredSecretsTest(
     @Autowired val variables: WorkspaceVariableRepository,
     @Autowired val catalogs: VariableCatalogRepository,
     @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val jdbc: JdbcTemplate,
 ) {
 
     private var workspaceId: Long = 0
@@ -119,6 +121,61 @@ class DoctorStoredSecretsTest(
 
         assertThat(stored.verdict).isEqualTo("OK")
         assertThat(stored.detail).contains("readable with the configured key")
+    }
+
+    /**
+     * The fault the card could not see at all.
+     *
+     * A value that was never encrypted has no envelope, and the envelope is how
+     * [DoctorAPI.encryptedValues] recognises a secret in a column nobody named. So
+     * four columns missing from the boot sweep did not read as unreadable, they
+     * read as absent — and the card went on saying "All N values readable with the
+     * configured key", which an operator reads as "my credentials are encrypted",
+     * over an SSH private key stored as the key it is.
+     *
+     * Plaintext cannot be found by its shape, so this half of the check is told
+     * where to look by `SecretColumns` — the `@Convert(SecretConverter)` fields
+     * themselves, which is the same thing that decides a value is encrypted at all.
+     *
+     * Written with raw SQL because that is the case: a row from before the
+     * converter existed is exactly a row the converter never touched.
+     */
+    @Test
+    fun `a credential that was never encrypted is reported as stored in the clear`() {
+        val id = requireNotNull(
+            variables.save(
+                WorkspaceVariable(
+                    workspaceId = workspaceId,
+                    catalogId = catalogId,
+                    name = "deployKey",
+                    kind = VariableKind.SECRET,
+                ),
+            ).id,
+        )
+        jdbc.update("update workspace_variable set value = ? where id = ?", "-----BEGIN OPENSSH PRIVATE KEY-----", id)
+
+        val stored = check("Stored secrets")
+
+        assertThat(stored.verdict)
+            .describedAs("a credential anyone with the database can read is a finding, not a footnote")
+            .isEqualTo("FAIL")
+        assertThat(stored.detail).contains("stored in the clear, not encrypted at all")
+        // Named, so the next step is not a database query.
+        assertThat(stored.detail).contains("workspace_variable.value")
+    }
+
+    /**
+     * And the other half stays sayable: nothing in the clear is said in as many
+     * words, because "all readable" was the sentence that hid this for a year.
+     */
+    @Test
+    fun `nothing in the clear is said out loud, not left to be inferred`() {
+        store("a token this server can open")
+
+        val stored = check("Stored secrets")
+
+        assertThat(stored.verdict).isEqualTo("OK")
+        assertThat(stored.detail).contains("none stored in the clear")
     }
 
     /** Saved through the converter, which leaves an envelope it did not write alone. */

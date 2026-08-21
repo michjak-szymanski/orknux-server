@@ -3,13 +3,19 @@ package io.mszymanski.orknux.server.security
 import io.mszymanski.orknux.connector.connection.McpServer
 import io.mszymanski.orknux.connector.connection.McpServerRepository
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretColumns
+import io.mszymanski.orknux.connector.security.SecretConverter
 import io.mszymanski.orknux.connector.security.SecretMigration
+import io.mszymanski.orknux.connector.shell.Shell
+import io.mszymanski.orknux.connector.shell.ShellRepository
 import io.mszymanski.orknux.server.variable.VariableCatalog
 import io.mszymanski.orknux.server.variable.VariableCatalogRepository
 import io.mszymanski.orknux.server.variable.WorkspaceVariable
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import jakarta.persistence.Convert
+import jakarta.persistence.Entity
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatCode
 import org.junit.jupiter.api.AfterEach
@@ -18,6 +24,8 @@ import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider
+import org.springframework.core.type.filter.AnnotationTypeFilter
 import org.springframework.jdbc.core.JdbcTemplate
 
 /**
@@ -30,7 +38,7 @@ import org.springframework.jdbc.core.JdbcTemplate
  * that and no log line a person would go looking for: the container simply does
  * not come up.
  *
- * Both tests below put plaintext into a credential column with raw SQL rather
+ * Several tests below put plaintext into a credential column with raw SQL rather
  * than through the entity. That is not a shortcut around the converter, it is
  * the case being tested: a row written before encryption existed is exactly a
  * row the converter never touched, and it is the only kind of row this class is
@@ -40,14 +48,17 @@ import org.springframework.jdbc.core.JdbcTemplate
 class SecretMigrationTest(
     @Autowired val jdbc: JdbcTemplate,
     @Autowired val cipher: SecretCipher,
+    @Autowired val columns: SecretColumns,
     @Autowired val mcpServers: McpServerRepository,
     @Autowired val variables: WorkspaceVariableRepository,
     @Autowired val catalogs: VariableCatalogRepository,
+    @Autowired val shells: ShellRepository,
     @Autowired val workspaces: WorkspaceRepository,
 ) {
 
     private var workspaceId: Long = 0
     private var catalogId: Long = 0
+    private val shellNames = mutableListOf<String>()
 
     @BeforeEach
     fun seed() {
@@ -60,13 +71,15 @@ class SecretMigrationTest(
     /**
      * Nothing may be left behind: a plaintext credential in one of these columns
      * is a landmine for the next context this suite builds, which runs this very
-     * migration as it starts.
+     * migration as it starts — and for the doctor, which now reports one.
      */
     @AfterEach
     fun clear() {
         variables.findAll().filter { it.workspaceId == workspaceId }.forEach(variables::delete)
         catalogs.findByWorkspaceIdOrderByNameAsc(workspaceId).forEach(catalogs::delete)
         mcpServers.findAll().filter { it.workspaceId == workspaceId }.forEach(mcpServers::delete)
+        shells.findAll().filter { it.name in shellNames }.forEach(shells::delete)
+        shellNames.clear()
         workspaces.findById(workspaceId).ifPresent(workspaces::delete)
     }
 
@@ -76,37 +89,26 @@ class SecretMigrationTest(
      * `SecretCipher.decrypt` was deliberately written never to throw, and the
      * doctor's "Secret key" card exists to say `Missing` in words — both of
      * which are promises that a server with no key still starts and still tells
-     * somebody what is wrong with it. This is the one place that breaks them.
+     * somebody what is wrong with it. This is the one place that broke them.
      * `encrypt` reaches a `by lazy` that calls `check`, so the first plaintext
-     * row throws `IllegalStateException` out of an `ApplicationReadyEvent`
-     * listener, and Spring Boot turns that into a failed start.
+     * row threw `IllegalStateException` out of an `ApplicationReadyEvent`
+     * listener, and Spring Boot turned that into a failed start.
      *
-     * The person upgrading sees a container that exits. The page built to tell
+     * The person upgrading saw a container that exits. The page built to tell
      * them their key is missing is on the server that will not start.
      *
      * So: it may write nothing, and it must not throw. What it may not do is
      * take the installation with it.
      *
-     * Disabled because what it should do *instead* is yours to choose, and every
-     * option is something an operator reads:
-     *
-     *  - Ask `cipher.keyStatus()` first and return without touching anything
-     *    when the key is not usable, logging at WARN that credentials are still
-     *    in plain text and why. The doctor then says the same thing on a server
-     *    that is running, which is what that page is for.
-     *  - Or contain per row and per column, so one credential that cannot be
-     *    written costs only itself. Wanted anyway, and independently of this.
-     *  - Or keep the hard stop but move it somewhere it reads as one — a startup
-     *    check that says "this database holds plaintext credentials and no key is
-     *    configured" rather than a stack trace out of a lazy delegate.
-     *
-     * The test itself was run and fails against the code as it stands.
+     * Still disabled: that is #153, and it is a separate change. This commit is
+     * about which columns are swept, and sweeping four more of them is if
+     * anything a larger surface for the throw to come out of.
      */
-    @Disabled("Decision needed: skip when the key is unusable, or contain per row — and what to log")
+    @Disabled("#153: skip when the key is unusable, or contain per row — and what to log")
     @Test
     fun `an installation with no key still starts, and keeps its credentials`() {
         val id = plaintextMcpSecret("a token written before any of this was encrypted")
-        val keyless = SecretMigration(jdbc, SecretCipher(""))
+        val keyless = SecretMigration(jdbc, SecretCipher(""), columns)
 
         assertThatCode { keyless.encryptStoredSecrets() }
             .describedAs("a missing key is a thing to report, not a reason the server cannot start")
@@ -120,42 +122,151 @@ class SecretMigrationTest(
     }
 
     /**
-     * The columns the migration does not know about.
+     * The columns the migration did not know about.
      *
-     * `COLUMNS` lists four. Eight fields carry `@Convert(SecretConverter)`: the
-     * four listed, plus `shell.private_key`, `shell.key_passphrase`,
-     * `proxy_rule.password` and `workspace_variable.value` — every one of them
-     * added after this list was written, and the list's own comment says "a new
-     * one belongs here as well as on its entity".
+     * A hand-kept `COLUMNS` listed four. Eight fields carry
+     * `@Convert(SecretConverter)`: the four listed, plus `shell.private_key`,
+     * `shell.key_passphrase`, `proxy_rule.password` and
+     * `workspace_variable.value` — every one of them added after that list was
+     * written, and the list's own comment said "a new one belongs here as well
+     * as on its entity".
      *
      * What makes it worth a test rather than a note is who is not told. The
      * doctor's "Stored secrets" card counts values that are *in* an envelope, so
-     * a column full of plaintext is not unreadable, it is invisible: the card
-     * says "All N values readable with the configured key" and the operator
+     * a column full of plaintext was not unreadable, it was invisible: the card
+     * said "All N values readable with the configured key" and the operator
      * reads that as "my credentials are encrypted". An SSH private key sitting
      * in plain text in the database is the thing they were told they did not
      * have.
      *
-     * Disabled because adding four columns to `COLUMNS` rewrites real data on a
-     * real upgrade, which is not a change to make on an auditor's judgement. Two
-     * things worth deciding with it: whether `workspace_variable.value` should be
-     * swept whole (the converter already encrypts every variable's value, secret
-     * or not, so the column is uniform — but the SELECT would touch every row a
-     * workspace has), and whether the doctor should count plaintext in these
-     * columns as a finding, since today it cannot see them at all.
-     *
-     * The test itself was run and fails against the code as it stands.
+     * `workspace_variable.value` is swept whole. The converter encrypts every
+     * variable's value, secret-kind or not, so the column is uniform and half of
+     * it sealed would be a column the doctor reports on for ever. The SELECT
+     * excludes anything already in an envelope, so the cost is one pass on the
+     * first boot after upgrade and nothing on every boot after it.
      */
-    @Disabled("Decision needed: which columns to add to COLUMNS, and whether the doctor should report plaintext")
     @Test
     fun `every column that stores a credential is one the migration rewrites`() {
         val id = plaintextVariable("-----BEGIN OPENSSH PRIVATE KEY-----")
 
-        SecretMigration(jdbc, cipher).encryptStoredSecrets()
+        migration().encryptStoredSecrets()
 
         assertThat(cipher.isEncrypted(storedVariableValue(id)))
-            .describedAs("workspace_variable.value carries @Convert(SecretConverter) and is not in COLUMNS")
+            .describedAs("workspace_variable.value carries @Convert(SecretConverter) and was not swept")
             .isTrue()
+    }
+
+    /** The headline of the audit: an SSH private key, as an upgrade leaves it. */
+    @Test
+    fun `a private key written before encryption is sealed by the sweep`() {
+        val id = plaintextShell("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaA==\n", "hunter2")
+
+        migration().encryptStoredSecrets()
+
+        assertThat(cipher.isEncrypted(storedShellColumn(id, "private_key"))).isTrue()
+        assertThat(cipher.isEncrypted(storedShellColumn(id, "key_passphrase"))).isTrue()
+        // Sealed, and still the key it was: an unreadable key is not a fix.
+        assertThat(cipher.decrypt(storedShellColumn(id, "key_passphrase"))).isEqualTo("hunter2")
+    }
+
+    /**
+     * Run twice, which is what every boot after the first one is.
+     *
+     * Encrypting an envelope again would be silent and unrecoverable-looking: the
+     * value still reads as sealed, `canRead` still says yes, and what comes out is
+     * the inner envelope rather than the credential. Two things stop it and both
+     * are tested here at once — the SELECT does not match a row that is already
+     * sealed, and `encrypt` hands back a value that is already in an envelope.
+     */
+    @Test
+    fun `a row that is already encrypted is left exactly as it was`() {
+        val id = plaintextVariable("a credential from before")
+
+        migration().encryptStoredSecrets()
+        val afterFirst = storedVariableValue(id)
+
+        migration().encryptStoredSecrets()
+
+        assertThat(storedVariableValue(id))
+            .describedAs("the same bytes, not an envelope around an envelope")
+            .isEqualTo(afterFirst)
+        assertThat(cipher.decrypt(storedVariableValue(id)))
+            .describedAs("and what comes back out is the credential, not ciphertext")
+            .isEqualTo("a credential from before")
+    }
+
+    /**
+     * The test that would have caught all four the day they were written.
+     *
+     * The sweep no longer keeps a list — [SecretColumns] reads the
+     * `@Convert(SecretConverter)` fields off the entities, so the list and the
+     * annotations cannot come to disagree by anybody forgetting one. That makes a
+     * test comparing the sweep's list against a list derived the same way
+     * vacuous, so this derives it a different way: it scans the classpath for
+     * `@Entity`, which is Spring's own scanner rather than the JPA metamodel the
+     * production code asks, and counts the annotated fields it finds.
+     *
+     * And it names the eight, because "eight of something" is not a review and
+     * this list is the one an auditor wants to read.
+     */
+    @Test
+    fun `the sweep covers every field the converter encrypts`() {
+        assertThat(columns.all.map { it.toString() }).containsExactlyInAnyOrder(
+            "mcp_server.secret",
+            "model_provider.secret",
+            "proxy_rule.password",
+            "shell.key_passphrase",
+            "shell.private_key",
+            "workspace_connection.app_token",
+            "workspace_connection.secret",
+            "workspace_variable.value",
+        )
+
+        assertThat(columns.all)
+            .describedAs("a ninth encrypted field anywhere on the classpath is a ninth swept column")
+            .hasSize(annotatedFieldsOnTheClasspath())
+    }
+
+    /**
+     * The half a reflection-only test cannot check: that those names are real.
+     *
+     * The table and column are worked out from the same two annotations Hibernate
+     * reads, and where an entity names neither, from a second implementation of
+     * Spring Boot's naming rule. A second implementation of a rule can drift from
+     * the first, and the way that failure shows up is a column silently never
+     * swept — which is the bug this whole change is about. So the schema is
+     * asked.
+     */
+    @Test
+    fun `every column the sweep names exists in the database`() {
+        val missing = columns.all.filterNot { column ->
+            val present = jdbc.queryForObject(
+                "select count(*) from information_schema.columns where table_name = ? and column_name = ?",
+                Int::class.java,
+                column.table,
+                column.column,
+            )
+            (present ?: 0) > 0
+        }
+
+        assertThat(missing).describedAs("named by the entities, absent from the schema").isEmpty()
+    }
+
+    private fun migration() = SecretMigration(jdbc, cipher, columns)
+
+    /** Every `@Convert(SecretConverter)` field there is, found without asking the metamodel. */
+    private fun annotatedFieldsOnTheClasspath(): Int {
+        val scanner = ClassPathScanningCandidateComponentProvider(false)
+        scanner.addIncludeFilter(AnnotationTypeFilter(Entity::class.java))
+        return scanner.findCandidateComponents("io.mszymanski.orknux")
+            .mapNotNull { it.beanClassName }
+            .map { Class.forName(it) }
+            .sumOf { entity ->
+                generateSequence(entity) { it.superclass }
+                    .takeWhile { it != Any::class.java }
+                    .flatMap { it.declaredFields.asSequence() }
+                    .count { it.getAnnotation(Convert::class.java)?.converter == SecretConverter::class }
+            }
     }
 
     /** A credential row as an upgrade finds it: written straight to the column. */
@@ -169,13 +280,28 @@ class SecretMigrationTest(
         return id
     }
 
-    private fun plaintextVariable(plaintext: String): Long {
+    private fun plaintextVariable(plaintext: String, name: String = "deployKey"): Long {
         val id = requireNotNull(
             variables.save(
-                WorkspaceVariable(workspaceId = workspaceId, catalogId = catalogId, name = "deployKey"),
+                WorkspaceVariable(workspaceId = workspaceId, catalogId = catalogId, name = name),
             ).id,
         )
         jdbc.update("update workspace_variable set value = ? where id = ?", plaintext, id)
+        return id
+    }
+
+    private fun plaintextShell(privateKey: String, passphrase: String): Long {
+        val name = "secret-migration-${System.nanoTime()}"
+        shellNames += name
+        val id = requireNotNull(
+            shells.save(Shell(name = name, host = "build.internal", username = "deploy")).id,
+        )
+        jdbc.update(
+            "update shell set private_key = ?, key_passphrase = ? where id = ?",
+            privateKey,
+            passphrase,
+            id,
+        )
         return id
     }
 
@@ -185,4 +311,7 @@ class SecretMigrationTest(
 
     private fun storedVariableValue(id: Long): String? =
         jdbc.queryForObject("select value from workspace_variable where id = ?", String::class.java, id)
+
+    private fun storedShellColumn(id: Long, column: String): String? =
+        jdbc.queryForObject("select $column from shell where id = ?", String::class.java, id)
 }

@@ -258,6 +258,17 @@ have failed.
 
 ### Fixed
 
+- **The magnifier above a conversation searches the conversation.** It searched
+  the list of chat titles, which is the sidebar's question - *which chat was that
+  in* - and not the one being asked above an open chat. A strip under the title
+  now finds what was said in this one: it marks the turns that match, rings the
+  one being looked at, counts them, steps with Enter or the chevrons, and shuts
+  on Escape.
+
+- **The footer says which version of Orknux this is.** It named the product, the
+  copyright holder, the licence and the source, and not the one thing anybody is
+  asked for first.
+
 - **Deleting a chat asks first.** It did not: the trash button removed the chat
   and every message in it on one press, with nothing said, from the title bar
   and from the sidebar's row menu both.

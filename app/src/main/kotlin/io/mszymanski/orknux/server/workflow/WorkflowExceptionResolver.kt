@@ -7,6 +7,9 @@ import io.mszymanski.orknux.server.action.ActionInUseException
 import io.mszymanski.orknux.server.action.ActionNameInvalidException
 import io.mszymanski.orknux.server.action.ActionNameTakenException
 import io.mszymanski.orknux.server.action.ActionNotFoundException
+import io.mszymanski.orknux.server.action.ActionHeaderAmbiguousException
+import io.mszymanski.orknux.server.action.ActionHeaderEmptyException
+import io.mszymanski.orknux.server.action.ActionHeaderVariableElsewhereException
 import io.mszymanski.orknux.server.action.ActionHoldsPlaceholderException
 import io.mszymanski.orknux.server.action.ActionSettingMissingException
 import io.mszymanski.orknux.server.action.ActionSubtypeMismatchException
@@ -150,6 +153,9 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ActionNameInvalidException,
             is ActionSettingMissingException,
             is ActionHoldsPlaceholderException,
+            is ActionHeaderAmbiguousException,
+            is ActionHeaderEmptyException,
+            is ActionHeaderVariableElsewhereException,
             is ActionSubtypeMismatchException,
             is ActionFailedException,
             is FunctionSignatureMismatchException,

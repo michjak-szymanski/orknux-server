@@ -68,42 +68,38 @@ data class GraphNode(
      * — which is what stops Temporal starting again underneath it.
      */
     val retryAttempts: Int? = null,
-    /** How long to leave a failed attempt alone before the next; null is none. */
+    /** The wait before the second attempt, in seconds; null is none. */
     val retryBackoffSeconds: Int? = null,
     /**
-     * How that wait grows from one attempt to the next; null is [RetryBackoff.FIXED].
+     * What the wait is multiplied by after each attempt; null is one.
      *
-     * Null rather than a default so a graph published before curves existed says
-     * what it always said: the same wait every time.
+     * One is a wait that never grows, two doubles it, and the numbers between
+     * are the curves neither of those words could say. Null rather than 1.0 so a
+     * graph published before this existed says what it always said, and so the
+     * editor can hand a node back exactly as it took it.
      */
-    val retryBackoff: RetryBackoff? = null,
+    val retryMultiplier: Double? = null,
+    /**
+     * The most any one wait may come to, in seconds; null is the engine's own
+     * ceiling, which no wait passes whatever this says.
+     */
+    val retryMaxWaitSeconds: Int? = null,
+    /**
+     * The fraction of a wait that may be taken off it at random; null is none.
+     *
+     * Downward only, so every number on the node stays the upper bound it reads
+     * as. What it is for is the hundred runs that failed on the same outage and
+     * would otherwise come back at the same instant.
+     */
+    val retryJitter: Double? = null,
+    /**
+     * The longest the whole business of attempting this node may take, in
+     * seconds, work included; null is no limit beyond the attempts themselves.
+     */
+    val retryBudgetSeconds: Int? = null,
     val x: Double = 0.0,
     val y: Double = 0.0,
 )
-
-/**
- * How the wait between two attempts grows.
- *
- * Whether the second retry waits longer than the first is a question about the
- * failure being waited on, not about the node: a connection reset is over by the
- * time anybody asks again, and a rate limit is a window somebody else's traffic
- * decides the width of. So it is set per node, and the engine reads it here
- * rather than guessing from the failure.
- */
-enum class RetryBackoff {
-
-    /** The same wait before every retry. */
-    FIXED,
-
-    /**
-     * Doubling: the wait before the nth retry is the node's wait times 2^(n-1).
-     *
-     * Bounded where it is spent rather than here — see StepRunner — because an
-     * hour's wait means the same thing whichever curve produced it, and 10
-     * attempts doubling off an hour is three weeks of run nobody asked for.
-     */
-    EXPONENTIAL,
-}
 
 /**
  * Which way out of a node an edge leaves by.

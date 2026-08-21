@@ -408,15 +408,35 @@ class WorkflowGraphAPI(
             ?.takeIf { it > MIN_ATTEMPTS && handlesFailure(node.kind) },
         retryBackoffSeconds = node.retryBackoffSeconds?.coerceIn(0, MAX_BACKOFF_SECONDS)
             ?.takeIf { handlesFailure(node.kind) },
-        // Kept only where the wait it shapes is kept, and only where there is a
-        // second attempt for it to sit between: a curve on a node that runs once
-        // is a setting that describes nothing, and one saved on a kind that
+        // The four below are kept only where the wait they shape is kept, and
+        // only where there is a second attempt for it to sit between: a curve on
+        // a node that runs once describes nothing, and one saved on a kind that
         // cannot retry is a setting nothing will ever read.
-        retryBackoff = node.retryBackoff?.takeIf {
-            handlesFailure(node.kind) && (node.retryAttempts ?: MIN_ATTEMPTS) > MIN_ATTEMPTS
-        },
+        retryMultiplier = node.retryMultiplier?.coerceIn(MIN_MULTIPLIER, MAX_MULTIPLIER)
+            // One is what no multiplier means, so it is stored as no multiplier:
+            // a node that was never given a curve should come back off the panel
+            // as the row it went in as.
+            ?.takeIf { it > MIN_MULTIPLIER && retries(node) },
+        // Dropped on a flat curve rather than kept and ignored, because a
+        // ceiling under a wait that never grows does not bound it - it cuts it,
+        // and a fixed wait quietly shortened by a field the panel had greyed out
+        // is the worst of the two.
+        retryMaxWaitSeconds = node.retryMaxWaitSeconds?.coerceIn(1, MAX_BACKOFF_SECONDS)
+            ?.takeIf { retries(node) && (node.retryMultiplier ?: MIN_MULTIPLIER) > MIN_MULTIPLIER },
+        retryJitter = node.retryJitter?.coerceIn(NO_JITTER, FULL_JITTER)
+            ?.takeIf { it > NO_JITTER && retries(node) },
+        retryBudgetSeconds = node.retryBudgetSeconds?.coerceIn(1, MAX_BUDGET_SECONDS)?.takeIf { retries(node) },
         mappings = mappingsFor(node, refusing),
     )
+
+    /**
+     * Whether this node has a second attempt for a backoff to sit between.
+     *
+     * Everything past the attempt count describes the gap between two of them,
+     * so on a node with one attempt there is nothing for any of it to describe.
+     */
+    private fun retries(node: WorkflowNodeInput): Boolean =
+        handlesFailure(node.kind) && (node.retryAttempts ?: MIN_ATTEMPTS) > MIN_ATTEMPTS
 
     /**
      * Whether a failure here is the node's own business rather than the run's.
@@ -651,10 +671,16 @@ data class WorkflowNodeInput(
     val fallbackEnabled: Boolean = false,
     /** How many times in all this node may be attempted; null or 1 is once. */
     val retryAttempts: Int? = null,
-    /** How long to leave a failed attempt alone before the next; null is none. */
+    /** The wait before the second attempt, in seconds; null is none. */
     val retryBackoffSeconds: Int? = null,
-    /** How that wait grows from one attempt to the next; null is fixed. */
-    val retryBackoff: RetryBackoff? = null,
+    /** What that wait is multiplied by after each attempt; null or 1 is a wait that does not grow. */
+    val retryMultiplier: Double? = null,
+    /** The most one wait may come to, in seconds; null is the engine's own hour. */
+    val retryMaxWaitSeconds: Int? = null,
+    /** The fraction of a wait that may be taken off it at random; null or 0 is none. */
+    val retryJitter: Double? = null,
+    /** The longest this node may go on being attempted for, in seconds; null is no limit. */
+    val retryBudgetSeconds: Int? = null,
     val x: Double,
     val y: Double,
 )
@@ -703,8 +729,14 @@ data class WorkflowNodeView(
     /** How many times in all this node may be attempted; null is once. */
     val retryAttempts: Int?,
     val retryBackoffSeconds: Int?,
-    /** How the wait grows from one attempt to the next; null is fixed. */
-    val retryBackoff: RetryBackoff?,
+    /** What the wait is multiplied by after each attempt; null is a wait that does not grow. */
+    val retryMultiplier: Double?,
+    /** The most one wait may come to; null is the engine's own hour. */
+    val retryMaxWaitSeconds: Int?,
+    /** The fraction of a wait taken off it at random; null is none. */
+    val retryJitter: Double?,
+    /** The longest this node may go on being attempted for; null is no limit. */
+    val retryBudgetSeconds: Int?,
     val x: Double,
     val y: Double,
     /** What the node needs, read off whatever it points at. */
@@ -736,7 +768,10 @@ data class WorkflowNodeView(
         fallbackEnabled = node.fallbackEnabled,
         retryAttempts = node.retryAttempts,
         retryBackoffSeconds = node.retryBackoffSeconds,
-        retryBackoff = node.retryBackoff,
+        retryMultiplier = node.retryMultiplier,
+        retryMaxWaitSeconds = node.retryMaxWaitSeconds,
+        retryJitter = node.retryJitter,
+        retryBudgetSeconds = node.retryBudgetSeconds,
         x = node.positionX,
         y = node.positionY,
         inputs = inputs,
@@ -827,8 +862,12 @@ private val PLACEHOLDER_IN_VALUE = Regex("""\{\{[^}]*\}\}""")
  * is somebody who has not thought about what a run costs. The ceiling on the
  * backoff is an hour, which is longer than any single wait a workflow has
  * needed and short enough that a run cannot disappear for a day over a typo.
- * A doubling curve is bounded by the same hour where it is spent rather than
+ * A growing curve is bounded by the same hour where it is spent rather than
  * here, because what this holds is the first wait and not what it grows into.
+ * The multiplier stops at ten for the same reason the attempts do: past that it
+ * is not a curve anybody chose, it is a typo with a long tail. The budget stops
+ * at a day, which is longer than any run worth waiting for and short enough that
+ * a spare nought cannot park a step for a fortnight.
  */
 /**
  * How much of a workflow's history a screen asks for, and the most it may.
@@ -843,6 +882,11 @@ private const val MOST_PUBLICATIONS = 200
 private const val MIN_ATTEMPTS = 1
 private const val MAX_ATTEMPTS = 10
 private const val MAX_BACKOFF_SECONDS = 3600
+private const val MIN_MULTIPLIER = 1.0
+private const val MAX_MULTIPLIER = 10.0
+private const val NO_JITTER = 0.0
+private const val FULL_JITTER = 1.0
+private const val MAX_BUDGET_SECONDS = 86_400
 
 class ValueHoldsPlaceholderException(parameter: String) : RuntimeException(
     "\"$parameter\" is a value holding {{...}}, which is sent as those characters. " +

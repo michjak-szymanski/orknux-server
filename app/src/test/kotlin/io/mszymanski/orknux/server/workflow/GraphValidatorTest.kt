@@ -402,7 +402,8 @@ class GraphValidatorTest(
             nodes = """
                 { key: "ask", kind: AGENT, name: "Ask", fallbackEnabled: true,
                   yesLabel: "Answered", noLabel: "Could not answer",
-                  retryAttempts: 3, retryBackoffSeconds: 20, retryBackoff: EXPONENTIAL, x: 0, y: 0 },
+                  retryAttempts: 3, retryBackoffSeconds: 20, retryMultiplier: 2,
+                  retryMaxWaitSeconds: 120, retryJitter: 0.5, retryBudgetSeconds: 600, x: 0, y: 0 },
                 { key: "onwards", kind: ACTION, name: "Onwards", actionId: $actionId, x: 200, y: 0 },
                 { key: "rescue", kind: ACTION, name: "Tell someone", actionId: $actionId, x: 200, y: 200 }
             """,
@@ -417,36 +418,110 @@ class GraphValidatorTest(
         assertThat(ask.fallbackEnabled).isTrue()
         assertThat(ask.retryAttempts).isEqualTo(3)
         assertThat(ask.retryBackoffSeconds).isEqualTo(20)
-        assertThat(ask.retryBackoff).isEqualTo(RetryBackoff.EXPONENTIAL)
+        assertThat(ask.retryMultiplier).isEqualTo(2.0)
+        assertThat(ask.retryMaxWaitSeconds).isEqualTo(120)
+        assertThat(ask.retryJitter).isEqualTo(0.5)
+        assertThat(ask.retryBudgetSeconds).isEqualTo(600)
         assertThat(ask.yesLabel).isEqualTo("Answered")
         assertThat(ask.noLabel).isEqualTo("Could not answer")
     }
 
     /**
-     * A curve describes how the wait grows between attempts, so a node with one
-     * attempt has nothing for it to describe - and a kind that cannot retry has
-     * nothing that would ever read it. Both are dropped on the way in rather
-     * than kept as a setting whose effect is nil.
+     * Everything past the attempt count describes the gap between two of them,
+     * so a node with one attempt has nothing for any of it to describe - and a
+     * kind that cannot retry has nothing that would ever read it. Both are
+     * dropped on the way in rather than kept as settings whose effect is nil.
      */
     @Test
-    fun `a backoff curve is dropped where there is no second attempt to wait for`() {
+    fun `a backoff is dropped where there is no second attempt to wait for`() {
         val actionId = wait("Post it")
         save(
             nodes = """
                 { key: "once", kind: ACTION, name: "Post", actionId: $actionId,
-                  retryBackoff: EXPONENTIAL, x: 0, y: 0 },
+                  retryMultiplier: 2, retryJitter: 0.5, retryBudgetSeconds: 60, x: 0, y: 0 },
                 { key: "shape", kind: OBJECT, name: "Make it",
-                  retryAttempts: 4, retryBackoff: EXPONENTIAL, x: 200, y: 0 }
+                  retryAttempts: 4, retryMultiplier: 2, x: 200, y: 0 }
             """,
             edges = """{ source: "once", target: "shape" }""",
         )
 
         val saved = nodes.findByWorkflowId(workflowId).associateBy { it.nodeKey }
-        assertThat(saved.getValue("once").retryBackoff).isNull()
+        assertThat(saved.getValue("once").retryMultiplier).isNull()
+        assertThat(saved.getValue("once").retryJitter).isNull()
+        assertThat(saved.getValue("once").retryBudgetSeconds).isNull()
         // An object node assembles what it was handed, so it never retries and
-        // the attempts go with the curve.
-        assertThat(saved.getValue("shape").retryBackoff).isNull()
+        // the attempts go with the rest.
+        assertThat(saved.getValue("shape").retryMultiplier).isNull()
         assertThat(saved.getValue("shape").retryAttempts).isNull()
+    }
+
+    /**
+     * A multiplier of one is what no multiplier means, and a node the panel only
+     * looked at should come back off it as the row it went in as. The same for
+     * jitter of nought, which is the wait exactly.
+     */
+    @Test
+    fun `a flat curve and no jitter are stored as nothing at all`() {
+        val actionId = wait("Post it")
+        save(
+            nodes = """
+                { key: "post", kind: ACTION, name: "Post", actionId: $actionId, retryAttempts: 3,
+                  retryBackoffSeconds: 10, retryMultiplier: 1, retryJitter: 0, x: 0, y: 0 }
+            """,
+            edges = "",
+        )
+
+        val post = nodes.findByWorkflowId(workflowId).single()
+        assertThat(post.retryAttempts).isEqualTo(3)
+        assertThat(post.retryBackoffSeconds).isEqualTo(10)
+        assertThat(post.retryMultiplier).isNull()
+        assertThat(post.retryJitter).isNull()
+    }
+
+    /**
+     * Under a wait that never grows a ceiling does not bound it, it shortens it -
+     * so a fixed wait cannot be quietly halved by a field the panel had greyed
+     * out and nobody cleared.
+     */
+    @Test
+    fun `a ceiling is dropped where the wait it caps never grows`() {
+        val actionId = wait("Post it")
+        save(
+            nodes = """
+                { key: "post", kind: ACTION, name: "Post", actionId: $actionId, retryAttempts: 3,
+                  retryBackoffSeconds: 300, retryMaxWaitSeconds: 30, x: 0, y: 0 },
+                { key: "grow", kind: ACTION, name: "Again", actionId: $actionId, retryAttempts: 3,
+                  retryBackoffSeconds: 10, retryMultiplier: 2, retryMaxWaitSeconds: 30, x: 200, y: 0 }
+            """,
+            edges = """{ source: "post", target: "grow" }""",
+        )
+
+        val saved = nodes.findByWorkflowId(workflowId).associateBy { it.nodeKey }
+        assertThat(saved.getValue("post").retryMaxWaitSeconds).isNull()
+        assertThat(saved.getValue("post").retryBackoffSeconds).isEqualTo(300)
+        assertThat(saved.getValue("grow").retryMaxWaitSeconds).isEqualTo(30)
+    }
+
+    /**
+     * Bounded rather than refused, like the attempts and the wait beside it:
+     * neither end is a mistake worth arguing with somebody over.
+     */
+    @Test
+    fun `a backoff past what a policy may be set to is held at the edge of it`() {
+        val actionId = wait("Post it")
+        save(
+            nodes = """
+                { key: "post", kind: ACTION, name: "Post", actionId: $actionId, retryAttempts: 3,
+                  retryBackoffSeconds: 10, retryMultiplier: 40, retryJitter: 9,
+                  retryBudgetSeconds: 900000, x: 0, y: 0 }
+            """,
+            edges = "",
+        )
+
+        val post = nodes.findByWorkflowId(workflowId).single()
+        assertThat(post.retryMultiplier).isEqualTo(10.0)
+        assertThat(post.retryJitter).isEqualTo(1.0)
+        assertThat(post.retryBudgetSeconds).isEqualTo(86_400)
     }
 
     /**

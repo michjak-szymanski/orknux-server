@@ -268,43 +268,53 @@ class WorkflowNode(
     @Column(name = "retry_attempts")
     var retryAttempts: Int? = null,
 
-    /** How long to leave a failed attempt alone before the next; null is none. */
+    /** The wait before the second attempt, in seconds; null is none. */
     @Column(name = "retry_backoff_seconds")
     var retryBackoffSeconds: Int? = null,
 
     /**
-     * How that wait grows from one attempt to the next; null is
-     * [RetryBackoff.FIXED], which is what every node saved before curves
-     * existed meant and goes on meaning.
+     * What that wait is multiplied by after each attempt; null is one.
+     *
+     * One is the fixed wait, two is the doubling that a boolean used to say, and
+     * the numbers between are the curves it could not. Null rather than 1.0 so
+     * every node saved before this existed goes on meaning what it meant, and so
+     * a node the panel only looked at comes back off it unedited.
      */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "retry_backoff", length = 16)
-    var retryBackoff: RetryBackoff? = null,
-)
-
-/**
- * How the wait between two attempts grows.
- *
- * A word rather than a flag, because what somebody is choosing between is
- * curves and there will be a third one - and because "exponential = false" is a
- * worse thing to read on a node than "fixed".
- */
-enum class RetryBackoff {
-
-    /** The same wait before every retry. */
-    FIXED,
+    @Column(name = "retry_multiplier")
+    var retryMultiplier: Double? = null,
 
     /**
-     * Doubling: each retry waits twice as long as the one before it.
+     * The most any one of this node's waits may come to, in seconds.
      *
-     * For the failure that is a queue rather than a blip - a rate limit, a
-     * provider still coming back up - where three attempts on the same short
-     * clock are three attempts spent inside the same bad minute. The engine caps
-     * what one wait may come to, so the numbers on the node cannot multiply out
-     * into a run that disappears for a week.
+     * The reason a multiplier is safe to offer: six attempts at three times the
+     * last is nearly an hour of run, and neither "6" nor "3" looks like an hour.
+     * Null is the engine's own hour, which no wait passes however this is set.
      */
-    EXPONENTIAL,
-}
+    @Column(name = "retry_max_wait_seconds")
+    var retryMaxWaitSeconds: Int? = null,
+
+    /**
+     * The fraction of a wait that may be taken off it at random; null is none.
+     *
+     * Downward only, so every other number here stays the upper bound it reads
+     * as. What it is for is the hundred runs that failed on one outage and would
+     * otherwise all come back at the same instant, which is how a service that
+     * is struggling gets held down.
+     */
+    @Column(name = "retry_jitter")
+    var retryJitter: Double? = null,
+
+    /**
+     * The longest this node may go on being attempted for, in seconds, work
+     * included; null is no limit beyond the attempts.
+     *
+     * The bound the waits cannot express between them: what happens between two
+     * waits is a call to something outside this installation, and how long that
+     * takes is not in any of the other numbers.
+     */
+    @Column(name = "retry_budget_seconds")
+    var retryBudgetSeconds: Int? = null,
+)
 
 @Entity
 @Table(name = "workflow_edge")

@@ -51,9 +51,17 @@ have failed.
   failure; the difference is that the run can carry on down the other line
   instead of stopping.
 
-  The wait can be **fixed or doubling**, so a provider asking to be left alone
-  is left alone for longer each time rather than being knocked on at the same
-  interval.
+  The wait is a backoff rather than a number: an **initial wait** and a
+  **multiplier**, so a provider asking to be left alone is left alone for longer
+  each time rather than being knocked on at the same interval - 1 repeats the
+  wait, 2 doubles it, and the numbers between grow it more gently. Behind a word,
+  for the nodes that want them: a **maximum wait** so a long policy cannot grow
+  into an absurd one, **jitter** so a hundred runs that failed together do not
+  retry together, and a **budget** - give up after this long whatever you are
+  doing, which is the only one that counts the work as well as the waiting.
+
+  Under the fields is a line saying what they come to, because five numbers that
+  each read as small compose into something nobody works out in their head.
 
   A failure already known to be final never spends an attempt. A thrown function
   will throw the same way next time, and so will a provider that refused the

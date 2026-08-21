@@ -5,7 +5,6 @@ import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphNode
 import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.workflow.execution.NodeKind
-import io.mszymanski.orknux.workflow.execution.RetryBackoff
 import io.mszymanski.orknux.workflow.execution.WorkflowGraph as RunnableGraph
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
@@ -49,7 +48,10 @@ object WorkflowSnapshot {
                     },
                     "retryAttempts" to node.retryAttempts,
                     "retryBackoffSeconds" to node.retryBackoffSeconds,
-                    "retryBackoff" to node.retryBackoff?.name,
+                    "retryMultiplier" to node.retryMultiplier,
+                    "retryMaxWaitSeconds" to node.retryMaxWaitSeconds,
+                    "retryJitter" to node.retryJitter,
+                    "retryBudgetSeconds" to node.retryBudgetSeconds,
                     "x" to node.x,
                     "y" to node.y,
                 )
@@ -88,9 +90,21 @@ object WorkflowSnapshot {
                     // be told to try again, which reads as the once it had.
                     retryAttempts = number(node, "retryAttempts")?.toInt(),
                     retryBackoffSeconds = number(node, "retryBackoffSeconds")?.toInt(),
-                    // Absent reads as the fixed wait, which is the only curve
-                    // there was when these snapshots were written.
-                    retryBackoff = text(node, "retryBackoff")?.let { RetryBackoff.valueOf(it) },
+                    /*
+                     * A snapshot is what a workflow was on the day it was
+                     * published and is never rewritten, so the ones already on
+                     * disk say `retryBackoff: EXPONENTIAL` and always will.
+                     * EXPONENTIAL was a multiplier of two, and is read as one -
+                     * so a workflow published last week goes on waiting what it
+                     * waited last week. Anything else absent is what it meant
+                     * when there was no field for it: a wait that does not grow,
+                     * the engine's own ceiling, no jitter and no budget.
+                     */
+                    retryMultiplier = decimal(node, "retryMultiplier")
+                        ?: EXPONENTIAL.takeIf { text(node, "retryBackoff") == "EXPONENTIAL" },
+                    retryMaxWaitSeconds = number(node, "retryMaxWaitSeconds")?.toInt(),
+                    retryJitter = decimal(node, "retryJitter"),
+                    retryBudgetSeconds = number(node, "retryBudgetSeconds")?.toInt(),
                     x = node.path("x").asDouble(),
                     y = node.path("y").asDouble(),
                 )
@@ -111,4 +125,10 @@ object WorkflowSnapshot {
 
     private fun number(node: JsonNode, name: String): Long? =
         node.path(name).let { if (it.isNumber) it.asLong() else null }
+
+    private fun decimal(node: JsonNode, name: String): Double? =
+        node.path(name).let { if (it.isNumber) it.asDouble() else null }
+
+    /** What the word EXPONENTIAL meant, for the snapshots that still say it. */
+    private const val EXPONENTIAL = 2.0
 }

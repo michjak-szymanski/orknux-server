@@ -229,10 +229,6 @@ object ComponentSnapshot {
         agent.tools = names(held, "tools")
     }
 
-    /** Which catalog a skill revision would put the skill back into. */
-    fun catalogIn(snapshot: String, mapper: ObjectMapper): Long? =
-        number(mapper.readTree(snapshot), "catalogId")
-
     // ---------------------------------------------------------------- reading
 
     private fun text(node: JsonNode, name: String): String? =

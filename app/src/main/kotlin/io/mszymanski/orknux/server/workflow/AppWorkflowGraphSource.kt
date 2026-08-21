@@ -52,7 +52,8 @@ class AppWorkflowGraphSource(
      */
     @Transactional(readOnly = true)
     fun published(workflowId: Long): Boolean =
-        publications.existsById(workflowId) || workflows.findByIdOrNull(workflowId)?.status == WorkflowStatus.PUBLISHED
+        publications.existsByWorkflowId(workflowId) ||
+            workflows.findByIdOrNull(workflowId)?.status == WorkflowStatus.PUBLISHED
 
     @Transactional
     override fun graph(workspaceId: Long, workflowId: Long, version: GraphVersion): RunnableGraph {
@@ -65,7 +66,10 @@ class AppWorkflowGraphSource(
 
         if (version == GraphVersion.DRAFT) return drafted(workflowId, workflow.name)
 
-        publications.findByIdOrNull(workflowId)?.let { held ->
+        // The newest publication, which is what a restore makes: restoring
+        // publishes the old graph again rather than reviving its row, so what
+        // runs is always the most recent one here.
+        publications.current(workflowId)?.let { held ->
             return WorkflowSnapshot.read(held.graph, mapper)
         }
 

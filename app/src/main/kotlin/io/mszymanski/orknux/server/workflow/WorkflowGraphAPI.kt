@@ -3,6 +3,9 @@ package io.mszymanski.orknux.server.workflow
 import io.mszymanski.orknux.server.action.ActionParameters
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
+import io.mszymanski.orknux.server.revision.ComponentRevisionKind
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
+import io.mszymanski.orknux.server.revision.RevisionSubject
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -11,6 +14,8 @@ import io.mszymanski.orknux.server.action.ActionParamView
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
+import io.mszymanski.orknux.workflow.execution.WorkflowGraph as RunnableGraph
+import org.springframework.data.domain.PageRequest
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
@@ -19,7 +24,7 @@ import org.springframework.stereotype.Controller
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.transaction.annotation.Transactional
 import tools.jackson.databind.ObjectMapper
-import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 
 @Controller
 class WorkflowGraphAPI(
@@ -38,6 +43,7 @@ class WorkflowGraphAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val publications: WorkflowPublicationRepository,
+    private val revisions: ComponentRevisionRecorder,
     private val graphSource: AppWorkflowGraphSource,
     private val mapper: ObjectMapper,
 ) {
@@ -174,6 +180,27 @@ class WorkflowGraphAPI(
         val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
         workflow.status = WorkflowStatus.DRAFT
 
+        /*
+         * Said, and deliberately not decided here.
+         *
+         * A workflow has a draft, so by the rule the recorder holds this writes
+         * nothing - a draft is a draft, and the version is what gets published.
+         * The call is here anyway because the rule is one rule: if a workflow's
+         * kind ever stopped having a draft, or another kind gained one, the
+         * recorder would change its answer and this door would already be
+         * right. Nothing is serialised while the answer is no.
+         */
+        revisions.saved(ComponentRevisionKind.WORKFLOW) {
+            RevisionSubject(
+                workspaceId = workspaceId,
+                componentId = workflowId,
+                name = workflow.name,
+                savedAt = java.time.OffsetDateTime.now(),
+                savedBy = currentUser(),
+                snapshot = WorkflowSnapshot.write(graphSource.drafted(workflowId, workflow.name), mapper),
+            )
+        }
+
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow ${workflow.name} graph updated")
         return graphOf(workspaceId, workflowId)
     }
@@ -194,17 +221,118 @@ class WorkflowGraphAPI(
          * something live to point at - and from here, editing and saving change
          * the draft alone, which is what makes it safe to leave one half-drawn.
          */
-        publications.save(
-            WorkflowPublication(
-                workflowId = workflowId,
-                publishedAt = OffsetDateTime.now(),
-                publishedBy = currentUser(),
-                graph = WorkflowSnapshot.write(graphSource.drafted(workflowId, workflow.name), mapper),
-            ),
+        revisions.published(
+            workflowId = workflowId,
+            graph = WorkflowSnapshot.write(graphSource.drafted(workflowId, workflow.name), mapper),
+            by = currentUser(),
         )
         workflow.status = WorkflowStatus.PUBLISHED
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow ${workflow.name} published")
         return graphOf(workspaceId, workflowId)
+    }
+
+    /**
+     * Every publication of this workflow, newest first — its version history.
+     *
+     * Without the graphs. A publication's snapshot is the whole runnable graph
+     * and a workflow published daily for a month is a month of them; the list
+     * says who published what and when, and [workflowPublicationGraph] fetches
+     * one when somebody opens it.
+     */
+    @QueryMapping
+    @Transactional(readOnly = true)
+    fun workflowPublications(
+        @Argument workspaceId: Long,
+        @Argument workflowId: Long,
+        @Argument limit: Int?,
+    ): List<WorkflowPublicationView> {
+        requireAssignment(workspaceId, workflowId)
+        val held = publications.findByWorkflowIdOrderByIdDesc(
+            workflowId,
+            PageRequest.of(0, (limit ?: DEFAULT_PUBLICATIONS).coerceIn(1, MOST_PUBLICATIONS)),
+        )
+        // The first row of a list ordered newest-first is what runs, by the
+        // same rule the runner uses - so the two cannot disagree about which.
+        val running = held.firstOrNull()?.id
+        return held.map { WorkflowPublicationView(it, current = it.id == running) }
+    }
+
+    /** One publication's graph, as it was published. */
+    @QueryMapping
+    @Transactional(readOnly = true)
+    fun workflowPublicationGraph(@Argument workspaceId: Long, @Argument publicationId: Long): String {
+        val held = publicationIn(workspaceId, publicationId)
+        return held.graph
+    }
+
+    /**
+     * Puts an older publication back into service.
+     *
+     * By publishing it again, rather than by deleting what came after: the
+     * newest publication is what runs, so a restore that removed rows would be
+     * a history that rewrites itself, and there would be no record that
+     * somebody rolled anything back. This is the shape of reverting a commit —
+     * a new entry, saying which older one it copied.
+     *
+     * **It does not touch the draft.** The draft is what somebody is in the
+     * middle of and it is not versioned, so overwriting it with a month-old
+     * graph would destroy unpublished work with nothing to get it back from.
+     * What changes is what runs. The badge follows from that: it says Published
+     * when the draft and the restored graph are the same picture, and Draft
+     * when they are not, which is exactly what it has always meant.
+     */
+    @MutationMapping
+    @Transactional
+    fun restoreWorkflowPublication(
+        @Argument workspaceId: Long,
+        @Argument publicationId: Long,
+    ): WorkflowGraphView {
+        val held = publicationIn(workspaceId, publicationId)
+        val workflowId = held.workflowId
+        val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
+
+        revisions.published(
+            workflowId = workflowId,
+            graph = held.graph,
+            by = currentUser(),
+            restoredFrom = publicationId,
+        )
+        workflow.status = if (samePicture(held.graph, graphSource.drafted(workflowId, workflow.name))) {
+            WorkflowStatus.PUBLISHED
+        } else {
+            WorkflowStatus.DRAFT
+        }
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.WORKFLOW,
+            "Workflow ${workflow.name} restored to the publication of " +
+                DateTimeFormatter.ISO_INSTANT.format(held.publishedAt.toInstant()),
+        )
+        return graphOf(workspaceId, workflowId)
+    }
+
+    /**
+     * Whether a stored graph and a drawn one are the same picture.
+     *
+     * Compared as parsed trees rather than as text, because the stored half has
+     * been through a `jsonb` column: Postgres rewrites the object it was given -
+     * key order and whitespace are its own - so two identical graphs come back
+     * as two different strings, and the badge would say Draft for every restore.
+     *
+     * Nodes keep the order the draft is read in, so two graphs that differ only
+     * in that read as different and the badge says Draft. That is the safe way
+     * round: it asks somebody to publish a graph that already is, rather than
+     * telling them one is live when it is not.
+     */
+    private fun samePicture(stored: String, drawn: RunnableGraph): Boolean =
+        mapper.readTree(stored) == mapper.readTree(WorkflowSnapshot.write(drawn, mapper))
+
+    /** One publication, checked to be this workspace's before it is handed out. */
+    private fun publicationIn(workspaceId: Long, publicationId: Long): WorkflowPublication {
+        val held = publications.findByIdOrNull(publicationId)
+            ?: throw WorkflowPublicationNotFoundException(publicationId)
+        requireAssignment(workspaceId, held.workflowId)
+        return held
     }
 
     /** Whoever is asking, for the record of who made a graph live. */
@@ -636,6 +764,36 @@ data class WorkflowEdgeView(
     )
 }
 
+/**
+ * One publication of a workflow: a version of it, and possibly the live one.
+ *
+ * Without the graph. A list of these is a history somebody scrolls, and every
+ * row carrying a whole serialised graph would be a page measured in megabytes;
+ * `workflowPublicationGraph` fetches one when a row is opened.
+ */
+data class WorkflowPublicationView(
+    val id: Long,
+    val workflowId: Long,
+    val publishedAt: String,
+    val publishedBy: String,
+    /** The one the runner reads. Exactly one publication of each workflow is. */
+    val current: Boolean,
+    /** The publication this one copied, when it was made by restoring one. */
+    val restoredFrom: Long?,
+) {
+    constructor(publication: WorkflowPublication, current: Boolean) : this(
+        id = requireNotNull(publication.id),
+        workflowId = publication.workflowId,
+        publishedAt = publication.publishedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        publishedBy = publication.publishedBy,
+        current = current,
+        restoredFrom = publication.restoredFrom,
+    )
+}
+
+class WorkflowPublicationNotFoundException(id: Long) :
+    RuntimeException("No publication with id $id")
+
 data class WorkflowGraphView(
     val workflowId: Long,
     val name: String,
@@ -672,6 +830,16 @@ private val PLACEHOLDER_IN_VALUE = Regex("""\{\{[^}]*\}\}""")
  * A doubling curve is bounded by the same hour where it is spent rather than
  * here, because what this holds is the first wait and not what it grows into.
  */
+/**
+ * How much of a workflow's history a screen asks for, and the most it may.
+ *
+ * A page shows a handful and a workflow published every morning for a year has
+ * three hundred and sixty five of them; the tail is what anybody reads, so the
+ * list is limited rather than paged.
+ */
+private const val DEFAULT_PUBLICATIONS = 25
+private const val MOST_PUBLICATIONS = 200
+
 private const val MIN_ATTEMPTS = 1
 private const val MAX_ATTEMPTS = 10
 private const val MAX_BACKOFF_SECONDS = 3600

@@ -2,11 +2,15 @@ package io.mszymanski.orknux.server.workflow
 
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.GeneratedValue
+import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.hibernate.annotations.JdbcTypeCode
 import org.hibernate.type.SqlTypes
+import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
 import java.time.OffsetDateTime
 
 /**
@@ -21,6 +25,13 @@ import java.time.OffsetDateTime
  * tables is the draft, which is what makes saving safe - a graph can be left
  * half-finished overnight without answering the next event with it.
  *
+ * **These are a workflow's versions, and they are kept.** There was one row per
+ * workflow, replaced on every publish, so what a workflow ran last month was
+ * gone the next time anybody pressed Publish. A draft is not a version — it is
+ * what somebody is in the middle of — and a publication is, which makes keeping
+ * them the whole of a workflow's history. The newest is what runs; see
+ * [WorkflowPublicationRepository.current].
+ *
  * The graph is kept as the execution module reads it, serialised whole. A
  * second set of tables shadowing the first would be a second schema to migrate
  * every time a node gains a field, in exchange for queries nobody makes: this
@@ -29,7 +40,17 @@ import java.time.OffsetDateTime
 @Entity
 @Table(name = "workflow_publication")
 class WorkflowPublication(
+    /**
+     * The publication's own id.
+     *
+     * It used to be the workflow's, which is what made the table one row per
+     * workflow. A history needs a key of its own, and this one also orders it:
+     * ids only increase, so the greatest is the newest, whatever a clock says.
+     */
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
     @Column(name = "workflow_id", nullable = false)
     val workflowId: Long,
 
@@ -43,6 +64,53 @@ class WorkflowPublication(
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(nullable = false, columnDefinition = "jsonb")
     var graph: String = "{}",
+
+    /**
+     * The publication this one was copied from, when it was made by restoring.
+     *
+     * Restoring publishes again rather than reviving an old row: the newest
+     * publication is always the one that runs, and the history only grows —
+     * the shape of reverting a commit rather than deleting one. Null for a
+     * publication somebody made from the draft, which is most of them.
+     */
+    @Column(name = "restored_from")
+    val restoredFrom: Long? = null,
 )
 
-interface WorkflowPublicationRepository : JpaRepository<WorkflowPublication, Long>
+interface WorkflowPublicationRepository : JpaRepository<WorkflowPublication, Long> {
+
+    /**
+     * What this workflow runs: its newest publication, or null if it has none.
+     *
+     * By id rather than by date. Two publications a second apart must not be
+     * able to swap places between two reads, and a clock that steps backwards
+     * would otherwise put an older graph back into service without anybody
+     * publishing anything.
+     */
+    fun findFirstByWorkflowIdOrderByIdDesc(workflowId: Long): WorkflowPublication?
+
+    /** Whether it has ever been published, asked where an exception was costly. */
+    fun existsByWorkflowId(workflowId: Long): Boolean
+
+    /** One workflow's history, newest first, no more of it than was asked for. */
+    fun findByWorkflowIdOrderByIdDesc(workflowId: Long, pageable: Pageable): List<WorkflowPublication>
+
+    fun deleteByWorkflowId(workflowId: Long)
+
+    /**
+     * The publication each workflow is running, which is what retention keeps
+     * whatever its age.
+     *
+     * A workflow published two years ago and left alone is still running that
+     * graph; sweeping it away because it is old would stop the workflow.
+     */
+    @Query("select max(p.id) from WorkflowPublication p group by p.workflowId")
+    fun currentIds(): List<Long>
+
+    @Query("select p.id from WorkflowPublication p where p.publishedAt < :before")
+    fun idsPublishedBefore(before: OffsetDateTime): List<Long>
+}
+
+/** What a workflow runs now, said in one place so nothing has to spell it. */
+fun WorkflowPublicationRepository.current(workflowId: Long): WorkflowPublication? =
+    findFirstByWorkflowIdOrderByIdDesc(workflowId)

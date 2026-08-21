@@ -21,7 +21,10 @@ import io.mszymanski.orknux.workflow.execution.StartExecutionInput
 import org.springframework.context.annotation.Lazy
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
+import java.time.OffsetDateTime
 import tools.jackson.databind.ObjectMapper
 import java.util.concurrent.CompletableFuture
 
@@ -157,6 +160,7 @@ class OrknuxTools(
      * in the declaration that is.
      */
     private val variables: WorkspaceVariableRepository,
+    private val revisions: ComponentRevisionRecorder,
     private val issueTools: IssueTools,
     private val newsTools: NewsTools,
     private val web: WebProperties,
@@ -1158,12 +1162,27 @@ class OrknuxTools(
                 .firstOrNull { it.id?.toString() == asked }
             ?: return refuse("There is no agent called $asked here")
 
+        /*
+         * The same recording the browser's toggle makes.
+         *
+         * This is the door the tracker's history was missing for a year: the
+         * MCP tools wrote and nothing wrote it down, so the gaps in the record
+         * lined up exactly with the work nobody was watching. An agent switched
+         * off from here is the same thing happening to that agent.
+         */
+        revisions.saved(chosen)
         chosen.enabled = wanted
+        chosen.lastModifiedAt = OffsetDateTime.now()
+        chosen.lastModifiedBy = currentUser()
         agents.save(chosen)
         return mapper.writeValueAsString(
             mapOf("agent" to chosen.name, "enabled" to wanted, "url" to agentLink(scope.workspaceId, chosen.id)),
         )
     }
+
+    /** Whoever is asking, for the stamp a revision of this state will carry. */
+    private fun currentUser(): String =
+        SecurityContextHolder.getContext().authentication?.name ?: "orknux"
 
     private fun readOnly(): String = refuse("This conversation may read what is here, but not change it")
 

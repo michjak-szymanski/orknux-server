@@ -13,6 +13,7 @@ import jakarta.persistence.Id
 import jakarta.persistence.JoinColumn
 import jakarta.persistence.OrderColumn
 import jakarta.persistence.Table
+import java.time.OffsetDateTime
 
 /**
  * There is one kind of agent.
@@ -156,4 +157,24 @@ class Agent(
      */
     @Column(length = 40)
     var icon: String? = null,
+
+    /**
+     * When this agent was last saved, and by whom.
+     *
+     * The two stamps every other versioned component already carried. A
+     * revision holds the state that was displaced and says when *that* state
+     * was saved, so without these an agent's history could only report when
+     * each version stopped being current — which is not the question anybody
+     * asks of one.
+     *
+     * Every door that changes an agent writes them, the MCP tools included:
+     * an agent switched off by another agent was still switched off by
+     * somebody, and a stamp that only the browser updated would be a stamp
+     * that quietly lied about the changes nobody watched.
+     */
+    @Column(name = "last_modified_at", nullable = false)
+    var lastModifiedAt: OffsetDateTime = OffsetDateTime.now(),
+
+    @Column(name = "last_modified_by", nullable = false, length = 120)
+    var lastModifiedBy: String = "",
 )

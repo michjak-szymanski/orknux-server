@@ -18,6 +18,8 @@ import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Controller
+import io.mszymanski.orknux.server.revision.ComponentRevisionKind
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -37,6 +39,7 @@ class ToolAPI(
     private val objects: WorkflowObjectRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val revisions: ComponentRevisionRecorder,
 ) {
 
     @QueryMapping
@@ -91,6 +94,10 @@ class ToolAPI(
     fun updateTool(@Argument id: Long, @Argument input: UpdateToolInput): ToolView {
         val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ToolNotFoundException(id)
 
+        // What it is about to stop being. A tool has no draft, so a save is a
+        // version; the recorder holds that rule, this door only reports.
+        revisions.saved(tool)
+
         val previousName = tool.name
         input.name?.trim()?.let { name ->
             if (!IDENTIFIER.matches(name)) throw ToolNameInvalidException(name)
@@ -134,7 +141,12 @@ class ToolAPI(
     fun setToolEnabled(@Argument id: Long, @Argument enabled: Boolean): ToolView {
         val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ToolNotFoundException(id)
 
+        // The toggle is a save like any other: it changes what the workspace
+        // has, and a version of it is what it was a moment ago.
+        revisions.saved(tool)
         tool.enabled = enabled
+        tool.lastModifiedAt = OffsetDateTime.now()
+        tool.lastModifiedBy = currentUser()
         val what = if (enabled) "enabled" else "disabled"
         auditRecorder.record(tool.workspaceId, WorkspaceAuditCategory.AGENT, "Tool ${tool.name} $what")
         return describe(tool)
@@ -159,6 +171,7 @@ class ToolAPI(
         val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         tools.delete(tool)
+        revisions.forget(ComponentRevisionKind.TOOL, id)
         auditRecorder.record(tool.workspaceId, WorkspaceAuditCategory.AGENT, "Tool ${tool.name} deleted")
         return true
     }

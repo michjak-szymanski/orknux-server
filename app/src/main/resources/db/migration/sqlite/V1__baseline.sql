@@ -36,6 +36,8 @@ CREATE TABLE agent
     icon                         varchar(40),
     orknux_access                boolean not null default false,
     shell_access                 boolean not null default false,
+    last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
+    last_modified_by             varchar(120) not null default '',
     constraint uk_agent_workspace_name UNIQUE (workspace_id, name),
     constraint ck_agent_type CHECK (((type) = 'LLM')),
     constraint agent_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
@@ -189,6 +191,20 @@ CREATE TABLE chat_session
     constraint chat_session_llm_session_id_fkey FOREIGN KEY (llm_session_id) REFERENCES llm_session(id) ON DELETE SET NULL,
     constraint chat_session_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint chat_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE component_revision
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    kind                         varchar(16) not null,
+    component_id                 integer not null,
+    name                         varchar(120) not null,
+    saved_at                     timestamp not null,
+    saved_by                     varchar(120) not null,
+    recorded_at                  timestamp not null default CURRENT_TIMESTAMP,
+    snapshot                     text not null,
+    constraint component_revision_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
 CREATE TABLE component_template
@@ -871,11 +887,12 @@ CREATE TABLE workflow_object
 
 CREATE TABLE workflow_publication
 (
+    id                           integer not null primary key autoincrement,
     workflow_id                  integer not null,
     published_at                 timestamp not null default CURRENT_TIMESTAMP,
     published_by                 varchar(120) not null default 'system',
     graph                        jsonb not null,
-    primary key (workflow_id),
+    restored_from                integer,
     constraint workflow_publication_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
 );
 
@@ -1141,6 +1158,8 @@ CREATE INDEX app_user_token_user_idx ON app_user_token (user_id);
 CREATE INDEX idx_chat_attachment_session ON chat_attachment (chat_session_id);
 CREATE INDEX idx_chat_attachment_workspace ON chat_attachment (workspace_id);
 CREATE INDEX idx_chat_session_owner ON chat_session (workspace_id, user_id, last_message_at DESC);
+CREATE INDEX component_revision_component_idx ON component_revision (kind, component_id, recorded_at DESC, id DESC);
+CREATE INDEX component_revision_recorded_idx ON component_revision (recorded_at);
 CREATE UNIQUE INDEX component_template_name_key ON component_template (name);
 CREATE INDEX idx_execution_log_execution ON execution_log (execution_id, sequence_no);
 CREATE INDEX idx_execution_step_execution ON execution_step (execution_id, step_order);
@@ -1192,6 +1211,7 @@ CREATE INDEX idx_workflow_node_agent ON workflow_node (agent_id);
 CREATE INDEX idx_workflow_node_condition ON workflow_node (condition_id) WHERE (condition_id IS NOT NULL);
 CREATE INDEX idx_workflow_node_trigger ON workflow_node (trigger_id) WHERE (trigger_id IS NOT NULL);
 CREATE INDEX idx_workflow_node_workflow ON workflow_node (workflow_id);
+CREATE INDEX workflow_publication_workflow_idx ON workflow_publication (workflow_id, id DESC);
 CREATE INDEX idx_workflow_trigger_connection ON workflow_trigger (connection_id, action) WHERE enabled;
 CREATE INDEX idx_workflow_trigger_workspace ON workflow_trigger (workspace_id);
 CREATE UNIQUE INDEX uk_workflow_trigger_webhook_path ON workflow_trigger (webhook_path) WHERE (webhook_path IS NOT NULL);

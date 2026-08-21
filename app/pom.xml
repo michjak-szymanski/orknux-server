@@ -283,6 +283,10 @@
                         <!-- No sweep calls a provider while a suite is running. -->
                         <orknux.model.check.enabled>false</orknux.model.check.enabled>
                         <orknux.connection.check.enabled>false</orknux.connection.check.enabled>
+                        <!-- No clock deletes a revision mid-suite; RevisionRetentionTest
+                             calls the sweep itself. The bean is still built, which is
+                             what lets it. -->
+                        <orknux.revision.sweep-enabled>false</orknux.revision.sweep-enabled>
                         <!-- The tick is called directly by the test that wants it. -->
                         <db-scheduler.enabled>false</db-scheduler.enabled>
                         <!-- Each distinct set of test properties builds its own

@@ -347,6 +347,25 @@ type Query {
     actionParameterDefaults(workspaceId: ID!, actionId: ID!): [NodeMapping!]!
     "What the graph on screen needs, gives and is wrong about, without saving it."
     workflowGraphPreview(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
+    """
+    Every publication of a workflow, newest first: its version history.
+
+    A workflow's versions are what was published, not what was saved - a draft
+    is a draft. Without the graphs, which are whole and are fetched one at a
+    time by `workflowPublicationGraph`.
+    """
+    workflowPublications(workspaceId: ID!, workflowId: ID!, limit: Int): [WorkflowPublication!]!
+    "One publication's graph, as JSON, as it was published."
+    workflowPublicationGraph(workspaceId: ID!, publicationId: ID!): String!
+    """
+    What a component has been, newest first.
+
+    For the kinds with no draft, where every save is a version. A workflow has
+    one, so its history is `workflowPublications` instead.
+    """
+    componentRevisions(kind: ComponentRevisionKind!, componentId: ID!, limit: Int): [ComponentRevision!]!
+    "One revision, with what it held."
+    componentRevision(id: ID!): ComponentRevisionDetail!
     "What one run did: the graph as it ran, per-node outcome, and its log."
     execution(id: ID!): ExecutionDetail
     "Runs of a workspace's workflows, newest first."
@@ -486,6 +505,13 @@ type Mutation {
     """
     setMetricsAnonymous(enabled: Boolean!): InstallationSettings!
     """
+    How many days of component history are kept before the sweep takes it.
+
+    Between 1 and 3650. A version is a whole copy of what a component was, so
+    this is the number that decides how much disk the history takes.
+    """
+    setRevisionRetentionDays(days: Int!): InstallationSettings!
+    """
     Says which chat uploaded files belong to. Sent when the message is, since a
     first message is what makes the chat.
     """
@@ -622,6 +648,22 @@ type Mutation {
     "Replaces the whole graph and puts the workflow back into draft."
     saveWorkflowGraph(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
     publishWorkflow(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
+    """
+    Puts an older publication back into service, by publishing it again.
+
+    The history is not rewritten: this adds an entry saying which older one it
+    copied, the way reverting a commit adds one rather than removing it. It
+    does not touch the draft, which is not versioned and would have nothing to
+    be recovered from.
+    """
+    restoreWorkflowPublication(workspaceId: ID!, publicationId: ID!): WorkflowGraph!
+    """
+    Makes an older state of a component current again.
+
+    What it displaces is recorded first, so this is undoable by the same
+    button. Answers whether it was done; refetch the component for the rest.
+    """
+    restoreComponentRevision(id: ID!): Boolean!
     "Creates a catalog: a folder for the workspace's variables."
     createVariableCatalog(workspaceId: ID!, name: String!): VariableCatalog!
     renameVariableCatalog(id: ID!, name: String!): VariableCatalog!
@@ -1059,6 +1101,73 @@ type WorkflowEdge {
     target: String!
     "The answer this edge carries; null for every edge that is not leaving a condition or handling a failure."
     branch: EdgeBranch
+}
+
+"""
+Which kinds of component have a history, and where it is kept.
+
+The rule behind the split: a kind with a draft is versioned by publishing, and
+a kind without one by saving. WORKFLOW is the only one with a draft today, so
+it is the only one whose history is its publications - it appears here so that
+the vocabulary is one vocabulary, and never in `componentRevisions`.
+"""
+enum ComponentRevisionKind {
+    FUNCTION
+    TOOL
+    SKILL
+    AGENT
+    WORKFLOW
+}
+
+"One line of a component's history: what it was, and when it stopped being it."
+type ComponentRevision {
+    id: ID!
+    kind: ComponentRevisionKind!
+    componentId: ID!
+    "What it was called then, so a rename reads as one."
+    name: String!
+    "When this state was saved - the component's own stamp, not this row's."
+    savedAt: String!
+    savedBy: String!
+    "When it stopped being current, which is what retention counts from."
+    recordedAt: String!
+}
+
+"One revision with what it held."
+type ComponentRevisionDetail {
+    id: ID!
+    kind: ComponentRevisionKind!
+    componentId: ID!
+    name: String!
+    savedAt: String!
+    savedBy: String!
+    recordedAt: String!
+    """
+    The part somebody reads: a function's or a tool's TypeScript, a skill's
+    markdown, an agent's system prompt. Null where this kind has none.
+    """
+    content: String
+    "`typescript`, `markdown` or `json`: what to colour `content` as."
+    contentLanguage: String!
+    "The whole component as it was, as JSON."
+    snapshot: String!
+}
+
+"""
+One publication of a workflow: a version of it, and possibly the live one.
+
+Without the graph. A history is a list somebody scrolls, and every row carrying
+a serialised graph would be a page measured in megabytes.
+"""
+type WorkflowPublication {
+    id: ID!
+    workflowId: ID!
+    publishedAt: String!
+    publishedBy: String!
+    "The one the runner reads. Exactly one publication of each workflow is."
+    current: Boolean!
+    "The publication this one copied, when it was made by restoring one."
+    restoredFrom: ID
 }
 
 type WorkflowGraph {
@@ -2676,6 +2785,10 @@ type InstallationSettings {
     metricsAnonymous: Boolean!
     "What a fresh installation would have answered: ORKNUX_METRICS_ANONYMOUS."
     metricsAnonymousConfigured: Boolean!
+    "How many days of component history are kept. 14 unless somebody has said otherwise."
+    revisionRetentionDays: Int!
+    "What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS."
+    revisionRetentionDaysConfigured: Int!
 }
 
 "What a component reports about itself."

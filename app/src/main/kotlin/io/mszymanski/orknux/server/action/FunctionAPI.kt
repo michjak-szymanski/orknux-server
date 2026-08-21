@@ -4,6 +4,8 @@ import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.plugin.PluginRepository
+import io.mszymanski.orknux.server.revision.ComponentRevisionKind
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.variable.VariableNotFoundException
 import io.mszymanski.orknux.server.variable.VariableType
@@ -46,6 +48,7 @@ class FunctionAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val plugins: PluginRepository,
+    private val revisions: ComponentRevisionRecorder,
 ) {
 
     /**
@@ -131,6 +134,11 @@ class FunctionAPI(
     fun updateFunction(@Argument id: Long, @Argument input: UpdateFunctionInput): FunctionView {
         val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: throw FunctionNotFoundException(id)
         val workspaceId = requireEditable(function)
+
+        // What it is about to stop being, kept before anything overwrites it.
+        // A function has no draft, so a save is a version - the rule is the
+        // recorder's, and this door only says that a save happened.
+        revisions.saved(function)
 
         val previousName = function.name
         input.name?.trim()?.let { name ->
@@ -219,6 +227,9 @@ class FunctionAPI(
         if (callers.isNotEmpty()) throw FunctionInUseException(function.name, callers)
 
         functions.delete(function)
+        // Its history goes with it: the rows point at an id in a table that no
+        // longer holds it, and no foreign key can say so for us.
+        revisions.forget(ComponentRevisionKind.FUNCTION, id)
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, "Function ${function.name} deleted")
         return true
     }

@@ -20,13 +20,13 @@ import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatCode
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider
 import org.springframework.core.type.filter.AnnotationTypeFilter
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.transaction.PlatformTransactionManager
 
 /**
  * The one thing that runs on every boot and has never had a test.
@@ -49,6 +49,7 @@ class SecretMigrationTest(
     @Autowired val jdbc: JdbcTemplate,
     @Autowired val cipher: SecretCipher,
     @Autowired val columns: SecretColumns,
+    @Autowired val transactions: PlatformTransactionManager,
     @Autowired val mcpServers: McpServerRepository,
     @Autowired val variables: WorkspaceVariableRepository,
     @Autowired val catalogs: VariableCatalogRepository,
@@ -98,17 +99,15 @@ class SecretMigrationTest(
      * them their key is missing is on the server that will not start.
      *
      * So: it may write nothing, and it must not throw. What it may not do is
-     * take the installation with it.
-     *
-     * Still disabled: that is #153, and it is a separate change. This commit is
-     * about which columns are swept, and sweeping four more of them is if
-     * anything a larger surface for the throw to come out of.
+     * take the installation with it. The sweep now asks `cipher.keyStatus()`
+     * before it touches anything and returns having written nothing, saying so
+     * at WARN with the count and the command that fixes it — which is the same
+     * answer the doctor gives, on a server that is running.
      */
-    @Disabled("#153: skip when the key is unusable, or contain per row — and what to log")
     @Test
     fun `an installation with no key still starts, and keeps its credentials`() {
         val id = plaintextMcpSecret("a token written before any of this was encrypted")
-        val keyless = SecretMigration(jdbc, SecretCipher(""), columns)
+        val keyless = SecretMigration(jdbc, SecretCipher(""), columns, transactions)
 
         assertThatCode { keyless.encryptStoredSecrets() }
             .describedAs("a missing key is a thing to report, not a reason the server cannot start")
@@ -119,6 +118,17 @@ class SecretMigrationTest(
         assertThat(storedMcpSecret(id))
             .describedAs("the credential is still there to be encrypted by a later boot")
             .isEqualTo("a token written before any of this was encrypted")
+    }
+
+    /** The same, for a key that is set but cannot be used. Not throwing is the whole claim. */
+    @Test
+    fun `a key that is not usable is reported, not thrown`() {
+        val id = plaintextMcpSecret("still plain text")
+        val wrongLength = SecretMigration(jdbc, SecretCipher("c2hvcnQ="), columns, transactions)
+
+        assertThatCode { wrongLength.encryptStoredSecrets() }.doesNotThrowAnyException()
+
+        assertThat(storedMcpSecret(id)).isEqualTo("still plain text")
     }
 
     /**
@@ -196,6 +206,31 @@ class SecretMigrationTest(
     }
 
     /**
+     * One row that cannot be written costs only itself.
+     *
+     * The method was `@Transactional`, which made every column of every row one
+     * transaction — the opposite of its own docstring, which says each row is one
+     * update — so a single row that would not go back rolled back every row that
+     * had. Here one value is long enough that its envelope will not fit the
+     * column, which is a real way for this to fail on a real upgrade, and the
+     * row beside it must still come out sealed.
+     */
+    @Test
+    fun `a row that cannot be written does not roll back the ones that could`() {
+        val tooLong = plaintextVariable("x".repeat(4000), name = "tooLong")
+        val ordinary = plaintextVariable("a credential that fits", name = "ordinary")
+
+        assertThatCode { migration().encryptStoredSecrets() }.doesNotThrowAnyException()
+
+        assertThat(cipher.isEncrypted(storedVariableValue(ordinary)))
+            .describedAs("the row that could be written is written, whatever happened to the other")
+            .isTrue()
+        assertThat(storedVariableValue(tooLong))
+            .describedAs("and the one that could not is left readable rather than lost")
+            .isEqualTo("x".repeat(4000))
+    }
+
+    /**
      * The test that would have caught all four the day they were written.
      *
      * The sweep no longer keeps a list — [SecretColumns] reads the
@@ -252,7 +287,7 @@ class SecretMigrationTest(
         assertThat(missing).describedAs("named by the entities, absent from the schema").isEmpty()
     }
 
-    private fun migration() = SecretMigration(jdbc, cipher, columns)
+    private fun migration() = SecretMigration(jdbc, cipher, columns, transactions)
 
     /** Every `@Convert(SecretConverter)` field there is, found without asking the metamodel. */
     private fun annotatedFieldsOnTheClasspath(): Int {

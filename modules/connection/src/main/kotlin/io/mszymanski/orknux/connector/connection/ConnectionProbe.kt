@@ -135,7 +135,9 @@ class ConnectionProbe(
         }
         if (uri.scheme?.lowercase() !in ALLOWED_SCHEMES) return "Only http and https URLs can be checked"
         val host = uri.host ?: return "The URL has no host"
-        return vetHost(host)
+        // Asked of the same rules the call itself will be routed by, so the
+        // question below is "who resolves this name" and not a guess.
+        return vetHost(host, viaProxy = proxies.resolve(url) != null)
     }
 
     /**
@@ -144,8 +146,14 @@ class ConnectionProbe(
      *
      * Public so that sending mail asks this rather than carrying its own copy of
      * the link-local rule; a second copy is a second one to forget.
+     *
+     * [viaProxy] says whether a proxy rule carries this host, and it defaults to
+     * false because the callers that pass nothing are asking about a host this
+     * process dials itself: the proxy named by a rule, and an SSH server, which
+     * no HTTP proxy carries. Those should still be resolved here.
      */
-    fun vetHost(host: String): String? = resolutionProblem(host.trim().ifEmpty { return "The host is empty" })
+    fun vetHost(host: String, viaProxy: Boolean = false): String? =
+        resolutionProblem(host.trim().ifEmpty { return "The host is empty" }, viaProxy)
 
     /**
      * Checks a connection, asking whatever question that kind of service can
@@ -272,7 +280,42 @@ class ConnectionProbe(
     }
 
     /** Null when the host is fine to call. */
-    private fun resolutionProblem(host: String): String? = try {
+    private fun resolutionProblem(host: String, viaProxy: Boolean): String? =
+        if (viaProxy) literalAddressProblem(host) else resolvedAddressProblem(host)
+
+    /**
+     * The same question asked of a host a proxy will dial, which is answered
+     * without a resolver.
+     *
+     * **Why this is not the check below.** On a network that requires a proxy,
+     * the proxy is usually the only thing that can resolve an external name -
+     * that is most of the reason it is there. Resolving here first meant every
+     * such call failed with "The host could not be resolved" before the rules
+     * were ever consulted, so an installation whose proxy rules were entirely
+     * correct could not make a single call, and nothing on the screen that
+     * lists those rules said why. The name is the proxy's to resolve, and a
+     * `CONNECT` carries it there unresolved.
+     *
+     * **Why anything is still checked.** The rule below exists to stop a URL
+     * being pointed at cloud instance metadata, and a proxy does not make that
+     * harmless - it makes it somebody else's network. What can still be
+     * answered without a resolver is an address that was written as an address,
+     * so that is what is answered; a name that resolves to one somewhere out
+     * there is beyond this process's knowledge either way.
+     */
+    private fun literalAddressProblem(host: String): String? {
+        // Written as an address or not written as one: ofLiteral refuses a name
+        // rather than looking it up, which is the whole point of asking it here.
+        val literal = runCatching { InetAddress.ofLiteral(host.removeSurrounding("[", "]")) }.getOrNull()
+            ?: return null
+        return if (!properties.allowLinkLocal && (literal.isLinkLocalAddress || literal.isAnyLocalAddress)) {
+            "That host resolves to a link-local address"
+        } else {
+            null
+        }
+    }
+
+    private fun resolvedAddressProblem(host: String): String? = try {
         val addresses = InetAddress.getAllByName(host)
         if (!properties.allowLinkLocal && addresses.any { it.isLinkLocalAddress || it.isAnyLocalAddress }) {
             "That host resolves to a link-local address"

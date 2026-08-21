@@ -9,6 +9,7 @@ import org.springframework.security.core.GrantedAuthority
 import org.springframework.security.core.authority.mapping.GrantedAuthoritiesMapper
 import org.springframework.security.oauth2.core.oidc.user.OidcUserAuthority
 import org.springframework.security.oauth2.core.user.OAuth2UserAuthority
+import org.springframework.security.oauth2.client.registration.ClientRegistration
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository
 import org.springframework.security.oauth2.client.registration.ClientRegistrations
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository
@@ -21,6 +22,8 @@ import org.springframework.security.oauth2.jwt.JwtIssuerValidator
 import org.springframework.security.oauth2.jwt.JwtValidators
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken
+import org.springframework.web.util.UriComponentsBuilder
+import java.net.URI
 
 /**
  * What an OIDC identity is worth here, for both ways one can arrive.
@@ -53,7 +56,10 @@ class OidcSecurityConfig {
      * a clear failure on the way up rather than a puzzle at the first sign-in.
      */
     @Bean
-    fun clientRegistrationRepository(properties: SecurityProperties): ClientRegistrationRepository {
+    fun clientRegistrationRepository(
+        properties: SecurityProperties,
+        transport: OidcTransport,
+    ): ClientRegistrationRepository {
         val oidc = properties.oidc
         require(oidc.issuer.isNotBlank()) {
             "orknux.security.oidc.issuer is not set, and this installation is configured to sign in " +
@@ -64,7 +70,7 @@ class OidcSecurityConfig {
                 "in with OIDC."
         }
 
-        val registration = ClientRegistrations.fromIssuerLocation(oidc.issuer)
+        val registration = discover(oidc.issuer, transport)
             .registrationId(OIDC_REGISTRATION_ID)
             .clientId(oidc.clientId)
             .clientName(oidc.displayName)
@@ -92,9 +98,14 @@ class OidcSecurityConfig {
      * that is what is read.
      */
     @Bean
-    fun jwtDecoder(properties: SecurityProperties): JwtDecoder {
+    fun jwtDecoder(properties: SecurityProperties, transport: OidcTransport): JwtDecoder {
         val issuer = properties.oidc.issuer
-        val decoder = NimbusJwtDecoder.withIssuerLocation(issuer).build()
+        // Discovery and the key set, both over the routed client: a decoder that
+        // cannot fetch the keys rejects every token that arrives, which reads on
+        // screen as an authentication failure and is nothing of the kind.
+        val decoder = NimbusJwtDecoder.withIssuerLocation(issuer)
+            .restOperations(transport.restOperations())
+            .build()
         decoder.setJwtValidator(
             JwtValidators.createDefaultWithValidators(
                 JwtIssuerValidator(issuer),
@@ -163,4 +174,89 @@ class OidcSecurityConfig {
         val granted: Collection<GrantedAuthority> = authorities.from(jwt)
         JwtAuthenticationToken(jwt, granted, authorities.usernameOf(jwt))
     }
+
+    /**
+     * The provider's own description of itself, fetched over the routed client.
+     *
+     * **Why this is not `ClientRegistrations.fromIssuerLocation`.** That method
+     * builds its own `RestTemplate` and takes no argument that would let one be
+     * supplied, so every discovery call it makes goes out over a plain
+     * `HttpURLConnection` — direct, whatever the proxy rules say. On a network
+     * that requires a proxy this failed while the application context was being
+     * built, which is a failure with nowhere to report it: the server did not
+     * start, so nobody could reach the page that configures the proxy.
+     *
+     * **What is kept.** The three well-known locations are asked for in the
+     * order Spring Security asks for them, so a provider that publishes only
+     * RFC 8414 metadata, or only OAuth authorization-server metadata, is found
+     * exactly as it was before. What `fromOidcConfiguration` does not do, and
+     * `fromIssuerLocation` did, is check that the document calls itself by the
+     * issuer that was asked for - so that check is made below, because without
+     * it a substituted document could point the flow at somebody else's
+     * authorization and token endpoints.
+     *
+     * **What is different.** The failure message. Spring's said which locations
+     * it tried; this says which locations were tried and what the last one did,
+     * because on a proxied network the answer is nearly always in the second
+     * half of that sentence.
+     */
+    private fun discover(issuer: String, transport: OidcTransport): ClientRegistration.Builder {
+        val rest = transport.restOperations()
+        val attempts = mutableListOf<String>()
+
+        for (uri in wellKnownLocations(issuer)) {
+            attempts += uri.toString()
+            val configuration = try {
+                rest.getForObject(uri, Map::class.java)
+            } catch (failure: Exception) {
+                attempts[attempts.lastIndex] += " (${failure.message})"
+                continue
+            } ?: continue
+
+            /*
+             * The document has to say it is the issuer that was asked for.
+             *
+             * `fromIssuerLocation` made this comparison and `fromOidcConfiguration`
+             * cannot: it is handed a document with nothing to compare it against,
+             * and takes the issuer it finds inside as the truth. Without the check
+             * here, a document served in place of the provider's own - by anything
+             * between here and there, the proxy included - would name whatever
+             * authorization and token endpoints it liked, and this application
+             * would send people to them.
+             */
+            val declared = configuration["issuer"]?.toString()
+            if (declared != issuer) {
+                attempts[attempts.lastIndex] += " (it calls itself $declared)"
+                continue
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            return ClientRegistrations.fromOidcConfiguration(configuration as Map<String, Any>)
+        }
+
+        throw IllegalArgumentException(
+            "The OIDC issuer $issuer could not be read. Tried: ${attempts.joinToString("; ")}",
+        )
+    }
+
+    /**
+     * Where a provider's metadata is published, in the order it is looked for.
+     *
+     * OIDC discovery appends its well-known path to the issuer; RFC 8414 inserts
+     * it between the host and the issuer's own path, which is what a provider
+     * serving several tenants from one host does. The third is the same
+     * insertion for an OAuth authorization server that publishes no OIDC
+     * document at all.
+     */
+    private fun wellKnownLocations(issuer: String): List<URI> {
+        val components = UriComponentsBuilder.fromUriString(issuer).build()
+        val path = components.path.orEmpty().trimEnd('/')
+        val host = UriComponentsBuilder.fromUriString(issuer).replacePath(null).replaceQuery(null).build().toUriString()
+        return listOf(
+            URI.create("$host$path/.well-known/openid-configuration"),
+            URI.create("$host/.well-known/openid-configuration$path"),
+            URI.create("$host/.well-known/oauth-authorization-server$path"),
+        )
+    }
+
 }

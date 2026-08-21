@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.mailAddress
 import jakarta.mail.AuthenticationFailedException
 import jakarta.mail.SendFailedException
 import jakarta.mail.internet.AddressException
@@ -27,7 +29,24 @@ import java.util.Properties
  * STARTTLS - to save one dependency the framework already manages the version of.
  */
 @Component
-class JavaMailTransport(private val properties: ConnectionProperties) : MailTransport {
+class JavaMailTransport(
+    private val properties: ConnectionProperties,
+    /**
+     * Mail is routed by the same rules everything else is.
+     *
+     * It could not be, once: the networking page said in its own footer that
+     * the rules "do not apply to mail", which was true and was the wrong thing
+     * to be true. A workspace that can only reach the outside through a proxy
+     * could configure a mail server it was never able to send through, and the
+     * failure was a connection timeout with nothing pointing at the cause.
+     *
+     * Jakarta Mail cannot be handed a [java.net.http.HttpClient], so this is
+     * the second of the two places that take the decision rather than the
+     * client - the Slack SDK being the first. The rules are still compiled once
+     * and in one place; what differs is only how the answer is delivered.
+     */
+    private val proxies: ProxyRouter,
+) : MailTransport {
 
     override fun deliver(server: SmtpServer, message: MailMessage): MailDelivery {
         val sender = senderFor(server)
@@ -103,6 +122,27 @@ class JavaMailTransport(private val properties: ConnectionProperties) : MailTran
         this["mail.smtp.connectiontimeout"] = timeout
         this["mail.smtp.timeout"] = timeout
         this["mail.smtp.writetimeout"] = timeout
+
+        /*
+         * A web proxy rather than a SOCKS one, when a rule names it.
+         *
+         * These are Jakarta Mail's own property names and it opens the tunnel
+         * itself: a CONNECT to the mail server's host and port, then the SMTP
+         * conversation inside it, which is the same shape a websocket through a
+         * proxy takes. Note that not every proxy will CONNECT to port 587, and
+         * one that refuses says so on the connect rather than in a greeting -
+         * whoever writes a rule for mail should expect to have it allowed at
+         * the proxy as well.
+         *
+         * Nothing is set when no rule matches, which leaves the session exactly
+         * as it was before there were rules at all.
+         */
+        proxies.resolve(mailAddress(server.host, server.port))?.let { proxy ->
+            this["mail.smtp.proxy.host"] = proxy.host
+            this["mail.smtp.proxy.port"] = proxy.port.toString()
+            proxy.username?.let { this["mail.smtp.proxy.user"] = it }
+            proxy.password?.let { this["mail.smtp.proxy.password"] = it }
+        }
     }
 
     /**

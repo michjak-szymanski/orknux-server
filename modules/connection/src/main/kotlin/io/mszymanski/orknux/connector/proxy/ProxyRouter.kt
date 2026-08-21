@@ -28,6 +28,22 @@ import javax.net.ssl.SSLParameters
 internal const val PROXY_AUTHORIZATION = "Proxy-Authorization"
 
 /**
+ * What a proxy rule is matched against for a mail server.
+ *
+ * A rule's pattern is written against a URL, and a mail server is configured as
+ * a host and a port with no URL anywhere - so one is spelled here rather than in
+ * each of the two places that need to ask. `smtp://` and the port are both
+ * present so that a rule can name either: `smtp\.example\.com` matches the
+ * server, `^smtps?://` matches all mail and nothing else.
+ *
+ * The scheme is `smtp` whatever the security setting says, because implicit TLS
+ * is the same conversation on a different port and a rule that stopped matching
+ * when somebody switched a connection from STARTTLS to TLS would be an
+ * unpleasant surprise.
+ */
+fun mailAddress(host: String, port: Int): String = "smtp://$host:$port"
+
+/**
  * Decides which proxy, if any, an outbound request goes through, and hands out
  * HTTP clients that ask.
  *

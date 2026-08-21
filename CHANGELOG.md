@@ -119,6 +119,36 @@ have failed.
 
 ### Fixed
 
+- **The proxy rules now cover the calls that were going round them.** Three
+  things this installation does over the network ignored the rules on the
+  networking page, each for its own reason, and each failed on exactly the
+  networks the rules exist for.
+
+  The worst was a name lookup. Before any call was made, the host was resolved
+  here first - so on a network where only the proxy can resolve an external
+  name, every call failed with *"The host could not be resolved"* before the
+  rules were consulted at all. An installation whose proxy configuration was
+  entirely correct could not make a single call, and nothing on the page listing
+  those rules said why. A host a rule carries is now the proxy's to resolve. A
+  host nothing carries is still checked here, and an address pointed at instance
+  metadata is still refused whether or not a proxy would have fetched it.
+
+  **Signing in with OIDC now works behind a proxy.** Discovery, the key set, the
+  token exchange and userinfo were four separate clients Spring Security built
+  for itself, none of which the rules reached. Discovery runs while the server is
+  starting, so a proxied installation did not come up at all - and the page where
+  the proxy rules are written is behind the sign-in that was failing.
+
+  **Mail is routed too.** A rule is matched against `smtp://host:port`; if one
+  names the server, the session opens a `CONNECT` tunnel through that proxy. Note
+  that a proxy has to be willing to `CONNECT` to a mail port, which is not
+  always the case - so if a rule is in place and mail still fails at the connect,
+  that is the thing to ask about.
+
+  Directory sign-in over LDAP is still not routed and cannot be by these rules:
+  it is not HTTP, so an HTTP proxy has nothing to carry. The networking page now
+  says so rather than claiming mail as the exception.
+
 - **A chat turn no longer disappears because a tool call failed.** Asking an
   agent in chat to file an issue could take the whole turn with it - the answer
   and the person's own message both gone, replaced by an error with nothing

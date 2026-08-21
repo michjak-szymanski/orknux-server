@@ -295,9 +295,19 @@ class OrknuxTools(
                         "Files a new issue in this workspace, under your own name. Use it for anything worth " +
                             "somebody else seeing: what you found, what you could not do, what should be decided.",
                     parameters = listOf(
-                        ToolParameterSpec("title", "One line saying what it is.", required = true),
+                        ToolParameterSpec(
+                            "title",
+                            // The limit is said here as well as enforced, so the ordinary
+                            // case is a title that fits rather than one refused and rewritten.
+                            "One line saying what it is, 200 characters at most.",
+                            required = true,
+                        ),
                         ToolParameterSpec("description", "The detail; markdown is rendered.", required = false),
-                        ToolParameterSpec("labels", "Labels to file it under, comma separated.", required = false),
+                        ToolParameterSpec(
+                            "labels",
+                            "Labels to file it under, comma separated; 60 characters each at most.",
+                            required = false,
+                        ),
                         ToolParameterSpec(
                             "observers",
                             "Who should hear about it, comma separated - people or agents, by name. They are " +
@@ -336,10 +346,18 @@ class OrknuxTools(
                     description = "Changes an issue's title, description or labels. What is left out is left alone.",
                     parameters = listOf(
                         ToolParameterSpec("issue", "Its number in this workspace.", required = true),
-                        ToolParameterSpec("title", "A new title.", required = false),
+                        ToolParameterSpec("title", "A new title, 200 characters at most.", required = false),
                         ToolParameterSpec("description", "A new description; markdown is rendered.", required = false),
-                        ToolParameterSpec("labels", "The labels it should have, comma separated. Replaces them all.", required = false),
-                        ToolParameterSpec("add_labels", "Labels to add, comma separated, leaving the rest alone.", required = false),
+                        ToolParameterSpec(
+                            "labels",
+                            "The labels it should have, comma separated; 60 characters each at most. Replaces them all.",
+                            required = false,
+                        ),
+                        ToolParameterSpec(
+                            "add_labels",
+                            "Labels to add, comma separated, leaving the rest alone; 60 characters each at most.",
+                            required = false,
+                        ),
                         ToolParameterSpec("remove_labels", "Labels to take off, comma separated.", required = false),
                     ),
                 ),

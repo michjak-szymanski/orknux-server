@@ -21,6 +21,7 @@ import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Propagation
 import org.springframework.transaction.annotation.Transactional
 import tools.jackson.databind.ObjectMapper
 import java.time.OffsetDateTime
@@ -36,6 +37,21 @@ import java.time.OffsetDateTime
  *
  * Everything is addressed by the number people say. "#4" is what the page
  * shows, what somebody types in a message, and what the address carries.
+ *
+ * **Every one of them opens its own transaction**, and that is the other reason
+ * this is a bean. These are reached from a tool call, and a tool call is
+ * reached from whatever the caller was in the middle of - a chat turn, which is
+ * one transaction from the person's message to the answer. Joining it meant a
+ * refused insert here left that transaction aborted, and the polite refusal
+ * `OrknuxTools.run` handed back to the model was worth nothing: the next
+ * statement the chat ran on the same connection threw, about a table nobody had
+ * asked about, and the whole turn came back as an empty `INTERNAL_ERROR` with
+ * the person's own message gone from it. `REQUIRES_NEW` is what makes the
+ * promise those catches make true - a tool that failed costs the tool call and
+ * nothing else - and it is the shape `ScheduledTriggerOccurrence` uses for the
+ * same reason. The cost is stated plainly: a tool call that succeeded is
+ * committed even if the turn around it does not survive, which is what "the
+ * agent filed an issue" should have meant all along.
  */
 @Service
 class IssueTools(
@@ -72,7 +88,42 @@ class IssueTools(
     private companion object {
         /** One page, big enough that a workspace's whole tracker fits in it. */
         const val MANY = 200
+
+        /** As long as `Issue.title` is. */
+        const val TITLE = 200
+
+        /** As long as one entry of `Issue.labels` is. */
+        const val LABEL = 60
     }
+
+    /**
+     * Refuses text the column would refuse, and says the limit.
+     *
+     * A model writes its own titles and nothing warns it how long one may be,
+     * so this is not an exotic input - it is the ordinary one, occasionally.
+     * Letting it reach Postgres got the model `value too long for type
+     * character varying(200)`, which is a fact about a column and not an
+     * instruction: it says nothing about which field, and a model handed it can
+     * only guess. Said here instead, with the field named and the limit in it,
+     * a title that is too long is something the model can shorten and send
+     * again - which is what it does.
+     *
+     * Every field a tool call can fill that lands in a bounded column goes
+     * through this. There are two of them, the title and each label; the rest
+     * of what these tools write is either `text`, or a name looked up before it
+     * is used, or one of a fixed set.
+     */
+    private fun tooLong(what: String, given: String, limit: Int): String? =
+        if (given.length <= limit) {
+            null
+        } else {
+            "That $what is ${given.length} characters long. An issue $what has to be $limit characters or fewer - " +
+                "shorten it and send it again."
+        }
+
+    /** The first label that will not fit, said the same way. */
+    private fun labelsTooLong(labels: Collection<String>): String? =
+        labels.firstNotNullOfOrNull { tooLong("label", it, LABEL) }
 
     /**
      * The tracker as a list, filtered the way somebody would ask for it.
@@ -82,7 +133,7 @@ class IssueTools(
      * it is user 5. The name is matched against what the assignee resolves to,
      * so a person and an agent are found the same way.
      */
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun list(scope: OrknuxScope, arguments: String): String {
         val wanted = text(arguments, "status")?.let { asked ->
             IssueStatus.entries.firstOrNull { it.name.equals(asked, ignoreCase = true) }
@@ -136,7 +187,7 @@ class IssueTools(
      * a filter if you know it exists, and "p1" is not something anybody can
      * guess from the outside.
      */
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun labels(scope: OrknuxScope): String {
         val all = issues.search(scope.workspaceId, "", PageRequest.of(0, MANY)).content
         val counted = all.flatMap { it.labels }
@@ -149,7 +200,7 @@ class IssueTools(
         )
     }
 
-    @Transactional(readOnly = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun one(scope: OrknuxScope, arguments: String): String {
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
         return mapper.writeValueAsString(
@@ -199,10 +250,19 @@ class IssueTools(
      * - so ten careful reports about security went to nobody at all, and the
      * silence was how anybody found out.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun open(scope: OrknuxScope, arguments: String): String {
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not open them")
-        val title = text(arguments, "title") ?: return refuse("What should the issue be called?")
+        val title = text(arguments, "title")?.trim() ?: return refuse("What should the issue be called?")
+        tooLong("title", title, TITLE)?.let { return refuse(it) }
+
+        val labels = text(arguments, "labels")
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toMutableSet()
+            ?: mutableSetOf()
+        labelsTooLong(labels)?.let { return refuse(it) }
 
         val named = text(arguments, "observers")
             ?.split(',')
@@ -225,15 +285,10 @@ class IssueTools(
             Issue(
                 workspaceId = scope.workspaceId,
                 number = issues.lastNumber(scope.workspaceId) + 1,
-                title = title.trim(),
+                title = title,
                 description = text(arguments, "description")?.trim(),
                 reporter = currentUser(),
-                labels = text(arguments, "labels")
-                    ?.split(',')
-                    ?.map { it.trim() }
-                    ?.filter { it.isNotEmpty() }
-                    ?.toMutableSet()
-                    ?: mutableSetOf(),
+                labels = labels,
                 lastModifiedBy = currentUser(),
             ),
         )
@@ -313,7 +368,7 @@ class IssueTools(
      * by a real name and lands where everybody else is already reading -
      * rather than in a chat window nobody else can see.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun comment(scope: OrknuxScope, arguments: String): String {
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not write on them")
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
@@ -330,7 +385,7 @@ class IssueTools(
         )
     }
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun setStatus(scope: OrknuxScope, arguments: String): String {
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not change them")
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
@@ -359,7 +414,7 @@ class IssueTools(
      * because "slack, timing" is what a model actually writes and insisting on
      * JSON here buys nothing.
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun update(scope: OrknuxScope, arguments: String): String {
         if (!scope.mayWrite) return refuse("This conversation may read issues, but not change them")
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
@@ -368,6 +423,22 @@ class IssueTools(
         // work on the set the entity holds, and a reference to it would compare
         // the result with itself.
         val labelsWere = held.labels.toSet()
+
+        /*
+         * Checked before anything is changed, so a refusal leaves the issue as
+         * it was rather than half edited. The transaction would undo it either
+         * way; the entity in front of us would not.
+         */
+        text(arguments, "title")?.trim()?.let { given ->
+            tooLong("title", given, TITLE)?.let { return refuse(it) }
+        }
+        listOf("labels", "add_labels").forEach { field ->
+            text(arguments, field)?.let { given ->
+                labelsTooLong(given.split(',').map { it.trim() }.filter { it.isNotEmpty() })
+                    ?.let { return refuse(it) }
+            }
+        }
+
         text(arguments, "title")?.let { held.title = it.trim() }
         text(arguments, "description")?.let { given ->
             held.description = given.trim().takeIf { it.isNotEmpty() }

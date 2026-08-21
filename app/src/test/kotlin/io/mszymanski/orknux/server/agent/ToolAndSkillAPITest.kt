@@ -25,6 +25,7 @@ class ToolAndSkillAPITest(
     @Autowired val tools: AgentToolRepository,
     @Autowired val skills: AgentSkillRepository,
     @Autowired val skillCatalogs: SkillCatalogRepository,
+    @Autowired val agents: AgentRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
 ) {
@@ -33,6 +34,7 @@ class ToolAndSkillAPITest(
 
     @BeforeEach
     fun reset() {
+        agents.deleteAll()
         tools.deleteAll()
         skills.deleteAll()
         skillCatalogs.deleteAll()
@@ -370,6 +372,116 @@ class ToolAndSkillAPITest(
             .execute().path("deleteTool").entity(Boolean::class.java).isEqualTo(true)
         assertThat(tools.findAll()).isEmpty()
         assertThat(audit.findAll().map { it.message }).contains("Tool buildReport deleted")
+    }
+
+    /**
+     * Issue #165: a tool an agent may call cannot be deleted out from under it.
+     *
+     * The grant is a **name**, so nothing would have been left dangling to
+     * notice - the agent would simply have stopped being able to do this, with
+     * its own screen still listing the grant and nothing anywhere saying what
+     * changed. Silent capability loss is worse than a refused delete, and the
+     * refusal names the agent because taking the grant off it is the way out.
+     */
+    @Test
+    fun `a tool an agent is granted cannot be deleted`() {
+        val id = tool("forecast")
+        granted(tools = listOf("forecast"))
+
+        graphQlTester.document("""mutation { deleteTool(id: $id) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message)
+                    .isEqualTo("forecast is granted to the agent Reviewer, so it cannot be deleted")
+            }
+
+        assertThat(tools.findAll().map { it.name }).containsExactly("forecast")
+    }
+
+    /**
+     * The same, one grant over.
+     *
+     * A catalog is the unit an agent is granted, so deleting one takes every
+     * skill in it away from every agent that had them at once.
+     */
+    @Test
+    fun `a skill catalog an agent draws on cannot be deleted`() {
+        val reviews = catalog("Reviews")
+        skill("codeReview", reviews)
+        granted(skillCatalogs = listOf("Reviews"))
+
+        graphQlTester.document("""mutation { deleteSkillCatalog(id: $reviews) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message)
+                    .isEqualTo("Reviews is granted to the agent Reviewer, so it cannot be deleted")
+            }
+
+        assertThat(skills.findAll().map { it.name }).containsExactly("codeReview")
+    }
+
+    /**
+     * Where the guard stops, said out loud.
+     *
+     * A single skill carries no grant - the catalog does - so removing one
+     * leaves the grant exactly as it was and every agent holding it keeps
+     * everything else in the folder. That is editing a folder, not revoking a
+     * capability, and it is not refused.
+     */
+    @Test
+    fun `a skill inside a granted catalog still deletes`() {
+        val reviews = catalog("Reviews")
+        val one = skill("codeReview", reviews)
+        skill("securityReview", reviews)
+        granted(skillCatalogs = listOf("Reviews"))
+
+        graphQlTester.document("""mutation { deleteSkill(id: $one) }""")
+            .execute().path("deleteSkill").entity(Boolean::class.java).isEqualTo(true)
+
+        assertThat(skills.findAll().map { it.name }).containsExactly("securityReview")
+    }
+
+    /**
+     * And the guards are guards, not bans.
+     *
+     * A tool nobody was granted and a catalog nobody draws on delete as they
+     * always did, with an agent in the workspace holding other grants - so what
+     * is being checked is that the question is about *this* name, not that the
+     * workspace happens to have no agents.
+     */
+    @Test
+    fun `a tool and a catalog nobody was granted still delete`() {
+        val spareTool = tool("unusedTool")
+        val spareCatalog = catalog("Unused")
+        granted(tools = listOf("somethingElse"), skillCatalogs = listOf("SomethingElse"))
+
+        graphQlTester.document("""mutation { deleteTool(id: $spareTool) }""")
+            .execute().path("deleteTool").entity(Boolean::class.java).isEqualTo(true)
+
+        graphQlTester.document("""mutation { deleteSkillCatalog(id: $spareCatalog) }""")
+            .execute().path("deleteSkillCatalog").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    /** One agent called Reviewer, holding the grants it is given. */
+    private fun granted(tools: List<String> = emptyList(), skillCatalogs: List<String> = emptyList()) {
+        val agentId = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Reviewer", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        val granted = tools.joinToString(", ") { "\"$it\"" }
+        val drawn = skillCatalogs.joinToString(", ") { "\"$it\"" }
+        graphQlTester.document(
+            """
+            mutation {
+              updateAgent(id: $agentId, input: {
+                name: "Reviewer", tools: [$granted], skillCatalogs: [$drawn]
+              }) { tools skillCatalogs }
+            }
+            """,
+        ).execute()
+            .path("updateAgent.tools").entityList(String::class.java).containsExactly(*tools.toTypedArray())
     }
 
     private fun expectInvalid(content: String, reason: String) {

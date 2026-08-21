@@ -182,3 +182,15 @@ class ToolCodeIncompleteException(missing: String) : RuntimeException(
     "The $missing is missing. A tool's TypeScript and the JavaScript compiled " +
         "from it are saved together, so that what runs is always what was written.",
 )
+
+/**
+ * A tool an agent may call is not one to delete.
+ *
+ * Named agents rather than a count, because the way out is to go and take the
+ * grant off each of them and "2 agents" does not say which. The agents are said
+ * as "the agent Answerer" for the reason a workflow is: the sentence is read on
+ * the tool list, where nothing else on the screen is an agent.
+ */
+class ToolInUseException(name: String, agents: List<String>) : RuntimeException(
+    "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
+)

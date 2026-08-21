@@ -15,4 +15,20 @@ interface AgentRepository : JpaRepository<Agent, Long> {
     /** However the name was typed: a model asking for an agent has read it, not copied it. */
     @Query("select a from Agent a where a.workspaceId = :workspaceId and lower(a.name) = lower(:name)")
     fun findNamed(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): Agent?
+
+    /**
+     * Which of the workspace's agents were granted this tool.
+     *
+     * Exactly as spelled, not however it was typed, because that is how the
+     * grant is read: [WorkspaceToolCaller] looks the name up with
+     * `findByWorkspaceIdAndName`, so a grant that differs by a letter's case is
+     * already a grant that resolves to nothing and there is nothing here to
+     * protect.
+     */
+    @Query("select a from Agent a join a.tools t where a.workspaceId = :workspaceId and t = :name")
+    fun findGrantedTool(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
+
+    /** Which of the workspace's agents were granted this skill catalog, spelled the same way. */
+    @Query("select a from Agent a join a.skillCatalogs c where a.workspaceId = :workspaceId and c = :name")
+    fun findGrantedSkillCatalog(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
 }

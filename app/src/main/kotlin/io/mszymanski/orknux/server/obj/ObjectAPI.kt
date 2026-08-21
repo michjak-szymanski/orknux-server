@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.obj
 
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -31,6 +32,7 @@ class ObjectAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val triggers: WorkflowTriggerRepository,
 ) {
 
     @QueryMapping
@@ -98,11 +100,37 @@ class ObjectAPI(
     }
 
     /**
-     * An object still used by another is not one to delete.
+     * An object another object or a webhook depends on is not one to delete.
      *
-     * The same rule a condition follows: what points at it would be left
-     * describing a shape that no longer exists, and a property with a dangling
-     * reference cannot be shown, checked or offered.
+     * Two of the references to an object are guarded and the rest are not, and
+     * that is a decision rather than an omission. An object is a *description of
+     * a shape*, and most things naming one are reading the description:
+     *
+     * - Another object's property. Guarded, and always was: a property with a
+     *   dangling reference cannot be shown, checked or offered — there is no
+     *   degraded version of it to fall back to.
+     * - A webhook's shape. Guarded here. Unlike the rest, this one is not read
+     *   by a person — it is what every arriving request is checked against, and
+     *   [WebhookAPI][io.mszymanski.orknux.server.trigger.WebhookAPI] answers 404
+     *   when it resolves to nothing. A 404 is exactly what a path nobody listens
+     *   on returns, so the webhook does not look broken to its caller; it looks
+     *   absent, and the only record is a line in the firing log. `TriggerAPI`
+     *   already refuses to *save* a webhook whose shape is missing, so deleting
+     *   the object was the one door that could put a trigger into a state the
+     *   trigger door itself would not accept.
+     * - A function's parameter or return object, a tool's parameter, an object
+     *   node on a canvas. **Not** guarded, deliberately. Each of these is an
+     *   annotation: the shape tells the editor what to write above the code and
+     *   what fields the picker downstream can offer. When it goes, the signature
+     *   falls back to saying `object` and the picker shows nothing chosen — a
+     *   thing somebody sees, on the screen where they would fix it, before
+     *   anything runs. None of them reaches a published copy either: a
+     *   snapshot's nodes carry `agentId`, `actionId` and `conditionId` and no
+     *   object id at all, so there is no frozen copy going on naming one.
+     *
+     * The line, then, is not "id or name" and not "draft or published": it is
+     * whether the reference is read by a person who can act on it, or consulted
+     * by something that will quietly turn a caller away.
      */
     @MutationMapping
     @Transactional
@@ -111,7 +139,8 @@ class ObjectAPI(
 
         val users = objects.findByWorkspaceId(held.workspaceId)
             .filter { it.id != id && it.properties.any { property -> property.refObjectId == id } }
-            .map { it.name }
+            .map { it.name } +
+            triggers.findByObjectId(id).map { "the webhook ${it.name}" }
         if (users.isNotEmpty()) throw ObjectInUseException(held.name, users)
 
         objects.delete(held)

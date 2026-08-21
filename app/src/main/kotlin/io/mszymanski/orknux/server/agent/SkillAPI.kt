@@ -34,6 +34,7 @@ class SkillAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
+    private val grants: AgentGrants,
 ) {
 
     /**
@@ -106,11 +107,23 @@ class SkillAPI(
         return describe(catalog)
     }
 
-    /** Deletes the catalog and the skills in it, as a memory catalog does. */
+    /**
+     * Deletes the catalog and the skills in it, unless an agent draws on it.
+     *
+     * The catalog is the unit an agent is granted, and the grant is a name — so
+     * deleting one takes every skill in it away from every agent that had them
+     * and nothing anywhere says so. [AgentGrants] is the argument; a single
+     * skill is not asked about here because a single skill carries no grant.
+     * Removing one leaves the catalog and its grant exactly as they were, which
+     * is editing a folder rather than revoking a capability.
+     */
     @MutationMapping
     @Transactional
     fun deleteSkillCatalog(@Argument id: Long): Boolean {
         val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+
+        val granted = grants.toSkillCatalog(catalog.workspaceId, catalog.name)
+        if (granted.isNotEmpty()) throw SkillCatalogInUseException(catalog.name, granted)
 
         val held = skills.countByCatalogId(id)
         // Every skill in it goes, so every skill's history goes with it -

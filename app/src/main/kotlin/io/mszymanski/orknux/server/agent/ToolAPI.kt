@@ -40,6 +40,7 @@ class ToolAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
+    private val grants: AgentGrants,
 ) {
 
     @QueryMapping
@@ -165,10 +166,21 @@ class ToolAPI(
         return SourceValidationView(checked.valid, checked.message, checked.line, checked.column)
     }
 
+    /**
+     * Removes a tool, unless an agent was granted it.
+     *
+     * A grant is a name rather than an id, so nothing here would have been left
+     * dangling: the agent would simply have stopped being able to do this, with
+     * its own screen still listing the grant and nothing anywhere saying what
+     * changed. [AgentGrants] is where that argument is written down.
+     */
     @MutationMapping
     @Transactional
     fun deleteTool(@Argument id: Long): Boolean {
         val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+
+        val granted = grants.toTool(tool.workspaceId, tool.name)
+        if (granted.isNotEmpty()) throw ToolInUseException(tool.name, granted)
 
         tools.delete(tool)
         revisions.forget(ComponentRevisionKind.TOOL, id)

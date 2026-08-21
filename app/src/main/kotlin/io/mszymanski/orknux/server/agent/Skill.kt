@@ -177,3 +177,14 @@ class SkillNameTakenException(name: String) :
 class SkillNameInvalidException : RuntimeException("A skill name is required")
 
 class SkillContentInvalidException(reason: String) : RuntimeException(reason)
+
+/**
+ * A skill catalog an agent draws on is not one to delete.
+ *
+ * Said of the catalog and not of the skills inside it, because the catalog is
+ * what an agent is granted: the skills go with it, so the loss is every page in
+ * the folder at once.
+ */
+class SkillCatalogInUseException(name: String, agents: List<String>) : RuntimeException(
+    "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
+)

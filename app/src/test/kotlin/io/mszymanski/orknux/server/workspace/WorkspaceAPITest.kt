@@ -320,6 +320,73 @@ class WorkspaceAPITest(
         assertThat(repository.findAll()).isEmpty()
     }
 
+    /**
+     * A workspace goes even when one of its actions still names one of its
+     * functions, and another still names one of its conditions.
+     *
+     * Both columns were ON DELETE SET NULL while `ck_workflow_action_shape`
+     * insists that a FUNCTION action has a function and a CONDITION wait has a
+     * condition. So the cascade took the functions and conditions away, the
+     * foreign key nulled the columns on action rows that were themselves about
+     * to go, and the check refused the row before anything got as far as
+     * deleting it — INTERNAL_ERROR, and the workspace still there. V25 had
+     * already fixed the same shape on `workflow_condition.function_id` and its
+     * comment said an action was safe; it was not.
+     *
+     * Only SQLite ever said so out loud, because Postgres puts the check off to
+     * the end of the statement, by which time the action row is gone. Which is
+     * why this is worth a test rather than a schema read: it runs on whichever
+     * engine the suite is pointed at.
+     */
+    @Test
+    fun `deletes a workspace whose actions still name its functions and conditions`() {
+        val workspaceId = graphQlTester.document(
+            """mutation { createWorkspace(input: { name: "backend" }) { id } }""",
+        ).execute().path("createWorkspace.id").entity(Long::class.java).get()
+
+        val functionId = graphQlTester.document(
+            """mutation { createFunction(input: { workspaceId: $workspaceId, name: "transformPayload" }) { id } }""",
+        ).execute().path("createFunction.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Transform Data", type: EXECUTE, subtype: FUNCTION,
+                functionId: $functionId
+              }) { id }
+            }
+            """,
+        ).execute().path("createAction.id").entity(Long::class.java).get()
+
+        val conditionId = graphQlTester.document(
+            """
+            mutation {
+              createCondition(input: {
+                workspaceId: $workspaceId, name: "From alice", type: SLACK, property: MESSAGE_AUTHOR,
+                check: IN_LIST, values: ["alice@example.com"]
+              }) { id }
+            }
+            """,
+        ).execute().path("createCondition.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Hold For Alice", type: WAIT, subtype: CONDITION,
+                conditionId: $conditionId
+              }) { id }
+            }
+            """,
+        ).execute().path("createAction.id").entity(Long::class.java).get()
+
+        graphQlTester.document("""mutation { deleteWorkspace(id: $workspaceId) }""")
+            .execute().path("deleteWorkspace").entity(Boolean::class.java).isEqualTo(true)
+
+        assertThat(repository.findAll()).isEmpty()
+    }
+
     @Test
     fun `deletes a workspace and reports whether it existed`() {
         val workspace = repository.save(Workspace(name = "platform"))

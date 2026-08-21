@@ -694,8 +694,8 @@ CREATE TABLE workflow_action
     constraint ck_workflow_action_shape CHECK (((((type) = 'EXECUTE') AND ((subtype) = 'OUTGOING_CONNECTION') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'SEND_EMAIL') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'HTTP_REQUEST') AND (url IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'FUNCTION') AND (function_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'INLINE_CONDITION') AND (condition_expression IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'CONDITION') AND (condition_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'TIME') AND (duration_seconds IS NOT NULL)))),
     constraint ck_workflow_action_subtype CHECK (((subtype) IN ('OUTGOING_CONNECTION', 'SEND_EMAIL', 'HTTP_REQUEST', 'FUNCTION', 'INLINE_CONDITION', 'CONDITION', 'TIME'))),
     constraint ck_workflow_action_type CHECK (((type) IN ('EXECUTE', 'WAIT'))),
-    constraint workflow_action_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE SET NULL,
-    constraint workflow_action_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE SET NULL,
+    constraint workflow_action_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id),
+    constraint workflow_action_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id),
     constraint workflow_action_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 

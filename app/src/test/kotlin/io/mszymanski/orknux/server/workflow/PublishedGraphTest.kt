@@ -6,7 +6,6 @@ import io.mszymanski.orknux.workflow.execution.EdgeBranch as RunnableEdgeBranch
 import io.mszymanski.orknux.workflow.execution.GraphEdge
 import io.mszymanski.orknux.workflow.execution.GraphVersion
 import io.mszymanski.orknux.workflow.execution.NodeBinding
-import io.mszymanski.orknux.workflow.execution.RetryBackoff as RunnableRetryBackoff
 import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
@@ -255,7 +254,8 @@ class PublishedGraphTest(
             nodes = """
                 { key: "call", kind: ACTION, name: "Tell the customer", x: 0, y: 0,
                   fallbackEnabled: true, retryAttempts: 3, retryBackoffSeconds: 30,
-                  retryBackoff: EXPONENTIAL },
+                  retryMultiplier: 1.5, retryMaxWaitSeconds: 90, retryJitter: 0.2,
+                  retryBudgetSeconds: 300 },
                 { key: "report", kind: AGENT, name: "Say it went out", x: 200, y: 0 },
                 { key: "apologise", kind: AGENT, name: "Say it did not", x: 200, y: 120 }
             """,
@@ -271,9 +271,13 @@ class PublishedGraphTest(
         val action = live.nodes.single { it.key == "call" }
         assertThat(action.retryAttempts).isEqualTo(3)
         assertThat(action.retryBackoffSeconds).isEqualTo(30)
-        // The curve too: a published graph whose waits stopped growing is a
-        // policy quietly changed by publishing it.
-        assertThat(action.retryBackoff).isEqualTo(RunnableRetryBackoff.EXPONENTIAL)
+        // And the whole of the backoff: a published graph whose waits stopped
+        // growing, or lost their ceiling, is a policy quietly changed by having
+        // been published.
+        assertThat(action.retryMultiplier).isEqualTo(1.5)
+        assertThat(action.retryMaxWaitSeconds).isEqualTo(90)
+        assertThat(action.retryJitter).isEqualTo(0.2)
+        assertThat(action.retryBudgetSeconds).isEqualTo(300)
 
         // The fallback is the edge: a run that could not do the work leaves by
         // the marked one, and the unmarked one is still the way out when it did.

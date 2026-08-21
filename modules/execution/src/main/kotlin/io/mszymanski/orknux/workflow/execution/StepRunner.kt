@@ -4,6 +4,8 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import java.time.Duration
 import java.time.OffsetDateTime
+import kotlin.math.pow
+import kotlin.random.Random
 
 /** What one step did, as the thing carrying the run needs to know it. */
 data class StepOutcome(
@@ -20,35 +22,100 @@ data class StepOutcome(
 )
 
 /**
- * How many attempts a node is allowed, and how long it waits between them.
+ * What a node does about failing, and how long it leaves between the goes.
  *
- * Visible, and with the arithmetic on it rather than inline where it is spent,
- * so the curve can be asserted without a test that actually sits out the waits
- * it is checking.
+ * Six numbers rather than a wait and a flag, because a backoff is a curve and a
+ * flag can name two of them. The arithmetic is here rather than inline where it
+ * is spent, so the curve can be asserted without a test that actually sits out
+ * the waits it is checking - and so the interface can draw the same sentence
+ * about it that the engine will act on.
  */
 data class RetryPolicy(
     val attempts: Int,
-    /** The wait before the first retry, and the whole of it under [RetryBackoff.FIXED]. */
+    /** The wait before the second attempt, and the whole of it at [NO_GROWTH]. */
     val backoff: Duration,
-    val curve: RetryBackoff = RetryBackoff.FIXED,
+    /**
+     * What the wait is multiplied by after each attempt.
+     *
+     * One is the fixed wait every policy was until now; two is the doubling that
+     * replaced the flag; 1.5 is the curve neither word could say. Below one is
+     * read as one rather than shrinking a wait, because a retry that comes back
+     * sooner each time is nobody's intent and the editor cannot express it.
+     */
+    val multiplier: Double = NO_GROWTH,
+    /**
+     * The most any one wait may come to.
+     *
+     * Never above [MAX_WAIT] however it is set: a run cannot be made to
+     * disappear for a day by a number typed into a box.
+     */
+    val maxWait: Duration = MAX_WAIT,
+    /**
+     * The fraction of a wait that may be taken off it at random.
+     *
+     * Downward only, which is what makes every other number here an upper bound
+     * that stays one: a policy with jitter never waits longer than the same
+     * policy without it, so the ceiling and the budget go on meaning what they
+     * say. Nought is the old behaviour, and one is a wait drawn uniformly from
+     * nothing up to what the curve asked for.
+     */
+    val jitter: Double = NO_JITTER,
+    /**
+     * The longest the whole business may take, work included; null is no limit.
+     *
+     * The one bound the other five cannot express between them. They bound the
+     * waiting, and what happens between two waits is an action calling something
+     * outside this installation, which takes as long as it takes: five attempts
+     * at a request that times out after sixty seconds is five minutes of run
+     * that no arrangement of waits accounts for.
+     */
+    val budget: Duration? = null,
 ) {
+
+    /** The ceiling actually enforced: what was asked for, or the hour, whichever is less. */
+    private val ceiling: Duration get() = if (maxWait < MAX_WAIT) maxWait else MAX_WAIT
 
     /**
      * How long to leave the step alone, having spent [attemptsSpent] attempts.
      *
-     * Doubling counts from the first retry, so the number written on the node is
-     * what it waits before its second attempt on either curve; only the waits
-     * after that one differ. Which also means switching a node to doubling never
-     * makes its first retry later than it was.
+     * Growth counts from the first retry, so the number written on the node is
+     * what it waits before its second attempt on any curve; only the waits after
+     * that one differ. Which also means steepening a node's curve never makes
+     * its first retry later than it was.
      */
     fun waitAfter(attemptsSpent: Int): Duration {
-        if (curve != RetryBackoff.EXPONENTIAL) return backoff
-        val doublings = (attemptsSpent - 1).coerceIn(0, MAX_DOUBLINGS)
-        val grown = backoff.multipliedBy(1L shl doublings)
-        return if (grown > MAX_WAIT) MAX_WAIT else grown
+        val ceiling = ceiling
+        if (backoff >= ceiling) return ceiling
+        if (multiplier <= NO_GROWTH) return backoff
+        val grown = backoff.toMillis() * multiplier.pow((attemptsSpent - 1).coerceAtLeast(0))
+        // Not a comparison of Durations, because far enough out the growth is
+        // larger than a Duration holds - and infinity is still above the hour.
+        return if (!grown.isFinite() || grown >= ceiling.toMillis()) ceiling else Duration.ofMillis(grown.toLong())
+    }
+
+    /**
+     * The same wait with [jitter] taken off it, by however much [random] says.
+     *
+     * Separate from the arithmetic rather than folded into it, so what the curve
+     * asks for stays something a test can assert exactly.
+     */
+    fun waitAfter(attemptsSpent: Int, random: Random): Duration {
+        val full = waitAfter(attemptsSpent)
+        if (jitter <= NO_JITTER || full.isZero) return full
+        val kept = 1.0 - jitter.coerceIn(NO_JITTER, FULL_JITTER) * random.nextDouble()
+        return Duration.ofMillis((full.toMillis() * kept).toLong())
     }
 
     companion object {
+
+        /** A multiplier of one: the same wait before every retry. */
+        const val NO_GROWTH: Double = 1.0
+
+        /** No jitter: the wait the curve asked for, exactly. */
+        const val NO_JITTER: Double = 0.0
+
+        /** All of it: a wait drawn uniformly from nothing up to what the curve asked for. */
+        const val FULL_JITTER: Double = 1.0
 
         /**
          * The longest a single wait may come to, whatever the curve.
@@ -61,12 +128,6 @@ data class RetryPolicy(
          * like three weeks to whoever typed them.
          */
         val MAX_WAIT: Duration = Duration.ofHours(1)
-
-        /**
-         * Enough doublings to reach the cap from a wait of one second, and few
-         * enough that the shift stays a number.
-         */
-        private const val MAX_DOUBLINGS = 30
     }
 }
 
@@ -122,6 +183,16 @@ class StepRunner(
 ) {
 
     /**
+     * Where a jittered wait's randomness comes from.
+     *
+     * Not injected, because there is nothing to configure and nothing to assert
+     * through it: what jitter does to a wait is arithmetic on [RetryPolicy] and
+     * is asserted there with a seed. All this has to be is different between two
+     * runs that failed on the same outage, which is the whole point of it.
+     */
+    private val random: Random = Random.Default
+
+    /**
      * Carries out one step and records what it did.
      *
      * A step that parks is not finished, so this is also how a parked step is
@@ -153,6 +224,13 @@ class StepRunner(
             // A resumed wait is the same attempt asking again; anything else is
             // a new one, which is what a retry policy is counting.
             step.attempts += 1
+            // The first time this run reaches this step, whatever the attempt
+            // count carried over from an earlier one says: a re-run starting
+            // here gets the budget from where it starts, not what a previous
+            // run had left of it.
+            if (step.retryDeadline == null) {
+                step.retryDeadline = step.retryBudgetSeconds?.let { step.startedAt?.plusSeconds(it.toLong()) }
+            }
         }
         step.status = StepStatus.RUNNING
         step.finishedAt = null
@@ -174,7 +252,25 @@ class StepRunner(
 
             val policy = retryOf(step)
             if (policy != null && !permanent && step.attempts < policy.attempts) {
-                return parkForRetry(executionId, step, input, reason, policy)
+                // Worked out here rather than inside parkForRetry, because the
+                // budget is a question about this particular wait: a policy with
+                // four attempts left and forty seconds of budget has to know
+                // whether the next wait lands inside it before it parks.
+                val wait = policy.waitAfter(step.attempts, random)
+                val deadline = step.retryDeadline
+                if (deadline == null || !OffsetDateTime.now().plus(wait).isAfter(deadline)) {
+                    return parkForRetry(executionId, step, input, reason, policy, wait)
+                }
+                // Parking would land past the budget, so it does not park. The
+                // attempts it had left are not spent one at a time to arrive at
+                // the same place: the budget is the answer, and it is already in.
+                log.write(
+                    executionId,
+                    step.nodeKey,
+                    LogLevel.INFO,
+                    "${step.name} failed on attempt ${step.attempts} of ${policy.attempts}: $reason. " +
+                        "Its ${policy.budget?.toSeconds() ?: 0}s budget for trying is spent, so it stops here",
+                )
             }
 
             /*
@@ -243,9 +339,16 @@ class StepRunner(
             RetryPolicy(
                 attempts = it,
                 backoff = Duration.ofSeconds((step.retryBackoffSeconds ?: 0).coerceAtLeast(0).toLong()),
-                // Null is the fixed wait every step had before a node could ask
-                // for anything else.
-                curve = step.retryBackoff ?: RetryBackoff.FIXED,
+                // Every null below is what the step meant before there was a
+                // field for it: a wait that does not grow, the engine's own
+                // ceiling, no jitter and no budget. So a step written by an
+                // older version, or by a node nobody has opened since, waits
+                // exactly what it waited then.
+                multiplier = step.retryMultiplier ?: RetryPolicy.NO_GROWTH,
+                maxWait = step.retryMaxWaitSeconds?.let { seconds -> Duration.ofSeconds(seconds.toLong()) }
+                    ?: RetryPolicy.MAX_WAIT,
+                jitter = step.retryJitter ?: RetryPolicy.NO_JITTER,
+                budget = step.retryBudgetSeconds?.let { seconds -> Duration.ofSeconds(seconds.toLong()) },
             )
         }
 
@@ -258,6 +361,10 @@ class StepRunner(
      * Temporal has no failure to retry on top, and the backoff runs down on a
      * durable timer rather than inside an activity holding a worker and burning
      * its start-to-close timeout.
+     *
+     * @param wait what the caller worked out this attempt had earned, already
+     *   checked against the budget - both written down and spent here, so the
+     *   log cannot quote one length of time while the run sits out another.
      */
     private fun parkForRetry(
         executionId: Long,
@@ -265,6 +372,7 @@ class StepRunner(
         input: String?,
         reason: String,
         policy: RetryPolicy,
+        wait: Duration,
     ): StepOutcome {
         step.status = StepStatus.WAITING
         step.error = reason.take(ERROR_LENGTH)
@@ -273,11 +381,9 @@ class StepRunner(
         step.waitUntil = null
         steps.save(step)
 
-        // What this attempt in particular earns, which on a doubling curve is
-        // not what the last one waited - so it is worked out here and then both
-        // written down and spent, rather than the log quoting the node's number
-        // while the run waits some other length of time.
-        val wait = policy.waitAfter(step.attempts)
+        // The wait this attempt in particular earned, which on any curve but a
+        // flat one is not what the last one waited - so the log quotes what the
+        // run is about to sit out rather than the number written on the node.
         log.write(
             executionId,
             step.nodeKey,

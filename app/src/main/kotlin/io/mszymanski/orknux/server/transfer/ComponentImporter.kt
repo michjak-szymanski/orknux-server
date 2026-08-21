@@ -45,7 +45,6 @@ import io.mszymanski.orknux.server.workflow.MappingMode
 import io.mszymanski.orknux.server.workflow.NodeKind
 import io.mszymanski.orknux.server.workflow.NodeMapping
 import io.mszymanski.orknux.server.workflow.NodeOrientation
-import io.mszymanski.orknux.server.workflow.RetryBackoff
 import io.mszymanski.orknux.server.workflow.Workflow
 import io.mszymanski.orknux.server.workflow.WorkflowEdge
 import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
@@ -921,9 +920,20 @@ class ComponentImporter(
                     fallbackEnabled = drawn.path("fallbackEnabled").asBoolean(false),
                     retryAttempts = drawn.path("retryAttempts").let { if (it.isNumber) it.asInt() else null },
                     retryBackoffSeconds = drawn.path("retryBackoffSeconds").let { if (it.isNumber) it.asInt() else null },
-                    // Absent from every envelope written while a fixed wait was
-                    // the only one there was, which is what null goes on meaning.
-                    retryBackoff = drawn.enumOrNull<RetryBackoff>("retryBackoff", component),
+                    /*
+                     * An envelope exported before the curve was a number says
+                     * `retryBackoff: EXPONENTIAL`, and files already written are
+                     * not going to change. EXPONENTIAL was a multiplier of two,
+                     * so it is read as one and the imported node waits what the
+                     * exported one waited. Everything absent is what it meant
+                     * before there was a field for it: a wait that does not
+                     * grow, the engine's own ceiling, no jitter, no budget.
+                     */
+                    retryMultiplier = drawn.path("retryMultiplier").let { if (it.isNumber) it.asDouble() else null }
+                        ?: DOUBLING.takeIf { drawn.text("retryBackoff") == "EXPONENTIAL" },
+                    retryMaxWaitSeconds = drawn.path("retryMaxWaitSeconds").let { if (it.isNumber) it.asInt() else null },
+                    retryJitter = drawn.path("retryJitter").let { if (it.isNumber) it.asDouble() else null },
+                    retryBudgetSeconds = drawn.path("retryBudgetSeconds").let { if (it.isNumber) it.asInt() else null },
                     mappings = drawn.path("mappings").values().map { mapping ->
                         NodeMapping(
                             name = mapping.text("name").orEmpty(),
@@ -1216,6 +1226,9 @@ class ComponentImporter(
 
         /** Where an imported skill goes when the file names no folder. */
         const val DEFAULT_CATALOG = "General"
+
+        /** What the word EXPONENTIAL meant, for the envelopes that still say it. */
+        const val DOUBLING = 2.0
 
         /** Far past any honest collision; a bound, so a loop cannot be one. */
         const val MAX_RENAME = 100

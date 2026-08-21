@@ -1030,10 +1030,16 @@ type WorkflowNode {
     fallbackEnabled: Boolean!
     "How many times in all a run may attempt this node; null is once."
     retryAttempts: Int
-    "How long to leave a failed attempt alone before the next; null is none."
+    "The wait before the second attempt, in seconds; null is none."
     retryBackoffSeconds: Int
-    "How that wait grows from one attempt to the next; null is FIXED."
-    retryBackoff: RetryBackoff
+    "What that wait is multiplied by after each attempt; null is a wait that does not grow."
+    retryMultiplier: Float
+    "The most any one wait may come to, in seconds; null is the engine's own hour."
+    retryMaxWaitSeconds: Int
+    "The fraction of a wait that may be taken off it at random; null is none."
+    retryJitter: Float
+    "The longest this node may go on being attempted for, in seconds; null is no limit."
+    retryBudgetSeconds: Int
     x: Float!
     y: Float!
     "What the node needs, read off whatever it points at."
@@ -1062,26 +1068,6 @@ type NodeMapping {
     mode: MappingMode!
     "Which node produces the referenced field; what the canvas draws a line from."
     sourceNodeKey: String
-}
-
-"""
-How the wait between two attempts of a node grows.
-
-Null is FIXED, which is what every node saved before there was a choice means.
-"""
-enum RetryBackoff {
-    "The same wait before every retry."
-    FIXED
-    """
-    Doubling: each retry waits twice as long as the one before it.
-
-    For a failure that is a queue rather than a blip — a rate limit, a provider
-    still coming back up — where several attempts on one short clock are several
-    attempts spent inside the same bad minute. One wait is capped at an hour
-    however far the doubling would have gone, so the numbers on a node cannot
-    multiply out into a run that disappears for a week.
-    """
-    EXPONENTIAL
 }
 
 "Which way out of a node an edge leaves by."
@@ -1248,20 +1234,48 @@ input WorkflowNodeInput {
     """
     retryAttempts: Int
     """
-    How long to leave a failed attempt alone before the next, in seconds; null
-    is none. Held between 0 and 3600. Under FIXED it is the whole wait; under
-    EXPONENTIAL it is what the first retry waits, and every one after it doubles.
+    The wait before the second attempt, in seconds; null is none. Held between 0
+    and 3600. At a multiplier of one it is the whole wait, before every retry.
     """
     retryBackoffSeconds: Int
     """
-    How that wait grows from one attempt to the next; null is FIXED. Kept on an
-    ACTION and on an AGENT only, like the two above it.
+    What that wait is multiplied by after each attempt; null or 1 is a wait that
+    does not grow. Held between 1 and 10, and kept only where there is a second
+    attempt for it to sit between, on an ACTION or an AGENT.
 
-    However far the doubling goes, one wait is capped at an hour where it is
-    spent — ten attempts doubling off the largest wait this takes would otherwise
-    be three weeks of run.
+    One is what a fixed wait always was and 2 is the doubling that used to be a
+    word; 1.5 is the curve neither could say. However steep it is, one wait is
+    capped at an hour where it is spent — ten attempts at ×2 off the largest
+    first wait this takes would otherwise be three weeks of run.
     """
-    retryBackoff: RetryBackoff
+    retryMultiplier: Float
+    """
+    The most any one wait may come to, in seconds; null is the engine's own hour,
+    which no wait passes whatever this says. Held between 1 and 3600, and kept
+    only where the multiplier is above 1 — under a wait that never grows a
+    ceiling does not bound it, it shortens it.
+    """
+    retryMaxWaitSeconds: Int
+    """
+    The fraction of a wait that may be taken off it at random; null or 0 is none,
+    and 1 draws each wait uniformly from nothing up to what the curve asked for.
+    Held between 0 and 1.
+
+    Downward only, so every other number here stays the upper bound it reads as.
+    What it is for is the many runs that failed on one outage and would otherwise
+    all come back at the same instant.
+    """
+    retryJitter: Float
+    """
+    The longest this node may go on being attempted for, in seconds, work
+    included; null is no limit beyond the attempts. Held between 1 and 86400.
+
+    The bound the waits cannot express between them: what happens between two of
+    them is a call to something outside this installation, and how long that
+    takes is in none of the other numbers. A node that reaches it stops there,
+    with the attempts it had left unspent.
+    """
+    retryBudgetSeconds: Int
     """
     What this node passes to its action. Omitted leaves it to the action's own
     suggestions, which is what a node freshly pointed at one wants. Names the
@@ -1904,12 +1918,16 @@ enum ConnectionType {
     Given the app-level token orknux also listens on it; without one it only sends.
     """
     SLACK
-    GITHUB
-    JIRA
     "A mail server to send through. Its url is a host name, not a URL."
     SMTP
-    "Anything that is just an HTTP endpoint, until it earns a type of its own."
-    WEBHOOK
+    """
+    An HTTP endpoint this installation sends requests to: the generic outbound
+    target, and what every connection that is not Slack or a mail server already
+    was. It was called WEBHOOK, which named the wrong end of the wire - a webhook
+    is something this installation exposes, which is what TriggerType.WEBHOOK
+    means and now means on its own.
+    """
+    HTTP
 }
 
 "How the session with a mail server is secured."
@@ -3215,7 +3233,19 @@ type Action {
     emailReplyTo: String
     url: String
     method: String
+    """
+    The headers it sends, as the column holds them: a JSON array of rows, or the
+    JSON object every action saved before rows existed still holds.
+
+    Kept on the type because an import writes it and because a form has to be
+    able to show the text back when nobody can read it as rows. A row that reads
+    a variable holds that variable's id here and never its value.
+    """
     headers: String
+    "The same headers as rows, each naming the variable it reads and never what that variable holds."
+    headerRows: [ActionHeader!]!
+    "Whether `headers` could be read as rows at all. False is a blob somebody has to mend by hand."
+    headersReadable: Boolean!
     functionId: ID
     functionName: String
     mappings: [ArgumentMapping!]!
@@ -3231,6 +3261,31 @@ type Action {
     outputParams: [ActionParam!]!
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
+}
+
+"""
+One header an HTTP request action sends, and where its value comes from.
+
+Exactly one of `value` and `variableId` is set. `value` is text somebody typed
+and is stored as typed; `variableId` names one of this workspace's variables and
+what that variable holds is read when the action runs, never when it is saved and
+never on this type.
+"""
+type ActionHeader {
+    name: String!
+    "What it is set to, used exactly as written. Null when this reads a variable."
+    value: String
+    "Which of the workspace's variables it reads. Null when it was typed in."
+    variableId: ID
+    "The name of that variable, and never what it holds."
+    variableName: String
+}
+
+"One header row: a name, and exactly one of a value and a variable to read."
+input ActionHeaderInput {
+    name: String!
+    value: String
+    variableId: ID
 }
 
 type ActionPage {
@@ -3264,7 +3319,10 @@ input CreateActionInput {
     emailReplyTo: String
     url: String
     method: String
+    "The headers as one JSON string. What an import carries; `headerRows` is what a form sends."
     headers: String
+    "The headers as rows. Wins over `headers` when both arrive."
+    headerRows: [ActionHeaderInput!]
     functionId: ID
     mappings: [ArgumentMappingInput!]
     conditionExpression: String
@@ -3292,7 +3350,10 @@ input UpdateActionInput {
     emailReplyTo: String
     url: String
     method: String
+    "The headers as one JSON string. What an import carries; `headerRows` is what a form sends."
     headers: String
+    "The headers as rows. Wins over `headers` when both arrive."
+    headerRows: [ActionHeaderInput!]
     functionId: ID
     mappings: [ArgumentMappingInput!]
     conditionExpression: String

@@ -218,19 +218,42 @@ class ExecutionStep(
     @Column(name = "retry_attempts")
     val retryAttempts: Int? = null,
 
-    /** How long to leave a failed attempt alone before the next; null is none. */
+    /** The wait before this step's second attempt, in seconds; null is none. */
     @Column(name = "retry_backoff_seconds")
     val retryBackoffSeconds: Int? = null,
 
     /**
-     * How that wait grows from one attempt to the next; null is fixed.
+     * What that wait is multiplied by after each attempt; null is one.
      *
-     * Copied like the two above it: a node switched to doubling while this step
-     * sits between attempts must not change the clock this run is already on.
+     * Copied like the two above it: a node whose curve is steepened while this
+     * step sits between attempts must not change the clock this run is on.
      */
-    @Enumerated(EnumType.STRING)
-    @Column(name = "retry_backoff", length = 16)
-    val retryBackoff: RetryBackoff? = null,
+    @Column(name = "retry_multiplier")
+    val retryMultiplier: Double? = null,
+
+    /** The most one of this step's waits may come to; null is the engine's own ceiling. */
+    @Column(name = "retry_max_wait_seconds")
+    val retryMaxWaitSeconds: Int? = null,
+
+    /** The fraction of a wait that may be taken off it at random; null is none. */
+    @Column(name = "retry_jitter")
+    val retryJitter: Double? = null,
+
+    /** The longest this step may go on being attempted for; null is no limit. */
+    @Column(name = "retry_budget_seconds")
+    val retryBudgetSeconds: Int? = null,
+
+    /**
+     * When this step's budget runs out, stamped the first time it is attempted.
+     *
+     * Written down rather than worked out, because a budget is wall clock and
+     * nothing else on the row can answer when the first attempt began:
+     * [startedAt] is rewritten by every attempt, and the attempt after next may
+     * be carried by a different worker in a different process. Null on a step
+     * with no budget, and on every step written before there were budgets.
+     */
+    @Column(name = "retry_deadline")
+    var retryDeadline: OffsetDateTime? = null,
 
     /**
      * How many attempts this step has spent.

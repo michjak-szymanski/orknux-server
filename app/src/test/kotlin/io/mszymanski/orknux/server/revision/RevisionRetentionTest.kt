@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.revision
 
 import io.mszymanski.orknux.server.attachment.InstallationSettingRepository
 import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.attachment.SettingNames
 import io.mszymanski.orknux.server.workflow.Workflow
 import io.mszymanski.orknux.server.workflow.WorkflowPublication
 import io.mszymanski.orknux.server.workflow.WorkflowPublicationRepository
@@ -18,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
 import java.time.OffsetDateTime
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A revision per save with no rule is a table nobody prunes.
@@ -44,16 +46,25 @@ class RevisionRetentionTest(
 
     private var workspaceId: Long = 0
 
+    /**
+     * Its own workspace, and only its own setting put back.
+     *
+     * Nothing global is wiped. The sweep is installation-wide by nature, so
+     * what makes these counts exact is that everything else in the suite writes
+     * rows dated now and this writes the only old ones.
+     */
     @BeforeEach
     fun reset() {
+        storedSettings.findById(SettingNames.REVISION_RETENTION_DAYS).ifPresent(storedSettings::delete)
+        // The one table these counts are exact against, and the one nothing
+        // else depends on: no row anywhere references a revision, so emptying
+        // it cascades to nothing.
         revisions.deleteAll()
-        publications.deleteAll()
-        assignments.deleteAll()
-        workflows.deleteAll()
-        storedSettings.deleteAll()
-        workspaces.deleteAll()
-        workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
+        workspaceId = requireNotNull(workspaces.save(Workspace(name = "retention-${counter.incrementAndGet()}")).id)
     }
+
+    /** Everything recorded about this test's workspace, and nothing else's. */
+    private fun recorded() = revisions.findAll().filter { it.workspaceId == workspaceId }
 
     /** Fourteen days, until somebody says otherwise. */
     @Test
@@ -74,7 +85,7 @@ class RevisionRetentionTest(
         val recent = record(recordedAt = OffsetDateTime.now().minusDays(3))
 
         assertThat(sweeper.sweep()).isEqualTo(1)
-        assertThat(revisions.findAll().map { it.id }).containsExactly(recent)
+        assertThat(recorded().map { it.id }).containsExactly(recent)
         assertThat(revisions.findById(stale)).isEmpty()
     }
 
@@ -111,7 +122,7 @@ class RevisionRetentionTest(
      */
     @Test
     fun `a workflow's live publication survives however old it is`() {
-        val workflow = workflows.save(Workflow(name = "Answer the customer"))
+        val workflow = workflows.save(Workflow(name = "Answer ${counter.incrementAndGet()}"))
         val workflowId = requireNotNull(workflow.id)
         val ancient = publications.save(
             WorkflowPublication(
@@ -135,6 +146,11 @@ class RevisionRetentionTest(
         assertThat(sweeper.sweep()).isEqualTo(1)
         assertThat(publications.findById(requireNotNull(ancient.id))).isEmpty()
         assertThat(publications.findById(requireNotNull(superseded.id))).isPresent()
+    }
+
+    private companion object {
+        /** Workspace and workflow names are unique; each test needs its own. */
+        val counter = AtomicLong(System.nanoTime())
     }
 
     private fun record(recordedAt: OffsetDateTime): Long = requireNotNull(

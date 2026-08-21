@@ -903,6 +903,17 @@ event runs until somebody publishes again. Saving does put the status back to
 runs, so the badge is saying "what you are looking at is not what is live", which
 is exactly the thing worth knowing.
 
+**What the copy holds is the graph, and of the things it calls only their ids.**
+A node carries an `actionId`, an `agentId`, a `conditionId`, and each node runner
+resolves its id against the live row at the moment the step runs. So publishing
+freezes the shape of a workflow and not its behaviour: edit a function a
+published workflow calls and that workflow answers differently on its next run,
+with nobody having republished anything and no badge anywhere turning back to
+Draft. Most of the time that is the point — a fix to a shared function reaching
+every caller at once is most of the reason functions are shared — but it is not
+what the word "published" promises, so it is worth saying out loud.
+`PublishedDefinitionsTest` keeps the sentence true.
+
 A workflow nobody has published has nothing to run and says so in its own
 exception, `WorkflowNotPublishedException`, rather than as "not found": one is a
 wrong id and the other is a graph that exists and is not ready, and somebody

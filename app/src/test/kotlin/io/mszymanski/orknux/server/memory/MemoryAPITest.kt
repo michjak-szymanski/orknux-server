@@ -118,6 +118,67 @@ class MemoryAPITest(
             .contains("Memory catalog Deployment Guides removed, with 1 memory")
     }
 
+    /**
+     * Issue #166: a catalog an agent may read cannot be deleted out from under it.
+     *
+     * The grant is a **name**, so nothing would have been left dangling to
+     * notice — [MemoryTool] drops a name that matches no catalog on purpose, so
+     * the agent would simply have stopped knowing any of this while its own
+     * screen went on listing the grant. Worse, the name is re-bindable: a new
+     * catalog called Notes tomorrow is silently handed to everyone still holding
+     * it. The refusal names the agent because taking the grant off it is the way
+     * out.
+     */
+    @Test
+    fun `a memory catalog an agent is granted cannot be deleted`() {
+        val id = catalog("Notes")
+        memory(id, "Standup", "Nine o'clock, and keep it short.")
+        agents.save(
+            Agent(
+                workspaceId = workspaceId,
+                name = "Reviewer",
+                type = AgentType.LLM,
+                memoryCatalogs = mutableListOf("Notes"),
+            ),
+        )
+
+        graphQlTester.document("""mutation { deleteMemoryCatalog(id: $id) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message)
+                    .isEqualTo("Notes is granted to the agent Reviewer, so it cannot be deleted")
+            }
+
+        assertThat(catalogs.findAll().map { it.name }).containsExactly("Notes")
+        assertThat(memories.findAll().map { it.title }).containsExactly("Standup")
+    }
+
+    /**
+     * And the guard is a guard, not a ban.
+     *
+     * The agent is there and holds grants — just not this name — so what is
+     * being checked is that the question is about the catalog's own name, not
+     * that the workspace happens to have no agents in it.
+     */
+    @Test
+    fun `a memory catalog nobody was granted still deletes`() {
+        val id = catalog("Unused")
+        agents.save(
+            Agent(
+                workspaceId = workspaceId,
+                name = "Reviewer",
+                type = AgentType.LLM,
+                memoryCatalogs = mutableListOf("SomethingElse"),
+            ),
+        )
+
+        graphQlTester.document("""mutation { deleteMemoryCatalog(id: $id) }""")
+            .execute().path("deleteMemoryCatalog").entity(Boolean::class.java).isEqualTo(true)
+
+        assertThat(catalogs.findAll()).isEmpty()
+    }
+
     @Test
     fun `an agent reads the catalogs it was granted, and nothing else`() {
         val granted = catalog("API Documentation")

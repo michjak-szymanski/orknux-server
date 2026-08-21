@@ -379,6 +379,15 @@ type Query {
         days: Int,
         search: String
     ): ExecutionPage!
+    """
+    Every workflow this workspace has runs of, for the executions filter.
+
+    Read off the runs, not off the workspace's workflow list, so a run of a
+    workflow that has since been removed can still be singled out. Each says
+    whether the workspace still lists it, because the filter has to show the
+    difference rather than hide it.
+    """
+    executionWorkflows(workspaceId: ID!): [ExecutionWorkflow!]!
 }
 
 type Mutation {
@@ -1318,6 +1327,22 @@ type Execution {
     finishedAt: String
     "Null while the run is still going."
     durationSeconds: Int
+    """
+    Whether this workspace still lists the workflow this run named.
+
+    False for a run whose workflow has been removed: the run is kept and still
+    opens, but there is no workflow page to send anybody to.
+    """
+    workflowAssigned: Boolean!
+}
+
+"A workflow the executions list can be filtered by: one this workspace has runs of."
+type ExecutionWorkflow {
+    workflowId: ID!
+    "The name its most recent run recorded, which for a removed one is all there is."
+    name: String!
+    "False for one this workspace has removed."
+    assigned: Boolean!
 }
 
 type ExecutionPage {
@@ -2523,6 +2548,12 @@ type ExecutionDetail {
     logs: [ExecutionLogLine!]!
     "Temporal's own screen for this run; null when there is nowhere to send anybody."
     temporalUrl: String
+    """
+    Whether this workspace still lists the workflow this run named. False for a
+    run whose workflow has been removed, which is why the page names it without
+    linking to it.
+    """
+    workflowAssigned: Boolean!
 }
 
 "What a variable holds. Scalars only: a shape belongs in the object catalogue."

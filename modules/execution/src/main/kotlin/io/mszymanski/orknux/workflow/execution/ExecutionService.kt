@@ -38,6 +38,25 @@ class ExecutionService(
         return ExecutionPage(executions.findAll(filter, pageable))
     }
 
+    /**
+     * Every workflow this workspace has a run of, by name.
+     *
+     * Read off the runs rather than off any list of workflows, which is the
+     * whole point of it: a run outlives the workflow's place in a workspace, so
+     * the workflows named here are not the workflows a workspace currently
+     * lists. Whoever asks is the one who can tell the difference.
+     *
+     * A workflow that has been renamed is one entry under the name its most
+     * recent run recorded, not one entry per name it has worn.
+     */
+    fun workflowsRun(workspaceId: Long): List<RunWorkflowView> =
+        executions.workflowsRun(workspaceId)
+            .groupBy { it.workflowId }
+            .map { (workflowId, named) ->
+                RunWorkflowView(workflowId, named.maxBy { it.lastRunAt }.workflowName)
+            }
+            .sortedBy { it.workflowName.lowercase() }
+
     /** Where a workflow last got to, or null if it has never run for this workspace. */
     fun lastExecution(workspaceId: Long, workflowId: Long): ExecutionView? =
         executions.findFirstByWorkspaceIdAndWorkflowIdOrderByStartedAtDesc(workspaceId, workflowId)?.let(::ExecutionView)
@@ -145,6 +164,17 @@ data class ExecutionView(
         stoppedReason = execution.stoppedReason,
     )
 }
+
+/**
+ * A workflow this workspace has run, under the name its latest run recorded.
+ *
+ * Deliberately only the two: this is what a run says about the workflow it ran,
+ * and a run says nothing else about it.
+ */
+data class RunWorkflowView(
+    val workflowId: Long,
+    val workflowName: String,
+)
 
 data class ExecutionPage(
     val content: List<ExecutionView>,

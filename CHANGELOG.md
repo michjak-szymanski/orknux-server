@@ -282,6 +282,22 @@ have failed.
   pickers offered them and the save refused them, with a message that said a
   function was needed when one had been chosen.
 
+- **Runs of a workflow you removed can be found, and no longer offer a link into
+  an error.** Removing a workflow takes it off the workspace's list and leaves
+  every run of it on the executions screen, where two things then went wrong.
+  The **Workflow** filter was built from the workflows the workspace still
+  lists, so those runs could be scrolled past and never singled out - 76 of 586
+  runs on the workspace this was found in. And the workflow name on such a run,
+  on the row and on the run's own page, linked to an editor that answered "No
+  workflow assignment with id 373", which reads as a broken page rather than as
+  a workflow somebody removed.
+
+  The filter is now built from the workflows the runs actually name, with the
+  removed ones marked **(removed)** so they are not passed off as live ones, and
+  such a run names its workflow without linking to it, saying that it has been
+  removed from the workspace. Runs of a workflow that is still there are
+  unchanged and still open it.
+
 ## 0.8.0
 
 ### Added

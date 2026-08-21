@@ -4,6 +4,7 @@ import org.springframework.data.jpa.domain.Specification
 import java.time.OffsetDateTime
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor
+import org.springframework.data.jpa.repository.Query
 
 interface WorkflowExecutionRepository :
     JpaRepository<WorkflowExecution, Long>,
@@ -14,6 +15,34 @@ interface WorkflowExecutionRepository :
         workspaceId: Long,
         workflowId: Long,
     ): WorkflowExecution?
+
+    /**
+     * Every workflow this workspace has a run of, and when each was last run.
+     *
+     * Grouped by the name as well as the id because a run keeps the name the
+     * workflow had when it started, so one that has been renamed comes back
+     * once per name it has worn - which is why the last run is selected too:
+     * it is what lets the caller pick the newest of them.
+     *
+     * Nothing is joined. This module knows which workflow a run named; whether
+     * the workspace still lists that workflow is not its question.
+     */
+    @Query(
+        """
+        select e.workflowId as workflowId, e.workflowName as workflowName, max(e.startedAt) as lastRunAt
+        from WorkflowExecution e
+        where e.workspaceId = :workspaceId
+        group by e.workflowId, e.workflowName
+        """,
+    )
+    fun workflowsRun(workspaceId: Long): List<RanWorkflow>
+}
+
+/** One row of [WorkflowExecutionRepository.workflowsRun]. */
+interface RanWorkflow {
+    val workflowId: Long
+    val workflowName: String
+    val lastRunAt: OffsetDateTime
 }
 
 interface ExecutionStepRepository : JpaRepository<ExecutionStep, Long> {

@@ -11,6 +11,7 @@ class AgentExceptionResolver : DataFetcherExceptionResolverAdapter() {
 
     override fun resolveToSingleError(exception: Throwable, environment: DataFetchingEnvironment): GraphQLError? {
         val errorType = when (exception) {
+            is AgentInUseException,
             is AgentNameTakenException,
             is AgentNameInvalidException,
             is ToolNameTakenException,

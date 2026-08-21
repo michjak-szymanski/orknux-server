@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.workflow
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
 import io.mszymanski.orknux.server.action.ActionFailedException
+import io.mszymanski.orknux.server.action.ActionInUseException
 import io.mszymanski.orknux.server.action.ActionNameInvalidException
 import io.mszymanski.orknux.server.action.ActionNameTakenException
 import io.mszymanski.orknux.server.action.ActionNotFoundException
@@ -57,6 +58,7 @@ import io.mszymanski.orknux.server.condition.ConditionPropertyMismatchException
 import io.mszymanski.orknux.server.condition.ConditionValuesRequiredException
 import io.mszymanski.orknux.server.trigger.TriggerConnectionRequiredException
 import io.mszymanski.orknux.server.trigger.TriggerActionUnsupportedException
+import io.mszymanski.orknux.server.trigger.TriggerInUseException
 import io.mszymanski.orknux.server.trigger.TriggerNameInvalidException
 import io.mszymanski.orknux.server.trigger.TriggerNameTakenException
 import io.mszymanski.orknux.server.trigger.TriggerNotFoundException
@@ -114,6 +116,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is WorkflowNameInvalidException,
             is WorkflowGraphEmptyException,
             is WorkflowNotAssignedException,
+            is TriggerInUseException,
             is TriggerNameTakenException,
             is TriggerNameInvalidException,
             is TriggerActionUnsupportedException,
@@ -138,6 +141,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is VariableCatalogNameInvalidException,
             is VariableCatalogNotEmptyException,
             is ObjectNotInCatalogueException,
+            is ActionInUseException,
             is ActionNameTakenException,
             is ActionNameInvalidException,
             is ActionSettingMissingException,

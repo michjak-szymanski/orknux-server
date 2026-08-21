@@ -2,6 +2,8 @@ package io.mszymanski.orknux.server.workflow
 
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -55,6 +57,8 @@ class PublishedDefinitionsTest(
     @Autowired val publications: WorkflowPublicationRepository,
     @Autowired val actions: WorkflowActionRepository,
     @Autowired val functions: WorkflowFunctionRepository,
+    @Autowired val agents: AgentRepository,
+    @Autowired val triggers: WorkflowTriggerRepository,
     @Autowired val executions: WorkflowExecutionRepository,
     @Autowired val steps: ExecutionStepRepository,
     @Autowired val logs: ExecutionLogRepository,
@@ -79,6 +83,8 @@ class PublishedDefinitionsTest(
         edges.deleteAll()
         actions.deleteAll()
         functions.deleteAll()
+        agents.deleteAll()
+        triggers.deleteAll()
         assignments.deleteAll()
         workflows.deleteAll()
         audit.deleteAll()
@@ -126,7 +132,10 @@ class PublishedDefinitionsTest(
         graph(actionId)
         publish()
 
-        val snapshot = publications.findById(workflowId).orElseThrow().graph
+        // Found by the workflow it belongs to rather than by key: what a
+        // publication is keyed by is the publishing side's business, and this
+        // test is about what is inside the copy.
+        val snapshot = publications.findAll().single { it.workflowId == workflowId }.graph
 
         // The node's pointer, kept. Written by Postgres' jsonb, so with a space
         // after the colon; matched on the pair rather than on the text.
@@ -137,22 +146,21 @@ class PublishedDefinitionsTest(
     }
 
     /**
-     * Deleting is the same rule read the other way, and the two halves of the
-     * reference are not guarded alike.
+     * Deleting is the same rule read the other way, and now both halves of the
+     * reference are guarded alike.
      *
      * A function an action calls cannot be deleted at all - `deleteFunction`
-     * refuses and names the caller. The action itself has no such guard, so it
-     * can be deleted while a published workflow's snapshot still names it, and
-     * the snapshot goes on naming it because a snapshot is a copy and nothing
-     * cascades into it. The run is left holding an id that resolves to nothing.
+     * refuses and names the caller. The action itself used to be held in place
+     * by nothing, so it could be deleted while a published workflow's copy still
+     * named it, and that copy went on naming it because it is a copy and nothing
+     * cascades into it. The run said "the action Act ran has been deleted",
+     * which is the right end of a bad situation and still a published workflow
+     * that stopped working with nobody touching the workflow.
      *
-     * It says so, which is the right end of a bad situation: a step reporting
-     * that its action is gone beats one that quietly does nothing. But it is
-     * still a published workflow that stopped working without anybody touching
-     * the workflow.
+     * Both ends refuse now, and the refusal names what is in the way.
      */
     @Test
-    fun `an action deleted after publishing leaves the published run with nothing to call`() {
+    fun `an action a published workflow runs cannot be deleted either`() {
         val functionId = function("""export default function answer() { return { said: "first" }; }""")
         val actionId = functionAction(functionId)
         graph(actionId)
@@ -164,11 +172,182 @@ class PublishedDefinitionsTest(
             .errors()
             .satisfy { errors -> assertThat(errors.single().message).contains("answer is called by Act") }
 
-        // The action is held in place by nothing.
+        // And the action by the workflow that runs it, which is named.
+        graphQlTester.document("""mutation { deleteAction(id: $actionId) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).contains("Act is used by the published workflow Answer")
+            }
+
+        // Nothing was deleted, so the published run still answers.
+        assertThat(published().output).isEqualTo("""{"said":"first"}""")
+    }
+
+    /**
+     * The half a draft-only guard would have missed.
+     *
+     * The node is taken off the canvas, which puts the workflow back into draft
+     * and leaves no drawn node naming the action at all. The published copy is
+     * untouched by that - it is what a trigger still runs - and it still names
+     * the action. A guard that asked the graph tables would find nothing here
+     * and let the delete through.
+     */
+    @Test
+    fun `an action only the published copy still names cannot be deleted`() {
+        val functionId = function("""export default function answer() { return { said: "first" }; }""")
+        val actionId = functionAction(functionId)
+        graph(actionId)
+        publish()
+
+        // The canvas is redrawn without it. Nothing republishes.
+        val second = graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Wait", type: WAIT, subtype: TIME, durationSeconds: 1
+              }) { id }
+            }
+            """,
+        ).execute().path("createAction.id").entity(Long::class.java).get()
+        graph(second)
+
+        assertThat(nodes.findByActionId(actionId)).isEmpty()
+
+        graphQlTester.document("""mutation { deleteAction(id: $actionId) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).contains("Act is used by the published workflow Answer")
+            }
+    }
+
+    /**
+     * And the guard is a guard, not a ban.
+     *
+     * An action no workflow names deletes exactly as it always did. Said out
+     * loud because a refusal that fires on everything is the way this change
+     * would go wrong: the delete button in the list is how a workspace tidies
+     * up, and most of what it removes was never wired to anything.
+     */
+    @Test
+    fun `an action no workflow names still deletes`() {
+        val functionId = function("""export default function answer() { return { said: "first" }; }""")
+        graph(functionAction(functionId))
+        publish()
+
+        val spare = graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Spare", type: WAIT, subtype: TIME, durationSeconds: 1
+              }) { id }
+            }
+            """,
+        ).execute().path("createAction.id").entity(Long::class.java).get()
+
+        graphQlTester.document("""mutation { deleteAction(id: $spare) }""")
+            .execute().path("deleteAction").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    /**
+     * The way out, which a refusal is only fair if it exists.
+     *
+     * Publishing again over the copy that named it is what releases the action:
+     * the newest published copy is what runs, and it does not name it any more.
+     */
+    @Test
+    fun `publishing again releases an action the older published copy named`() {
+        val functionId = function("""export default function answer() { return { said: "first" }; }""")
+        val actionId = functionAction(functionId)
+        graph(actionId)
+        publish()
+
+        val second = graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Wait", type: WAIT, subtype: TIME, durationSeconds: 1
+              }) { id }
+            }
+            """,
+        ).execute().path("createAction.id").entity(Long::class.java).get()
+        graph(second)
+        publish()
+
         graphQlTester.document("""mutation { deleteAction(id: $actionId) }""")
             .execute().path("deleteAction").entity(Boolean::class.java).isEqualTo(true)
+    }
 
-        assertThat(published().output).contains("has been deleted")
+    /**
+     * The same guard, one node kind over.
+     *
+     * An agent id is the second of the three a published copy carries, and
+     * `deleteAgent` said in a comment that it was refused while a node instanced
+     * it while doing nothing of the kind - [AgentInUseException] was declared and
+     * never thrown. The sentence and the behaviour now agree.
+     */
+    @Test
+    fun `an agent a published workflow instances cannot be deleted`() {
+        val agentId = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Answerer", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{ key: "ask", kind: AGENT, name: "Ask", agentId: $agentId, x: 0, y: 0 }], edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].key").entity(String::class.java).isEqualTo("ask")
+        publish()
+
+        graphQlTester.document("""mutation { deleteAgent(id: $agentId) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).contains("Answerer is used by the published workflow Answer")
+            }
+    }
+
+    /**
+     * And the one the published copy cannot answer for.
+     *
+     * A trigger id is not written into the copy at all, so the question of
+     * whether a workflow starts from a trigger is a question about the drawn
+     * graph. Deleting it would not break a run - it would stop the workflow
+     * being started, silently, which is why the refusal is here too.
+     */
+    @Test
+    fun `a trigger a workflow starts from cannot be deleted`() {
+        val triggerId = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Nightly", type: SCHEDULED, cron: "0 0 3 * * *"
+              }) { id }
+            }
+            """,
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{ key: "start", kind: TRIGGER, name: "Start", triggerId: $triggerId, x: 0, y: 0 }], edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].key").entity(String::class.java).isEqualTo("start")
+
+        graphQlTester.document("""mutation { deleteTrigger(id: $triggerId) }""")
+            .execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors.single().message).contains("Nightly is used by the workflow Answer")
+            }
     }
 
     /** A function the workspace owns, returning an object and taking nothing. */

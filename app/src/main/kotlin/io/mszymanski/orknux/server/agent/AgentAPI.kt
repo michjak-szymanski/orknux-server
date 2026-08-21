@@ -2,7 +2,7 @@ package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -20,7 +20,7 @@ import org.springframework.transaction.annotation.Transactional
 class AgentAPI(
     private val agents: AgentRepository,
     private val workspaces: WorkspaceRepository,
-    private val nodes: WorkflowNodeRepository,
+    private val references: WorkflowReferences,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val models: ModelService,
@@ -208,9 +208,20 @@ class AgentAPI(
      * would be left pointing at nothing, and a run reaching it could only report
      * that the agent it was supposed to ask is gone. Better to say which
      * workflows are using it while there is still something to change.
+     *
+     * This paragraph described a guard that was not here. [AgentInUseException]
+     * existed, unthrown; `findByAgentId` existed, with a comment saying it was
+     * what kept an agent from being deleted from under a node, and nothing
+     * called it. So the sentence is now true, and it covers the published copy
+     * as well as the drawn one - that is the half a node taken off the canvas
+     * cannot reach.
      */
     fun deleteAgent(@Argument id: Long): Boolean {
         val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+
+        val users = references.toAgent(agent.workspaceId, id)
+        if (users.isNotEmpty()) throw AgentInUseException(agent.name, users)
+
         agents.delete(agent)
         auditRecorder.record(agent.workspaceId, WorkspaceAuditCategory.AGENT, "Agent ${agent.name} deleted")
         return true

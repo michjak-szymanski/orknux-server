@@ -10,7 +10,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
-import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -32,7 +32,7 @@ class ConditionAPI(
     private val conditions: WorkflowConditionRepository,
     private val functions: WorkflowFunctionRepository,
     private val actions: WorkflowActionRepository,
-    private val nodes: WorkflowNodeRepository,
+    private val references: WorkflowReferences,
     private val triggers: WorkflowTriggerRepository,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
@@ -120,6 +120,15 @@ class ConditionAPI(
         return describe(condition)
     }
 
+    /**
+     * Refused while anything still asks it.
+     *
+     * The workflow half of this used to say "a workflow node", counted off the
+     * drawn graph. Two things were wrong with that. It named nothing somebody
+     * could go and look at, and it saw only the draft - so a condition still
+     * asked by a published copy, whose node had since been taken off the canvas,
+     * could be deleted out from under the workflow that was running it.
+     */
     @MutationMapping
     @Transactional
     fun deleteCondition(@Argument id: Long): Boolean {
@@ -133,7 +142,7 @@ class ConditionAPI(
                     .filter { id in it.members }
                     .map { it.name },
             )
-            addAll(nodes.findByConditionId(id).map { "a workflow node" }.distinct())
+            addAll(references.toCondition(condition.workspaceId, id))
             addAll(triggers.findByConditionId(id).map { it.name })
         }
         if (users.isNotEmpty()) throw ConditionInUseException(condition.name, users)

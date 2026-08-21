@@ -11,6 +11,8 @@ import jakarta.persistence.Id
 import jakarta.persistence.JoinColumn
 import jakarta.persistence.ManyToOne
 import jakarta.persistence.Table
+import org.hibernate.annotations.Formula
+import java.time.OffsetDateTime
 
 /** A workflow definition, independent of the workspaces that use it. */
 @Entity
@@ -48,4 +50,28 @@ class WorkspaceWorkflow(
 
     @Column(nullable = false)
     var enabled: Boolean = true,
+
+    /**
+     * When this workflow last started a run in this workspace, or null when it
+     * never has.
+     *
+     * A read-only expression rather than a column, because nothing writes it:
+     * the answer already exists in `workflow_execution`, and a copy kept beside
+     * the assignment would be a second truth to keep up to date on every run,
+     * every re-run and every deletion.
+     *
+     * It is here at all so that the list can be *ordered* by it. The row's last
+     * run is already fetched one workflow at a time for display, but a page is
+     * ten rows of however many the workspace has, and ordering ten of them
+     * orders the page rather than the list. Ordering has to happen in the
+     * query, and a query can only order by something the database can name.
+     *
+     * `(workflow_id, started_at DESC)` is indexed, which is exactly the shape
+     * this asks for.
+     */
+    @Formula(
+        "(select max(run.started_at) from workflow_execution run " +
+            "where run.workflow_id = workflow_id and run.workspace_id = workspace_id)",
+    )
+    val lastRunAt: OffsetDateTime? = null,
 )

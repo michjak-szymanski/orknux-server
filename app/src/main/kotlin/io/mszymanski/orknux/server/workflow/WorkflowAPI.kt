@@ -23,6 +23,23 @@ import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
 
+/**
+ * What a list of workflows is ordered by.
+ *
+ * Three, and they are the three questions somebody asks of this screen: what is
+ * this one called, when did it last do anything, and is it switched on. Next
+ * run is deliberately not among them - it is not a stored anything, it is the
+ * soonest of however many cron expressions the workflow's trigger nodes point
+ * at, worked out in this process a row at a time. Ordering by it would mean
+ * parsing every schedule in the workspace on every page load and then paging in
+ * memory, which is a different kind of list from the one this is.
+ */
+enum class WorkflowOrder {
+    NAME,
+    LAST_RUN,
+    ENABLED,
+}
+
 @Controller
 class WorkflowAPI(
     private val workflows: WorkflowRepository,
@@ -36,10 +53,16 @@ class WorkflowAPI(
 ) {
 
     @QueryMapping
-    fun workspaceWorkflows(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): WorkspaceWorkflowPage {
+    fun workspaceWorkflows(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument order: WorkflowOrder?,
+        @Argument ascending: Boolean?,
+    ): WorkspaceWorkflowPage {
         requireWorkspaceAccess(workspaceId)
         return WorkspaceWorkflowPage(
-            assignments.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("workflow.name"))),
+            assignments.findByWorkspaceId(workspaceId, pageRequest(page, size, sortBy(order, ascending))),
         ) { assignment ->
             val workflowId = requireNotNull(assignment.workflow.id)
             // A workflow that is switched off is not started by the clock, so
@@ -123,6 +146,43 @@ class WorkflowAPI(
 
     /** Admins pass for every workspace; everyone else needs the workspace's LDAP role. */
     /** The workflows list shows where each one last got to, so a run is visible here. */
+    /**
+     * The order the page asked for, worked out here rather than in the page.
+     *
+     * By name, ascending, when nothing is said - which is what this list has
+     * always done, and what somebody reading a column of names expects.
+     *
+     * Every order ends with the name, because the other two do not tell rows
+     * apart: `enabled` has two values, and a workspace where nothing has run
+     * has one value for the last run as well. Without the tiebreak the rows
+     * within a group come back in whatever order the database felt like, and
+     * that order is free to differ between one page and the next - so a row can
+     * appear on both pages, or on neither.
+     */
+    private fun sortBy(order: WorkflowOrder?, ascending: Boolean?): Sort {
+        // Ascending unless told otherwise: absent has to keep meaning A to Z.
+        val direction = if (ascending == false) Sort.Direction.DESC else Sort.Direction.ASC
+        val byName = Sort.Order(direction, "workflow.name").ignoreCase()
+        return when (order ?: WorkflowOrder.NAME) {
+            WorkflowOrder.NAME -> Sort.by(byName)
+            /*
+             * A workflow nobody has ever run has no last run, and a database
+             * left to itself puts those nulls first when the order is
+             * descending - which would open "most recently run" with every
+             * workflow that has never run at all. Last either way round: no
+             * answer is not the newest answer.
+             */
+            WorkflowOrder.LAST_RUN -> Sort.by(
+                Sort.Order(direction, "lastRunAt").nullsLast(),
+                Sort.Order(Sort.Direction.ASC, "workflow.name").ignoreCase(),
+            )
+            WorkflowOrder.ENABLED -> Sort.by(
+                Sort.Order(direction, "enabled"),
+                Sort.Order(Sort.Direction.ASC, "workflow.name").ignoreCase(),
+            )
+        }
+    }
+
     private fun lastRunOf(workspaceId: Long, workflowId: Long): LastRunView? =
         runs.lastExecution(workspaceId, workflowId)?.let {
             LastRunView(

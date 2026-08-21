@@ -18,6 +18,7 @@ import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureG
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * What a component has been, and putting it back.
@@ -46,18 +47,22 @@ class ComponentRevisionTest(
 
     private var workspaceId: Long = 0
 
+    /**
+     * A workspace of its own per test, and nothing wiped.
+     *
+     * Every assertion here is scoped to it, so this class neither depends on
+     * what ran before it nor breaks what runs after. The suite's usual
+     * `deleteAll()` reset is what it is because most of these tests predate
+     * caring; the cost of it on SQLite is a cascade that trips a CHECK on
+     * `workflow_action`, and a class that does not need to wipe should not.
+     */
     @BeforeEach
     fun reset() {
-        revisions.deleteAll()
-        functions.deleteAll()
-        tools.deleteAll()
-        skills.deleteAll()
-        skillCatalogs.deleteAll()
-        agents.deleteAll()
-        audit.deleteAll()
-        workspaces.deleteAll()
-        workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
+        workspaceId = requireNotNull(workspaces.save(Workspace(name = "revisions-${counter.incrementAndGet()}")).id)
     }
+
+    /** Everything recorded about this test's workspace, and nothing else's. */
+    private fun recorded() = revisions.findAll().filter { it.workspaceId == workspaceId }
 
     // ------------------------------------------------------------- recording
 
@@ -98,7 +103,7 @@ class ComponentRevisionTest(
 
         updateFunction(id, "export default function greet() { return {}; }")
 
-        val held = revisions.findAll().single()
+        val held = recorded().single()
         assertThat(held.savedAt).isEqualTo(before)
         assertThat(held.savedBy).isEqualTo("alice")
     }
@@ -139,7 +144,7 @@ class ComponentRevisionTest(
         graphQlTester.document("""mutation { setToolEnabled(id: $id, enabled: false) { enabled } }""")
             .execute().path("setToolEnabled.enabled").entity(Boolean::class.java).isEqualTo(false)
 
-        assertThat(revisions.findAll()).singleElement()
+        assertThat(recorded()).singleElement()
             .satisfies({ assertThat(it.kind).isEqualTo(ComponentRevisionKind.TOOL) })
     }
 
@@ -159,7 +164,7 @@ class ComponentRevisionTest(
         )
 
         assertThat(requireNotNull(agents.findById(id).orElse(null)).enabled).isFalse()
-        assertThat(revisions.findAll()).singleElement().satisfies({
+        assertThat(recorded()).singleElement().satisfies({
             assertThat(it.kind).isEqualTo(ComponentRevisionKind.AGENT)
             assertThat(it.componentId).isEqualTo(id)
         })
@@ -206,13 +211,13 @@ class ComponentRevisionTest(
 
         // Two saves, so two versions: the stub the function started as, and
         // the first thing written over it. The newest of them says "first".
-        assertThat(revisions.findAll()).hasSize(2)
+        assertThat(recorded()).hasSize(2)
         restore(newestRevision(ComponentRevisionKind.FUNCTION, id))
         assertThat(requireNotNull(functions.findById(id).orElse(null)).typescript).contains("first")
 
         // The restore displaced the state that said "second", and kept it - so
         // going back is another restore rather than a lost afternoon.
-        assertThat(revisions.findAll()).hasSize(3)
+        assertThat(recorded()).hasSize(3)
         restore(newestRevision(ComponentRevisionKind.FUNCTION, id))
         assertThat(requireNotNull(functions.findById(id).orElse(null)).typescript).contains("second")
     }
@@ -224,7 +229,7 @@ class ComponentRevisionTest(
         updateFunction(id, "export default function greet() { return {}; }")
         restore(newestRevision(ComponentRevisionKind.FUNCTION, id))
 
-        assertThat(audit.findAll().map { it.message })
+        assertThat(audit.findAll().filter { it.workspaceId == workspaceId }.map { it.message })
             .anySatisfy { assertThat(it).startsWith("Function greet restored to the version saved on") }
     }
 
@@ -259,12 +264,12 @@ class ComponentRevisionTest(
         graphQlTester.document(
             """mutation { updateTool(id: $id, input: { description: "Ask about the weather" }) { id } }""",
         ).execute().path("updateTool.id").entity(Long::class.java).isEqualTo(id)
-        assertThat(revisions.findAll()).hasSize(1)
+        assertThat(recorded()).hasSize(1)
 
         graphQlTester.document("""mutation { deleteTool(id: $id) }""").execute()
             .path("deleteTool").entity(Boolean::class.java).isEqualTo(true)
 
-        assertThat(revisions.findAll()).isEmpty()
+        assertThat(recorded()).isEmpty()
     }
 
     // ---------------------------------------------------------------- helpers
@@ -295,6 +300,11 @@ class ComponentRevisionTest(
     private fun restore(revisionId: Long) {
         graphQlTester.document("""mutation { restoreComponentRevision(id: $revisionId) }""")
             .execute().path("restoreComponentRevision").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    private companion object {
+        /** So each test's workspace has a name of its own; workspace names are unique. */
+        val counter = AtomicLong(System.nanoTime())
     }
 
     /** A skill has to open with frontmatter or it is refused before it is stored. */

@@ -11,6 +11,7 @@ import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureG
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A workflow's versions are its publications.
@@ -42,17 +43,20 @@ class WorkflowPublicationHistoryTest(
     private var workspaceId: Long = 0
     private var workflowId: Long = 0
 
+    /**
+     * A workspace and a workflow of its own per test, and nothing wiped.
+     *
+     * Every assertion here is scoped to this workflow, so the class neither
+     * depends on what ran before it nor takes anything with it. The usual
+     * `deleteAll()` reset would also mean deleting a workspace, and on SQLite
+     * that cascade sets `workflow_action.function_id` to null and trips a CHECK
+     * the row was passing a moment earlier.
+     */
     @BeforeEach
     fun reset() {
-        publications.deleteAll()
-        assignments.deleteAll()
-        edges.deleteAll()
-        nodes.deleteAll()
-        workflows.deleteAll()
-        workspaces.deleteAll()
-
-        workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
-        val workflow = workflows.save(Workflow(name = "Answer the customer"))
+        val mine = counter.incrementAndGet()
+        workspaceId = requireNotNull(workspaces.save(Workspace(name = "publications-${mine}")).id)
+        val workflow = workflows.save(Workflow(name = "Answer the customer ${mine}"))
         workflowId = requireNotNull(workflow.id)
         assignments.save(WorkspaceWorkflow(workspaceId = workspaceId, workflow = workflow))
     }
@@ -157,7 +161,7 @@ class WorkflowPublicationHistoryTest(
         draw("First answer")
         publish()
         val mine = publicationIds().first()
-        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "sales")).id)
+        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "sales-${counter.incrementAndGet()}")).id)
 
         graphQlTester.document(
             """query { workflowPublicationGraph(workspaceId: $elsewhere, publicationId: $mine) }""",
@@ -165,6 +169,11 @@ class WorkflowPublicationHistoryTest(
     }
 
     // ---------------------------------------------------------------- helpers
+
+    private companion object {
+        /** Workspace and workflow names are unique; each test needs its own. */
+        val counter = AtomicLong(System.nanoTime())
+    }
 
     private fun draw(nodeName: String) {
         graphQlTester.document(

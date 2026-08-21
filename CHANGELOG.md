@@ -119,6 +119,27 @@ have failed.
 
 ### Fixed
 
+- **A chat turn no longer disappears because a tool call failed.** Asking an
+  agent in chat to file an issue could take the whole turn with it - the answer
+  and the person's own message both gone, replaced by an error with nothing
+  written in it. The tracker tools ran inside the chat's transaction, so a
+  refused write left that transaction unusable; the polite refusal the model was
+  handed changed nothing, because the next thing the chat did on the same
+  connection failed too, naming a table nobody had asked about.
+
+  The tracker tools now open a transaction of their own, the same way scheduled
+  triggers do, so a tool that failed costs the tool call and nothing else. The
+  visible consequence is the one worth knowing: a tool call that succeeded is
+  now kept even if the turn around it does not, so an agent that says it filed
+  something has filed it.
+
+- **An issue title too long for the tracker is refused in words.** A model
+  writes its own titles and nothing warned it how long one could be, so the
+  ordinary way to hit this was for an assistant to be slightly wordy. It now
+  hears which field was too long and what the limit is - 200 characters for a
+  title, 60 for a label - and shortens it and files the issue, instead of being
+  handed a database error about a column it cannot see.
+
 - **One unpublished workflow stopped every scheduled trigger.** A workflow
   somebody was still drawing - an imported one arrives that way - was enough to
   silence the clock for the whole installation: the round that fires the due

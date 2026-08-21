@@ -44,8 +44,6 @@ enum class ConnectionType {
      * than at the type.
      */
     SLACK,
-    GITHUB,
-    JIRA,
 
     /**
      * A mail server to send through. The only type that is not an HTTP endpoint,
@@ -55,8 +53,21 @@ enum class ConnectionType {
      */
     SMTP,
 
-    /** Anything that is just an HTTP endpoint, until it earns a type of its own. */
-    WEBHOOK,
+    /**
+     * An HTTP endpoint this installation sends requests to.
+     *
+     * The generic outbound target, and the type every connection that is not
+     * Slack or a mail server already was: the connector opens the URL, sends the
+     * request with whatever [AuthType] and headers the connection carries, and
+     * reads the response back. Nothing here asks what the far end calls itself.
+     *
+     * It was called WEBHOOK, which named the wrong end of the wire. A webhook is
+     * something *this* installation exposes and somebody else calls - which is
+     * what a webhook trigger still means, and now means on its own. Whether the
+     * endpoint on the other side of an outgoing request is a webhook, an API or
+     * a form handler is the receiver's business and was never visible from here.
+     */
+    HTTP,
 }
 
 /**

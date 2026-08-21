@@ -11,31 +11,27 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * What happens to the rows when a type nobody implemented stops existing.
+ * What happens to the rows when a type is renamed rather than removed.
  *
- * V160 removes TEAMS. The interface never offered it, but the API took it, so a
- * row could exist - and a CHECK narrowed against a table that still holds the
- * value it is narrowing away does not fail quietly, it fails on startup. V160
- * therefore moves the rows to WEBHOOK first, which is where a TEAMS connection
- * already effectively lived: nothing in the connector ever branched on the type,
- * so it was always just an HTTP endpoint with a URL, a credential and headers.
+ * V184 renames WEBHOOK to HTTP. One word was naming two opposite directions: a
+ * webhook *trigger* is a path this installation exposes for somebody else to
+ * call, and a webhook *connection* was a URL this installation sends a request
+ * to. The trigger keeps the word; the connection gets the name of what it is.
+ *
+ * Every row moves, and that is the difference from V160 and V183. Those two
+ * removed a type and had to find somewhere for its rows to go. This one changes
+ * the spelling of a type that is staying, so there is no conversion to argue
+ * about - only the question of whether a row survives being respelled, with its
+ * URL, its override, its credential and its headers where they were.
  *
  * This replays the real Postgres history into a schema of its own - up to the
- * migration before V160, then a TEAMS connection with a credential and a header
- * on it, then the rest of the history - and asserts the connection comes out the
- * other side intact rather than merely renamed.
- *
- * It runs to the end rather than stopping at V160 because the type the row lands
- * on went on to be renamed: V184 calls WEBHOOK what it always was, an HTTP
- * endpoint, so a row that arrived here as TEAMS is an HTTP row by the end. That
- * is the whole chain a real installation upgrading from before V160 walks, and
- * it is the chain worth asserting - what matters is that the row is carried
- * across every step of it rather than which name the step in the middle used.
+ * migration before V184, then a webhook connection with a credential and a
+ * header on it, then V184 - and asserts it is the same row afterwards.
  */
-class TeamsTypeMigrationTest {
+class HttpTypeMigrationTest {
 
     @Test
-    fun `a Teams connection comes through the removal with everything on it`() {
+    fun `a webhook connection is the same row spelled HTTP afterwards`() {
         val url = System.getProperty("spring.datasource.url").orEmpty()
         // The SQLite run has no numbered history to replay; its half of this
         // change is the baseline, which SqliteSchemaTest applies.
@@ -45,74 +41,78 @@ class TeamsTypeMigrationTest {
         val password = System.getProperty("spring.datasource.password")
 
         try {
-            flyway(url, username, password, target = BEFORE_THE_REMOVAL).migrate()
+            flyway(url, username, password, target = BEFORE_THE_RENAME).migrate()
 
-            connect(url, username, password).use { db ->
+            val id = connect(url, username, password).use { db ->
                 db.createStatement().use { statement ->
                     statement.execute(
                         """
                         INSERT INTO connection (name, type, url)
-                        VALUES ('Teams default', 'TEAMS', 'https://example.invalid/teams')
+                        VALUES ('Pager default', 'WEBHOOK', 'https://example.invalid/pager')
                         """.trimIndent(),
                     )
                     statement.execute(
                         """
                         INSERT INTO workspace_connection (workspace_id, name, type, url, url_override, auth_type, secret)
-                        VALUES (1, 'Teams', 'TEAMS', 'https://example.invalid/teams',
+                        VALUES (1, 'Pager', 'WEBHOOK', 'https://example.invalid/pager',
                                 'https://example.invalid/override', 'API_KEY', 'key-was-here')
                         """.trimIndent(),
                     )
                     statement.execute(
                         """
                         INSERT INTO workspace_connection_header (workspace_connection_id, position, name, value)
-                        SELECT id, 0, 'X-Was-Here', 'yes' FROM workspace_connection WHERE name = 'Teams'
+                        SELECT id, 0, 'X-Was-Here', 'yes' FROM workspace_connection WHERE name = 'Pager'
                         """.trimIndent(),
                     )
                 }
+                single(db, "SELECT id FROM workspace_connection WHERE name = 'Pager'")
             }
 
             flyway(url, username, password, target = LATEST).migrate()
 
             connect(url, username, password).use { db ->
                 val migrated = read(db)
-                assertThat(migrated.type).describedAs("the row moved to the surviving type").isEqualTo("HTTP")
+                assertThat(migrated.type).describedAs("the type was respelled").isEqualTo("HTTP")
 
-                // The point of the whole test: the conversion changes the name of
-                // the type and nothing else. The secret is stored encrypted, so a
-                // migration that rewrote it could not be undone afterwards.
+                // The same row, not a new one written in its place: the id is
+                // what workflow actions and inheriting workspaces point at.
+                assertThat(single(db, "SELECT id FROM workspace_connection WHERE name = 'Pager'")).isEqualTo(id)
+
+                // The secret is stored encrypted, so a migration that rewrote it
+                // could not be undone afterwards.
                 assertThat(migrated.secret).isEqualTo("key-was-here")
-                assertThat(migrated.url).isEqualTo("https://example.invalid/teams")
+                assertThat(migrated.url).isEqualTo("https://example.invalid/pager")
                 assertThat(migrated.urlOverride).isEqualTo("https://example.invalid/override")
                 assertThat(migrated.authType).isEqualTo("API_KEY")
 
-                // Headers hang off the row by id, so they survive by the row
-                // surviving - which is the argument for converting rather than
-                // deleting, stated as an assertion.
                 assertThat(single(db, "SELECT name FROM workspace_connection_header WHERE value = 'yes'"))
                     .isEqualTo("X-Was-Here")
 
-                // And it is a connection the application still considers usable.
                 val connection = WorkspaceConnection(
                     id = 1,
                     workspaceId = 1,
-                    name = "Teams",
+                    name = "Pager",
                     type = ConnectionType.valueOf(migrated.type),
                     url = migrated.url,
                     secret = migrated.secret,
                 )
                 assertThat(connection.configured).isTrue()
 
-                // The admin default moved with it, so nothing inheriting it was
-                // orphaned by the type going away.
-                assertThat(single(db, "SELECT type FROM connection WHERE name = 'Teams default'"))
+                // The admin default was respelled with it, so nothing inheriting
+                // it disagrees with the workspace's copy about what it is.
+                assertThat(single(db, "SELECT type FROM connection WHERE name = 'Pager default'"))
                     .isEqualTo("HTTP")
 
-                // And the value cannot come back in through the front door.
+                // And the old spelling is not a type any more. This is the half
+                // SqliteCheckConstraintTest cannot see: it matches constraints by
+                // name and compares what Postgres allows against what SQLite
+                // allows, so a value withdrawn from one dialect and left in the
+                // other passes it.
                 assertThatThrownBy {
                     insert(
                         db,
                         "INSERT INTO connection (name, type, url) " +
-                            "VALUES ('Late', 'TEAMS', 'https://example.invalid/teams')",
+                            "VALUES ('Late', 'WEBHOOK', 'https://example.invalid/pager')",
                     )
                 }.hasMessageContaining("ck_connection_type")
 
@@ -120,7 +120,7 @@ class TeamsTypeMigrationTest {
                     insert(
                         db,
                         "INSERT INTO workspace_connection (workspace_id, name, type, url) " +
-                            "VALUES (1, 'Late', 'TEAMS', 'https://example.invalid/teams')",
+                            "VALUES (1, 'Late', 'WEBHOOK', 'https://example.invalid/pager')",
                     )
                 }.hasMessageContaining("ck_workspace_connection_type")
             }
@@ -150,7 +150,7 @@ class TeamsTypeMigrationTest {
 
     private fun read(db: Connection): Row = db.createStatement().use { statement ->
         statement.executeQuery(
-            "SELECT type, url, url_override, auth_type, secret FROM workspace_connection WHERE name = 'Teams'",
+            "SELECT type, url, url_override, auth_type, secret FROM workspace_connection WHERE name = 'Pager'",
         ).use {
             assertThat(it.next()).describedAs("the connection survived the migration at all").isTrue()
             Row(it.getString(1), it.getString(2), it.getString(3), it.getString(4), it.getString(5))
@@ -175,14 +175,14 @@ class TeamsTypeMigrationTest {
     )
 
     private companion object {
-        const val SCHEMA = "teams_type_migration"
+        const val SCHEMA = "http_type_migration"
 
         /**
-         * Everything below V160. The `?` is Flyway's "or the highest there is
-         * under it": nothing is numbered 159 and nothing needs to be, and a
-         * migration added between now and then is included without editing this.
+         * Everything below V184. The `?` is Flyway's "or the highest there is
+         * under it", so a migration added between now and then is included
+         * without editing this.
          */
-        const val BEFORE_THE_REMOVAL = "159?"
+        const val BEFORE_THE_RENAME = "183?"
         const val LATEST = "latest"
     }
 }

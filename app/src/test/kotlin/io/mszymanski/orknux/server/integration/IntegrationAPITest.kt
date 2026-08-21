@@ -77,7 +77,7 @@ class IntegrationAPITest(
     @Test
     fun `a new workspace is provisioned with every default, and the log says so`() {
         createDefault("Slack")
-        createDefault("GitHub", type = "GITHUB")
+        createDefault("Pager", type = "HTTP")
 
         val newWorkspace = graphQlTester.document(
             """mutation { createWorkspace(input: { name: "platform" }) { id } }""",
@@ -85,7 +85,7 @@ class IntegrationAPITest(
 
         graphQlTester.document("""query { workspaceConnections(workspaceId: $newWorkspace) { name inherited status } }""")
             .execute()
-            .path("workspaceConnections[*].name").entityList(String::class.java).containsExactly("GitHub", "Slack")
+            .path("workspaceConnections[*].name").entityList(String::class.java).containsExactly("Pager", "Slack")
             .path("workspaceConnections[0].inherited").entity(Boolean::class.java).isEqualTo(true)
             .path("workspaceConnections[0].status").entity(String::class.java).isEqualTo("NOT_CHECKED")
 
@@ -114,7 +114,7 @@ class IntegrationAPITest(
             """
             mutation {
               createConnection(input: {
-                name: "Pager", type: WEBHOOK, url: "https://pager.test", addToExistingWorkspaces: true
+                name: "Pager", type: HTTP, url: "https://pager.test", addToExistingWorkspaces: true
               }) { id }
             }
             """,
@@ -223,9 +223,9 @@ class IntegrationAPITest(
     @Test
     fun `a check reports what the service answered`() {
         // Not a Slack connection: that type now always points at slack.com, and
-        // a check on one would call Slack for real. A webhook keeps the URL it
-        // was given, which is what makes this test stay on the machine.
-        val id = createWorkspaceConnection("Slack", url = "https://orknux-test.invalid/hook", type = "WEBHOOK")
+        // a check on one would call Slack for real. An HTTP endpoint keeps the
+        // URL it was given, which is what makes this test stay on the machine.
+        val id = createWorkspaceConnection("Slack", url = "https://orknux-test.invalid/hook", type = "HTTP")
         graphQlTester.document(
             """mutation { updateWorkspaceConnection(id: $id, input: { secret: "x" }) { secretSet } }""",
         ).execute()

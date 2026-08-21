@@ -32,6 +32,7 @@ class ActionAPI(
     private val functions: WorkflowFunctionRepository,
     private val conditions: WorkflowConditionRepository,
     private val parameters: ActionParameters,
+    private val headers: ActionHeaders,
     private val connections: WorkspaceConnectionService,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
@@ -76,7 +77,7 @@ class ActionAPI(
                 emailReplyTo = input.emailReplyTo?.trim()?.ifEmpty { null },
                 url = input.url?.trim()?.ifEmpty { null },
                 method = input.method?.trim()?.uppercase()?.ifEmpty { null },
-                headers = input.headers?.trim()?.ifEmpty { null },
+                headers = writtenHeaders(input.workspaceId, input.headerRows, input.headers),
                 functionId = input.functionId,
                 mappings = input.mappings.orEmpty().toMappings(),
                 conditionExpression = input.conditionExpression?.trim()?.ifEmpty { null },
@@ -119,7 +120,15 @@ class ActionAPI(
         input.emailReplyTo?.let { action.emailReplyTo = it.trim().ifEmpty { null } }
         input.url?.let { action.url = it.trim().ifEmpty { null } }
         input.method?.let { action.method = it.trim().uppercase().ifEmpty { null } }
-        input.headers?.let { action.headers = it.trim().ifEmpty { null } }
+        /*
+         * Rows win when the form sent any, and the form sends them whenever it
+         * could read what was stored. Only a client that has never heard of rows
+         * - or a form looking at headers nobody can parse, which offers the text
+         * itself instead - falls back to the string, and neither may quietly
+         * throw the other's work away.
+         */
+        input.headerRows?.let { action.headers = headers.write(headers.checked(action.workspaceId, it.toRows())) }
+            ?: input.headers?.let { action.headers = it.trim().ifEmpty { null } }
         input.functionId?.let { action.functionId = it }
         input.mappings?.let { action.mappings = it.toMappings() }
         input.conditionExpression?.let { action.conditionExpression = it.trim().ifEmpty { null } }
@@ -194,6 +203,12 @@ class ActionAPI(
             url = action.url,
             method = action.method,
             headers = action.headers,
+            headerRows = headers.viewOf(action),
+            // False is an action whose stored headers are not readable as rows.
+            // The form shows the text itself when it hears this, because taking
+            // the only editor away from a value nobody can parse would leave
+            // somebody looking at a broken action with no way to mend it.
+            headersReadable = headers.rowsOf(action.headers) != null,
             functionId = action.functionId,
             functionName = function?.name,
             mappings = action.mappings.map { ArgumentMappingView(it.argument, it.expression) },
@@ -327,6 +342,26 @@ class ActionAPI(
         if (written?.contains("{{") == true) throw ActionHoldsPlaceholderException(setting)
     }
 
+    /**
+     * What goes in the column: the rows if the form sent them, the string if not.
+     *
+     * Both are accepted because both are current. The rows are what the form
+     * sends and what a reference can be expressed in at all; the string is what
+     * an import writes and what every action saved before this held, and it is
+     * read back as rows by the same reader that reads the rows.
+     */
+    private fun writtenHeaders(workspaceId: Long, rows: List<ActionHeaderInput>?, written: String?): String? =
+        rows?.let { headers.write(headers.checked(workspaceId, it.toRows())) }
+            ?: written?.trim()?.ifEmpty { null }
+
+    private fun List<ActionHeaderInput>.toRows(): List<ActionHeaderRow> = map { row ->
+        ActionHeaderRow(
+            name = row.name,
+            literal = row.value,
+            variableId = row.variableId,
+        )
+    }
+
     private fun List<ArgumentMappingInput>.toMappings(): MutableList<ArgumentMapping> = this
         .map { ArgumentMapping(argument = it.argument.trim(), expression = it.expression.trim()) }
         .filter { it.argument.isNotEmpty() }
@@ -350,6 +385,13 @@ fun label(subtype: ActionSubtype): String = subtype.name
 
 data class ArgumentMappingInput(val argument: String, val expression: String)
 
+/** One header row a form sent: a name, and exactly one of a value and a variable. */
+data class ActionHeaderInput(
+    val name: String,
+    val value: String? = null,
+    val variableId: Long? = null,
+)
+
 data class CreateActionInput(
     val workspaceId: Long,
     val name: String,
@@ -367,7 +409,10 @@ data class CreateActionInput(
     val emailReplyTo: String? = null,
     val url: String? = null,
     val method: String? = null,
+    /** The headers as one JSON string; what an import carries and what rows are read back out of. */
     val headers: String? = null,
+    /** The headers as rows, which is what the form sends. Wins over [headers] when both arrive. */
+    val headerRows: List<ActionHeaderInput>? = null,
     val functionId: Long? = null,
     val mappings: List<ArgumentMappingInput>? = null,
     val conditionExpression: String? = null,
@@ -394,7 +439,10 @@ data class UpdateActionInput(
     val emailReplyTo: String? = null,
     val url: String? = null,
     val method: String? = null,
+    /** The headers as one JSON string; what an import carries and what rows are read back out of. */
     val headers: String? = null,
+    /** The headers as rows, which is what the form sends. Wins over [headers] when both arrive. */
+    val headerRows: List<ActionHeaderInput>? = null,
     val functionId: Long? = null,
     val mappings: List<ArgumentMappingInput>? = null,
     val conditionExpression: String? = null,
@@ -434,6 +482,10 @@ data class ActionView(
     val url: String?,
     val method: String?,
     val headers: String?,
+    /** The same headers as rows, with a reference naming its variable and never holding its value. */
+    val headerRows: List<ActionHeaderView>,
+    /** Whether [headers] could be read as rows at all. */
+    val headersReadable: Boolean,
     val functionId: Long?,
     val functionName: String?,
     val mappings: List<ArgumentMappingView>,

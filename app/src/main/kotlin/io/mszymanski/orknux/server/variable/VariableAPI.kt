@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.variable
 
+import io.mszymanski.orknux.server.action.ActionHeaders
+import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -30,6 +32,8 @@ class VariableAPI(
     private val variables: WorkspaceVariableRepository,
     private val catalogs: VariableCatalogRepository,
     private val functions: WorkflowFunctionRepository,
+    private val actions: WorkflowActionRepository,
+    private val actionHeaders: ActionHeaders,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -250,9 +254,20 @@ class VariableAPI(
     fun deleteVariable(@Argument id: Long): Boolean {
         val variable = variables.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
+        /*
+         * An action's header reads a variable the same way a function's external
+         * parameter does, so it holds it in place the same way. Read out of the
+         * JSON rather than joined to, because that is where the reference is
+         * kept - there is no column for a foreign key to guard, so the guard is
+         * here or it is nowhere, and nowhere means a header that names a variable
+         * nobody can find and a request that fails at three in the morning.
+         */
         val usedBy = functions.findByWorkspaceId(variable.workspaceId)
             .filter { function -> function.externals.any { it.variableId == variable.id } }
-            .map { it.name }
+            .map { it.name } +
+            actions.findByWorkspaceId(variable.workspaceId)
+                .filter { action -> actionHeaders.reads(action, requireNotNull(variable.id)) }
+                .map { it.name }
         if (usedBy.isNotEmpty()) throw VariableInUseException(variable.name, usedBy)
 
         variables.delete(variable)

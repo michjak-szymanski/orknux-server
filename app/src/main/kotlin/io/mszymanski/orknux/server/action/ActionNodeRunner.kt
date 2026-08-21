@@ -54,6 +54,7 @@ import java.time.OffsetDateTime
 @Order(KIND_RUNNER_ORDER)
 class ActionNodeRunner(
     private val actions: WorkflowActionRepository,
+    private val headers: ActionHeaders,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
     private val pluginRunner: PluginRunner,
@@ -239,7 +240,22 @@ class ActionNodeRunner(
         val body = resolved(ActionParameters.BODY).ifEmpty { action.content.orEmpty() }
         val method = action.method?.trim()?.ifEmpty { null } ?: "GET"
 
-        return when (val answer = http.call(url, method, headersOf(action), body)) {
+        /*
+         * The headers are read now, not when the action was saved, so a header
+         * pointing at a variable sends what the variable holds today. A reference
+         * that comes to nothing stops the step here: the alternative is a request
+         * that quietly went out without its authorization and a 401 that explains
+         * none of it. Permanent, because a variable does not appear because
+         * something was tried a second time.
+         */
+        val sent = try {
+            headers.sentBy(action)
+        } catch (unresolved: ActionHeaderUnresolvedException) {
+            throw ActionFailedException("${step.name} did not call \"${url.take(URL_IN_ERROR)}\": " +
+                "${unresolved.message}", permanent = true)
+        }
+
+        return when (val answer = http.call(url, method, sent, body)) {
             is HttpAnswer.Answered -> answered(action, step, answer, method, url)
 
             /*
@@ -309,15 +325,6 @@ class ActionNodeRunner(
     /** Enough of a failing body to see what was wrong, without pasting a web page into a log. */
     private fun detail(answer: HttpAnswer.Answered): String =
         answer.body.trim().replace(WHITESPACE, " ").take(BODY_IN_ERROR).ifEmpty { "It said nothing." }
-
-    /** The headers the action defines, as they were typed. Unreadable JSON sends none. */
-    private fun headersOf(action: WorkflowAction): Map<String, String> {
-        val written = action.headers?.trim()?.ifEmpty { null } ?: return emptyMap()
-        return runCatching {
-            val tree = mapper.readTree(written)
-            tree.properties().associate { (name, value) -> name to value.asString() }
-        }.getOrDefault(emptyMap())
-    }
 
     /**
      * Calls the workspace's function with the arguments the node passes it.

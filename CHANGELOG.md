@@ -17,6 +17,33 @@ have failed.
 
 ### Added
 
+- **The workflow list can be sorted, and shows as many rows as you ask for.**
+  Name, last run, or switched on, in either direction, with the same 10/25/50/100
+  chooser the issues list has. Sorting is done by the server, so it orders the
+  whole list rather than the page you happen to be looking at; the order lives in
+  the address, so a sorted list can be shared.
+
+  The list used to open showing four rows - a number the chooser could not be set
+  back to. It opens on ten now.
+
+- **An agent's definition opens beside the graph** rather than instead of it.
+  Pressing Open definition on an agent node used to navigate to the agent's own
+  page and take the canvas off the screen; it now opens in the panel down the
+  left, the way every other kind already did, carrying the model, the system
+  prompt and every grant. Ctrl-click still opens the page in a tab.
+
+- **The four editors ask before unsaved work is walked away from.** Function,
+  tool, object and skill: clicking a link, closing the tab or pressing Back with
+  changes on screen now asks, and offers to save on the way out. Typing something
+  and undoing it counts as no change, and saving then leaving asks nothing -
+  a guard that fires after a successful save is one people learn to click
+  through.
+
+- **Creating and closing an issue is written to the audit log** whichever door it
+  came through. The page's door already recorded it; the tools an agent uses did
+  not, so an issue an agent filed left no trace of who filed it or when.
+
+
 - **A node can be told what to do when it fails.** An action or an agent now
   carries a retry policy - how many attempts, and how long to wait between them
   - and can be given a second way out of the node, drawn as a red **If fails**
@@ -138,14 +165,63 @@ have failed.
   it and still pass in silence, and only a wait long enough to look broken says
   anything.
 
-- **A bent line in the workflow editor is one curve through the point** rather
-  than two half-curves meeting at it. Lines you have already bent keep their
-  shape; what changes is that dragging one now moves it by as much as you
-  dragged, and a line can no longer be pulled into a loop that cannot be undone.
+- **A line in the workflow editor takes as many bend points as you put on it.**
+  Double-click the line to add one where you clicked; double-click a point, or
+  press Delete with it focused, to take it off. The last one off straightens the
+  line, which is what those gestures already did when a line could hold only one.
+
+  The curve through several points passes through each of them rather than being
+  pulled at by them, so dragging one still moves it by exactly as much as you
+  dragged. A line with a single bend is drawn exactly as it was before, and
+  arrangements you have already made are read and written unchanged - nothing
+  moves by upgrading, and nothing breaks by going back.
+
+- **Deleting something that is still in use is refused, and says what is using
+  it.** Actions, agents, conditions and triggers were deletable while a workflow
+  still named them - a published workflow could be left calling something that
+  no longer existed, and only said so when it ran. Tools, skill catalogs and
+  memory catalogs are granted to agents *by name*, so deleting one silently took
+  a capability away from every agent granted it, with the grant still listed on
+  the agent's screen.
+
+  All of them now refuse with a sentence naming what is in the way. Objects are
+  the deliberate exception where the reference is only an annotation - a function
+  parameter or a node's shape - because losing one degrades what the editor
+  writes above the code, visibly, on the screen where you would fix it. Where an
+  object is a contract rather than an annotation, such as a webhook's input
+  shape, the delete is refused like the rest.
+
+- **Toggling a tool's or a skill's Active badge no longer discards the draft.**
+  It applied the whole stored copy over the form, so an edit in progress was
+  replaced by whatever was saved. It now reads only what it changed.
 
 - **The readmes name the other three addresses** the site answers to.
 
 ### Fixed
+
+- **A workspace can be deleted on SQLite, which is what the one-container image
+  runs.** Any workspace holding an action that calls a function could not be
+  deleted at all: the delete cascaded the function away, a foreign key nulled the
+  column a check constraint required, and the whole thing failed with nothing on
+  screen to explain it. The workspace survived and the error said only that
+  something went wrong. Postgres was never affected, which is why it lasted.
+
+  The same fault was present twice in one table - for conditions as well as
+  functions - and both are fixed. Deleting a function that something still calls
+  is refused by name, as it already was.
+
+- **Twenty-seven backgrounds across the interface were painted with a colour that
+  does not exist.** They were transparent, showing whatever happened to be
+  behind: search boxes, label chips, the issue sidebar, the code area, a node's
+  input socket. All of them now use the recessed surface they meant, in both
+  themes.
+
+- **A list that could not be fetched no longer says the workspace is empty.**
+  Pickers and grant lists turned a failed request into "there are none yet",
+  which is a different and untrue statement. They now say what failed and what to
+  do about it - sign in again, ask an administrator, try again - and offer to
+  retry that one list.
+
 
 - **Pictures sent to an Anthropic model now arrive.** They did not. The request
   built for an Anthropic provider had no place for them at all, so a turn

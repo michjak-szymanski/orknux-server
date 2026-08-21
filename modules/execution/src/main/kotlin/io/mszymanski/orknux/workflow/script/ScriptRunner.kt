@@ -10,8 +10,7 @@ import org.graalvm.polyglot.io.IOAccess
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Runs a workspace's JavaScript.
@@ -27,6 +26,15 @@ import java.util.concurrent.TimeUnit
  * cancelled from another thread. A script that spins in a tight loop hits the
  * first; one that blocks in a way statements do not count hits the second.
  *
+ * Neither of those is about size, and a script that never finishes is not the
+ * only way one can take the server. The context shares this process's heap, so a
+ * script that holds what it allocates is spending the room every other thread is
+ * about to want — and the thread that runs out first is whichever asks next,
+ * which is almost never the script's. So the host bounds three more things, in
+ * [ScriptGuard]: how much of the heap a run may be holding when the heap runs
+ * short, how many runs may be doing it at once, and how much JSON one may hand
+ * back for the rest of the server to carry.
+ *
  * The engine is shared, so parsed sources are cached across runs, but every run
  * gets a fresh context: two runs of a function must not be able to see each
  * other's globals.
@@ -40,10 +48,17 @@ class ScriptRunner(private val properties: ScriptProperties) {
         .option("engine.WarnInterpreterOnly", "false")
         .build()
 
-    /** Cancels a context that has outstayed its timeout. */
-    private val watchdog = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "script-watchdog").apply { isDaemon = true }
-    }
+    /** Stops a run that outstays its time, its heap, or its turn. */
+    private val guard = ScriptGuard(
+        "script",
+        Bounds(
+            timeoutMillis = properties.timeoutMillis,
+            heapPressurePercent = properties.heapPressurePercent,
+            suspectAfterBytes = properties.suspectAfterBytes,
+            concurrency = properties.concurrency,
+            queueMillis = properties.queueMillis,
+        ),
+    )
 
     /**
      * Calls one function from [source].
@@ -62,36 +77,41 @@ class ScriptRunner(private val properties: ScriptProperties) {
         context: String = "{}",
     ): ScriptResult {
         val started = System.nanoTime()
+        val stopped = AtomicReference<Overrun?>(null)
         return try {
-            newContext().use {
-                val cancel = watchdog.schedule(
-                    { runCatching { it.close(true) } },
-                    properties.timeoutMillis,
-                    TimeUnit.MILLISECONDS,
-                )
-                try {
-                    val output = evaluate(it, source, functionName, arguments, context)
-                    ScriptResult.Returned(output, millisSince(started))
-                } finally {
-                    cancel.cancel(false)
-                }
+            guard.bounded(stopped, ::newContext) {
+                ScriptResult.Returned(evaluate(it, source, functionName, arguments, context), millisSince(started))
             }
         } catch (failure: PolyglotException) {
             val budget = failure.isCancelled || failure.isResourceExhausted
             val reason = when {
+                // What the guard says comes first. A cancelled context only says
+                // that somebody stopped it, and the guard is the only one who
+                // knows whether that was the clock or the heap.
+                stopped.get() != null -> "${guard.overrunReason(stopped.get())} and was stopped"
                 failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms and was stopped"
                 failure.isResourceExhausted -> exhausted(failure)
                 failure.isGuestException -> failure.message ?: "threw"
                 else -> failure.message ?: "could not be run"
             }
-            ScriptResult.Failed(reason, millisSince(started), settled = !budget)
+            ScriptResult.Failed(reason, millisSince(started), settled = !budget && stopped.get() == null)
+        } catch (failure: ScriptBusyException) {
+            // Nothing to do with this script. Worth asking again once the ones
+            // ahead of it have finished, which is what unsettled means.
+            ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started), settled = false)
         } catch (failure: ScriptContractException) {
             // The script ran and did not hold up its end: it threw, or there was
             // nothing to call. Both are answers about the script, not faults here.
             ScriptResult.Failed(failure.message ?: "did not return", millisSince(started))
         } catch (failure: IllegalStateException) {
-            // Closing a cancelled context races with the call that was in it.
-            ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started))
+            // Closing a cancelled context races with the call that was in it. If
+            // it was the guard that closed it, say what for.
+            val overrun = guard.overrunReason(stopped.get())
+            if (overrun != null) {
+                ScriptResult.Failed("$overrun and was stopped", millisSince(started), settled = false)
+            } else {
+                ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started))
+            }
         }
     }
 
@@ -126,25 +146,14 @@ class ScriptRunner(private val properties: ScriptProperties) {
      * is not something parsing can tell anyone about.
      */
     fun validate(source: String): ScriptValidation = try {
-        newContext().use {
-            /*
-             * Parsing is bounded too, for the same reason running is. It is the
-             * one entry point that had no watchdog, which made it the one entry
-             * point where a source that took the parser a long time would hold a
-             * request thread for as long as it liked - and this one is reached
-             * from the editor, by anybody who may write a function.
-             */
-            val cancel = watchdog.schedule(
-                { runCatching { it.close(true) } },
-                properties.timeoutMillis,
-                TimeUnit.MILLISECONDS,
-            )
-            try {
-                it.parse(module(source))
-            } finally {
-                cancel.cancel(false)
-            }
-        }
+        /*
+         * Parsing is bounded too, for the same reason running is. It is the one
+         * entry point that had no watchdog, which made it the one entry point
+         * where a source that took the parser a long time would hold a request
+         * thread for as long as it liked - and this one is reached from the
+         * editor, by anybody who may write a function.
+         */
+        guard.bounded(AtomicReference(), ::newContext) { it.parse(module(source)) }
         ScriptValidation(valid = true)
     } catch (failure: PolyglotException) {
         val location = failure.sourceLocation
@@ -154,6 +163,10 @@ class ScriptRunner(private val properties: ScriptProperties) {
             line = location?.startLine,
             column = location?.startColumn,
         )
+    } catch (failure: ScriptBusyException) {
+        ScriptValidation(valid = false, message = failure.message ?: "the script could not be checked")
+    } catch (failure: IllegalStateException) {
+        ScriptValidation(valid = false, message = failure.message ?: "the script could not be checked")
     }
 
     /**
@@ -169,29 +182,29 @@ class ScriptRunner(private val properties: ScriptProperties) {
      * and accepts two, and refusing that would be refusing correct code.
      */
     fun arity(source: String): ScriptArity = try {
-        newContext().use { polyglot ->
-            val cancel = watchdog.schedule(
-                { runCatching { polyglot.close(true) } },
-                properties.timeoutMillis,
-                TimeUnit.MILLISECONDS,
-            )
-            try {
-                val exported = polyglot.eval(module(source)).getMember("default")
-                    ?: return@use ScriptArity.Unreadable("it has no default export to call")
-                if (!exported.canExecute()) return@use ScriptArity.Unreadable("its default export is not a function")
+        /*
+         * Bounded like the other two, and it is the one that needed it most:
+         * counting the parameters means evaluating the module, so a source's
+         * top-level code runs here - before anybody has agreed to store it. A
+         * function that takes the heap in its module body would take it while
+         * being checked.
+         */
+        guard.bounded(AtomicReference(), ::newContext) { polyglot ->
+            val exported = polyglot.eval(module(source)).getMember("default")
+                ?: return@bounded ScriptArity.Unreadable("it has no default export to call")
+            if (!exported.canExecute()) return@bounded ScriptArity.Unreadable("its default export is not a function")
 
-                polyglot.getBindings("js").putMember(SUBJECT, exported)
-                polyglot.eval("js", ARITY)
-                val counted = polyglot.getBindings("js").getMember(ARITY_RESULT)
-                if (counted == null || !counted.isNumber) {
-                    return@use ScriptArity.Unreadable("its parameters could not be read")
-                }
-                ScriptArity.Counted(counted.asInt())
-            } finally {
-                cancel.cancel(false)
+            polyglot.getBindings("js").putMember(SUBJECT, exported)
+            polyglot.eval("js", ARITY)
+            val counted = polyglot.getBindings("js").getMember(ARITY_RESULT)
+            if (counted == null || !counted.isNumber) {
+                return@bounded ScriptArity.Unreadable("its parameters could not be read")
             }
+            ScriptArity.Counted(counted.asInt())
         }
     } catch (failure: PolyglotException) {
+        ScriptArity.Unreadable(failure.message ?: "the script could not be read")
+    } catch (failure: ScriptBusyException) {
         ScriptArity.Unreadable(failure.message ?: "the script could not be read")
     } catch (failure: IllegalStateException) {
         ScriptArity.Unreadable(failure.message ?: "the script could not be read")
@@ -286,6 +299,10 @@ class ScriptRunner(private val properties: ScriptProperties) {
         polyglot.getBindings("js").putMember(CALLEE, function)
         polyglot.getBindings("js").putMember(ARGUMENTS, "[${arguments.joinToString(",")}]")
         polyglot.getBindings("js").putMember(CONTEXT, context)
+        // As text, like everything else that crosses: the harness is one cached
+        // source, so the bound travels as a value rather than being spliced into
+        // the code and parsed afresh on every call.
+        polyglot.getBindings("js").putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
         polyglot.eval("js", HARNESS)
 
         val bindings = polyglot.getBindings("js")
@@ -363,10 +380,19 @@ class ScriptRunner(private val properties: ScriptProperties) {
         const val ARGUMENTS = "__orknuxArguments"
         const val RESULT = "__orknuxResult"
         const val ERROR = "__orknuxError"
+        const val RESULT_LIMIT = "__orknuxResultLimit"
 
         /**
          * Calls the function and settles whatever it answered with, leaving JSON
          * behind. Written as one expression so a script cannot shadow it.
+         *
+         * The answer is measured before it is handed over, and an oversized one
+         * is refused here rather than on the other side of the boundary. What a
+         * function returns does not stop at being a string: it is written to the
+         * step's row, carried to whatever node reads it next, and parsed into a
+         * tree on the way. A hundred megabytes of JSON is a hundred megabytes in
+         * each of those places, and the only cheap place to say no is the one
+         * where the string has just been made.
          */
         val HARNESS = """
             (function () {
@@ -377,9 +403,16 @@ class ScriptRunner(private val properties: ScriptProperties) {
                 // call cannot leave anything behind for the next.
                 globalThis.context = Object.freeze(JSON.parse(globalThis.$CONTEXT));
                 var args = JSON.parse(globalThis.$ARGUMENTS);
+                var limit = Number(globalThis.$RESULT_LIMIT);
                 Promise.resolve(globalThis.$CALLEE.apply(null, args)).then(
                   function (value) {
-                    globalThis.$RESULT = value === undefined ? null : JSON.stringify(value);
+                    var json = value === undefined ? null : JSON.stringify(value);
+                    if (json !== null && json.length > limit) {
+                      globalThis.$ERROR = 'returned ' + json.length +
+                        ' characters of JSON, more than the ' + limit + ' it is allowed';
+                      return;
+                    }
+                    globalThis.$RESULT = json;
                   },
                   function (failure) {
                     globalThis.$ERROR = String((failure && failure.message) || failure);
@@ -453,4 +486,57 @@ data class ScriptProperties(
      * observed from outside.
      */
     val statementLimit: Long = 5_000_000,
+
+    /**
+     * How full the heap may be, after a collection, before calls start being
+     * stopped to save the server.
+     *
+     * Post-collection occupancy is live data, so eighty-five per cent of it is a
+     * server that is nearly out of room rather than one that is merely busy. A
+     * healthy installation never sees this; one that does is a few seconds from
+     * an OutOfMemoryError on whichever thread asks next, and the thread that asks
+     * next is usually not the script's.
+     */
+    val heapPressurePercent: Int = 85,
+
+    /**
+     * How much a call must have allocated before the heap's trouble is put down
+     * to it.
+     *
+     * Not a limit. A call may allocate as much as it likes while there is room -
+     * and it will, since the interpreter boxes arithmetic and an honest loop
+     * churns through hundreds of megabytes a second keeping none of it. This is
+     * only the line between a bystander and a suspect, so that a small function
+     * running beside somebody else's leak is not the one that gets stopped.
+     */
+    val suspectAfterBytes: Long = 64L * 1024 * 1024,
+
+    /**
+     * How many calls may be in a sandbox at once.
+     *
+     * What bounds the installation rather than the call. Scripts are small and
+     * quick - tens of milliseconds each - so four at a time is a great many calls
+     * a second, and it means four contexts' worth of live data at worst rather
+     * than one per request the server happens to be serving.
+     */
+    val concurrency: Int = 4,
+
+    /**
+     * How long a call waits for its turn before it is told the server is full.
+     *
+     * Waiting is the right answer to a burst and the wrong answer to a queue that
+     * is never going to clear, so there is a limit on it. What comes back is
+     * unsettled, so a workflow step retries rather than failing outright.
+     */
+    val queueMillis: Long = 5_000,
+
+    /**
+     * How much JSON one call may hand back.
+     *
+     * Not a bound on the heap - the two above are that - but a bound on what the
+     * rest of the server is asked to carry, which is a separate thing and costs
+     * three times over: the answer is written to the step's row, parsed into a
+     * tree on the way there, and handed to whatever node reads it next.
+     */
+    val resultLimitChars: Long = 4L * 1024 * 1024,
 )

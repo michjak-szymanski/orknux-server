@@ -163,17 +163,25 @@ class ExecutionStep(
     val description: String? = null,
 
     /**
-     * Which action this step runs, copied when the run started: editing the
-     * action afterwards does not change what this run did.
+     * Which action this step runs, copied when the run started.
+     *
+     * The id and not the definition, which is the difference that matters: the
+     * step is pinned to the same catalogue entry the graph named however the
+     * graph is redrawn afterwards, and the runner reads that entry's row when
+     * it gets here. So a run whose action was edited while it was waiting runs
+     * the edit, and a published workflow calls whatever its function says now.
+     * `PublishedDefinitionsTest` in the app module is where that is written
+     * down. The step's own copies below - the mappings, the retry policy - are
+     * the fields that genuinely are frozen.
      */
     @Column(name = "action_id")
     val actionId: Long? = null,
 
-    /** Which condition this step asks, copied when the run started. */
+    /** Which condition this step asks; the id, like the action above it. */
     @Column(name = "condition_id")
     val conditionId: Long? = null,
 
-    /** The agent this step runs, when the node is one. */
+    /** The agent this step runs, when the node is one; again by id. */
     @Column(name = "agent_id")
     val agentId: Long? = null,
 

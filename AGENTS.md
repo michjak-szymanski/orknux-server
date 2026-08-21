@@ -205,7 +205,11 @@ is reported to the module rather than cascaded.
   `GraphVersion.DRAFT` only when the run was `MANUAL`. Anything that changes what
   a graph does has to be part of the snapshot, or it will be edited and not run;
   `WorkflowSnapshot` reads and writes it by hand rather than by reflection,
-  because a shape in a database outlives the class it came from.
+  because a shape in a database outlives the class it came from. The snapshot
+  stops at the graph: of the action, agent or condition a node names it keeps the
+  id, and the runner reads that row live — so editing a function changes what a
+  published workflow does, without a republish. `PublishedDefinitionsTest` pins
+  it; do not write a comment claiming a step froze a definition.
 - **Access is decided in roles, not in the provider's vocabulary.** A directory
   group or an OIDC claim is translated once, by `RoleResolver`, and everything
   past the front door — who administers, who sees which workspace — deals only in

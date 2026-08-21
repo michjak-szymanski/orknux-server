@@ -17,6 +17,40 @@ have failed.
 
 ### Added
 
+- **A node's retry policy is a policy, not a checkbox.** Attempts and a single
+  wait with a "double it" tick have become attempts, an initial wait, a
+  multiplier, a ceiling, jitter and a total budget. A multiplier of 1 is a fixed
+  wait and 2 is what the tick used to do, so everything in between is now
+  sayable; the ceiling stops a long policy growing to an absurd delay in
+  silence; and the budget is the one people actually reach for, because what
+  happens *between* two waits is a call to something outside this installation,
+  and five attempts at a request that times out after a minute is five minutes
+  no arrangement of waits accounts for.
+
+  Jitter is a fraction rather than a switch, and is only ever subtracted — so
+  the ceiling and the budget still mean what they say. The panel shows three
+  fields and a sentence — *"Up to 5 attempts over about 2m"* — with the rest
+  behind a disclosure, and **a graph you already have does exactly what it did
+  before**.
+
+- **An HTTP action's headers are built as rows, and a value may name a
+  variable.** They were a JSON blob typed by hand, so a bearer token had to be
+  pasted in as a literal — into a field that is not a credential field, stored
+  unencrypted, visible to anyone who could open the action. A referenced value
+  is read when the action runs and is shown nowhere: not in the form, not in a
+  log, not in an error. Deleting a variable an action's header names is now
+  refused, as it already was for a function.
+
+  Headers saved before this keep working and are left in the database exactly as
+  they were until somebody saves the form.
+
+- **Three times as many icons to label a node with**, 94 to 291, chosen by what
+  the nodes in this product actually reach — tickets, source control,
+  infrastructure, storage, security, money, documents, logistics. The furniture
+  rule that hides chevrons and arrows was also hiding `play`, `save`, `search`,
+  `plus` and `copy`, which are perfectly good names for a node; they are back.
+
+
 - **The workflow list can be sorted, and shows as many rows as you ask for.**
   Name, last run, or switched on, in either direction, with the same 10/25/50/100
   chooser the issues list has. Sorting is done by the server, so it orders the
@@ -203,9 +237,60 @@ have failed.
   It applied the whole stored copy over the form, so an edit in progress was
   replaced by whatever was saved. It now reads only what it changed.
 
+- **"Webhook" no longer names two opposite things.** A trigger of that kind is
+  incoming — a path this installation exposes. A connection of that kind was
+  outgoing, a URL this installation posts to, which is not a webhook: it is an
+  HTTP endpoint, and whether the receiver thinks of it as a webhook is the
+  receiver's business. The connection kind is now **HTTP**. Existing
+  connections are carried across.
+
+- **Jira and GitHub are no longer offered as connection kinds.** Nothing
+  implemented either; both fell through to the same generic HTTP handling.
+  Connections of those kinds become HTTP connections, which is what they always
+  were.
+
+- **A secret is revealed by the same control everywhere.** Some fields offered a
+  green *Reveal* link and some an eye; two of the links only revealed, with no
+  way to put the value back. Every one is now the eye, it toggles, and it says
+  which state it is in.
+
 - **The readmes name the other three addresses** the site answers to.
 
 ### Fixed
+
+- **Typing quickly in a code editor no longer scrambles what you typed.** The
+  editor wrote its incoming text back into the document whenever the two
+  disagreed — but that work happens after the screen is painted, so a keystroke
+  landing in the gap left it holding the text from one character ago. It wrote
+  that back and sent the cursor to the top of the file, and did it again on the
+  next keystroke. At a realistic typing speed a line came out reversed in
+  chunks, and **what was saved was the scrambled text**, because the document is
+  what a save stores.
+
+- **An editor no longer asks about unsaved work on a function nobody touched.**
+  Opening certain functions produced "you have changes the server has not been
+  told about" immediately, because the editor rewrote the code to match the
+  panel as the page finished loading. The guard against that fired by counting
+  renders, and the rewrite happened on a later one — after the workspace's
+  variables arrived. It is asked by value now. The tool editor had the same
+  fault.
+
+- **The workflow list's first column no longer says "Template name"** on a list
+  of workflows, and the sort control shares a line with the buttons beside it
+  rather than taking a row of its own.
+
+- **A line in the workflow editor accepts extra bend points even when it carries
+  a label.** The label sat on the first point as its only handle, covering the
+  part of the line you would aim at.
+
+- **The line from a session node is drawn as a dependency**, dashed, like every
+  other line that says "this uses that" rather than "this runs next". A session
+  is not a step, and the solid line said it was.
+
+- **The editor's side panel can be closed from its top-right corner.** The only
+  way out was at the bottom, past the whole form — and the panel's first
+  inch had always been hidden behind the toolbar above it.
+
 
 - **A workspace can be deleted on SQLite, which is what the one-container image
   runs.** Any workspace holding an action that calls a function could not be

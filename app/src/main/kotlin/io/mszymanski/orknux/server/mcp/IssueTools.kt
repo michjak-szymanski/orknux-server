@@ -16,6 +16,8 @@ import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.issue.NewsReader
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.user.AppUserRepository
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -60,6 +62,7 @@ class IssueTools(
     private val agents: AgentRepository,
     private val newsDesk: IssueNewsDesk,
     private val history: IssueHistoryRecorder,
+    private val audit: WorkspaceAuditRecorder,
     private val observers: IssueObserverRepository,
     private val relations: IssueRelationRepository,
     private val models: ModelService,
@@ -292,6 +295,7 @@ class IssueTools(
                 lastModifiedBy = currentUser(),
             ),
         )
+        audited(scope.workspaceId, "Issue #${made.number} \"$title\" opened")
         watching.forEach {
             observers.save(
                 IssueObserver(
@@ -301,6 +305,12 @@ class IssueTools(
                     addedBy = currentUser(),
                 ),
             )
+            // Said the same way `observeIssue` says it, because it is the same
+            // fact. Who was put on an issue is the question the audit gets
+            // asked about observers, and it has to answer whether they were
+            // named on the tool call that filed it or added from the page
+            // afterwards.
+            audited(scope.workspaceId, "Issue #${made.number}: ${it.name} is now an observer")
         }
         // Opened rather than observing: at creation the news worth having is
         // that the issue exists. "You are now an observer" is the right sentence
@@ -399,7 +409,13 @@ class IssueTools(
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
         issues.save(held)
-        if (moved) newsDesk.statusChanged(held, currentUser())
+        if (moved) {
+            newsDesk.statusChanged(held, currentUser())
+            audited(
+                scope.workspaceId,
+                "Issue #${held.number} ${if (wanted == IssueStatus.CLOSED) "closed" else "reopened"}",
+            )
+        }
         // Written here as well as in the controller, because this is the other
         // door into the tracker and a history with a hole exactly where the
         // agents worked is worse than no history at all.
@@ -550,5 +566,30 @@ class IssueTools(
     /** Whoever is asking: a token carries its owner, so this is a real name. */
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "orknux"
+
+    /**
+     * The same audit entry the controller writes, from the other door.
+     *
+     * Worded to the letter of what `IssueAPI` writes, because the audit log is
+     * read as one list and searched as one list: "Issue #12 closed" filed by an
+     * agent has to sort beside "Issue #12 closed" filed from the page, and a
+     * second phrasing here would mean a search for one of them finds half the
+     * closures. The category is `WORKSPACE` for the same reason - it is where
+     * every issue entry already lives.
+     *
+     * `recordAutomated` rather than `record`, and the difference is not
+     * cosmetic. `record` reads the security context itself and *throws* when
+     * nobody is authenticated - which is the ordinary case on one of the three
+     * ways in here: an agent's tool call inside a workflow that a schedule
+     * started has no web request behind it and no principal. Under `record`
+     * that agent's `open` would come back to the model as a failure after the
+     * issue was already saved. The actor is passed instead, from the same
+     * `currentUser` that fills `reporter` and `lastModifiedBy`, so the audit
+     * names whoever the issue itself names - a real username where a token
+     * carried one, and `orknux` where the platform acted on its own.
+     */
+    private fun audited(workspaceId: Long, message: String) {
+        audit.recordAutomated(workspaceId, WorkspaceAuditCategory.WORKSPACE, message, currentUser())
+    }
 
 }

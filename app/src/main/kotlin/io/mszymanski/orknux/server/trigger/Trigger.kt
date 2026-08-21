@@ -189,6 +189,19 @@ class TriggerNameTakenException(name: String) :
 
 class TriggerNameInvalidException : RuntimeException("A trigger name is required")
 
+/**
+ * A trigger a workflow starts from is not one to delete.
+ *
+ * The drawn graph is the whole of it: publishing does not copy a trigger id, and
+ * an arriving event finds its workflows by looking for the trigger *node*. So a
+ * deleted trigger does not break a run halfway - it stops the workflow being
+ * started at all, with nothing anywhere saying why, which is why it is refused
+ * here rather than reported later.
+ */
+class TriggerInUseException(name: String, users: List<String>) : RuntimeException(
+    "$name is used by ${users.joinToString(", ")}, so it cannot be deleted",
+)
+
 class TriggerConnectionRequiredException :
     RuntimeException("An incoming connection trigger needs a connection and an event")
 

@@ -214,6 +214,17 @@ class ActionNameTakenException(name: String) :
 
 class ActionNameInvalidException : RuntimeException("An action name is required")
 
+/**
+ * Named workflow by workflow, and marked where the copy is a published one.
+ *
+ * "The published workflow Answer" and "the workflow Answer" ask for two
+ * different things from whoever reads it - republish, or redraw - so the
+ * refusal has to be able to say which, rather than counting nodes.
+ */
+class ActionInUseException(name: String, users: List<String>) : RuntimeException(
+    "$name is used by ${users.joinToString(", ")}, so it cannot be deleted",
+)
+
 class ActionSettingMissingException(setting: String) :
     RuntimeException("This kind of action needs $setting")
 

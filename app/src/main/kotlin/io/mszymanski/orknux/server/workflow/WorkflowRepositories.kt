@@ -13,6 +13,13 @@ interface WorkspaceWorkflowRepository : JpaRepository<WorkspaceWorkflow, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkspaceWorkflow>
 
+    /**
+     * All of them, for a caller asking about the workspace rather than showing
+     * it a page - which in practice means "does anything here still name this
+     * definition", asked once when somebody tries to delete one.
+     */
+    fun findByWorkspaceId(workspaceId: Long): List<WorkspaceWorkflow>
+
     fun existsByWorkspaceIdAndWorkflowId(workspaceId: Long, workflowId: Long): Boolean
 
     /**

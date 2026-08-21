@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import io.mszymanski.orknux.server.workspace.pageRequest
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
@@ -35,6 +36,7 @@ class ActionAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val references: WorkflowReferences,
 ) {
 
     @QueryMapping
@@ -139,10 +141,28 @@ class ActionAPI(
         return describe(action)
     }
 
+    /**
+     * Refused while a workflow runs it, the way a function it calls is.
+     *
+     * A function held in place by an action is the same rule read one link
+     * earlier: `deleteFunction` refuses and names the caller, and until this
+     * existed the action itself was held in place by nothing. So the reference a
+     * published workflow depends on could be taken out from under it - the
+     * snapshot went on naming an id that resolved to nothing, and a run said
+     * "the action Act ran has been deleted", which is honest but is a workflow
+     * that stopped working with nobody touching the workflow.
+     *
+     * The published copy is what makes this more than a repeat of the function
+     * guard. A draft naming it is a canvas somebody can redraw; a snapshot
+     * naming it cannot be edited at all, so it is the half that has to be asked.
+     */
     @MutationMapping
     @Transactional
     fun deleteAction(@Argument id: Long): Boolean {
         val action = actions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+
+        val users = references.toAction(action.workspaceId, id)
+        if (users.isNotEmpty()) throw ActionInUseException(action.name, users)
 
         actions.delete(action)
         auditRecorder.record(action.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Action ${action.name} deleted")

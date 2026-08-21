@@ -357,10 +357,19 @@ class ModelChatClient(
             is ModelProviderProbe.Credential.Header -> resolved.header
         }
 
-        val body = if (anthropic) {
-            anthropicBody(model, turns, streaming, tools)
-        } else {
-            openAiBody(model, turns, streaming, tools)
+        val body = try {
+            if (anthropic) {
+                anthropicBody(model, turns, streaming, tools)
+            } else {
+                openAiBody(model, turns, streaming, tools)
+            }
+        } catch (refused: UnusableImage) {
+            // A picture that cannot be carried is said out loud. Dropping it and
+            // sending the words alone is what this used to do, and the model
+            // then answered plausibly about something it had never been shown -
+            // which is worse than a refusal by exactly the amount that a
+            // confident wrong answer is worse than an error message.
+            return Prepared.Failed("${provider.name} cannot be sent this picture: ${refused.message}")
         }
         val builder = HttpRequest.newBuilder(uri)
             .timeout(properties.timeout)
@@ -518,6 +527,28 @@ class ModelChatClient(
                     }
                 }
 
+                /*
+                 * The same turn openAiBody sends as text and image_url parts,
+                 * in the shape Anthropic reads: content blocks, with the
+                 * picture carried as a source rather than as a URL.
+                 *
+                 * This branch is the whole of issue #151. Without it a turn
+                 * carrying a picture reached the model as words alone - nothing
+                 * failed, nothing was logged, and an agent whose entire purpose
+                 * was reading a screenshot appeared to work.
+                 */
+                turn.images.isNotEmpty() -> {
+                    message.put("role", turn.role)
+                    val blocks = message.putArray("content")
+                    if (turn.content.isNotEmpty()) {
+                        blocks.addObject().put("type", "text").put("text", turn.content)
+                    }
+                    turn.images.forEach { image ->
+                        val block = blocks.addObject().put("type", "image")
+                        block.set("source", anthropicImageSource(image))
+                    }
+                }
+
                 else -> message.put("role", turn.role).put("content", turn.content)
             }
         }
@@ -540,6 +571,60 @@ class ModelChatClient(
             }
         }
         return mapper.writeValueAsString(root)
+    }
+
+    /**
+     * A picture this provider cannot be sent, and the sentence saying why.
+     *
+     * Thrown rather than returned because it interrupts building a request that
+     * must not go out: the alternative - carrying on and leaving the picture
+     * behind - is precisely the behaviour this replaces.
+     */
+    private class UnusableImage(message: String) : IllegalArgumentException(message)
+
+    /**
+     * One picture, in the shape Anthropic's messages API takes.
+     *
+     * A turn's images are `data:` URLs, which is what the OpenAI shape puts
+     * straight into `image_url.url`. Anthropic does not take a URL there: it
+     * wants the media type and the bytes separately, so the URL is taken apart
+     * here. An `http` or `https` address is passed through as a URL source,
+     * which Anthropic does accept, so a caller that ever carries one is not
+     * broken by this being written for the shape it carries today.
+     *
+     * Anything else refuses. The media types are Anthropic's own list, and a
+     * picture in some other format would otherwise be answered with an opaque
+     * 400 from the provider rather than a sentence naming what is wrong.
+     */
+    private fun anthropicImageSource(image: String): ObjectNode {
+        val source = mapper.createObjectNode()
+
+        if (image.startsWith("http://") || image.startsWith("https://")) {
+            return source.put("type", "url").put("url", image)
+        }
+
+        if (!image.startsWith("data:")) {
+            throw UnusableImage("it is neither a data: URL nor an http address")
+        }
+
+        val comma = image.indexOf(',')
+        if (comma < 0) throw UnusableImage("the data: URL has no data in it")
+        val declaration = image.substring("data:".length, comma)
+        if (!declaration.endsWith(";base64")) {
+            throw UnusableImage("only base64 data: URLs can be carried, and this one is not base64")
+        }
+
+        val mediaType = declaration.removeSuffix(";base64").ifEmpty {
+            throw UnusableImage("the data: URL does not say what kind of picture it is")
+        }
+        if (mediaType !in ANTHROPIC_IMAGE_TYPES) {
+            throw UnusableImage("$mediaType is not one of the types it accepts (${ANTHROPIC_IMAGE_TYPES.joinToString(", ")})")
+        }
+
+        val data = image.substring(comma + 1)
+        if (data.isEmpty()) throw UnusableImage("the data: URL has no data in it")
+
+        return source.put("type", "base64").put("media_type", mediaType).put("data", data)
     }
 
     /** Arguments arrive as a JSON string; this shape wants them as an object. */
@@ -620,6 +705,9 @@ class ModelChatClient(
 
         /** Where the provider stops objecting to the request and starts failing. */
         const val SERVER_ERROR = 500
+
+        /** What Anthropic's messages API will look at. Its list, not a guess. */
+        val ANTHROPIC_IMAGE_TYPES = setOf("image/jpeg", "image/png", "image/gif", "image/webp")
 
         const val DEFAULT_MAX_TOKENS = 4096
         const val ANTHROPIC_VERSION = "2023-06-01"

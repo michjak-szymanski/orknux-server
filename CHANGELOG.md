@@ -119,6 +119,18 @@ have failed.
 
 ### Fixed
 
+- **The one-container image works on whatever port you publish it on.** It did
+  not. `docker run -p 9000:8080 orknux-one` gave a sign-in page that loaded
+  perfectly and then refused every request it made, with a 403 and nothing on
+  screen to explain it. nginx forwarded the Host header with the port removed,
+  so the server rebuilt its own address without one; the page's own origin then
+  no longer matched the address its requests appeared to arrive at, every
+  ordinary call was treated as cross-origin, and that image allows no origins
+  because it was never expected to need any. The image's own smoke test never
+  saw it, because `curl` sends no `Origin` header and a browser always does.
+
+  The interface image behind a proxy was affected the same way.
+
 - **The proxy rules now cover the calls that were going round them.** Three
   things this installation does over the network ignored the rules on the
   networking page, each for its own reason, and each failed on exactly the

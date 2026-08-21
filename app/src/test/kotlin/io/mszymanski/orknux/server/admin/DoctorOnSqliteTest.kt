@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.admin
 
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretColumns
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
 import io.mszymanski.orknux.server.security.SecurityProperties
 import io.mszymanski.orknux.server.security.WebProperties
@@ -57,6 +58,9 @@ class DoctorOnSqliteTest {
     @Autowired
     lateinit var attachments: AttachmentProperties
 
+    @Autowired
+    lateinit var secrets: SecretColumns
+
     @BeforeEach
     fun signInAsAdministrator() {
         SecurityContextHolder.getContext().authentication =
@@ -109,7 +113,7 @@ class DoctorOnSqliteTest {
         // not there took every other check down with it, so the checks are run
         // one at a time inside their own catch. Here the database itself is
         // gone, which is as broken as the ones that talk to it can get.
-        val withoutADatabase = DoctorAPI(cipher, security, web, access, JdbcTemplate(NoDatabase()), attachments)
+        val withoutADatabase = DoctorAPI(cipher, security, web, access, JdbcTemplate(NoDatabase()), attachments, secrets)
 
         val checks = withoutADatabase.doctor()
 

@@ -20,7 +20,7 @@ directory or an OIDC provider. One deployable, built from modules that cannot
 reach into each other:
 
 ```
-orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, Teams, SMTP
+orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, SMTP
                     └──▶ execution  ──▶ Temporal
 ```
 
@@ -245,7 +245,9 @@ validation looks straight through.
 Everything the test suite covers works: signing in, workspaces, issues, agents,
 workflows, executions, chat and its history, the MCP endpoint, attachments,
 sessions, password resets, proxy rules and the shells an agent runs commands on.
-The suite runs green against both. What differs is underneath.
+The same suite runs against both, switched by a property rather than written
+twice — **Tests** below says what that run is worth at the moment. What differs
+is underneath.
 
 **One writer at a time.** This is the whole of it, and everything below is a
 consequence. SQLite takes a single write lock for the database, so two requests
@@ -306,6 +308,11 @@ to be running, LDAP still comes from compose.
 suite on purpose: a suite that only ever exercises one database will not notice
 the day the other stops working.
 
+**The SQLite run is not green at the moment** — issue #171 — and CI does not run
+it, so it is a red that is already known about rather than something a checkout
+did. It is the engine `orknux-one` ships with, which is why it is worth running
+by hand rather than treating as the second-class half of the switch.
+
 They run with `orknux.temporal.enabled=false`, so a workflow runs on the calling
 thread and no Temporal server is needed; the Temporal path has its own test,
 which brings up an in-process environment. `orknux.model.check.enabled=false` and
@@ -322,7 +329,9 @@ away, and a real key has no business in a build file.
 | `ldap`           | Bind authentication and the group-to-authority mapping                 |
 | `user`           | Everybody this installation knows, internal and external, their passwords and their access tokens |
 | `workspace`           | Workspaces and the audit log every other package writes to                  |
-| `workflow`       | Workflow definitions, the editable graph, the published snapshot, and the API over runs |
+| `workflow`       | Workflow definitions, the editable graph, the publications, and the API over runs |
+| `transfer`       | Moving components between installations: the JSON envelope, what it refuses to carry, and the templates an installation keeps |
+| `revision`       | What a function, tool, skill or agent was before its last save, the restore that puts one back, and the sweep that ages them out |
 | `agent`          | Agents, the MCP servers they may use, the tools they may call and the skills that guide them |
 | `integration`    | The integration API over the connection module                         |
 | `trigger`        | The trigger catalogue, the listener, and the clock that fires the scheduled ones |
@@ -335,6 +344,7 @@ away, and a real key has no business in a build file.
 | `issue`          | The workspace's issue tracker: issues, comments, mentions, and the feed a bell and an assistant read |
 | `memory`         | Memory catalogs, the notes in them, and the tool an agent reads them through |
 | `model`          | The API over the workspace's LLM providers, the models reached through them, and what they were used for |
+| `llm`            | LLM sessions: a conversation an agent keeps across the runs that share its key, and the transcript of what was said and called |
 | `mcp`            | The MCP endpoint this server serves, and the tools an outside assistant calls through it |
 | `shell`          | The tool an agent runs commands through, on the machines Admin -> Shell holds; the sessions themselves belong to `modules/connection` |
 | `mail`           | The installation's own relay, and the one thing it sends: a password reset link |
@@ -364,9 +374,11 @@ written. `orknux.security.admin-role` (default `ROLE_ADMINS`) still administers
 on its own. Group lookup under LDAP needs `orknux.ldap.group-search-base` to
 point at the OU holding the groups.
 
-`orknux.security.auth-method` picks `LDAP` or `OIDC`, one at a time. Beside
-either there are **internal users**: identities this installation made up, which
-may be given a password and may mint access tokens. A token is 32 random bytes
+`orknux.security.auth-method` picks `LDAP`, `OIDC` or `INTERNAL`, one at a time —
+the last being no directory and no provider at all, which is what `orknux-one`
+runs on. Beside any of them there are **internal users**: identities this
+installation made up, which may be given a password and may mint access tokens.
+A token is 32 random bytes
 behind an `orkx_` prefix, kept only as a SHA-256 hash, presented as
 `Authorization: Bearer orkx_…`, and it creates no session. That is how something
 that is not a browser — the CLI, or an assistant calling the MCP endpoint — signs
@@ -416,7 +428,7 @@ read.
 
 `WorkspaceAuditRecorder` writes one row per change, attributed to the username of the
 caller. Entries carry a category (`WORKSPACE`, `WORKFLOW`, `AGENT`, `INTEGRATION`,
-`MODEL`, `MEMORY`, `OBJECT`, `CHAT`) and
+`MODEL`, `MEMORY`, `OBJECT`, `CHAT`, `SHELL`) and
 a message ready to display. An entry with no workspace is an admin-level change
 and only appears in the admin audit log.
 
@@ -467,6 +479,37 @@ and not somebody who can already read the application's own environment. Losing
 it makes every stored credential unreadable; the Doctor page under Admin is where
 to find out whether the key is set, the right length, and able to read what is
 already there.
+
+### Networking
+
+Where this installation has to go out through a proxy is one list of **rules**,
+installation-wide rather than per workspace: the reason a proxy exists is the
+network this process sits in and not the team whose workflow made the call, and
+it is the only scope that can cover the calls made for nobody in particular — the
+token grant a model provider needs, the sweep that asks whether connections still
+answer. A rule matches its pattern anywhere in the request URL, ignoring case,
+and names a host and a port with an optional login whose password is encrypted
+like every other credential; where two rules could answer, the order an
+administrator put them in decides.
+
+**Everything this product does over the network goes through them**, which is
+worth saying because for a while three things did not. Signing in with OIDC is
+four clients Spring Security builds for itself — discovery, the key set, the
+token exchange, userinfo — and discovery runs while the server is starting, so a
+proxied installation did not come up at all. Slack went out through its SDK's own
+HTTP client and its own websocket stack. And mail is matched as
+`smtp://host:port`, opening a `CONNECT` tunnel through the proxy a rule names.
+A host a rule carries is also the **proxy's to resolve**: resolving it here first
+is how an installation whose proxy configuration was entirely correct failed
+every call before the rules were consulted at all. A host no rule carries is
+still checked here, and an address pointed at instance metadata is still refused
+whether or not a proxy would have fetched it.
+
+Two things these rules cannot do, and the page says so rather than letting them
+be found out. Directory sign-in over **LDAP** is not HTTP, so an HTTP proxy has
+nothing to carry. And a websocket or a mail session is a `CONNECT` tunnel, which
+a proxy has to be willing to open — if yours will not, that is where a rule that
+looks right still fails.
 
 ### Chat
 
@@ -644,6 +687,18 @@ reports; the tool editor's Validate is the same parser that would run the code.
 Both can be turned off without being deleted, and both record who last saved
 them, which the lists and the editors show.
 
+**And both keep what they were.** Every save of a function, a tool, a skill or an
+agent writes down the state it replaced, and each of the four has a **History**
+panel beside it: who saved it, when, what the code or the prompt said then, and a
+button that puts it back. Restoring keeps what it replaces too, so a restore is
+undone the same way it was made. A version is a whole copy of what a component
+was, which is why how long they are kept is an administrator's setting —
+`ORKNUX_REVISION_RETENTION_DAYS`, fourteen days by default, measured from when a
+version stopped being current rather than from when it was written. Nothing from
+before the upgrade is recovered: a component's history begins with the first save
+after it. A workflow is not one of the four because a workflow's versions are its
+publications — see **Publishing**.
+
 ### Memory
 
 A **memory catalog** is a folder of notes a workspace keeps: an incident writeup,
@@ -661,6 +716,17 @@ decision worth making once, not once per note.
 A workspace reaches models through **providers**, and a provider holds a key — which
 is why it lives in `modules/connection` beside MCP servers: credentials are read
 in one place. Each provider has a type, and the type decides what else it needs.
+
+**A type exists where something branches on it**, and nowhere else. `OPENAI` is
+the shape the rest are measured against, `ANTHROPIC` has its own body, streaming
+events and `/messages` path, `AZURE_OPENAI` puts the deployment and the API
+version in the URL, `OLLAMA` is the OpenAI shape at an address of your own — and
+`CUSTOM` is anything that speaks one of those well enough, which is most things.
+A service reached through **Custom** is not a second-class one: Google's own
+OpenAI-compatible endpoint is a Custom provider pointed at
+`https://generativelanguage.googleapis.com/v1beta/openai`, and a type of its own
+would have branched on nothing but the name of an auth header.
+
 Azure OpenAI wants an API version, a deployment and a region, and can
 authenticate either with an API key or as an **Entra ID service principal**,
 where the credential is not a key on the resource but a tenant, an app
@@ -673,12 +739,11 @@ clouds.
 
 **Connected means checked.** A provider carries the same three status columns a
 workspace connection does, and `testModelProvider` is what fills them: the key path
-calls the endpoint with the header that type wants — `x-api-key`, `api-key`,
-`x-goog-api-key`, or a bearer — and the Entra path performs the client
-credentials grant, which is the only thing that says whether the tenant, client
-and secret go together. Anything that could change what a check would find
-forgets the last one, so a stored answer never describes a provider that has
-moved.
+calls the endpoint with the header that type wants — `x-api-key`, `api-key`, or a
+bearer — and the Entra path performs the client credentials grant, which is the
+only thing that says whether the tenant, client and secret go together. Anything
+that could change what a check would find forgets the last one, so a stored
+answer never describes a provider that has moved.
 
 What the check asks for is the **model list**, not a HEAD on whatever URL was
 typed in. "Something answered" is a poor thing to call a connection — a host that
@@ -750,6 +815,21 @@ because that is a configuration somebody has to fix. And an agent a node
 instances cannot be deleted while the node exists — the same rule a condition
 follows.
 
+### Sessions
+
+An agent node can be given a **session key**, and everything that happens in its
+turn is recorded against it: what it was asked, what it answered, which tools it
+called and with what, and a note when something went wrong. Two runs that compute
+the same key write into one conversation — a ticket seen by two workflows has one
+history rather than two — and a node naming no key records nothing.
+
+What was said before goes back in front of the model, so an agent that keeps a
+session remembers it rather than merely writing it down. A session has its own
+page under **AI**, searchable and filterable by the kind of line; it can be thrown
+away when it should not have been kept; and it can be **continued in chat**, where
+somebody picks up the conversation an agent was having and what they say is
+written into it too, under their own name rather than the agent's.
+
 ### Actions and functions
 
 An **action** is a reusable block a workflow is built from, defined once in the
@@ -771,6 +851,11 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
   returns
 - a statement limit and a wall-clock timeout, either of which stops a script
   that will not finish
+- a guard on the heap, because neither of those stops a script that finishes by
+  filling it: a call is stopped when the heap is still nearly full after a
+  collection and that call is the one that has been allocating, so a script
+  cannot take the server down with it. Only so many calls are in a sandbox at
+  once, which is what bounds the installation rather than the call
 - a fresh context per call, so two runs cannot see each other
 
 Everything crossing the boundary is JSON text; nothing the script touches is a
@@ -881,6 +966,27 @@ What a condition means in words is not stored. The list's description and the
 sentence under the builder are read off the definition, so they cannot drift
 from what will actually be asked.
 
+### When a step fails
+
+A failed step used to end the run, and that was the only answer there was. An
+action or an agent node now carries a **retry policy** — how many attempts, and
+how long to wait between them, fixed or doubling — and can be given a second way
+out, drawn as a red **If fails** edge beside the green one. The failure is still
+recorded on the step; what changes is that the run can carry on down the other
+line instead of stopping. One attempt is no policy rather than a policy of one,
+so a node left at the default costs nothing.
+
+A failure already known to be final never spends an attempt. A thrown function
+throws the same way next time and so does a provider that refused the request it
+was sent, so only what might come out differently — a timeout, a 429, a 5xx, a
+dropped connection — is asked again. The wait between attempts is taken the way a
+wait node's is, which is what keeps the policy from being applied twice: the step
+parks, so Temporal has no failure of its own to retry on top of it, and a doubling
+backoff runs down on a durable timer rather than inside a step holding a worker.
+
+Retries on an agent are the ones to think about before turning them on: **every
+attempt is another billed call**, and nothing caps that.
+
 ### Publishing
 
 **Publishing takes a copy, and the copy is what runs.** Until it did, Publish set
@@ -891,17 +997,19 @@ badge said Draft and the graph ran anyway, which was the honest answer to "what
 is the difference between Save and Publish" — there was none.
 
 So the editable rows are the **draft**, and `publishWorkflow` writes a snapshot
-of the runnable graph into `workflow_publication`, one row per workflow. A
-trigger, a schedule or the API runs that snapshot; a person pressing **Run** gets
-the draft, because they mean the graph on their screen. Which one is used is read
-off what started the run — `ExecutionPlanner` asks for `GraphVersion.DRAFT` only
+of the runnable graph into `workflow_publication` — one row per publication, and
+the newest of them is what runs. A trigger, a schedule or the API runs that
+snapshot; a person pressing **Run** gets the draft, because they mean the graph
+on their screen. Which one is used is read off what started the run —
+`ExecutionPlanner` asks for `GraphVersion.DRAFT` only
 for `MANUAL` — rather than from a setting somebody has to remember. Editing and
 saving change the draft alone, which is what makes it safe to leave a graph
-half-finished overnight, and an edit after publishing does not change what an
-event runs until somebody publishes again. Saving does put the status back to
-`DRAFT`, which is the badge somebody reads — the snapshot goes on being what
-runs, so the badge is saying "what you are looking at is not what is live", which
-is exactly the thing worth knowing.
+half-finished overnight, and a graph edited after publishing is not the graph an
+event runs until somebody publishes again. **The graph**, and not everything the
+graph calls — which is the next paragraph, and the half people are surprised by.
+Saving does put the status back to `DRAFT`, which is the badge somebody reads —
+the snapshot goes on being what runs, so the badge is saying "what you are
+looking at is not what is live", which is exactly the thing worth knowing.
 
 **What the copy holds is the graph, and of the things it calls only their ids.**
 A node carries an `actionId`, an `agentId`, a `conditionId`, and each node runner
@@ -913,6 +1021,17 @@ Draft. Most of the time that is the point — a fix to a shared function reachin
 every caller at once is most of the reason functions are shared — but it is not
 what the word "published" promises, so it is worth saying out loud.
 `PublishedDefinitionsTest` keeps the sentence true.
+
+**A workflow's publications are its versions, and they are kept.** The table held
+one row per workflow, overwritten on every Publish, which made "what did this run
+last month" unanswerable. Each publish now writes another row, the workflow's
+settings page lists them, and an older one is put back into service by publishing
+it again — `restored_from` says which one was copied, so a rollback is a thing
+that happened rather than the deletion of everything after it. The draft on the
+canvas is untouched by a restore: a workflow's versions are its publications and
+not its saves, so nothing half-finished is lost, and the badge says Draft while
+the two differ. Variables are deliberately not versioned — their values are
+encrypted, and old versions would be old secrets.
 
 A workflow nobody has published has nothing to run and says so in its own
 exception, `WorkflowNotPublishedException`, rather than as "not found": one is a
@@ -965,10 +1084,11 @@ is how a signature is checked against a secret nobody has to paste into a graph.
 
 Slack arrives over **Socket Mode**, a websocket orknux dials out on, so a
 self-hosted installation needs no public URL and no inbound rule. Add a
-connection of type **Slack (Socket Mode)** — its form asks for the two
-credentials the listener uses, a bot token (`xoxb-…`) and an app-level token
-(`xapp-…`) — and `SlackListener` opens a socket for it within
-`orknux.slack.reconcile-seconds`;
+connection of type **Slack** — a bot token (`xoxb-…`) to call the API with, and
+optionally an app-level token (`xapp-…`) — and it is that second credential
+rather than the type that decides whether this installation listens as well as
+sends: `SlackListener` opens a socket for every Slack connection holding one,
+within `orknux.slack.reconcile-seconds`;
 an `app_mention` then matches every enabled definition watching that connection
 for a mention, and runs each workflow instancing one, with the message, channel
 and thread handed to the run. Set

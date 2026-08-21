@@ -18,7 +18,8 @@ to this.
 ## What it needs
 
 A database - Postgres, or SQLite and no second container - something to sign in
-against (a directory, or an OIDC provider), and Temporal. With the default
+against (a directory, an OIDC provider, or accounts it holds itself), and
+Temporal. With the default
 configuration the application **refuses to start** when Temporal is not
 reachable, so a deployment brought up before its Temporal restarts until that
 service answers.
@@ -93,8 +94,8 @@ and says so by name.
 ORKNUX_DB_URL: jdbc:sqlite:/data/orknux.db
 ```
 
-The schema is Flyway's either way, and JPA runs with `ddl-auto: validate`, so the
-migrations are the only thing that ever changes it.
+The schema is Flyway's either way, and the migrations are the only thing that
+ever changes it.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -117,7 +118,7 @@ is why.
 **How hard somebody may try.** A wrong password costs nothing until the
 allowance is spent, then a pause that doubles to the ceiling and stops there.
 Nothing locks anybody out: a success clears the record, and so does going quiet.
-Username and address are counted at once, in memory, so a restart forgets both.
+Counted in memory, so a restart forgets.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -130,7 +131,9 @@ Username and address are counted at once, in memory, so a restart forgets both.
 **INTERNAL** - nothing to configure, which is the point. Username and password
 against the accounts this installation holds itself, with no directory and no
 provider contacted. It is what `orknux/orknux-one` runs on, and what to set here
-when the bootstrap administrator below is the whole of the way in.
+when the bootstrap administrator below is the whole of the way in. That image
+also runs on **SQLite** - one writer, one process, one machine: a way to try
+this product, not a second way to deploy it.
 
 **LDAP** - read only when `ORKNUX_AUTH_METHOD=LDAP`.
 
@@ -161,16 +164,15 @@ per request.
 | `ORKNUX_OIDC_DISPLAY_NAME` | What the sign-in button says. | `single sign-on` | No |
 | `ORKNUX_OIDC_AUDIENCES` | Which audiences a bearer token may name, comma separated. **Read the paragraph below before upgrading an OIDC installation.** | *the client id* | **Conditional** - see below |
 
-**`ORKNUX_OIDC_AUDIENCES` is the one that can lock people out on upgrade.** A
-bearer token has to name this installation in its `aud` claim, and empty means
-the client id - which is not what two common providers write: **Keycloak** names
-`account` unless an audience mapper is configured against this client, and
-**Entra** names the application's **App ID URI**, `api://…`. The claim has only
-been checked since **0.5.0**, so an installation coming from 0.4 or earlier
-accepts those tokens today and refuses them after the upgrade: **a 401 on every
-API call that worked yesterday**, with `The aud claim is not valid` in the log.
-Browser sign-in is unaffected. Either configure the provider to name this
-client, or set this to what its tokens carry - one entry matching is enough.
+**`ORKNUX_OIDC_AUDIENCES` is the one that locks scripts out.** A bearer token has
+to name this installation in its `aud` claim, and empty means the client id -
+which is not what two common providers write: **Keycloak** names `account`
+unless an audience mapper is configured against this client, and **Entra** names
+the application's **App ID URI**, `api://…`. A token naming neither is **a 401 on
+every API call**, with `The aud claim is not valid` in the log; browser sign-in
+is unaffected. Either configure the provider to name this client, or set this to
+what its tokens carry - one entry matching is enough. Checked since 0.5.0, so an
+installation from 0.4 meets it on upgrade.
 
 Which of the provider's names grants which of this installation's roles is
 `orknux.security.role-mapping`, **YAML only** because the keys are group DNs and
@@ -195,9 +197,9 @@ has the rest.
 
 **Resetting a forgotten password** - a link mailed to the address on the
 account, good once and for an hour, and only for an internal user who already
-has a password: a directory or OIDC account's password belongs to the provider.
-Until the mail server below and `ORKNUX_BASE_URL` are set it is off, and the log
-says what is missing.
+has one: a directory or OIDC account's password belongs to the provider. Until
+the mail server below and `ORKNUX_BASE_URL` are set it is off, and the log says
+what is missing.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -222,7 +224,11 @@ can be looked at afterwards.
 What a trigger, a schedule or the API runs is the workflow **as it was
 published**, not as it is being edited - Run in the editor is the one thing that
 uses the draft. A workflow nobody has published has nothing to run and says so.
-The README's **Publishing** section is why.
+Every publish is kept, and an older one can be put back into service. What is
+published is the **graph**: of the function, action, agent or condition its nodes
+call it holds an id, read live when the step runs - so editing a function changes
+what a published workflow does, with no republish. The README's **Publishing**
+section is why.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -232,7 +238,7 @@ The README's **Publishing** section is why.
 | `ORKNUX_TEMPORAL_TASK_QUEUE` | The queue workers take work from. Change it to run two installations against one Temporal. | `orknux-workflow` | No |
 | `ORKNUX_TEMPORAL_RUN_TIMEOUT_HOURS` | How long a whole run may take, waits included. | `24` | No |
 | `ORKNUX_TEMPORAL_STEP_TIMEOUT_SECONDS` | How long one step's own work may take. It does not bound what a step *waits* for: a wait parks the step. | `300` | No |
-| `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | How many times a failing step is tried. | `3` | No |
+| `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | How many times the platform tries a failing step. A node's own retry policy is separate and is not multiplied by this. | `3` | No |
 | `ORKNUX_TEMPORAL_UI_URL` | Temporal's own web interface, linked out to from a run. Empty offers no links. | `http://localhost:8233` | No |
 | `ORKNUX_INLINE_MAX_WAIT` | Only the inline engine: how long a run may spend parked in total before the step fails and says what would have carried it. A Temporal wait is a timer, bounded by the run timeout. | `5m` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
@@ -242,7 +248,9 @@ The README's **Publishing** section is why.
 ## What a workspace's code may do
 
 A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
-files, no network and no threads. These bound what it can spend.
+files, no network and no threads. These bound what it can spend. Memory is
+bounded too, without a variable: a call still allocating while the heap stays
+nearly full after a collection is stopped, so no script can take the server down.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -271,8 +279,15 @@ files, no network and no threads. These bound what it can spend.
 | `ORKNUX_SLACK_RETRY_FAILED_SECONDS` | How long a connection Slack refused is left alone. Changing the token clears the wait. | `300` | No |
 
 **A workspace's mail is not configured here.** The `ORKNUX_MAIL_*` variables
-above are the installation's own relay. Mail a *workflow* sends is a connection
-like any other, typed into a workspace's connection form.
+above are the installation's own relay; mail a *workflow* sends is a connection
+like any other, typed into a workspace's own form.
+
+**A proxy is a rule, not an environment variable.** Rules live on **Admin ->
+Networking**, are matched against the request URL, and carry every outbound call:
+model providers, connections, Slack's API and its websocket, OIDC sign-in and the
+relay above. Each client is given them explicitly, so an `HTTPS_PROXY` in the
+environment is not what any of them reaches out through. LDAP is not HTTP and
+cannot be carried by a rule at all.
 
 ## Chat, attachments and the tracker
 
@@ -305,8 +320,8 @@ and it needs nothing else configured here.
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together. | `1GB` | No |
-| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one. `true` only where the scrape crosses a network the scraper alone is on; it opens nothing else under `/actuator`. The same switch is on the Admin screen, and once pressed that answer holds. | `false` | No |
-| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was before a save, so this is what decides the size of that table. The same field is on the Admin screen, and once set that answer holds. | `14` | No |
+| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. It opens nothing else under `/actuator`. Also on the Admin screen; once pressed that answer holds. | `false` | No |
+| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was, so this decides the size of that table. Also on the Admin screen, and once set that answer holds. | `14` | No |
 | `ORKNUX_REVISION_SWEEP_ENABLED` | Whether the retention sweep runs. `false` deletes nothing, and the history grows without limit. | `true` | No |
 | `ORKNUX_REVISION_SWEEP_INTERVAL` | How often it runs. | `6h` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |

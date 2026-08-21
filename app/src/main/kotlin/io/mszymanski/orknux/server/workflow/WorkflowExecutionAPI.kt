@@ -12,6 +12,7 @@ import io.mszymanski.orknux.workflow.execution.ExecutionService
 import io.mszymanski.orknux.workflow.execution.ExecutionStatus
 import io.mszymanski.orknux.workflow.execution.ExecutionStepView
 import io.mszymanski.orknux.workflow.execution.ExecutionTrigger
+import io.mszymanski.orknux.workflow.execution.ExecutionView
 import io.mszymanski.orknux.workflow.execution.GraphVersion
 import io.mszymanski.orknux.workflow.execution.ResumePoint
 import io.mszymanski.orknux.workflow.execution.StartExecutionInput
@@ -29,6 +30,7 @@ import org.springframework.stereotype.Controller
 class WorkflowExecutionAPI(
     private val runs: ExecutionService,
     private val edges: WorkflowEdgeRepository,
+    private val assignments: WorkspaceWorkflowRepository,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val temporal: TemporalLinks,
@@ -44,9 +46,9 @@ class WorkflowExecutionAPI(
         @Argument workflowId: Long?,
         @Argument days: Int?,
         @Argument search: String?,
-    ): ExecutionPage {
+    ): RunPage {
         requireWorkspaceAccess(workspaceId)
-        return runs.executions(
+        val found = runs.executions(
             workspaceId = workspaceId,
             workflowId = workflowId,
             status = status,
@@ -55,13 +57,47 @@ class WorkflowExecutionAPI(
             page = page,
             size = size,
         )
+        return RunPage(found, assignedIn(workspaceId))
+    }
+
+    /**
+     * Every workflow this workspace has runs of, and whether it still lists it.
+     *
+     * The executions screen filters by workflow, and it used to offer only the
+     * workflows the workspace assigns - so a run of a workflow that has since
+     * been removed could be scrolled past but never singled out, because the
+     * only control that would have singled it out did not know it existed.
+     * This is read off the runs, so what the filter offers is what the list
+     * actually holds.
+     *
+     * [ExecutionWorkflowView.assigned] is the part the screen has to say out
+     * loud. Without it a removed workflow would sit in the list looking exactly
+     * like a live one, which trades a filter that cannot see for a filter that
+     * misleads.
+     */
+    @QueryMapping
+    fun executionWorkflows(@Argument workspaceId: Long): List<ExecutionWorkflowView> {
+        requireWorkspaceAccess(workspaceId)
+        val assigned = assignedIn(workspaceId)
+        return runs.workflowsRun(workspaceId).map {
+            ExecutionWorkflowView(
+                workflowId = it.workflowId,
+                name = it.workflowName,
+                assigned = it.workflowId in assigned,
+            )
+        }
     }
 
     /** What one run did: the graph as it ran, per-node outcome, and its log. */
     @QueryMapping
     fun execution(@Argument id: Long): RunDetailView? {
         val run = runs.execution(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
-        return RunDetailView(run, edgesOf(run.workflowId), temporal.forExecution(run.id))
+        return RunDetailView(
+            run,
+            edgesOf(run.workflowId),
+            temporal.forExecution(run.id),
+            assignments.existsByWorkspaceIdAndWorkflowId(run.workspaceId, run.workflowId),
+        )
     }
 
     /**
@@ -91,7 +127,7 @@ class WorkflowExecutionAPI(
             WorkspaceAuditCategory.WORKFLOW,
             "Workflow ${started.workflowName} run started",
         )
-        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
+        return startedView(started)
     }
 
     /**
@@ -136,7 +172,7 @@ class WorkflowExecutionAPI(
                 startedFrom = id,
             ),
         )
-        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
+        return startedView(started)
     }
 
     /**
@@ -179,8 +215,23 @@ class WorkflowExecutionAPI(
                 startedFrom = id,
             ),
         )
-        return RunDetailView(started, edgesOf(started.workflowId), temporal.forExecution(started.id))
+        return startedView(started)
     }
+
+    /**
+     * A run that has just been started, as the detail screen wants it.
+     *
+     * Whether the workspace lists the workflow is asked rather than assumed:
+     * re-running is offered on any run this workspace can see, and one of those
+     * is a run of a workflow the workspace has since removed.
+     */
+    private fun startedView(started: ExecutionDetailView): RunDetailView =
+        RunDetailView(
+            started,
+            edgesOf(started.workflowId),
+            temporal.forExecution(started.id),
+            assignments.existsByWorkspaceIdAndWorkflowId(started.workspaceId, started.workflowId),
+        )
 
     /**
      * A run keeps its own copy of the nodes it ran, but not of the edges between
@@ -189,10 +240,82 @@ class WorkflowExecutionAPI(
     private fun edgesOf(workflowId: Long): List<WorkflowEdgeView> =
         edges.findByWorkflowId(workflowId).map(::WorkflowEdgeView)
 
+    /** The workflow definitions this workspace lists, as one set for a page of rows. */
+    private fun assignedIn(workspaceId: Long): Set<Long> =
+        assignments.findByWorkspaceId(workspaceId).mapNotNull { it.workflow.id }.toSet()
+
     private fun requireWorkspaceAccess(workspaceId: Long) {
         access.requireVisible(workspaceId)
     }
 }
+
+/**
+ * One row of the executions list: what the module recorded, plus whether this
+ * workspace still lists the workflow the run names.
+ *
+ * The flag is here rather than left to the screen because the screen cannot
+ * work it out. A row carries the workflow's id and the name it had when the run
+ * started, and nothing about the id says whether the workspace assigns it.
+ */
+data class RunView(
+    val id: Long,
+    val workflowId: Long,
+    val workflowName: String,
+    val status: ExecutionStatus,
+    val trigger: ExecutionTrigger,
+    val startedAt: String,
+    val finishedAt: String?,
+    val durationSeconds: Int?,
+    val stoppedReason: String?,
+    /**
+     * False for a run of a workflow this workspace has removed. Such a run is
+     * kept and still opens; what it cannot do is lead anywhere, which is why
+     * the row has to say so rather than offer a link into nothing.
+     */
+    val workflowAssigned: Boolean,
+) {
+    constructor(run: ExecutionView, assigned: Set<Long>) : this(
+        id = run.id,
+        workflowId = run.workflowId,
+        workflowName = run.workflowName,
+        status = run.status,
+        trigger = run.trigger,
+        startedAt = run.startedAt,
+        finishedAt = run.finishedAt,
+        durationSeconds = run.durationSeconds,
+        stoppedReason = run.stoppedReason,
+        workflowAssigned = run.workflowId in assigned,
+    )
+}
+
+/** A page of [RunView], with the module's paging carried straight through. */
+data class RunPage(
+    val content: List<RunView>,
+    val page: Int,
+    val size: Int,
+    val totalElements: Int,
+    val totalPages: Int,
+) {
+    constructor(page: ExecutionPage, assigned: Set<Long>) : this(
+        content = page.content.map { RunView(it, assigned) },
+        page = page.page,
+        size = page.size,
+        totalElements = page.totalElements,
+        totalPages = page.totalPages,
+    )
+}
+
+/**
+ * A workflow the executions list can be filtered by: one this workspace has
+ * runs of, whether or not it still lists it.
+ */
+data class ExecutionWorkflowView(
+    val workflowId: Long,
+    /** The name its most recent run recorded, which for a removed one is all there is. */
+    val name: String,
+    /** False for one the workspace has removed; the filter says so rather than pretending. */
+    val assigned: Boolean,
+)
 
 /** A run as the detail screen wants it: what the module recorded, plus the edges. */
 data class RunDetailView(
@@ -231,11 +354,18 @@ data class RunDetailView(
      * anybody to.
      */
     val temporalUrl: String? = null,
+    /**
+     * Whether this workspace still lists the workflow this run named. False for
+     * a run whose workflow has been removed - the run is untouched, but there
+     * is no editor to send anybody to, and the page says that instead.
+     */
+    val workflowAssigned: Boolean = true,
 ) {
     constructor(
         run: ExecutionDetailView,
         edges: List<WorkflowEdgeView>,
         temporalUrl: String?,
+        workflowAssigned: Boolean,
     ) : this(
         id = run.id,
         workspaceId = run.workspaceId,
@@ -254,6 +384,7 @@ data class RunDetailView(
         edges = edges,
         logs = run.logs,
         temporalUrl = temporalUrl,
+        workflowAssigned = workflowAssigned,
     )
 }
 

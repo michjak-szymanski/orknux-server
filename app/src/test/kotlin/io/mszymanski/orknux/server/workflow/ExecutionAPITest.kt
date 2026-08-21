@@ -238,6 +238,81 @@ class ExecutionAPITest(
             .path("execution").valueIsNull()
     }
 
+    /**
+     * Issue 168. Removing a workflow deletes the workspace's assignment and
+     * leaves every run of it, so the executions screen goes on showing runs of a
+     * workflow the workspace no longer lists. Both halves of what the screen
+     * needs to say so are here: the run says its workflow is gone, and the
+     * filter it can be found with knows the workflow at all.
+     */
+    @Test
+    fun `a run outlives the workflow's place in the workspace, and says so`() {
+        val id = start().id
+        val assignment = requireNotNull(assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id)
+
+        graphQlTester.document("""query { execution(id: $id) { workflowAssigned } }""")
+            .execute()
+            .path("execution.workflowAssigned").entity(Boolean::class.java).isEqualTo(true)
+
+        graphQlTester.document("""mutation { removeWorkflow(id: $assignment) }""").execute()
+
+        graphQlTester.document("""query { execution(id: $id) { workflowName workflowAssigned } }""")
+            .execute()
+            // Still named. The run is the only record of what ran, and the name
+            // it recorded is the only copy of it the workspace can still reach.
+            .path("execution.workflowName").entity(String::class.java).isEqualTo("Data Processing Pipeline")
+            .path("execution.workflowAssigned").entity(Boolean::class.java).isEqualTo(false)
+
+        graphQlTester.document(
+            """query { workspaceExecutions(workspaceId: $workspaceId) { content { workflowAssigned } } }""",
+        ).execute()
+            .path("workspaceExecutions.content[0].workflowAssigned").entity(Boolean::class.java).isEqualTo(false)
+    }
+
+    /**
+     * The filter is built from this, and it is built from the runs rather than
+     * from the workflows the workspace lists - which is the whole of the fix:
+     * asked of the assignments, a removed workflow is not there to be chosen,
+     * so its runs could be scrolled past and never singled out.
+     */
+    @Test
+    fun `the executions filter offers a removed workflow, marked as removed`() {
+        start()
+        val assignment = requireNotNull(assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id)
+
+        graphQlTester.document("""query { executionWorkflows(workspaceId: $workspaceId) { workflowId assigned } }""")
+            .execute()
+            .path("executionWorkflows[*].workflowId").entityList(Long::class.java).containsExactly(workflowId)
+            .path("executionWorkflows[0].assigned").entity(Boolean::class.java).isEqualTo(true)
+
+        graphQlTester.document("""mutation { removeWorkflow(id: $assignment) }""").execute()
+
+        graphQlTester.document(
+            """query { executionWorkflows(workspaceId: $workspaceId) { workflowId name assigned } }""",
+        ).execute()
+            .path("executionWorkflows[*].workflowId").entityList(Long::class.java).containsExactly(workflowId)
+            .path("executionWorkflows[0].name").entity(String::class.java).isEqualTo("Data Processing Pipeline")
+            .path("executionWorkflows[0].assigned").entity(Boolean::class.java).isEqualTo(false)
+
+        // And choosing it does what choosing it is for.
+        graphQlTester.document(
+            """query { workspaceExecutions(workspaceId: $workspaceId, workflowId: $workflowId) { totalElements } }""",
+        ).execute()
+            .path("workspaceExecutions.totalElements").entity(Int::class.java).isEqualTo(1)
+    }
+
+    /**
+     * A workflow that has never run is not on this list, because the list is
+     * what the runs name. A workflow with no runs belongs to the workflows
+     * screen, and the executions filter goes on offering those separately.
+     */
+    @Test
+    fun `a workflow with no runs is not offered by the executions filter`() {
+        graphQlTester.document("""query { executionWorkflows(workspaceId: $workspaceId) { workflowId } }""")
+            .execute()
+            .path("executionWorkflows").entityList(Long::class.java).hasSize(0)
+    }
+
     private fun start() = runs.startExecution(
         StartExecutionInput(workspaceId = workspaceId, workflowId = workflowId, trigger = ExecutionTrigger.WEBHOOK),
     )

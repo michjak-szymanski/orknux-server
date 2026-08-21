@@ -20,7 +20,7 @@ directory or an OIDC provider. One deployable, built from modules that cannot
 reach into each other:
 
 ```
-orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, Jira, GitHub, SMTP
+orknux-ui ──▶ app ──┬──▶ connection ──▶ Slack, SMTP, HTTP endpoints
                     └──▶ execution  ──▶ Temporal
 ```
 

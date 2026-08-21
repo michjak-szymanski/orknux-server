@@ -38,6 +38,8 @@ class InstallationSettingsAPI(
         chatConfigurable = settings.chatConfigurable(),
         metricsAnonymous = settings.metricsAnonymous(),
         metricsAnonymousConfigured = settings.metricsAnonymousConfigured(),
+        revisionRetentionDays = settings.revisionRetentionDays(),
+        revisionRetentionDaysConfigured = settings.revisionRetentionDaysConfigured(),
     )
 
     @MutationMapping
@@ -95,6 +97,26 @@ class InstallationSettingsAPI(
         return installationSettings()
     }
 
+    /**
+     * How long a component's history is kept before the sweep takes it.
+     *
+     * An administrator's, because it is a decision about the disk: the rows are
+     * whole copies of function source, tool source and agent prompts, so this
+     * number is what decides how large that table gets.
+     */
+    @MutationMapping
+    fun setRevisionRetentionDays(@Argument days: Int): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setRevisionRetentionDays(days, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Component history kept for $days days",
+        )
+        return installationSettings()
+    }
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
@@ -128,4 +150,14 @@ data class InstallationSettingsView(
      * they edited appears to be ignored.
      */
     val metricsAnonymousConfigured: Boolean,
+    /**
+     * How many days of component history are kept.
+     *
+     * A component's versions are what it was before each save - the code and
+     * the prompts, in full - so this is the setting that decides how much of
+     * the disk they take. Fourteen days unless somebody has said otherwise.
+     */
+    val revisionRetentionDays: Int,
+    /** What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS. */
+    val revisionRetentionDaysConfigured: Int,
 )

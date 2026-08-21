@@ -150,6 +150,22 @@ orknux:
     # wrong in a container: name a volume that outlives the process.
     location: ${ORKNUX_ATTACHMENTS_LOCATION:data/attachments}
     max-file-size-mb: ${ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB:25}
+  revision:
+    # How many days of a component's history are kept.
+    #
+    # A version of a function, tool, skill or agent is a whole copy of what it
+    # was before a save - the source, the parameters, the prompt - so this is
+    # the number that decides how much disk that table takes. Fourteen days.
+    #
+    # This is where a fresh installation starts, not the last word: it is also a
+    # field on the Admin screen, and once an administrator has set it theirs is
+    # the answer. The sweep reads it on every pass, so changing it needs no
+    # restart.
+    retention-days: ${ORKNUX_REVISION_RETENTION_DAYS:14}
+    # False sweeps nothing on a timer; nothing is deleted until it is turned
+    # back on. The suite sets it and calls the sweep itself.
+    sweep-enabled: ${ORKNUX_REVISION_SWEEP_ENABLED:true}
+    sweep-interval: ${ORKNUX_REVISION_SWEEP_INTERVAL:6h}
   logging:
     # Console always. Name a file here and it is written to as well — an
     # absolute path in a deployment, since the working directory of a container

@@ -306,6 +306,9 @@ and it needs nothing else configured here.
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together. | `1GB` | No |
 | `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one. `true` only where the scrape crosses a network the scraper alone is on; it opens nothing else under `/actuator`. The same switch is on the Admin screen, and once pressed that answer holds. | `false` | No |
+| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was before a save, so this is what decides the size of that table. The same field is on the Admin screen, and once set that answer holds. | `14` | No |
+| `ORKNUX_REVISION_SWEEP_ENABLED` | Whether the retention sweep runs. `false` deletes nothing, and the history grows without limit. | `true` | No |
+| `ORKNUX_REVISION_SWEEP_INTERVAL` | How often it runs. | `6h` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |
 
 Sessions are kept in the database, so signing in outlives a restart and more

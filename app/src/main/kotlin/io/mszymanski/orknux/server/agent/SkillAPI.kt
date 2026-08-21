@@ -13,6 +13,8 @@ import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Controller
+import io.mszymanski.orknux.server.revision.ComponentRevisionKind
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -31,6 +33,7 @@ class SkillAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val revisions: ComponentRevisionRecorder,
 ) {
 
     /**
@@ -110,6 +113,11 @@ class SkillAPI(
         val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         val held = skills.countByCatalogId(id)
+        // Every skill in it goes, so every skill's history goes with it -
+        // deleteByCatalogId is one statement and no delete hook would see them.
+        skills.findByCatalogId(id).forEach { skill ->
+            skill.id?.let { revisions.forget(ComponentRevisionKind.SKILL, it) }
+        }
         skills.deleteByCatalogId(id)
         catalogs.delete(catalog)
         auditRecorder.record(
@@ -167,6 +175,10 @@ class SkillAPI(
         val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw SkillNotFoundException(id)
 
+        // What it is about to stop being. A skill has no draft, so a save is a
+        // version; the recorder holds that rule, this door only reports.
+        revisions.saved(skill)
+
         val previousName = skill.name
         input.name?.trim()?.let { name ->
             if (name.isEmpty()) throw SkillNameInvalidException()
@@ -202,7 +214,11 @@ class SkillAPI(
         val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw SkillNotFoundException(id)
 
+        // The toggle is a save: it changes what the workspace has.
+        revisions.saved(skill)
         skill.enabled = enabled
+        skill.lastModifiedAt = OffsetDateTime.now()
+        skill.lastModifiedBy = currentUser()
         val what = if (enabled) "enabled" else "disabled"
         auditRecorder.record(skill.workspaceId, WorkspaceAuditCategory.AGENT, "Skill ${skill.name} $what")
         return describe(skill)
@@ -225,6 +241,7 @@ class SkillAPI(
         val skill = skills.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         skills.delete(skill)
+        revisions.forget(ComponentRevisionKind.SKILL, id)
         auditRecorder.record(skill.workspaceId, WorkspaceAuditCategory.AGENT, "Skill ${skill.name} deleted")
         return true
     }

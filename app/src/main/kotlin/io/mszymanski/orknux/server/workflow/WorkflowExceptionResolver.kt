@@ -19,6 +19,9 @@ import io.mszymanski.orknux.server.action.FunctionNotFoundException
 import io.mszymanski.orknux.server.action.FunctionParamInvalidException
 import io.mszymanski.orknux.server.action.FunctionCodeIncompleteException
 import io.mszymanski.orknux.server.action.FunctionObjectRequiredException
+import io.mszymanski.orknux.server.revision.ComponentRevisionNotFoundException
+import io.mszymanski.orknux.server.revision.RevisionComponentGoneException
+import io.mszymanski.orknux.server.revision.RevisionNotRestorableException
 import io.mszymanski.orknux.server.security.RoleBuiltInException
 import io.mszymanski.orknux.server.security.RoleInUseException
 import io.mszymanski.orknux.workflow.execution.WorkflowNotPublishedException
@@ -66,6 +69,7 @@ import io.mszymanski.orknux.server.trigger.TriggerPayloadInvalidException
 import io.mszymanski.orknux.server.attachment.AttachmentNotFoundException
 import io.mszymanski.orknux.server.attachment.AttachmentTooLargeException
 import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
+import io.mszymanski.orknux.server.attachment.RetentionOutOfRangeException
 import io.mszymanski.orknux.server.trigger.TriggerScheduleInvalidException
 import io.mszymanski.orknux.server.variable.VariableCatalogNameInvalidException
 import io.mszymanski.orknux.server.variable.VariableCatalogNameTakenException
@@ -188,6 +192,9 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ConditionFunctionRequiredException,
             is ConditionFunctionElsewhereException,
             is ConditionFunctionNotBooleanException,
+            is RetentionOutOfRangeException,
+            is RevisionNotRestorableException,
+            is RevisionComponentGoneException,
             -> ErrorType.BAD_REQUEST
 
             is AttachmentNotFoundException -> ErrorType.NOT_FOUND
@@ -200,6 +207,8 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is IssueAttachmentNotFoundException -> ErrorType.NOT_FOUND
             is ConditionNotFoundException -> ErrorType.NOT_FOUND
             is WorkflowNotFoundException -> ErrorType.NOT_FOUND
+            is WorkflowPublicationNotFoundException -> ErrorType.NOT_FOUND
+            is ComponentRevisionNotFoundException -> ErrorType.NOT_FOUND
             else -> return null
         }
 

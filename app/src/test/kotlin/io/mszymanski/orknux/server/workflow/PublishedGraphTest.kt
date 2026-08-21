@@ -150,7 +150,7 @@ class PublishedGraphTest(
         assertThat(source.graph(workspaceId, workflowId, GraphVersion.PUBLISHED).nodes.single().name)
             .isEqualTo("From before")
         // Taken once, then read like any other.
-        assertThat(publications.findById(workflowId)).isPresent()
+        assertThat(publications.current(workflowId)).isNotNull()
     }
 
     @Test
@@ -158,7 +158,7 @@ class PublishedGraphTest(
         draw("Answer politely")
         publish()
 
-        assertThat(publications.findById(workflowId).get().publishedBy).isEqualTo("alice")
+        assertThat(publications.current(workflowId)?.publishedBy).isEqualTo("alice")
     }
 
     /**

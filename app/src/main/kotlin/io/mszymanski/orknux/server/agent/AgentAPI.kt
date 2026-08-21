@@ -13,8 +13,11 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
+import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.security.core.context.SecurityContextHolder
+import java.time.OffsetDateTime
 
 @Controller
 class AgentAPI(
@@ -24,6 +27,7 @@ class AgentAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val models: ModelService,
+    private val revisions: ComponentRevisionRecorder,
 ) {
 
     /** The agent, with what its model is called: the screen shows the name. */
@@ -57,6 +61,7 @@ class AgentAPI(
                 description = input.description?.trim()?.ifEmpty { null },
                 systemPrompt = input.systemPrompt?.trim()?.ifEmpty { null },
                 icon = input.icon?.trim()?.ifEmpty { null },
+                lastModifiedBy = currentUser(),
             ),
         )
         auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.AGENT, "Agent $name created")
@@ -75,6 +80,10 @@ class AgentAPI(
         if (name != agent.name && agents.findByWorkspaceIdAndName(agent.workspaceId, name) != null) {
             throw AgentNameTakenException(name)
         }
+
+        // What it is about to stop being. An agent has no draft, so a save is a
+        // version; the recorder holds that rule, this door only reports.
+        revisions.saved(agent)
 
         val previousName = agent.name
         val previousDescription = agent.description
@@ -119,6 +128,8 @@ class AgentAPI(
         if (input.tools != null) {
             agent.tools = input.tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
         }
+        agent.lastModifiedAt = OffsetDateTime.now()
+        agent.lastModifiedBy = currentUser()
 
         recordChanges(
             agent,
@@ -190,7 +201,11 @@ class AgentAPI(
     fun setAgentEnabled(@Argument id: Long, @Argument enabled: Boolean): AgentView {
         val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw AgentNotFoundException(id)
+        // The toggle is a save: it changes what the workspace has.
+        revisions.saved(agent)
         agent.enabled = enabled
+        agent.lastModifiedAt = OffsetDateTime.now()
+        agent.lastModifiedBy = currentUser()
         auditRecorder.record(
             agent.workspaceId,
             WorkspaceAuditCategory.AGENT,
@@ -295,6 +310,10 @@ class AgentAPI(
     private fun requireWorkspaceAccess(workspaceId: Long) {
         access.requireVisible(workspaceId)
     }
+
+    /** Whoever is asking, for the stamp a revision of this state will carry. */
+    private fun currentUser(): String =
+        SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
 
 data class CreateAgentInput(

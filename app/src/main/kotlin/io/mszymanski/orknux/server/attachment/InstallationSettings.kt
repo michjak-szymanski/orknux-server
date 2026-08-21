@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.attachment
 
 import io.mszymanski.orknux.server.chat.ChatProperties
 import io.mszymanski.orknux.server.monitoring.MetricsProperties
+import io.mszymanski.orknux.server.revision.RevisionProperties
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
@@ -50,6 +51,7 @@ object SettingNames {
     const val ATTACHMENTS_ENABLED = "attachments.enabled"
     const val CHAT_ENABLED = "chat.enabled"
     const val METRICS_ANONYMOUS = "metrics.anonymous"
+    const val REVISION_RETENTION_DAYS = "revision.retention.days"
 }
 
 /**
@@ -66,6 +68,7 @@ class InstallationSettings(
     private val properties: AttachmentProperties,
     private val chat: ChatProperties,
     private val metrics: MetricsProperties,
+    private val revisions: RevisionProperties,
 ) {
 
     /**
@@ -142,6 +145,39 @@ class InstallationSettings(
     @Transactional
     fun setMetricsAnonymous(enabled: Boolean, by: String) = hold(SettingNames.METRICS_ANONYMOUS, enabled, by)
 
+    /**
+     * How many days of a component's history are kept.
+     *
+     * The file is the value a fresh installation starts at and the screen is
+     * the answer from then on - the same bargain the metrics switch is under,
+     * and for the same reason: there is no closed answer here for a floor to
+     * protect. Fourteen days is the default the owner chose.
+     *
+     * A stored value that is not a number, or is outside what the screen would
+     * let anybody choose, reads as the configured one. It cannot be zero: a
+     * retention of none is a feature switched off by a number, and the switch
+     * for that would be a different setting with a different name.
+     */
+    fun revisionRetentionDays(): Int {
+        val held = settings.findByIdOrNull(SettingNames.REVISION_RETENTION_DAYS) ?: return revisions.retentionDays
+        return held.value.toIntOrNull()?.takeIf { it in MIN_RETENTION_DAYS..MAX_RETENTION_DAYS }
+            ?: revisions.retentionDays
+    }
+
+    /** What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS. */
+    fun revisionRetentionDaysConfigured(): Int = revisions.retentionDays
+
+    @Transactional
+    fun setRevisionRetentionDays(days: Int, by: String) {
+        if (days !in MIN_RETENTION_DAYS..MAX_RETENTION_DAYS) throw RetentionOutOfRangeException(days)
+        val held = settings.findByIdOrNull(SettingNames.REVISION_RETENTION_DAYS)
+            ?: InstallationSetting(name = SettingNames.REVISION_RETENTION_DAYS)
+        held.value = days.toString()
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = by
+        settings.save(held)
+    }
+
     private fun hold(name: String, enabled: Boolean, by: String) {
         val held = settings.findByIdOrNull(name) ?: InstallationSetting(name = name)
         held.value = enabled.toString()
@@ -150,6 +186,23 @@ class InstallationSettings(
         settings.save(held)
     }
 }
+
+/**
+ * A day and ten years.
+ *
+ * The floor is a day rather than nothing, because "keep no history" is the
+ * feature turned off and a number is the wrong way to say that. The ceiling is
+ * there so a typed zero too many cannot quietly mean forever - the rows are
+ * whole copies of source and prompts, and forever is the state this setting
+ * exists to prevent.
+ */
+const val MIN_RETENTION_DAYS = 1
+const val MAX_RETENTION_DAYS = 3650
+
+class RetentionOutOfRangeException(days: Int) : RuntimeException(
+    "$days is not a number of days history can be kept for. " +
+        "Choose between $MIN_RETENTION_DAYS and $MAX_RETENTION_DAYS.",
+)
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(AttachmentProperties::class, ChatProperties::class, MetricsProperties::class)

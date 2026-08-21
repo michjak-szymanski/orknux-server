@@ -54,6 +54,21 @@ is plainly there in the source. `-am` builds them alongside; `./mvnw install
 -DskipTests` first is the other way out. A plain `./mvnw test` builds the whole
 reactor and does not have the problem.
 
+**The interface is a submodule with its own AGENTS.md**, and its checks run in
+its container - there is no Node on this machine:
+
+```
+cd orknux-ui
+docker compose run --rm dev npm run typecheck   # tsc -b
+```
+
+**`npm run typecheck` is `tsc -b`, and nothing else will do.** `tsc --noEmit -p
+tsconfig.json` exits 0 whatever state the code is in: the root config is
+`"files": []` and a list of project references, so `--noEmit` is handed no files,
+checks nothing, and succeeds on a codebase that does not compile. Reporting a
+clean typecheck off that run is reporting that a command exited 0. `tsc -b`
+follows the references, which is why it is the one the build and CI use.
+
 ## Stack quirks worth knowing
 
 - **Spring Boot 4 ships Jackson 3.** The Jackson 2 Kotlin module does not apply,
@@ -101,12 +116,33 @@ constraints on tables it went on to drop and a name that no longer exists is not
 drift. So a `CHECK` added to a table that already existed, and folded into only
 one of the two files, slips past it - one arriving with a new table does not,
 since `validate` is looking for the table itself. If a migration widens or adds a
-`CHECK` on an existing table, read the baseline yourself rather than trusting a
-green run.
+`CHECK` on an existing table, grep the baseline for the constraint's name
+yourself rather than trusting a green run.
 
-The whole suite runs against either: `./mvnw test` on Postgres,
-`./mvnw test -Dorknux.test.database=sqlite` on SQLite. Run both when the schema
-moved. `TestDatabase` is what switches them, before any Spring context exists: a
+**And neither guard reads a foreign key.** `validate` compares tables and
+columns, the check test compares the literals a named `CHECK` allows, and
+nothing at all compares an `ON DELETE` clause between the two files - or notices
+when one contradicts a `CHECK` on the same table. That is exactly what #169 was:
+`ON DELETE SET NULL` nulling a column that `ck_workflow_action_shape` requires,
+which Postgres never sees because it defers the check to the end of the
+statement. A guard is a list of the mistakes somebody already made; the SQLite
+run is what covers the rest.
+
+**The suite runs on two engines, and CI runs one of them.** `./mvnw test` is
+Postgres and CI's `./mvnw -B -ntp verify` is the same engine, so
+`./mvnw test -Dorknux.test.database=sqlite` only ever runs where somebody
+remembers to run it. It is not the second-class half of the switch: it is the
+engine `orknux-one` ships with, and it is the only one that can see the class of
+bug above - #169 was a workspace that could not be deleted, a delete SQLite
+refused every time and Postgres allowed every time, and it lasted until somebody
+ran the other engine. Run both, and not only when the schema moved.
+
+**SQLite is not green at the moment - issue #171.** A red run there is a state
+that was already there rather than something a change did, so read the failures
+before assuming they are yours. What is not acceptable is treating the whole run
+as noise, because that is how #169 lasted as long as it did.
+
+`TestDatabase` is what switches them, before any Spring context exists: a
 Postgres container by default, and a file in `app/target` for SQLite, which needs
 no Docker. `SqliteSchemaTest` keeps a database of its own, deleted at the start of
 every run - a file left behind refuses the next run with a checksum mismatch the
@@ -200,8 +236,9 @@ is reported to the module rather than cascaded.
   their instances second — `IncomingTriggerListener` shows both halves.
 - **Saving is the draft; publishing is a copy.** The `workflow_node` and
   `workflow_edge` rows are the draft an editor writes to. `publishWorkflow` writes
-  a snapshot of the runnable graph into `workflow_publication`, and that is what a
-  trigger, a schedule or the API runs — `ExecutionPlanner` asks for
+  a snapshot of the runnable graph into `workflow_publication` — one row per
+  publication since V180, the newest of which is what a trigger, a schedule or
+  the API runs — `ExecutionPlanner` asks for
   `GraphVersion.DRAFT` only when the run was `MANUAL`. Anything that changes what
   a graph does has to be part of the snapshot, or it will be edited and not run;
   `WorkflowSnapshot` reads and writes it by hand rather than by reflection,
@@ -210,6 +247,15 @@ is reported to the module rather than cascaded.
   id, and the runner reads that row live — so editing a function changes what a
   published workflow does, without a republish. `PublishedDefinitionsTest` pins
   it; do not write a comment claiming a step froze a definition.
+- **A version is written by the recorder, from every door.**
+  `ComponentRevisionRecorder` is handed the state a save *displaced*, never the
+  new one — the live row is already the newest version — and it is called from
+  the browser's door and the `orknux_*` tools alike, for the reason the tracker's
+  history learnt: covering only the door you can see leaves a hole exactly where
+  nobody is watching. What counts as a version is `ComponentRevisionKind`'s
+  answer and not the call site's. A new versioned kind assembles its own
+  `RevisionSubject` rather than being reflected over, so a field somebody adds
+  cannot be silently left out of the history.
 - **Access is decided in roles, not in the provider's vocabulary.** A directory
   group or an OIDC claim is translated once, by `RoleResolver`, and everything
   past the front door — who administers, who sees which workspace — deals only in

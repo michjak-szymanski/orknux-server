@@ -137,6 +137,18 @@ class MemoryCatalogNameTakenException(name: String) :
 
 class MemoryCatalogNameInvalidException : RuntimeException("A catalog name is required")
 
+/**
+ * A memory catalog an agent may read is not one to delete.
+ *
+ * Said of the catalog and not of the memories in it, because the catalog is what
+ * an agent is granted: the memories go with it, so the loss is everything in the
+ * folder at once. Named agents rather than a count, because the way out is to go
+ * and take the grant off each of them and "2 agents" does not say which.
+ */
+class MemoryCatalogInUseException(name: String, agents: List<String>) : RuntimeException(
+    "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
+)
+
 class MemoryNotFoundException(id: Long) : RuntimeException("No memory with id $id")
 
 class MemoryTitleInvalidException : RuntimeException("A memory title is required")

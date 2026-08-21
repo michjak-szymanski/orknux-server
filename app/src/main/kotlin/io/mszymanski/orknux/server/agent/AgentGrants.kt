@@ -30,10 +30,15 @@ import org.springframework.stereotype.Component
  * agent's workspace, so an agent elsewhere holding the same word holds a grant
  * to a different thing entirely.
  *
- * Two of the four name-grants are asked here. [Agent.mcpServers] names servers
- * this application does not own, and [Agent.memoryCatalogs] has the same hole on
- * the same terms — `deleteMemoryCatalog` is unguarded — but that is a memory
- * door rather than an agent one and is left where it is rather than swept in.
+ * Three of the four name-grants are asked here. The fourth is
+ * [Agent.mcpServers], and `removeMcpServer` is unguarded on exactly these terms:
+ * the grant is a name, `McpToolCaller` drops one that matches no server, and
+ * registering a server under that name again hands it to every agent still
+ * holding the grant. The difference is only in what is named — an address
+ * somebody registered, run by somebody else, where a workspace's own tools,
+ * skills and memories are things this application holds — and that is a
+ * difference in what breaks, not in whether it breaks quietly. It is left to be
+ * argued on its own rather than swept in here.
  */
 @Component
 class AgentGrants(private val agents: AgentRepository) {
@@ -45,4 +50,8 @@ class AgentGrants(private val agents: AgentRepository) {
     /** Which of the workspace's agents draw on this skill catalog. */
     fun toSkillCatalog(workspaceId: Long, name: String): List<String> =
         agents.findGrantedSkillCatalog(workspaceId, name).map { "the agent ${it.name}" }
+
+    /** Which of the workspace's agents may read this memory catalog. */
+    fun toMemoryCatalog(workspaceId: Long, name: String): List<String> =
+        agents.findGrantedMemoryCatalog(workspaceId, name).map { "the agent ${it.name}" }
 }

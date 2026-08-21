@@ -31,4 +31,15 @@ interface AgentRepository : JpaRepository<Agent, Long> {
     /** Which of the workspace's agents were granted this skill catalog, spelled the same way. */
     @Query("select a from Agent a join a.skillCatalogs c where a.workspaceId = :workspaceId and c = :name")
     fun findGrantedSkillCatalog(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
+
+    /**
+     * Which of the workspace's agents were granted this memory catalog, spelled
+     * the same way.
+     *
+     * Exactly as spelled for the reason the tool grant is: `MemoryTool` keeps
+     * the catalogs whose `name` is `in` the granted set, so a grant differing by
+     * a letter's case already reads nothing and there is nothing here to protect.
+     */
+    @Query("select a from Agent a join a.memoryCatalogs c where a.workspaceId = :workspaceId and c = :name")
+    fun findGrantedMemoryCatalog(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
 }

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.memory
 
+import io.mszymanski.orknux.server.agent.AgentGrants
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -32,6 +33,7 @@ class MemoryAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val grants: AgentGrants,
 ) {
 
     @QueryMapping
@@ -142,11 +144,28 @@ class MemoryAPI(
         return describe(catalog)
     }
 
-    /** Takes the memories in it, which is what the cascade is for. */
+    /**
+     * Takes the memories in it, which is what the cascade is for — unless an
+     * agent was granted the catalog.
+     *
+     * The catalog is the unit an agent is granted, and the grant is a **name**,
+     * so nothing here would have been left dangling for anything to report:
+     * [MemoryTool] drops a granted name that matches no catalog, deliberately,
+     * and the agent simply stops knowing everything the folder held while its
+     * own screen goes on listing the grant. A name is also re-bindable — make a
+     * catalog with that name again tomorrow and every agent still holding the
+     * grant is silently handed the new one. That is why the question is asked
+     * here rather than by the next thing to read the grant. [AgentGrants] is
+     * where the argument is written down; deleting a single memory is not asked
+     * about, because a memory carries no grant.
+     */
     @MutationMapping
     @Transactional
     fun deleteMemoryCatalog(@Argument id: Long): Boolean {
         val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+
+        val granted = grants.toMemoryCatalog(catalog.workspaceId, catalog.name)
+        if (granted.isNotEmpty()) throw MemoryCatalogInUseException(catalog.name, granted)
 
         val held = memories.countByCatalogId(id)
         memories.deleteByCatalogId(id)

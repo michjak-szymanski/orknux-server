@@ -14,6 +14,7 @@ class MemoryExceptionResolver : DataFetcherExceptionResolverAdapter() {
         val errorType = when (exception) {
             is MemoryCatalogNameTakenException,
             is MemoryCatalogNameInvalidException,
+            is MemoryCatalogInUseException,
             is MemoryTitleInvalidException,
             is MemoryContentInvalidException,
             -> ErrorType.BAD_REQUEST

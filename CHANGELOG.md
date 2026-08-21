@@ -50,6 +50,34 @@ have failed.
   selector, so the shape the code is being written against can be read without
   hunting for it.
 
+- **Functions, tools, skills and agents keep what they were.** Every save now
+  keeps the version it replaced, and each of those four has a **History** panel
+  beside it: who saved it, when, what the code or the prompt said then, and a
+  button that puts it back. Restoring keeps what it replaces too, so a restore
+  is undone the same way it was made. Nothing before the upgrade is recovered -
+  a component's history begins with the first save after it.
+
+- **A workflow's publications are kept, and one can be put back into service.**
+  They used to be one row per workflow, overwritten every time somebody pressed
+  Publish, so what a workflow ran last month was unanswerable. The workflow's
+  settings page now lists every publication, marks the one that runs, and
+  restores an older one by publishing it again - which leaves a record that a
+  rollback happened rather than deleting what came after.
+
+  A workflow's versions are its **publications and not its saves**: a draft is a
+  draft. Restoring one therefore does not touch the draft on the canvas, so no
+  half-finished work is lost - what changes is what triggers and schedules run,
+  and the badge says Draft while the two differ.
+
+  **Variables are deliberately not versioned.** Their values are encrypted, and
+  keeping old ones would mean keeping old secrets.
+
+- **How long that history is kept is an Admin setting**, fourteen days by
+  default (`ORKNUX_REVISION_RETENTION_DAYS`). A version is a whole copy of what
+  a component was, so this is the number that decides how much disk it takes.
+  It is measured from when a version stopped being current, not from when it was
+  written, and a workflow's live publication is never swept whatever its age.
+
 - **A Slack connection's app-level token can be read back.** It could be typed
   and never seen again, which left no way to check which token was in there
   short of pasting a new one. It now has its own Reveal, and the audit log

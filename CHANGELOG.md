@@ -119,6 +119,19 @@ have failed.
 
 ### Fixed
 
+- **Pictures sent to an Anthropic model now arrive.** They did not. The request
+  built for an Anthropic provider had no place for them at all, so a turn
+  carrying a screenshot reached the model as words alone - nothing failed,
+  nothing was logged, and the model answered plausibly and at length about
+  something it had never been shown. An agent whose whole purpose was reading a
+  picture appeared to be working.
+
+  A picture is now carried as an image block, which is the shape Anthropic
+  reads. A picture that genuinely cannot be carried - a format it does not
+  accept - **fails with a sentence naming the format**, rather than being left
+  behind. That is the part worth knowing before you upgrade: a workflow that has
+  been quietly discarding pictures will now say so instead.
+
 - **The one-container image works on whatever port you publish it on.** It did
   not. `docker run -p 9000:8080 orknux-one` gave a sign-in page that loaded
   perfectly and then refused every request it made, with a 403 and nothing on

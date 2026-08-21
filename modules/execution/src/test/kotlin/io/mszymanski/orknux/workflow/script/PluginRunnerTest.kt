@@ -156,4 +156,32 @@ class PluginRunnerTest {
 
         assertThat((read as PluginInspection.Unreadable).reason).contains("needs a name")
     }
+
+    @Test
+    fun `a plugin that imports a library cannot even be loaded`() {
+        /*
+         * Issue #142 asks that a plugin be allowed to carry libraries inside it.
+         * Today it may not reach for one: the plugin sandbox is given no
+         * filesystem either, so the import is refused while the module is being
+         * loaded - before `id()` is ever called. So the failure is not "this
+         * plugin needs a permission you have not granted", it is "this is not
+         * readable", which is a different sentence and sends whoever wrote it
+         * somewhere else.
+         *
+         * The wording below is GraalJS's and may move under an upgrade; what is
+         * being pinned is that the answer is Unreadable, and why.
+         */
+        val read = runner.inspect(
+            """
+            import fetchish from "node-fetch";
+            export default class Reaching extends OrknuxPlugin {
+              id() { return 'reaching'; }
+              apiVersion() { return 1; }
+            }
+            """.trimIndent(),
+        )
+
+        assertThat(read).isInstanceOf(PluginInspection.Unreadable::class.java)
+        assertThat((read as PluginInspection.Unreadable).reason).contains("not allowed")
+    }
 }

@@ -237,4 +237,79 @@ class ScriptRunnerTest {
 
         assertThat(runner.validate("export default function ok() { return 1; }").valid).isTrue()
     }
+
+    /*
+     * What happens today when a workspace's JavaScript tries to import
+     * something — issue #142 asks for a module system, and these say what there
+     * is instead of one.
+     *
+     * They are written against the shape of the answer rather than its wording:
+     * the sentences below come from GraalJS and would change under an upgrade,
+     * so what is asserted is that the run failed and that the reason mentions a
+     * denial, not the exact words. The day imports are implemented, these are
+     * the tests that go red, which is the point of having them.
+     */
+
+    @Test
+    fun `a function cannot import another module, by any spelling of the name`() {
+        fun importing(specifier: String) = runner.call(
+            """
+            import helper from "$specifier";
+            export default function uses() { return helper; }
+            """.trimIndent(),
+            "uses",
+            emptyList(),
+        )
+
+        // A library by bare name, a sibling by relative path, and a URL: three
+        // ways of asking, one answer. There is no resolver behind any of them,
+        // because the context is given no filesystem at all.
+        assertThat(importing("lodash")).isInstanceOf(ScriptResult.Failed::class.java)
+        assertThat((importing("lodash") as ScriptResult.Failed).reason).contains("not allowed")
+        assertThat((importing("./helper.mjs") as ScriptResult.Failed).reason).contains("not allowed")
+        assertThat((importing("https://esm.sh/lodash") as ScriptResult.Failed).reason).contains("not allowed")
+    }
+
+    @Test
+    fun `waiting until it runs does not find a module either`() {
+        // A dynamic import is the same denial arriving as a rejected promise
+        // rather than as a failure to load, so it is worth its own line: the two
+        // travel back through different code paths in the runner.
+        val result = runner.call(
+            """export default async function late() { return await import("./helper.mjs"); }""",
+            "late",
+            emptyList(),
+        )
+
+        assertThat((result as ScriptResult.Failed).reason).contains("not allowed")
+    }
+
+    @Test
+    fun `there is no require either`() {
+        val result = runner.call("""export default function ask() { return typeof require; }""", "ask", emptyList())
+
+        assertThat((result as ScriptResult.Returned).json).isEqualTo(""""undefined"""")
+    }
+
+    @Test
+    fun `validate accepts a script that importing has already doomed`() {
+        /*
+         * The gap worth knowing about before anybody builds #142: the editor's
+         * Validate parses, and parsing a module does not resolve what it
+         * imports. So a function with an import in it is called valid, stored,
+         * and then fails on its first run with a sentence about an operation
+         * not being allowed — which names neither the import nor the reason.
+         *
+         * This is not asserted because it is right. It is asserted because it
+         * is what happens, and a change to it should be a change somebody made
+         * on purpose.
+         */
+        val importing = """
+            import helper from "lodash";
+            export default function uses() { return helper; }
+        """.trimIndent()
+
+        assertThat(runner.validate(importing).valid).isTrue()
+        assertThat(runner.call(importing, "uses", emptyList())).isInstanceOf(ScriptResult.Failed::class.java)
+    }
 }

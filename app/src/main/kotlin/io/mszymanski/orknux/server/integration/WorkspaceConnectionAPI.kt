@@ -1,8 +1,5 @@
 package io.mszymanski.orknux.server.integration
 
-import io.mszymanski.orknux.connector.connection.ConnectionInput
-import io.mszymanski.orknux.connector.connection.ConnectionService
-import io.mszymanski.orknux.connector.connection.ConnectionView
 import io.mszymanski.orknux.connector.connection.CreateWorkspaceConnectionInput
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionView
@@ -24,7 +21,6 @@ import org.springframework.stereotype.Controller
 @Controller
 class WorkspaceConnectionAPI(
     private val connections: WorkspaceConnectionService,
-    private val defaults: ConnectionService,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -64,54 +60,6 @@ class WorkspaceConnectionAPI(
             "Connection ${updated.name} settings updated",
         )
         return updated
-    }
-
-    /**
-     * Makes an admin default out of a connection one workspace set up.
-     *
-     * A connection is usually worked out once, in the workspace that needed it,
-     * and then typed again in every other one. This takes what was worked out —
-     * its name, its kind and where it points — and puts it in the catalogue that
-     * new workspaces are provisioned from.
-     *
-     * The credentials stay where they are. A default carries none by design:
-     * every workspace answers for its own, which is what keeps one workspace's
-     * token out of another's hands. The workspace exporting it keeps its own
-     * copy exactly as it was.
-     */
-    @MutationMapping
-    fun exportWorkspaceConnectionAsDefault(
-        @Argument id: Long,
-        @Argument addToExistingWorkspaces: Boolean? = null,
-    ): ConnectionView {
-        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
-            ?: throw ConnectionNotFoundException(id)
-        // A default is everybody's, so making one is an administrator's to do.
-        access.requireAdmin()
-
-        val created = defaults.createConnection(
-            ConnectionInput(
-                name = connection.name,
-                type = connection.type,
-                // Where this workspace actually points, which is the thing worth
-                // sharing; the default it may have inherited is what it moved on
-                // from.
-                url = connection.effectiveUrl,
-                addToExistingWorkspaces = addToExistingWorkspaces,
-            ),
-        )
-
-        auditRecorder.record(
-            connection.workspaceId,
-            WorkspaceAuditCategory.INTEGRATION,
-            "Connection ${connection.name} exported as a default",
-        )
-        auditRecorder.record(
-            null,
-            WorkspaceAuditCategory.INTEGRATION,
-            "Default connection ${created.connection.name} created from a workspace connection",
-        )
-        return created.connection
     }
 
     /**

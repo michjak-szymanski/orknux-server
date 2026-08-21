@@ -801,12 +801,6 @@ type Mutation {
     deleteShell(id: ID!): Boolean!
     "Adds a connection that belongs to this workspace alone."
     createWorkspaceConnection(input: CreateWorkspaceConnectionInput!): WorkspaceConnection!
-    """
-    Makes an admin default out of a connection one workspace set up: its name,
-    kind and URL. Credentials stay with the workspace, as they do for every
-    default. Administrators only.
-    """
-    exportWorkspaceConnectionAsDefault(id: ID!, addToExistingWorkspaces: Boolean): Connection!
     "Saves the connection settings form; inherited fields are left to the default."
     updateWorkspaceConnection(id: ID!, input: UpdateWorkspaceConnectionInput!): WorkspaceConnection!
     "Clears the workspace's credentials; a workspace-owned connection is removed outright."

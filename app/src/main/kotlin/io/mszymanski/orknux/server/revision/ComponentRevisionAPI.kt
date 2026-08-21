@@ -69,7 +69,7 @@ class ComponentRevisionAPI(
         // than readable by whoever knows an id.
         access.requireVisible(workspaceOf(kind, componentId))
         return recorder.history(kind, componentId, limit ?: DEFAULT_REVISIONS)
-            .map { ComponentRevisionView(it, mapper) }
+            .map(::ComponentRevisionView)
     }
 
     /** One revision, with what it held. */
@@ -77,7 +77,7 @@ class ComponentRevisionAPI(
     @Transactional(readOnly = true)
     fun componentRevision(@Argument id: Long): ComponentRevisionDetailView {
         val held = revision(id)
-        return ComponentRevisionDetailView(held, mapper)
+        return ComponentRevisionDetailView.of(held, mapper)
     }
 
     /**
@@ -243,7 +243,7 @@ data class ComponentRevisionView(
     /** When it stopped being current, which is what retention counts from. */
     val recordedAt: String,
 ) {
-    constructor(revision: ComponentRevision, mapper: ObjectMapper) : this(
+    constructor(revision: ComponentRevision) : this(
         id = requireNotNull(revision.id),
         kind = revision.kind,
         componentId = revision.componentId,
@@ -276,16 +276,28 @@ data class ComponentRevisionDetailView(
     val contentLanguage: String,
     val snapshot: String,
 ) {
-    constructor(revision: ComponentRevision, mapper: ObjectMapper) : this(
-        id = requireNotNull(revision.id),
-        kind = revision.kind,
-        componentId = revision.componentId,
-        name = revision.name,
-        savedAt = revision.savedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-        savedBy = revision.savedBy,
-        recordedAt = revision.recordedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-        content = ComponentSnapshot.contentIn(revision.kind, revision.snapshot, mapper).text,
-        contentLanguage = ComponentSnapshot.contentIn(revision.kind, revision.snapshot, mapper).language,
-        snapshot = revision.snapshot,
-    )
+    companion object {
+
+        /**
+         * A factory rather than a second constructor, so the snapshot is read
+         * once. A constructor delegating to `this(...)` can only call
+         * [ComponentSnapshot.contentIn] separately for each of the two fields
+         * it fills, which parses the whole revision twice.
+         */
+        fun of(revision: ComponentRevision, mapper: ObjectMapper): ComponentRevisionDetailView {
+            val read = ComponentSnapshot.contentIn(revision.kind, revision.snapshot, mapper)
+            return ComponentRevisionDetailView(
+                id = requireNotNull(revision.id),
+                kind = revision.kind,
+                componentId = revision.componentId,
+                name = revision.name,
+                savedAt = revision.savedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                savedBy = revision.savedBy,
+                recordedAt = revision.recordedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                content = read.text,
+                contentLanguage = read.language,
+                snapshot = revision.snapshot,
+            )
+        }
+    }
 }

@@ -133,8 +133,16 @@ type Query {
     Asks the provider, so it fails the way a connection check fails.
     """
     discoveredModels(providerId: ID!): [DiscoveredModel!]!
-    "Workflows assigned to a workspace, ordered by name."
-    workspaceWorkflows(workspaceId: ID!, page: Int = 0, size: Int = 20): WorkspaceWorkflowPage!
+    "Workflows assigned to a workspace, by name unless another order is asked for."
+    workspaceWorkflows(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        "By name when absent."
+        order: WorkflowOrder,
+        "Ascending when absent, so a column of names reads A to Z."
+        ascending: Boolean
+    ): WorkspaceWorkflowPage!
     "The workspace's action catalogue: the blocks its workflows are built from."
     workspaceActions(workspaceId: ID!, page: Int = 0, size: Int = 20): ActionPage!
     action(id: ID!): Action
@@ -1233,6 +1241,19 @@ type WorkspaceWorkflow {
     lastRun: LastRun
     "When a scheduled trigger will start it next, ISO-8601; null when nothing schedules it or it is switched off."
     nextRun: String
+}
+
+"What a list of workflows is ordered by."
+enum WorkflowOrder {
+    "By name, which is how a catalogue is read."
+    NAME
+    """
+    By when it last started a run. A workflow nobody has ever run has no answer
+    here and sorts last, whichever way round.
+    """
+    LAST_RUN
+    "By whether the workspace has it switched on."
+    ENABLED
 }
 
 type WorkspaceWorkflowPage {

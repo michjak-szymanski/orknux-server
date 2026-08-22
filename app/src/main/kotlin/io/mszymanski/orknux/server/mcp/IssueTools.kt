@@ -14,11 +14,13 @@ import io.mszymanski.orknux.server.issue.IssueRelations
 import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.issue.NewsReader
+import io.mszymanski.orknux.server.issue.issueFilter
 import io.mszymanski.orknux.server.security.WebProperties
 import io.mszymanski.orknux.server.user.AppUserRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Pageable
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.security.core.context.SecurityContextHolder
@@ -88,8 +90,15 @@ class IssueTools(
         if (node.isNumber) node.asLong() else node.stringValue()?.trim()?.toLongOrNull()
     }.getOrNull()
 
-    private companion object {
-        /** One page, big enough that a workspace's whole tracker fits in it. */
+    companion object {
+        /**
+         * How many issues one answer carries at most.
+         *
+         * Not private, and not a literal in a test either: what goes wrong past
+         * this number is only visible to a test that creates more than it, and a
+         * test that hard-codes 200 stops testing anything the day somebody moves
+         * the constant. `IssueToolsPagingTest` fills a workspace to `MANY + 5`.
+         */
         const val MANY = 200
 
         /** As long as `Issue.title` is. */
@@ -134,7 +143,15 @@ class IssueTools(
      * "Assigned to me" is the question this exists for, and it is asked by
      * name rather than by id: an assistant knows it is called Claude, not that
      * it is user 5. The name is matched against what the assignee resolves to,
-     * so a person and an agent are found the same way.
+     * so a person and an agent are found the same way - resolved to the kind
+     * and id the column holds *before* the query, because the name lives in
+     * another table and the filter has to be in the query.
+     *
+     * Every filter is in the query, and that is the whole point. Fetching a
+     * page and filtering it afterwards filters the page: asking for everything
+     * labelled `p1` in a tracker of 221 answered with the p1s among the newest
+     * 200 and said nothing about the rest. What still cannot fit is said
+     * plainly, with the total, rather than left to look like the whole answer.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun list(scope: OrknuxScope, arguments: String): String {
@@ -155,32 +172,59 @@ class IssueTools(
             .orEmpty()
         val newestFirst = PageRequest.of(0, MANY, Sort.by("number").descending())
 
-        val page = if (wanted == null) {
-            issues.search(scope.workspaceId, search, newestFirst)
-        } else {
-            issues.searchByStatus(scope.workspaceId, wanted, search, newestFirst)
-        }
-
-        val found = page.content.filter { held ->
-            (assignee == null || nameOf(held)?.lowercase()?.contains(assignee) == true) &&
-                wantedLabels.all { wanted -> held.labels.any { it.equals(wanted, ignoreCase = true) } }
-        }
-
-        return mapper.writeValueAsString(
-            mapOf(
-                "issues" to found.map {
-                    mapOf(
-                        "number" to it.number,
-                        "title" to it.title,
-                        "status" to it.status,
-                        "reporter" to it.reporter,
-                        "assignee" to nameOf(it),
-                        "labels" to it.labels.sorted(),
-                        "url" to issueLink(scope.workspaceId, it.number),
-                    )
-                },
+        val page = issues.findAll(
+            issueFilter(
+                workspaceId = scope.workspaceId,
+                status = wanted,
+                search = search,
+                labels = wantedLabels,
+                assignedTo = assignee?.let { assignedTo(scope, it) },
             ),
+            newestFirst,
         )
+        val found = page.content
+
+        val answer = mutableMapOf<String, Any?>(
+            "issues" to found.map {
+                mapOf(
+                    "number" to it.number,
+                    "title" to it.title,
+                    "status" to it.status,
+                    "reporter" to it.reporter,
+                    "assignee" to nameOf(it),
+                    "labels" to it.labels.sorted(),
+                    "url" to issueLink(scope.workspaceId, it.number),
+                )
+            },
+            "matching" to page.totalElements,
+        )
+        if (page.totalElements > found.size) {
+            answer["note"] = "These are the newest ${found.size} of ${page.totalElements} matching issues. " +
+                "Narrow it with status, labels, assignee or search to see the rest."
+        }
+        return mapper.writeValueAsString(answer)
+    }
+
+    /**
+     * A name, as the assignees it could mean.
+     *
+     * The column holds a kind and an id; the question is asked with a name, and
+     * the name belongs to a user, an agent or a model. Resolving it here rather
+     * than filtering on [nameOf] afterwards is what lets the filter be part of
+     * the query - and a name that matches nobody comes back empty, which the
+     * filter reads as "no issue", not as "no filter".
+     */
+    private fun assignedTo(scope: OrknuxScope, name: String): List<Pair<AssigneeKind, String>> {
+        val people = users.findAll()
+            .filter { it.displayName.contains(name, ignoreCase = true) }
+            .map { AssigneeKind.USER to requireNotNull(it.id).toString() }
+        val theirAgents = agents.findByWorkspaceId(scope.workspaceId, Pageable.unpaged()).content
+            .filter { it.name.contains(name, ignoreCase = true) }
+            .map { AssigneeKind.AGENT to requireNotNull(it.id).toString() }
+        val theirModels = models.models(scope.workspaceId)
+            .filter { it.name.contains(name, ignoreCase = true) }
+            .map { AssigneeKind.MODEL to it.id.toString() }
+        return people + theirAgents + theirModels
     }
 
     /**
@@ -189,19 +233,21 @@ class IssueTools(
      * Worth its own tool rather than a note in the list: a label only works as
      * a filter if you know it exists, and "p1" is not something anybody can
      * guess from the outside.
+     *
+     * The database does the counting. It used to read one page of issues and
+     * tally the labels on it, which counted the page rather than the tracker -
+     * 200 of 221, and which 221st went missing was the database's choice
+     * because the page was not even sorted. A tool whose whole job is to say
+     * how big a thing is has to be right about it.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
-    fun labels(scope: OrknuxScope): String {
-        val all = issues.search(scope.workspaceId, "", PageRequest.of(0, MANY)).content
-        val counted = all.flatMap { it.labels }
-            .groupingBy { it }
-            .eachCount()
-            .toList()
-            .sortedWith(compareByDescending<Pair<String, Int>> { it.second }.thenBy { it.first })
-        return mapper.writeValueAsString(
-            mapOf("labels" to counted.map { (label, count) -> mapOf("label" to label, "issues" to count) }),
+    fun labels(scope: OrknuxScope): String =
+        mapper.writeValueAsString(
+            mapOf(
+                "labels" to issues.labelCounts(scope.workspaceId)
+                    .map { mapOf("label" to it.label, "issues" to it.issues) },
+            ),
         )
-    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun one(scope: OrknuxScope, arguments: String): String {

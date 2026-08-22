@@ -15,9 +15,16 @@ import jakarta.persistence.JoinColumn
 import jakarta.persistence.OneToMany
 import jakarta.persistence.OrderBy
 import jakarta.persistence.Table
+import jakarta.persistence.criteria.CriteriaBuilder
+import jakarta.persistence.criteria.CriteriaQuery
+import jakarta.persistence.criteria.Expression
+import jakarta.persistence.criteria.Predicate
+import jakarta.persistence.criteria.Root
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
+import org.springframework.data.jpa.domain.Specification
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor
 import org.springframework.data.jpa.repository.Query
 import java.time.OffsetDateTime
 
@@ -166,7 +173,16 @@ class IssueComment(
     var editedAt: OffsetDateTime? = null,
 )
 
-interface IssueRepository : JpaRepository<Issue, Long> {
+/**
+ * One label and how many issues in the workspace carry it.
+ *
+ * Counted by the database rather than by tallying a page of entities read back:
+ * a page has a size, and a tally of one page is a count of that page and not of
+ * the tracker. See [IssueRepository.labelCounts].
+ */
+data class LabelCount(val label: String, val issues: Long)
+
+interface IssueRepository : JpaRepository<Issue, Long>, JpaSpecificationExecutor<Issue> {
 
     fun findByWorkspaceIdAndNumber(workspaceId: Long, number: Int): Issue?
 
@@ -259,6 +275,116 @@ interface IssueRepository : JpaRepository<Issue, Long> {
     /** Every label in use here, for the filter to offer. */
     @Query("select distinct l from Issue i join i.labels l where i.workspaceId = :workspaceId order by l")
     fun labelsIn(workspaceId: Long): List<String>
+
+    /**
+     * Every label in use here with how many issues carry it, counted by the
+     * database.
+     *
+     * The count has to be the query's, because the alternative - read a page of
+     * issues and tally their labels - counts the page. That is what it did, with
+     * a page of 200 against a tracker of 221, and every number it reported was
+     * short by however many issues fell off the end. A `group by` has no page.
+     *
+     * Commonest first and alphabetically within a tie, which is the order the
+     * answer is read in: what a workspace uses most is what a filter is most
+     * likely to want.
+     */
+    @Query(
+        """
+        select new io.mszymanski.orknux.server.issue.LabelCount(l, count(i))
+        from Issue i join i.labels l
+        where i.workspaceId = :workspaceId
+        group by l
+        order by count(i) desc, l asc
+        """,
+    )
+    fun labelCounts(workspaceId: Long): List<LabelCount>
+}
+
+/**
+ * The tracker filtered the way somebody asks for it, as one query.
+ *
+ * A specification rather than JPQL for the reason the audit log's is one:
+ * `:enum IS NULL OR …` fails in Hibernate 6, and every one of these is
+ * optional. `WorkspaceAuditRepository.auditFilter` is the shape.
+ *
+ * The point of it being a query at all is that a filter applied after a page
+ * has been fetched filters the page. Asking for everything labelled `p1` in a
+ * tracker of 221 got the p1s among the newest 200, handed back as though it
+ * were all of them.
+ */
+fun issueFilter(
+    workspaceId: Long,
+    status: IssueStatus?,
+    /** Read across the title, the description and the labels together. */
+    search: String?,
+    /**
+     * Every one of them, not any: "p1, slack" asks for the urgent Slack issues,
+     * not for everything urgent and everything about Slack. One `exists` each,
+     * rather than a join, because a join multiplies an issue by its labels and
+     * then needs a `distinct` that Postgres will not order by an expression
+     * outside the select list.
+     */
+    labels: Collection<String> = emptyList(),
+    /**
+     * Who has it, as the kind and id an assignee is stored as - resolved from a
+     * name by the caller, because a name lives in the users, the agents or the
+     * models and not in this table. Null means anybody; an empty collection
+     * means the name matched nobody, which matches no issue rather than every
+     * issue.
+     */
+    assignedTo: Collection<Pair<AssigneeKind, String>>? = null,
+): Specification<Issue> = Specification { root, query, builder ->
+    val predicates = mutableListOf(builder.equal(root.get<Long>("workspaceId"), workspaceId))
+
+    status?.let { predicates += builder.equal(root.get<IssueStatus>("status"), it) }
+
+    search?.trim()?.ifEmpty { null }?.let {
+        val pattern = "%${it.lowercase()}%"
+        predicates += builder.or(
+            builder.like(builder.lower(root.get("title")), pattern),
+            builder.like(builder.lower(builder.coalesce(root.get<String>("description"), "")), pattern),
+            carriesLabel(root, query, builder) { label -> builder.like(label, pattern) },
+        )
+    }
+
+    labels.forEach { wanted ->
+        val spelled = wanted.lowercase()
+        predicates += carriesLabel(root, query, builder) { label -> builder.equal(label, spelled) }
+    }
+
+    assignedTo?.let { held ->
+        predicates += if (held.isEmpty()) {
+            builder.disjunction()
+        } else {
+            val assignee = root.get<Any>("assignee")
+            builder.or(
+                *held.map { (kind, id) ->
+                    builder.and(
+                        builder.equal(assignee.get<AssigneeKind>("kind"), kind),
+                        builder.equal(assignee.get<String>("id"), id),
+                    )
+                }.toTypedArray(),
+            )
+        }
+    }
+
+    builder.and(*predicates.toTypedArray())
+}
+
+/** `exists (select 1 from the issue's labels where …)`, spelled once. */
+private fun carriesLabel(
+    root: Root<Issue>,
+    query: CriteriaQuery<*>,
+    builder: CriteriaBuilder,
+    matching: (Expression<String>) -> Predicate,
+): Predicate {
+    val sub = query.subquery(Int::class.java)
+    val held = sub.from(Issue::class.java)
+    val label = held.join<Issue, String>("labels")
+    sub.select(builder.literal(1))
+    sub.where(builder.equal(held, root), matching(builder.lower(label)))
+    return builder.exists(sub)
 }
 
 class IssueNotFoundException(id: Long) : RuntimeException("No issue with id $id")

@@ -43,6 +43,24 @@ have failed.
   session list under the `chat` prefix. A chat with a bare model calls no tools,
   has nothing to keep, and still opens nothing.
 
+- **The issue tools no longer answer about the first two hundred issues as
+  though it were the tracker.** Both halves came from the same habit: fetch a
+  page of two hundred and do the work in memory afterwards.
+
+  `orknux_issue_labels` tallied the labels on that page, so it was counting the
+  page. Against a tracker of 221 issues it reported `p1` as 73 where the truth
+  was 88, and `p2` as 25 where it was 27 — and which twenty-one issues it had
+  dropped was the database's choice, because the page was not even sorted. The
+  counting is now a `group by` in the query, which has no page.
+
+  The list filtered by `labels` and `assignee` after fetching, so those two
+  filters could only ever match something among the newest two hundred: asking
+  for everything labelled `p1` got the p1s in that window, handed back with
+  nothing to say the rest existed. Both filters are now part of the query,
+  beside the search and the status that always were. What still will not fit in
+  one answer is said plainly — the answer carries how many issues matched, and a
+  note when it is showing fewer than that.
+
 ## 0.9.0
 
 ### Added

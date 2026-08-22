@@ -30,15 +30,20 @@ import org.springframework.stereotype.Component
  * agent's workspace, so an agent elsewhere holding the same word holds a grant
  * to a different thing entirely.
  *
- * Three of the four name-grants are asked here. The fourth is
- * [Agent.mcpServers], and `removeMcpServer` is unguarded on exactly these terms:
- * the grant is a name, `McpToolCaller` drops one that matches no server, and
- * registering a server under that name again hands it to every agent still
- * holding the grant. The difference is only in what is named — an address
- * somebody registered, run by somebody else, where a workspace's own tools,
- * skills and memories are things this application holds — and that is a
- * difference in what breaks, not in whether it breaks quietly. It is left to be
- * argued on its own rather than swept in here.
+ * All four name-grants are asked here, and the fourth is answered differently.
+ * [Agent.mcpServers] names an address somebody registered, run by somebody
+ * else, where a workspace's own tools, skills and memories are things this
+ * application holds. "The server is gone, so I removed the entry" is ordinary
+ * housekeeping, and a refusal would stand in the way of a tidy-up that is
+ * already the right thing to do — so `removeMcpServer` does not refuse.
+ *
+ * It does not leave the grant behind either. A name pointing at nothing is
+ * exactly the re-binding above: register a server under that name again and
+ * every agent still holding it is armed with whatever now answers there, and
+ * nobody chose that. So the removal takes the grant off each agent that held
+ * it and the response names them. Refusing and revoking are two ways to keep a
+ * grant pointing at the thing somebody meant; which one fits depends on what is
+ * named, and only for MCP is the thing named already somebody else's to remove.
  */
 @Component
 class AgentGrants(private val agents: AgentRepository) {
@@ -54,4 +59,15 @@ class AgentGrants(private val agents: AgentRepository) {
     /** Which of the workspace's agents may read this memory catalog. */
     fun toMemoryCatalog(workspaceId: Long, name: String): List<String> =
         agents.findGrantedMemoryCatalog(workspaceId, name).map { "the agent ${it.name}" }
+
+    /**
+     * Which of the workspace's agents may connect to this MCP server.
+     *
+     * The agents themselves rather than a sentence about them, because this one
+     * is not read to write a refusal: the caller takes the grant off each of
+     * them. See the note above for why that is the answer here and a refusal is
+     * the answer for the other three.
+     */
+    fun toMcpServer(workspaceId: Long, name: String): List<Agent> =
+        agents.findGrantedMcpServer(workspaceId, name)
 }

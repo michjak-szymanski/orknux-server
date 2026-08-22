@@ -61,6 +61,15 @@ have failed.
 
 ### Fixed
 
+- **CI runs both databases now, side by side.** There are two engines and the
+  build tested one of them - the other being the one `orknux-one` actually ships
+  with, so the engine nobody tested was the engine most people run. It went red
+  unnoticed twice: #169, a workspace that could not be deleted on SQLite and
+  could on Postgres, and #171, every tracker tool an agent called from a chat
+  answering `Unable to commit against JDBC Connection` a minute later. Neither
+  was visible from CI. The two legs run in parallel and both must pass before an
+  image is built or published.
+
 - **An installation with chat turned off stops offering a chat's settings.** The
   tab, the palette and the chat page already honoured the switch; the workspace's
   Chat card did not, so three models that configure a screen nobody could open

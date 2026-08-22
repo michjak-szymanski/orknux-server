@@ -17,6 +17,24 @@ have failed.
 
 ### Added
 
+- **A picture in the manual opens at the size it was taken.** The screenshots are
+  captured at 1440 and drawn into a column about half that, so the detail being
+  pointed at was not legible. Clicking one now opens it over the page - Escape,
+  click-away, and the focus kept inside. It is on for the manual only: issue
+  attachments already have a viewer of their own.
+
+- **"Go to" offers things to do, as well as everywhere to go.** Create issue,
+  create function and create condition, shown before anything is typed and marked
+  with a plus so they read differently from a destination. Each is registered on
+  the page it starts, so a fourth is a line. The box is called **Search or
+  create...** now, because "Go to" stopped being true the moment it could make
+  something.
+
+- **The lines in a workflow point where the run goes.** An edge a run travels
+  ends in an arrowhead at the target, and the failure branch's is red. The dashed
+  lines - a node reading a field from somewhere else, a session's line to an
+  agent - deliberately keep none: nothing travels along them.
+
 - **An agent can put a name on an issue.** `orknux_update_issue` takes an
   `assignee` — a person, an agent or a model, by the name somebody would say,
   rather than the kind-and-id pair the browser sends because it has just drawn
@@ -42,6 +60,17 @@ have failed.
   agents will no longer be holding it afterwards.
 
 ### Fixed
+
+- **An installation with chat turned off stops offering a chat's settings.** The
+  tab, the palette and the chat page already honoured the switch; the workspace's
+  Chat card did not, so three models that configure a screen nobody could open
+  were still on the page. The Quick Chat model stays, in a card of its own - the
+  AI button answers through its own endpoint and goes on working, and hiding its
+  model would remove the only way to turn it off.
+
+- **A screenshot in the manual is no longer dimmed in the light theme.** The rule
+  that darkens icon files was catching every picture in the documentation and
+  drawing it at less than half brightness.
 
 - **Renaming an MCP server carries the grants with it.** They are held by
   name, so a rename used to leave every agent pointing at a name that matched

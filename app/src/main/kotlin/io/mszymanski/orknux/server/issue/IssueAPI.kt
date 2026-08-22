@@ -233,7 +233,7 @@ class IssueAPI(
                 audit.record(
                     held.workspaceId,
                     WorkspaceAuditCategory.WORKSPACE,
-                    "Issue #${held.number} ${if (wanted == IssueStatus.CLOSED) "closed" else "reopened"}",
+                    "Issue #${held.number} ${wanted.auditedAs(statusWas)}",
                 )
                 statusChanged = true
             }

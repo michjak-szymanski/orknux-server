@@ -293,8 +293,8 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP` or `OIDC`. |
 | `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | *empty* | The first internal administrator, created at startup if nobody has that name. Empty seeds nobody. See above. |
 | `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | *empty* | What they sign in with the first time. At least 12 characters, and something to change and unset once you are in. |
-| `ORKNUX_SERVER_TAG` | `0.8` | Which `orknux/orknux-server` image. |
-| `ORKNUX_UI_TAG` | `0.8` | Which `orknux/orknux-ui` image. |
+| `ORKNUX_SERVER_TAG` | `0.9` | Which `orknux/orknux-server` image. |
+| `ORKNUX_UI_TAG` | `0.9` | Which `orknux/orknux-ui` image. |
 | `ORKNUX_TEMPORAL_UI_URL` | *empty* | Where a run links out to. Empty offers no links, which is right while the Temporal UI is not running. |
 | `ORKNUX_ALLOWED_ORIGINS` | *empty* | Cross-origin callers to allow. Empty is correct here, since the browser only talks to `orknux-ui`. |
 | `ORKNUX_TEMPORAL_UI_PORT` | `8233` | Only with `--profile debug`. |
@@ -346,13 +346,13 @@ are published from CI on every push to `main`, under one scheme:
 - `sha-<commit>` never moves, and is the one to pin to if you want to be certain
   what you are running.
 
-`compose.yaml` pins `0.8`, so what you bring up today is what you bring up next
+`compose.yaml` pins `0.9`, so what you bring up today is what you bring up next
 week. `latest` follows `main` and moving under a running deployment is how an
 upgrade happens to you rather than being something you did. Set
 `ORKNUX_SERVER_TAG` and `ORKNUX_UI_TAG` to move deliberately, and to
 `sha-<commit>` if you want to be certain to the commit.
 
-Both repositories are at `0.8`/`0.8.0`, released together, and that is what
+Both repositories are at `0.9`/`0.9.0`, released together, and that is what
 this file uses. They are meant to move together - the interface and the server
 are one product released under one version - so pin them to the same number.
 Check what exists before reaching for a different one:

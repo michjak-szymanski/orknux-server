@@ -52,7 +52,6 @@ class ChatStreamAPI(
     private val chats: ChatService,
     private val client: ModelChatClient,
     private val titles: ChatTitles,
-    private val conversation: AgentConversation,
     private val ownership: ChatOwnership,
     private val attachments: ChatAttachments,
     private val settings: InstallationSettings,
@@ -100,7 +99,7 @@ class ChatStreamAPI(
                 val answer = if (start.agentId == null) {
                     client.stream(start.modelId, start.turns) { piece -> send("chunk", mapOf("text" to piece)) }
                 } else {
-                    conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId).also { whole ->
+                    chats.ask(start).also { whole ->
                         if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                     }
                 }

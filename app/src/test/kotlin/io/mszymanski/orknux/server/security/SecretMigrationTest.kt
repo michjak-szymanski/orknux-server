@@ -19,6 +19,7 @@ import jakarta.persistence.Entity
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatCode
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -214,20 +215,33 @@ class SecretMigrationTest(
      * had. Here one value is long enough that its envelope will not fit the
      * column, which is a real way for this to fail on a real upgrade, and the
      * row beside it must still come out sealed.
+     *
+     * Asserted on both engines, which took a second way of refusing the write.
+     * SQLite does not enforce a varchar length: the oversized envelope goes in
+     * happily, no row fails, and the test proved nothing about the engine
+     * `orknux-one` ships. [refuseWrites] makes the same row unwritable there
+     * instead, so what the sweep meets is what it meets on Postgres — an UPDATE
+     * that throws, inside the per-row transaction — and the containment is read
+     * off the same two assertions.
      */
     @Test
     fun `a row that cannot be written does not roll back the ones that could`() {
         val tooLong = plaintextVariable("x".repeat(4000), name = "tooLong")
         val ordinary = plaintextVariable("a credential that fits", name = "ordinary")
+        refuseWrites(tooLong)
 
-        assertThatCode { migration().encryptStoredSecrets() }.doesNotThrowAnyException()
+        try {
+            assertThatCode { migration().encryptStoredSecrets() }.doesNotThrowAnyException()
 
-        assertThat(cipher.isEncrypted(storedVariableValue(ordinary)))
-            .describedAs("the row that could be written is written, whatever happened to the other")
-            .isTrue()
-        assertThat(storedVariableValue(tooLong))
-            .describedAs("and the one that could not is left readable rather than lost")
-            .isEqualTo("x".repeat(4000))
+            assertThat(cipher.isEncrypted(storedVariableValue(ordinary)))
+                .describedAs("the row that could be written is written, whatever happened to the other")
+                .isTrue()
+            assertThat(storedVariableValue(tooLong))
+                .describedAs("and the one that could not is left readable rather than lost")
+                .isEqualTo("x".repeat(4000))
+        } finally {
+            allowWrites()
+        }
     }
 
     /**
@@ -274,6 +288,14 @@ class SecretMigrationTest(
      */
     @Test
     fun `every column the sweep names exists in the database`() {
+        // `information_schema` is Postgres'; SQLite keeps its schema in
+        // `sqlite_master` and answers this question in a different language
+        // entirely. What the question is for - a second implementation of the
+        // naming rule drifting from Hibernate's - is answered on either engine,
+        // and the schema the two are built from is held together by
+        // SqliteSchemaTest's `validate`.
+        assumeTrue(postgres, "Postgres only: information_schema is Postgres'")
+
         val missing = columns.all.filterNot { column ->
             val present = jdbc.queryForObject(
                 "select count(*) from information_schema.columns where table_name = ? and column_name = ?",
@@ -288,6 +310,47 @@ class SecretMigrationTest(
     }
 
     private fun migration() = SecretMigration(jdbc, cipher, columns, transactions)
+
+    /** Which engine this run is on, read where `TestDatabase` wrote it. */
+    private val engine: String
+        get() = System.getProperty("spring.datasource.url").orEmpty()
+
+    private val postgres: Boolean get() = engine.startsWith("jdbc:postgresql")
+
+    /**
+     * Asked rather than inferred from [postgres] being false: a trigger in
+     * SQLite's spelling handed to any other database is a test that fails on
+     * something that has nothing to do with what it is testing.
+     */
+    private val sqlite: Boolean get() = engine.startsWith("jdbc:sqlite")
+
+    /**
+     * Makes one row refuse to be written, where the column's own length will not.
+     *
+     * Only on SQLite, and it is not a way of making the test pass: it is the
+     * only way of running it at all. A varchar length is documentation there
+     * rather than a constraint, so the row the test calls unwritable is written
+     * without complaint and there is no failure to contain. A trigger refusing
+     * that one id puts the failure back where the column would have put it on
+     * Postgres — an UPDATE that throws — and leaves everything the sweep does
+     * around it untouched.
+     */
+    private fun refuseWrites(id: Long) {
+        if (!sqlite) return
+        jdbc.execute(
+            """
+            CREATE TRIGGER $REFUSING BEFORE UPDATE ON workspace_variable
+            WHEN NEW.id = $id
+            BEGIN SELECT RAISE(ABORT, 'this row cannot be written'); END
+            """.trimIndent(),
+        )
+    }
+
+    /** And takes it away again: the file outlives the test, and so would the trigger. */
+    private fun allowWrites() {
+        if (!sqlite) return
+        jdbc.execute("DROP TRIGGER IF EXISTS $REFUSING")
+    }
 
     /** Every `@Convert(SecretConverter)` field there is, found without asking the metamodel. */
     private fun annotatedFieldsOnTheClasspath(): Int {
@@ -349,4 +412,8 @@ class SecretMigrationTest(
 
     private fun storedShellColumn(id: Long, column: String): String? =
         jdbc.queryForObject("select $column from shell where id = ?", String::class.java, id)
+
+    private companion object {
+        const val REFUSING = "secret_migration_refuses_the_row"
+    }
 }

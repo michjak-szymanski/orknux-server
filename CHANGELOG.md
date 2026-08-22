@@ -43,6 +43,25 @@ have failed.
 
 ### Fixed
 
+- **An agent's tools work in a chat on SQLite.** Anything an agent reached for
+  while answering — filing an issue, commenting on one, closing one — came back
+  to it as `Unable to commit against JDBC Connection` a minute later, whatever
+  the tool had actually answered. The sentence telling a model its title was
+  longer than the 200 characters the column holds was one of the answers thrown
+  away that way, so the one thing that refusal exists for, a model shortening it
+  and trying again, could not happen on the engine `orknux-one` ships with. A
+  chat turn was one transaction from the message to the answer, and every
+  tracker tool opens one of its own so that a write it could not make cannot
+  abort the turn around it; SQLite takes one writer at a time, so the second
+  waited on a lock the first was holding and gave up twice over. The chat now
+  writes what was said, asks the model outside any transaction of its own, and
+  writes the answer afterwards — which is what the streaming answer already did,
+  and is now what both do. On Postgres the same change hands a connection back
+  to the pool for the length of a model's answer instead of holding it. One
+  visible consequence on both: a turn the provider fails now leaves the person's
+  own message in the conversation rather than taking it away with the answer
+  that never came.
+
 - **Renaming an MCP server carries the grants with it.** They are held by
   name, so a rename used to leave every agent pointing at a name that matched
   nothing - and a grant matching no server is dropped in silence, so the

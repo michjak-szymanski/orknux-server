@@ -42,4 +42,19 @@ interface AgentRepository : JpaRepository<Agent, Long> {
      */
     @Query("select a from Agent a join a.memoryCatalogs c where a.workspaceId = :workspaceId and c = :name")
     fun findGrantedMemoryCatalog(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
+
+    /**
+     * Which of the workspace's agents were granted this MCP server, spelled the
+     * same way.
+     *
+     * Exactly as spelled for the reason the other three are: `McpToolCaller`
+     * intersects the granted names with the servers the workspace has, so a
+     * grant differing by a letter's case already resolves to nothing.
+     *
+     * Unlike the other three this is not read to refuse a delete but to undo
+     * the grant — see `McpServerAPI.removeMcpServer` — so the agents are what
+     * the caller wants, not a sentence naming them.
+     */
+    @Query("select a from Agent a join a.mcpServers s where a.workspaceId = :workspaceId and s = :name")
+    fun findGrantedMcpServer(@Param("workspaceId") workspaceId: Long, @Param("name") name: String): List<Agent>
 }

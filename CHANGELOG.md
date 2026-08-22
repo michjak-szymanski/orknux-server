@@ -25,6 +25,22 @@ have failed.
   it worked and leaves the wrong person on the issue is the failure nobody goes
   looking for.
 
+### Changed
+
+- **Removing an MCP server now takes the grant off the agents that held it.**
+  It used to leave the name behind: the agent went on listing a server that was
+  not there, quietly lost whatever it could do through it, and — the part worth
+  upgrading for — registering a server under that name again handed every agent
+  still holding the grant whatever now answered at the new address, with nobody
+  having asked for that. The removal is still allowed, unlike the one for a
+  tool, a skill catalog or a memory catalog, because an MCP server is an address
+  somebody else runs and "the server is gone, so I removed the entry" is
+  ordinary housekeeping. What it does now is name the agents that held the grant
+  in its answer and take the grant off each of them, with an audit entry per
+  agent and a version of each agent kept as it was before. If you have been
+  removing and re-adding a server under the same name to move it, note that the
+  agents will no longer be holding it afterwards.
+
 ### Fixed
 
 - **A cron of seconds is now a schedule this actually keeps.** Six fields

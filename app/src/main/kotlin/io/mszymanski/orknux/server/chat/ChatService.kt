@@ -366,54 +366,33 @@ class ChatService(
     }
 
     /**
-     * Says something, and answers it.
+     * Asks, in whatever way this chat answers, and in no transaction at all.
      *
-     * The user's turn is written to the history before the model is asked, so a
-     * provider that fails leaves the conversation holding what was actually
-     * said rather than losing it. The whole thread goes to the model, which is
-     * the point of keeping one.
+     * The middle of a send, and the reason a send is three calls rather than
+     * one. Asking a model takes as long as the model takes, and an agent's turn
+     * is longer still: the loop calls tools, and every tracker tool opens its
+     * own transaction because [io.mszymanski.orknux.server.mcp.IssueTools] says
+     * why. A transaction held open across all of that is a connection held out
+     * of the pool for a minute on Postgres — and on SQLite it is the whole
+     * database, which takes one writer at a time. There the turn's transaction
+     * held the write lock, the tool's `REQUIRES_NEW` asked for it on a second
+     * connection, waited out the busy timeout twice over and failed at commit:
+     * every tracker tool an agent called from a chat came back to the model as
+     * `Unable to commit against JDBC Connection`, sixty seconds later, whatever
+     * the tool had actually answered - including the sentence naming the title
+     * limit, which had been composed and was then thrown away by the commit.
+     *
+     * So nothing here is transactional, and what has to be written is written
+     * either side of it: [beginSend] before, [finishSend] after. It is the shape
+     * `ChatStreamAPI` was already composed in, said once for both callers.
      */
-    @Transactional
-    fun send(id: Long, text: String): ChatExchange {
-        val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
-        val message = text.trim().ifEmpty { throw ChatMessageEmptyException() }
-        val modelId = session.modelId ?: throw ChatModelNotChosenException()
-
-        val thread = history.findByConversationId(session.conversationId)
-        history.saveAll(session.conversationId, thread + UserMessage(message))
-        session.lastMessageAt = OffsetDateTime.now()
-        val into = recording(session)
-        recordSaid(session, into, message)
-
-        val turns = briefed(session) +
-            thread.map { ChatTurn(role(it), it.text.orEmpty()) } +
-            recalled(into) +
-            ChatTurn("user", message)
-        // An agent may need its tools before it can answer; a bare model cannot.
-        val asked = session.agentId?.let { agents.findByIdOrNull(it) }
-        return when (
-            val answer = if (asked == null) {
-                models.complete(modelId, turns)
-            } else {
-                conversation.answer(modelId, asked, turns, into)
-            }
-        ) {
-            is ChatCompletion.Failed -> throw ChatModelUnusableException(answer.reason)
-            // The loop runs tools to a conclusion, so nothing reaching here is
-            // still asking for one.
-            is ChatCompletion.CalledTools ->
-                throw ChatModelUnusableException("The model asked for a tool that could not be run")
-            is ChatCompletion.Answered -> {
-                history.saveAll(
-                    session.conversationId,
-                    history.findByConversationId(session.conversationId) + AssistantMessage(answer.content),
-                )
-                session.lastMessageAt = OffsetDateTime.now()
-                recordAnswer(session, into, answer.content)
-                ChatExchange(session, answer.content, answer.millis)
-            }
+    fun ask(start: ChatSendStart): ChatCompletion =
+        if (start.agentId == null) {
+            models.complete(start.modelId, start.turns)
+        } else {
+            // An agent may need its tools before it can answer; a bare model cannot.
+            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId)
         }
-    }
 
     /**
      * The first half of a send: everything settled before the model is asked.
@@ -629,6 +608,3 @@ data class ChatSendStart(
      */
     val llmSessionId: Long? = null,
 )
-
-/** What one send produced: the answer, and how long the model took over it. */
-data class ChatExchange(val session: ChatSession, val answer: String, val millis: Long)

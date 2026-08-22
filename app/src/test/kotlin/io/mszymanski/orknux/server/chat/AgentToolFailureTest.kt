@@ -68,6 +68,18 @@ import java.util.concurrent.CopyOnWriteArrayList
  * its own — the shape `ScheduledTriggerOccurrence` uses for scheduled triggers.
  * And a title too long for the column is refused by the tool, in a sentence
  * naming the limit, so the ordinary case never reaches the database at all.
+ *
+ * A third one holds it on SQLite, and this class is where it was found. Both
+ * tests here failed on that engine and took sixty seconds each to do it: a
+ * turn was one transaction from the message to the answer, so the tool's own
+ * transaction was a second writer, and SQLite takes one at a time. It waited
+ * out the busy timeout and failed at commit — which meant the refusal below
+ * had been composed, correctly, and was then replaced by `Unable to commit
+ * against JDBC Connection` on its way back to the model. So the model is
+ * asked outside any transaction now, the way the streaming answer already did
+ * it, and the two engines answer the same. Run this class under
+ * `-Dorknux.test.database=sqlite` as well; on Postgres a held transaction is
+ * only slow.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester

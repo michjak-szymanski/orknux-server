@@ -43,6 +43,28 @@ enum class IssueStatus {
 }
 
 /**
+ * What an audit line calls a move to this status.
+ *
+ * Beside the enum rather than at either door, because both doors write that
+ * line and both had the same third value wrong. Each asked
+ * `if (wanted == CLOSED) "closed" else "reopened"`, which is a question with
+ * two answers being put to something with three - so every issue anybody picked
+ * up was recorded as having been reopened, in the browser and through the tools
+ * alike. A word per value, decided once, is what stops the next value added
+ * here being wrong in two places at the same time.
+ *
+ * Reopening is the one that needs to know where it came from. Only a closed
+ * issue can be reopened; one moved back to open from in progress was put down,
+ * which is a different thing to have happened and reads as a falsehood under
+ * either of the other two words.
+ */
+fun IssueStatus.auditedAs(was: IssueStatus): String = when (this) {
+    IssueStatus.CLOSED -> "closed"
+    IssueStatus.IN_PROGRESS -> "picked up"
+    IssueStatus.OPEN -> if (was == IssueStatus.CLOSED) "reopened" else "put back to open"
+}
+
+/**
  * What kind of thing an issue is assigned to.
  *
  * A person is the obvious one and not the only one: this is a product where

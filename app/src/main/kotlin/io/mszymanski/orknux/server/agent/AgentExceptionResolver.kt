@@ -29,6 +29,7 @@ class AgentExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is SkillCatalogInUseException,
             is ToolInUseException,
             is AgentModelUnusableException,
+            is AgentMemoryShareUnusableException,
             -> ErrorType.BAD_REQUEST
 
             is AgentNotFoundException,

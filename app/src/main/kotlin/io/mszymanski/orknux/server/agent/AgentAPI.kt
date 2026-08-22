@@ -1,6 +1,9 @@
 package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.llm.CHARS_PER_TOKEN
+import io.mszymanski.orknux.server.llm.ResolvedMemoryBudget
+import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -13,6 +16,7 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.graphql.data.method.annotation.SchemaMapping
 import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
@@ -28,10 +32,46 @@ class AgentAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
     private val models: ModelService,
     private val revisions: ComponentRevisionRecorder,
+    private val budgets: SessionMemoryBudgets,
 ) {
 
     /** The agent, with what its model is called: the screen shows the name. */
     private fun describe(agent: Agent) = AgentView(agent, agent.modelId?.let { models.model(it)?.name })
+
+    /**
+     * What this agent's memory share works out to against the model it uses.
+     *
+     * A field of its own rather than part of [describe], so the list of a
+     * workspace's agents does not resolve a model and a budget per row to fill
+     * in something only the settings screen asks for.
+     */
+    @SchemaMapping(typeName = "Agent", field = "memoryBudget")
+    fun memoryBudget(agent: AgentView): SessionMemoryBudgetView =
+        SessionMemoryBudgetView(budgets.resolve(agent.memoryShare, agent.modelId))
+
+    /**
+     * What a share would work out to, before anybody saves it.
+     *
+     * Asked of a workspace and a model rather than of an agent, because the
+     * screen setting this has an unsaved form in front of it: the model may
+     * have been changed in the same edit, and a preview that read the stored
+     * agent would answer for the model it used to have.
+     *
+     * It never fails on a share that cannot work - it reports the refusal that
+     * saving would raise, in the same words, so the slider can say why while it
+     * is being dragged instead of only once Save has been pressed. The mutation
+     * is what actually refuses, from the same calculation.
+     */
+    @QueryMapping
+    fun memoryBudget(
+        @Argument workspaceId: Long,
+        @Argument modelId: Long?,
+        @Argument share: Int?,
+    ): SessionMemoryBudgetView {
+        requireWorkspaceAccess(workspaceId)
+        val model = modelId?.takeIf { models.model(it)?.workspaceId == workspaceId }
+        return SessionMemoryBudgetView(budgets.resolve(share, model))
+    }
 
     @QueryMapping
     fun workspaceAgents(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): AgentPage {
@@ -94,6 +134,7 @@ class AgentAPI(
         val previousCatalogs = agent.memoryCatalogs.toList()
         val previousSkillCatalogs = agent.skillCatalogs.toList()
         val previousTools = agent.tools.toList()
+        val previousShare = agent.memoryShare
 
         agent.name = name
         agent.description = input.description?.trim()?.ifEmpty { null }
@@ -111,6 +152,26 @@ class AgentAPI(
             }
             model.id
         }
+
+        /*
+         * Refused here rather than found out at the provider.
+         *
+         * Raising this is not free and not obviously bounded: a share too large
+         * for the window is a request the provider rejects, on somebody's turn,
+         * after the money for the tokens that did fit has been spent. The
+         * refusal needs the model, so it is judged after the model is set and
+         * against the one being saved rather than the one that was there.
+         *
+         * Sent whenever the form saves, so null is "the default" rather than
+         * "not mentioned" - the same rule the icon follows, and what lets the
+         * screen put it back to the default it started on.
+         */
+        agent.memoryShare = input.memoryShare
+        if (input.memoryShare != null) {
+            budgets.resolve(input.memoryShare, agent.modelId).refusal
+                ?.let { throw AgentMemoryShareUnusableException(it) }
+        }
+
         if (input.mcpServers != null) {
             // Keep the given order, dropping blanks and repeats.
             agent.mcpServers = input.mcpServers.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
@@ -146,6 +207,21 @@ class AgentAPI(
                 agent.workspaceId,
                 WorkspaceAuditCategory.AGENT,
                 if (named == null) "Agent ${agent.name} model cleared" else "Agent ${agent.name} model set to $named",
+            )
+        }
+        /*
+         * Its own entry, because it changes what every turn costs.
+         *
+         * A share raised is more of the window bought on every request this
+         * agent makes from then on, and a bill that grew is a question somebody
+         * asks the audit log rather than the agent.
+         */
+        if (agent.memoryShare != previousShare) {
+            auditRecorder.record(
+                agent.workspaceId,
+                WorkspaceAuditCategory.AGENT,
+                agent.memoryShare?.let { "Agent ${agent.name} memory set to $it% of its model's context window" }
+                    ?: "Agent ${agent.name} memory reset to the default",
             )
         }
         // A grant is worth an entry of its own: it changes what an agent can read.
@@ -347,6 +423,14 @@ data class UpdateAgentInput(
     val tools: List<String>? = null,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String? = null,
+    /**
+     * How much of its model's context window a session may take back, as a
+     * percentage.
+     *
+     * Sent whenever the form saves, so null is the built-in default rather than
+     * "leave it alone" - the icon's rule, and what lets the screen put it back.
+     */
+    val memoryShare: Int? = null,
 )
 
 data class AgentView(
@@ -370,6 +454,8 @@ data class AgentView(
     val tools: List<String>,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String?,
+    /** Its share of the model's context window; null is the built-in default. */
+    val memoryShare: Int?,
 ) {
     constructor(agent: Agent, modelName: String? = null) : this(
         id = requireNotNull(agent.id),
@@ -388,6 +474,49 @@ data class AgentView(
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),
         icon = agent.icon,
+        memoryShare = agent.memoryShare,
+    )
+}
+
+/**
+ * A memory budget as the API reports it: in tokens, never in characters.
+ *
+ * The counts are characters everywhere inside, because that is what the
+ * recorder can count and what every model agrees on. They are converted here
+ * and nowhere else. Whoever sets this is looking at a context window measured
+ * in tokens and will read any number beside it as tokens whatever the label
+ * says, so a surface that reported characters would be read wrong by a factor
+ * of four every time - and being wrong in that direction means asking for four
+ * times the memory and paying for it.
+ *
+ * It is an approximation and says so in the schema. There is no tokeniser here:
+ * it would have to be the provider's, it would differ per model, and it would
+ * be run over a whole session on every turn to answer a question that only
+ * decides where to cut.
+ */
+data class SessionMemoryBudgetView(
+    val share: Int?,
+    val contextWindow: Int?,
+    val derived: Boolean,
+    val totalTokens: Int,
+    val conversationTokens: Int,
+    val toolResultTokens: Int,
+    val longestResultTokens: Int,
+    val turns: Int,
+    val toolResults: Int,
+    val refusal: String?,
+) {
+    constructor(resolved: ResolvedMemoryBudget) : this(
+        share = resolved.share,
+        contextWindow = resolved.contextWindow,
+        derived = resolved.derived,
+        totalTokens = resolved.budget.totalChars / CHARS_PER_TOKEN,
+        conversationTokens = resolved.budget.memoryChars / CHARS_PER_TOKEN,
+        toolResultTokens = resolved.budget.recallChars / CHARS_PER_TOKEN,
+        longestResultTokens = resolved.budget.longestResult / CHARS_PER_TOKEN,
+        turns = resolved.budget.turns,
+        toolResults = resolved.budget.results,
+        refusal = resolved.refusal,
     )
 }
 
@@ -419,3 +548,12 @@ class AgentNameInvalidException : RuntimeException("An agent name is required")
 
 /** A model chosen for an agent has to be one this workspace can reach. */
 class AgentModelUnusableException(message: String) : RuntimeException(message)
+
+/**
+ * A share of a context window that could not work, refused where it was set.
+ *
+ * Carries the sentence `SessionMemoryBudgets` wrote, which names the model, its
+ * window and what it reserves for its answer - because "too large" tells nobody
+ * what would fit.
+ */
+class AgentMemoryShareUnusableException(message: String) : RuntimeException(message)

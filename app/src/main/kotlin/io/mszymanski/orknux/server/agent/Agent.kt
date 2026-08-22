@@ -68,6 +68,27 @@ class Agent(
     var modelId: Long? = null,
 
     /**
+     * How much of that model's context window a session may take back, as a
+     * percentage of it.
+     *
+     * Null is the built-in default, which is the five numbers this used to be
+     * five constants for - so an agent nobody has touched carries exactly what
+     * it carried before there was a setting.
+     *
+     * A share rather than a count of tokens, and on the agent rather than
+     * anywhere else, because a budget is two things owned by two rows: the
+     * window is the model's and is already recorded on it, and how much of that
+     * window is worth spending on remembering depends on what this agent's
+     * tools give back. One agent reading whole files and another reading issue
+     * lists can point at the same model and want different answers, and neither
+     * of them wants the answer an installation-wide setting would give both.
+     * `SessionMemoryBudget` holds the whole of the reasoning and the
+     * arithmetic; this column holds the one number a person sets.
+     */
+    @Column(name = "memory_share")
+    var memoryShare: Int? = null,
+
+    /**
      * Whether this agent may ask orknux about orknux.
      *
      * The built-in server, which is not one of [mcpServers] and never appears

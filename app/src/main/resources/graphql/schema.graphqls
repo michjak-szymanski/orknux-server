@@ -289,6 +289,20 @@ type Query {
     workflowObject(id: ID!): WorkflowObject
     agent(id: ID!): Agent
     """
+    What a share of a model's context window would work out to, before it is saved.
+
+    Asked of a workspace and a model rather than of an agent, because the form
+    setting this may have changed the model in the same edit and a preview read
+    off the stored agent would answer for the model it used to have. A null
+    share is the built-in default, and a null model is what an agent with none
+    chosen gets.
+
+    It never fails. A share that could not be saved comes back with `refusal`
+    set to the sentence `updateAgent` would raise, so a slider can say why
+    while it is being dragged.
+    """
+    memoryBudget(workspaceId: ID!, modelId: ID, share: Int): SessionMemoryBudget!
+    """
     One workspace's LLM sessions, most recently spoken in first.
 
     There is no mutation beside this. A session appears the first time an agent
@@ -1458,6 +1472,79 @@ type Agent {
     tools: [String!]!
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
+    """
+    How much of its model's context window one of its sessions may take back,
+    as a percentage of that window. Null is the built-in default.
+
+    One number rather than five. How many turns come back, how much of them,
+    how much of what its tools returned and how much of any one result are all
+    worked out from this, because somebody setting it is answering "how much
+    conversation should it carry" and not five separate questions.
+
+    A share rather than a count, and on the agent rather than the installation,
+    because a budget is a share of a window: the window belongs to the model
+    and is recorded on it, and how much of it is worth spending on remembering
+    depends on what this agent's tools give back.
+    """
+    memoryShare: Int
+    "What that share works out to against the model this agent uses now."
+    memoryBudget: SessionMemoryBudget!
+}
+
+"""
+What a session may put back in front of a model, worked out.
+
+Every count is in tokens and every one of them is approximate: they are
+measured in characters, which is the unit every model agrees on and the only
+one that can be counted without the provider's own tokeniser, and reported here
+at four characters to the token.
+"""
+type SessionMemoryBudget {
+    "The share that was asked for. Null when nothing is set and the default applies."
+    share: Int
+    """
+    The context window of the model in question, in tokens.
+
+    Null when that model has none recorded or none is chosen, in which case a
+    share cannot be worked out and the built-in default is what applies.
+    """
+    contextWindow: Int
+    "True when the share and the window produced the numbers below; false when the built-in default did."
+    derived: Boolean!
+    "What a session may add to one prompt altogether."
+    totalTokens: Int!
+    "Of that, what turns somebody said may take."
+    conversationTokens: Int!
+    """
+    And what tool results may take.
+
+    A separate allowance rather than a slice of the one above: a single listing
+    of a workspace's issues measures ten thousand tokens against everything
+    anybody ever said, so sharing one allowance it either takes all of it or is
+    the first thing dropped.
+    """
+    toolResultTokens: Int!
+    "The most any one tool result may take; a longer one is cut, and the cut says so."
+    longestResultTokens: Int!
+    "How many said turns come back at most."
+    turns: Int!
+    """
+    How many tool lookups are considered.
+
+    The one number that does not follow the share, because it is a ceiling on a
+    query rather than an allowance: repeats are dropped after they are read, so
+    it is deliberately more than can fit.
+    """
+    toolResults: Int!
+    """
+    Why this share cannot be saved, or null when it can.
+
+    A share too large for the window is a request the provider refuses, on
+    somebody's turn, after the tokens that did fit have been paid for. The
+    preview reports the refusal so a form can say why before Save; the mutation
+    raises it, from the same calculation.
+    """
+    refusal: String
 }
 
 type AgentPage {
@@ -1872,6 +1959,19 @@ input UpdateAgentInput {
     tools: [String!]
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
+    """
+    How much of its model's context window a session may take back, as a
+    percentage of it, between 1 and 50.
+
+    Sent whenever the form saves, so null is the built-in default rather than
+    "leave it alone" — the rule the icon follows, and what lets a screen put it
+    back to the default.
+
+    A share the chosen model cannot give is refused here rather than at the
+    provider: ask `memoryBudget` what it works out to and it will say why in
+    the same words.
+    """
+    memoryShare: Int
 }
 
 enum WorkspaceOperationType {

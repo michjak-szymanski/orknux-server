@@ -139,12 +139,19 @@ class LlmSessionRecorder(
      *
      * Bounded twice, because a session is designed to outlive things and will
      * eventually be longer than any context window. The most recent turns are
-     * the ones kept: [MEMORY_TURNS] of them at most, and only while they fit in
-     * [MEMORY_CHARS] - counted from the newest backwards, so the cut falls at
-     * the oldest turn rather than in the middle of the newest.
+     * the ones kept: [SessionMemoryBudget.turns] of them at most, and only
+     * while they fit in [SessionMemoryBudget.memoryChars] - counted from the
+     * newest backwards, so the cut falls at the oldest turn rather than in the
+     * middle of the newest.
+     *
+     * @param budget how much this agent's model may be given back. Defaulted
+     *   rather than required, and the default is the one an agent that has been
+     *   given no share gets - so a caller with no agent in hand, and every
+     *   caller written before budgets existed, asks for exactly what it always
+     *   asked for.
      */
-    fun remembered(session: Long): List<ChatTurn> =
-        tail(session) { events.latest(session, SAID, PageRequest.of(0, MEMORY_TURNS)) }
+    fun remembered(session: Long, budget: SessionMemoryBudget = SessionMemoryBudget.DEFAULT): List<ChatTurn> =
+        tail(session, budget) { events.latest(session, SAID, PageRequest.of(0, budget.turns)) }
             .map(::turn)
             .map { said -> ChatTurn(said.role, said.content) }
 
@@ -172,11 +179,19 @@ class LlmSessionRecorder(
      * same kinds, same counts, same order - so the turns that come back are the
      * tail that was copied rather than something merely like it, and the calls
      * are threaded through it without ever counting as part of it.
+     *
+     * @param budget the same one the copy was taken under, for that reason. A
+     *   page shaped by a different allowance from the prompt it is a reading of
+     *   would show turns that were never carried, or hide ones that were.
      */
-    fun readBefore(session: Long, before: OffsetDateTime): List<RememberedTurn> =
+    fun readBefore(
+        session: Long,
+        before: OffsetDateTime,
+        budget: SessionMemoryBudget = SessionMemoryBudget.DEFAULT,
+    ): List<RememberedTurn> =
         withCalls(
             session,
-            tail(session) { events.latestBefore(session, SAID, before, PageRequest.of(0, MEMORY_TURNS)) },
+            tail(session, budget) { events.latestBefore(session, SAID, before, PageRequest.of(0, budget.turns)) },
         ).map(::turn)
 
     /**
@@ -202,10 +217,11 @@ class LlmSessionRecorder(
      * listing of one workspace's issues measured forty thousand characters
      * against a memory of twenty-four thousand for everything anybody ever
      * said, so a result sharing that allowance either takes all of it or is the
-     * first thing dropped. So: [RECALL_RESULTS] lookups at most,
-     * [RECALL_LONGEST] characters of any one of them, [RECALL_CHARS] across all
-     * of them, and newest first - the answer to "check that again" is in the
-     * last lookup rather than the first.
+     * first thing dropped. So: [SessionMemoryBudget.results] lookups at most,
+     * [SessionMemoryBudget.longestResult] characters of any one of them,
+     * [SessionMemoryBudget.recallChars] across all of them, and newest first -
+     * the answer to "check that again" is in the last lookup rather than the
+     * first.
      *
      * Cut rather than dropped where one is too long, and the cut says so and
      * names the tool to call for the rest. A model told it is holding part of
@@ -213,8 +229,8 @@ class LlmSessionRecorder(
      * list cannot tell that it is short, which is the failure this exists to
      * stop rather than a new spelling of it.
      */
-    fun recalled(session: Long): List<ChatTurn> {
-        val kept = results(session)
+    fun recalled(session: Long, budget: SessionMemoryBudget = SessionMemoryBudget.DEFAULT): List<ChatTurn> {
+        val kept = results(session, budget)
         if (kept.isEmpty()) return emptyList()
         return listOf(ChatTurn(ASKED, RECALL_HEADER + kept.joinToString("\n\n")))
     }
@@ -234,21 +250,21 @@ class LlmSessionRecorder(
      * this class makes: the model is asked with what was said, and that is
      * exactly what it was asked with before any of this existed.
      */
-    private fun results(session: Long): List<String> {
+    private fun results(session: Long, budget: SessionMemoryBudget): List<String> {
         val recent = try {
-            events.latestResults(session, LlmSessionEventKind.TOOL, PageRequest.of(0, RECALL_RESULTS))
+            events.latestResults(session, LlmSessionEventKind.TOOL, PageRequest.of(0, budget.results))
         } catch (failure: Exception) {
             log.warn("What the tools in session {} returned could not be read back", session, failure)
             return emptyList()
         }
 
         val seen = mutableSetOf<String>()
-        var room = RECALL_CHARS
+        var room = budget.recallChars
         return recent
             .asSequence()
             .mapNotNull { event -> event.result?.takeIf { it.isNotBlank() }?.let { event to it } }
             .filter { (event, _) -> seen.add(event.actor + " " + event.content.orEmpty()) }
-            .map { (event, got) -> lookup(event, got) }
+            .map { (event, got) -> lookup(event, got, budget.longestResult) }
             .takeWhile { written ->
                 room -= written.length
                 room >= 0
@@ -265,13 +281,13 @@ class LlmSessionRecorder(
      * two different answers, and a model reading a block of them has to be able
      * to tell which is which.
      */
-    private fun lookup(event: LlmSessionEvent, got: String): String {
+    private fun lookup(event: LlmSessionEvent, got: String, longest: Int): String {
         val asked = event.content?.takeIf { it.isNotBlank() } ?: "{}"
-        val body = if (got.length <= RECALL_LONGEST) {
+        val body = if (got.length <= longest) {
             got
         } else {
-            got.take(RECALL_LONGEST) +
-                "\n[${got.length - RECALL_LONGEST} more characters were not kept. " +
+            got.take(longest) +
+                "\n[${got.length - longest} more characters were not kept. " +
                 "Call ${event.actor} again if you need them.]"
         }
         return "${event.actor} $asked\n$body"
@@ -285,7 +301,11 @@ class LlmSessionRecorder(
      * Two copies of them would be two answers to "what was said", and the
      * second one to drift would be a chat labelling turns it did not carry.
      */
-    private fun tail(session: Long, read: () -> List<LlmSessionEvent>): List<LlmSessionEvent> {
+    private fun tail(
+        session: Long,
+        budget: SessionMemoryBudget,
+        read: () -> List<LlmSessionEvent>,
+    ): List<LlmSessionEvent> {
         val recent = try {
             read()
         } catch (failure: Exception) {
@@ -295,7 +315,7 @@ class LlmSessionRecorder(
             return emptyList()
         }
 
-        var room = MEMORY_CHARS
+        var room = budget.memoryChars
         return recent
             .asSequence()
             .mapNotNull { event -> event.content?.takeIf { it.isNotBlank() }?.let { event to it } }
@@ -405,50 +425,16 @@ class LlmSessionRecorder(
         /** What a note is signed with; nothing said it. */
         const val SYSTEM = "system"
 
-        /** How many said turns come back at most. */
-        const val MEMORY_TURNS = 40
-
-        /**
-         * And how much of them, in characters.
+        /*
+         * The five numbers that used to be here are [SessionMemoryBudget]'s.
          *
-         * A rough stand-in for a token budget: the count is the thing every
-         * model agrees on, and this is a ceiling on what a session may add to a
-         * prompt rather than an attempt to fill one exactly.
+         * They were sized against one installation's models and one set of
+         * tools, and could not be changed without a rebuild - which is #226.
+         * They are still exactly these numbers for an agent that has been given
+         * no share; what moved is who gets to say otherwise, and the reasoning
+         * for where that setting lives is on [SessionMemoryBudget] rather than
+         * repeated here.
          */
-        const val MEMORY_CHARS = 24_000
-
-        /**
-         * How many lookups may be recalled at most.
-         *
-         * A ceiling on the query rather than the bound that matters, which is
-         * [RECALL_CHARS]. Deliberately more than will usually fit, because
-         * duplicates are dropped after they are read: a smaller number would
-         * mean an agent that asked one thing five times recalls nothing else.
-         */
-        const val RECALL_RESULTS = 24
-
-        /**
-         * And how much of them altogether, in characters.
-         *
-         * On top of [MEMORY_CHARS] rather than inside it. A result is not a
-         * turn and must not compete with one: sharing the allowance, a single
-         * large listing either crowds out everything that was said or is itself
-         * the first thing cut, and both of those are the bug this fixes wearing
-         * a different hat.
-         */
-        const val RECALL_CHARS = 16_000
-
-        /**
-         * And how much of any single one.
-         *
-         * Sized against what the tools here actually return: a workspace's open
-         * issues measured under five thousand characters and comes back whole,
-         * while every issue in it measured over forty thousand and comes back
-         * cut. Two ordinary lookups still fit inside [RECALL_CHARS], which is
-         * the case worth sizing for - one enormous result leaving no room for
-         * the next is the same crowding-out by another route.
-         */
-        const val RECALL_LONGEST = 8_000
 
         /**
          * What the block of recalled lookups opens with.

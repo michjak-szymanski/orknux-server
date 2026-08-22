@@ -17,6 +17,21 @@ have failed.
 
 ### Added
 
+- **How much conversation an agent carries is now a setting, and it is one
+  number.** What a session put back in front of a model was five constants in
+  the source - forty turns, twenty-four thousand characters of them, and three
+  more bounding what its tools had returned - sized against one installation's
+  models and one installation's tools, and unchangeable without a rebuild. An
+  agent now has a **memory share**: how much of its model's context window one
+  of its sessions may take back, as a percentage of that window. How many turns
+  come back, how much of them, and how much of what its tools returned all
+  follow from that one number. A share the chosen model cannot give is refused
+  when it is saved, naming what that model could give, rather than becoming a
+  request the provider rejects halfway through somebody's turn. The API reports
+  the budget in tokens rather than in the characters it counts, at four
+  characters to the token. An agent that sets nothing carries exactly what it
+  carried before.
+
 - **A picture in the manual opens at the size it was taken.** The screenshots are
   captured at 1440 and drawn into a column about half that, so the detail being
   pointed at was not legible. Clicking one now opens it over the page - Escape,
@@ -26,9 +41,8 @@ have failed.
 - **"Go to" offers things to do, as well as everywhere to go.** Create issue,
   create function and create condition, shown before anything is typed and marked
   with a plus so they read differently from a destination. Each is registered on
-  the page it starts, so a fourth is a line. The box is called **Search or
-  create...** now, because "Go to" stopped being true the moment it could make
-  something.
+  the page it starts, so a fourth is a line. The box is called **Quick actions**
+  now, because "Go to" stopped being true the moment it could make something.
 
 - **The lines in a workflow point where the run goes.** An edge a run travels
   ends in an arrowhead at the target, and the failure branch's is red. The dashed

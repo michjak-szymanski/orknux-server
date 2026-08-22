@@ -27,6 +27,22 @@ have failed.
 
 ### Fixed
 
+- **A cron of seconds is now a schedule this actually keeps.** Six fields
+  parsed and saved the whole time, so a trigger of every ten seconds looked
+  supported — and then fired once a minute, because the tick ran once a minute
+  and started only the next occurrence it found. The tick now runs on
+  `ORKNUX_SCHEDULER_TICK_INTERVAL` (ten seconds by default) and starts every
+  occurrence that came due since the last round, each stamped with the moment it
+  was due rather than the moment the round happened. Catching up is bounded to a
+  minute, so a trigger switched back on after a fortnight does not start a
+  fortnight of runs.
+
+- **A schedule that can never come round is refused when it is saved.**
+  `0 0 30 2 *` is a well-formed expression naming the thirtieth of February, so
+  it saved, sat in the list looking like a schedule and was skipped on every tick
+  for ever. It is refused now, and in different words from a malformed one —
+  there is no typo to go looking for.
+
 - **Shift + Enter grows the message box, and it grows all the way to the top.**
   It was capped at two hundred pixels, so a message of more than about ten lines
   was written through a letterbox. The cap is now measured rather than chosen:

@@ -244,6 +244,7 @@ section is why.
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
 | `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
 | `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |
+| `ORKNUX_SCHEDULER_TICK_INTERVAL` | How often scheduled triggers are looked at, and so the finest schedule this installation can keep. A cron of seconds is accepted whatever this says; it fires whatever came due since the last tick, so lower this to make a schedule of seconds run like one. Every tick costs a query per enabled scheduled trigger. | `10s` | No |
 
 ## What a workspace's code may do
 

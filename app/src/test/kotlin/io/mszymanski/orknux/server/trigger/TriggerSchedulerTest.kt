@@ -97,6 +97,82 @@ class TriggerSchedulerTest(
         assertThat(executions.count()).isEqualTo(after)
     }
 
+    /**
+     * A schedule of seconds, actually kept.
+     *
+     * Six fields parsed and saved the whole time, so this looked supported and
+     * was not: the tick fired the single next occurrence, so a cron of every
+     * ten seconds ran once a tick whatever it said. Firing what came due is the
+     * difference between a schedule and a schedule's first sixth.
+     *
+     * Asserted a minute on, with the trigger stamped as having last fired at
+     * the start of it, so the window holds exactly six occurrences.
+     */
+    @Test
+    fun `a cron of seconds fires every occurrence that came due`() {
+        val id = scheduled("Every Ten Seconds", "*/10 * * * * *")
+        instance(id)
+
+        val start = OffsetDateTime.now().withNano(0)
+        triggers.findAll().single().let {
+            it.lastFiredAt = start
+            triggers.save(it)
+        }
+        scheduler.tick(start.plusMinutes(1))
+
+        assertThat(executions.count()).isEqualTo(6)
+    }
+
+    /**
+     * And a schedule nobody has been running is not a backlog to work through.
+     *
+     * Firing only the next occurrence used to be its own throttle. Now that
+     * every due one fires, a trigger switched off for a fortnight would start a
+     * fortnight of runs the moment it came back - so the window is bounded, and
+     * what it missed stays missed.
+     */
+    @Test
+    fun `a trigger that has not fired for a fortnight does not replay it`() {
+        val id = scheduled("Every Minute", "* * * * *")
+        instance(id)
+
+        val now = OffsetDateTime.now()
+        triggers.findAll().single().let {
+            it.lastFiredAt = now.minusDays(14)
+            triggers.save(it)
+        }
+        scheduler.tick(now)
+
+        // A minute of catch-up on a schedule of every minute is one occurrence,
+        // not twenty thousand.
+        assertThat(executions.count()).isLessThanOrEqualTo(2)
+    }
+
+    /**
+     * Each firing says when it was due, not when the round happened.
+     *
+     * It only shows once several fire together, which is exactly when it
+     * matters: six runs all stamped with the tick's own moment would say the
+     * schedule fired six times at once, which is not what happened.
+     */
+    @Test
+    fun `each occurrence carries its own moment`() {
+        val id = scheduled("Every Ten Seconds", "*/10 * * * * *")
+        instance(id)
+
+        val start = OffsetDateTime.now().withNano(0)
+        triggers.findAll().single().let {
+            it.lastFiredAt = start
+            triggers.save(it)
+        }
+        scheduler.tick(start.plusMinutes(1))
+
+        val fired = executions.findAll().mapNotNull { it.input }
+        assertThat(fired).hasSize(6)
+        // Six different moments rather than six copies of the tick's.
+        assertThat(fired.toSet()).hasSize(6)
+    }
+
     @Test
     fun `the run is handed the trigger's payload, with the firing on top`() {
         val id = createWithPayload(

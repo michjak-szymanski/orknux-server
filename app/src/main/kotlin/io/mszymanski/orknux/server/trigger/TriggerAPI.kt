@@ -25,6 +25,7 @@ import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
 import tools.jackson.core.JacksonException
 import tools.jackson.databind.ObjectMapper
+import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
 /**
@@ -334,6 +335,21 @@ class TriggerAPI(
                 val cron = trigger.cron ?: throw TriggerScheduleRequiredException()
                 // Five fields is what a person writes; Spring wants six.
                 if (!CronExpression.isValidExpression(sixField(cron))) throw TriggerScheduleInvalidException(cron)
+                /*
+                 * And that it will ever come round.
+                 *
+                 * Parsing is not the same question. "0 0 30 2 *" is a valid
+                 * expression naming the thirtieth of February, and Spring
+                 * answers `next` with null rather than refusing it - so it
+                 * saved, sat in the list looking like a schedule, and was
+                 * silently skipped on every tick for ever. A trigger that can
+                 * never fire is worth refusing at the door, because the only
+                 * other way to find out is to wait.
+                 */
+                val ever = runCatching {
+                    CronExpression.parse(sixField(cron)).next(OffsetDateTime.now())
+                }.getOrNull()
+                if (ever == null) throw TriggerScheduleUnreachableException(cron)
             }
 
             TriggerType.WEBHOOK -> {

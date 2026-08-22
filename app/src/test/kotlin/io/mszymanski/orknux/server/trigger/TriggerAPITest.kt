@@ -113,6 +113,43 @@ class TriggerAPITest(
         ).execute().errors().expect { it.message?.contains("is not a cron expression") == true }.verify()
     }
 
+    /**
+     * A cron that parses and never happens.
+     *
+     * The thirtieth of February is a well-formed expression, so it saved, sat
+     * in the list looking like a schedule, and was skipped on every tick for
+     * ever. Refused at the door, because the only other way to find out is to
+     * wait - and it is refused in different words from a typo, since there is
+     * nothing here to correct.
+     */
+    @Test
+    fun `refuses a cron that is well formed and never comes round`() {
+        graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Never", type: SCHEDULED, cron: "0 0 30 2 *"
+              }) { id }
+            }
+            """,
+        ).execute().errors().expect { it.message?.contains("never comes round") == true }.verify()
+    }
+
+    /** Six fields is a schedule of seconds, and it saves like any other. */
+    @Test
+    fun `accepts a cron with seconds`() {
+        graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Often", type: SCHEDULED,
+                cron: "*/10 * * * * *", timezone: "UTC"
+              }) { id event }
+            }
+            """,
+        ).execute().path("createTrigger.event").entity(String::class.java).isEqualTo("*/10 * * * * *")
+    }
+
     @Test
     fun `refuses an incoming trigger with no connection`() {
         graphQlTester.document(

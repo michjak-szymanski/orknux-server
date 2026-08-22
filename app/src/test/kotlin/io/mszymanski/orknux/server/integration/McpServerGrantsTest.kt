@@ -149,6 +149,129 @@ class McpServerGrantsTest(
         assertThat(messages()).contains("MCP Server unused removed")
     }
 
+    /**
+     * A rename carries the grants with it.
+     *
+     * The other door onto the same defect, and the one nobody expects to be
+     * destructive. Removing a server is deliberate; renaming is tidying. A
+     * rename that touched only the server would leave every agent holding a
+     * name matching nothing, and the capability would go without a word.
+     */
+    @Test
+    fun `a rename moves the grant onto every agent holding it`() {
+        val id = server("zendesk")
+        val reviewer = agent("Reviewer", "zendesk", "pagerduty")
+        val watcher = agent("Watcher", "zendesk")
+
+        rename(id, "zendesk-eu")
+
+        assertThat(agents.findByIdOrNullChecked(reviewer).mcpServers).containsExactly("zendesk-eu", "pagerduty")
+        assertThat(agents.findByIdOrNullChecked(watcher).mcpServers).containsExactly("zendesk-eu")
+        assertThat(messages()).contains(
+            "MCP Server zendesk renamed to zendesk-eu",
+            "MCP Server zendesk renamed to zendesk-eu for Reviewer",
+            "MCP Server zendesk renamed to zendesk-eu for Watcher",
+        )
+    }
+
+    /**
+     * Where it stood, not at the end.
+     *
+     * The grant list is ordered and shown in that order, so a server that
+     * jumped to the bottom would send somebody looking for what else had
+     * changed. A rename is not a re-grant.
+     */
+    @Test
+    fun `the moved grant keeps its place in the list`() {
+        val id = server("zendesk")
+        val held = agent("Reviewer", "pagerduty", "zendesk", "statuspage")
+
+        rename(id, "zendesk-eu")
+
+        assertThat(agents.findByIdOrNullChecked(held).mcpServers)
+            .containsExactly("pagerduty", "zendesk-eu", "statuspage")
+    }
+
+    /**
+     * An agent already carrying the new name as a stale grant does not end up
+     * holding the same server twice.
+     *
+     * The server's own name is unique in the workspace; a name left behind on
+     * an agent is not, so the collision this guards against is a grant from an
+     * earlier rename that was never cleaned up.
+     */
+    @Test
+    fun `following a rename onto a stale grant does not grant it twice`() {
+        val id = server("zendesk")
+        val held = agent("Reviewer", "zendesk", "zendesk-eu")
+
+        rename(id, "zendesk-eu")
+
+        assertThat(agents.findByIdOrNullChecked(held).mcpServers).containsExactly("zendesk-eu")
+    }
+
+    /**
+     * And the state each agent lost is recorded, as it is for a revocation.
+     *
+     * The snapshot has to hold the grant as it was, or the history says the
+     * agent always pointed where it now points.
+     */
+    @Test
+    fun `each agent whose grant moved has the state it lost recorded`() {
+        val id = server("zendesk")
+        val reviewer = agent("Reviewer", "zendesk")
+
+        rename(id, "zendesk-eu")
+
+        val written = revisions.findAll().filter {
+            it.kind == ComponentRevisionKind.AGENT && it.componentId == reviewer
+        }
+        assertThat(written).singleElement().satisfies({ assertThat(it.snapshot).contains("zendesk") })
+        assertThat(agents.findByIdOrNullChecked(reviewer).lastModifiedBy).isEqualTo("alice")
+    }
+
+    /**
+     * An agent holding a different server is untouched, which is what proves
+     * the question is about the name.
+     */
+    @Test
+    fun `a rename leaves an agent holding a different server alone`() {
+        val id = server("zendesk")
+        server("pagerduty")
+        val held = agent("Reviewer", "pagerduty")
+
+        rename(id, "zendesk-eu")
+
+        assertThat(agents.findByIdOrNullChecked(held).mcpServers).containsExactly("pagerduty")
+        assertThat(revisions.findAll().filter { it.componentId == held }).isEmpty()
+        assertThat(messages()).noneMatch { it.contains("for Reviewer") }
+    }
+
+    /** Everything else about a server is editable without disturbing a grant. */
+    @Test
+    fun `an edit that is not a rename moves nothing`() {
+        val id = server("zendesk")
+        val held = agent("Reviewer", "zendesk")
+
+        graphQlTester.document(
+            """mutation { updateMcpServer(id: $id, input: {
+                 name: "zendesk", address: "https://mcp.example.com/moved"
+               }) { id name } }""",
+        ).execute().path("updateMcpServer.name").entity(String::class.java).isEqualTo("zendesk")
+
+        assertThat(agents.findByIdOrNullChecked(held).mcpServers).containsExactly("zendesk")
+        assertThat(revisions.findAll().filter { it.componentId == held }).isEmpty()
+        assertThat(messages()).contains("MCP Server zendesk updated")
+    }
+
+    private fun rename(id: Long, to: String) {
+        graphQlTester.document(
+            """mutation { updateMcpServer(id: $id, input: {
+                 name: "$to", address: "https://mcp.example.com/$to"
+               }) { id name } }""",
+        ).execute().path("updateMcpServer.name").entity(String::class.java).isEqualTo(to)
+    }
+
     /** Everything said about this test's workspace, and nothing else's. */
     private fun messages() = audit.findAll().filter { it.workspaceId == workspaceId }.map { it.message }
 

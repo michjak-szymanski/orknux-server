@@ -43,6 +43,15 @@ have failed.
 
 ### Fixed
 
+- **Renaming an MCP server carries the grants with it.** They are held by
+  name, so a rename used to leave every agent pointing at a name that matched
+  nothing - and a grant matching no server is dropped in silence, so the
+  capability went while the agent's screen went on listing it. The same defect
+  the removal guard closed, reached by the door nobody expects to be
+  destructive: removing a server is deliberate, renaming one is tidying. The
+  grant now moves with the name, keeping its place in the agent's list, and each
+  agent it moved on is audited and versioned.
+
 - **A cron of seconds is now a schedule this actually keeps.** Six fields
   parsed and saved the whole time, so a trigger of every ten seconds looked
   supported — and then fired once a minute, because the tick ran once a minute

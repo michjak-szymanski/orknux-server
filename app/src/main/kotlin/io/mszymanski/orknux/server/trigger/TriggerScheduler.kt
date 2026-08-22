@@ -27,13 +27,20 @@ import javax.sql.DataSource
  * Fires the scheduled triggers.
  *
  * db-scheduler owns the clock: the tick below is a recurring task in the
- * database, so it runs once a minute however many instances are up, and a
- * restart picks it up where it was rather than firing everything again.
+ * database, so it runs on one instance however many are up, and a restart picks
+ * it up where it was rather than firing everything again.
  *
  * What the tick does is compare each enabled definition's cron with when it last
  * fired. That is what makes a trigger's schedule editable while the process
- * runs — nothing is registered per trigger, so nothing has to be unregistered —
- * and it is why the smallest schedule this supports is a minute.
+ * runs — nothing is registered per trigger, so nothing has to be unregistered.
+ *
+ * It used to fire the single next occurrence, once a minute, which made a
+ * minute the smallest schedule this could keep. Seconds parsed and were
+ * accepted the whole time — `sixField` passes six fields straight through — so
+ * a cron of every ten seconds saved cleanly and then fired six times less often
+ * than it said. Now the tick runs on [TriggerSchedulerProperties.tickInterval] and
+ * fires every occurrence that came due in the window, so a schedule finer than
+ * the tick arrives in bursts rather than being quietly thinned.
  */
 @Component
 class TriggerScheduler(
@@ -68,9 +75,41 @@ class TriggerScheduler(
                 continue
             }
 
+            /*
+             * How far back this is willing to look.
+             *
+             * A trigger that has never fired starts from now, so adding one
+             * does not replay the schedule it missed. One that has is bounded
+             * to [CATCH_UP] as well: firing the single next occurrence used to
+             * be its own throttle, and now that every due occurrence fires, a
+             * trigger switched back on after a fortnight would otherwise start
+             * a fortnight of runs at once.
+             */
             val since = trigger.lastFiredAt ?: now.minusMinutes(1)
-            val due = expression.next(since.atZoneSameInstant(zone).toOffsetDateTime())
-            if (due == null || due.isAfter(now)) continue
+            val from = maxOf(since, now.minus(CATCH_UP))
+
+            /*
+             * Everything due between then and now, and not merely the first of
+             * them. A cron of every ten seconds has six occurrences in a
+             * minute, and taking one of them is not a schedule running late, it
+             * is a schedule running at a sixth of what it says.
+             *
+             * [MOST_PER_TICK] is the second bound. It bites only where the cron
+             * is finer than the window, which after [CATCH_UP] means a schedule
+             * of seconds - and starting sixty runs in one round is a thing
+             * worth having a ceiling on whatever the arithmetic says.
+             */
+            val due = buildList {
+                var at = expression.next(from.atZoneSameInstant(zone).toOffsetDateTime())
+                while (at != null && !at.isAfter(now) && size < MOST_PER_TICK) {
+                    add(at)
+                    at = expression.next(at)
+                }
+            }
+            if (due.isEmpty()) continue
+            if (due.size == MOST_PER_TICK) {
+                log.warn("Trigger {} had more than {} occurrences due; the rest are dropped", trigger.name, MOST_PER_TICK)
+            }
 
             /*
              * The stamp is committed before the firing is attempted, and that
@@ -95,8 +134,15 @@ class TriggerScheduler(
             // on the next tick, so nothing is started until it has.
             if (!stamped) continue
 
-            runCatching { occurrence.fire(id, cron, now) }
-                .onFailure { log.error("Trigger {} could not be fired", trigger.name, it) }
+            /*
+             * Each occurrence is handed its own moment rather than the tick's,
+             * so a run started by the third of six firings says when it was due
+             * instead of reporting the six as having happened together.
+             */
+            due.forEach { at ->
+                runCatching { occurrence.fire(id, cron, at) }
+                    .onFailure { log.error("Trigger {} could not be fired", trigger.name, it) }
+            }
         }
     }
 
@@ -104,6 +150,27 @@ class TriggerScheduler(
         runCatching { ZoneId.of(timezone ?: "UTC") }.getOrDefault(ZoneId.of("UTC"))
 
     private companion object {
+        /**
+         * The furthest back a trigger will catch up.
+         *
+         * A minute, which is where a trigger that has never fired starts from,
+         * so the two agree. It is what keeps a schedule that was switched off
+         * and back on from starting everything it missed while it was away -
+         * an occurrence that did not happen is a gap in a schedule, and the
+         * fortnight of them is not work anybody still wants doing.
+         */
+        val CATCH_UP: Duration = Duration.ofMinutes(1)
+
+        /**
+         * And the most any one trigger may start in one round.
+         *
+         * Sixty, which is a schedule of every second catching up a whole
+         * minute - the finest thing [CATCH_UP] can produce. Anything above that
+         * is arithmetic nobody intended, and a ceiling that is never reached in
+         * normal running is exactly the one worth having.
+         */
+        const val MOST_PER_TICK = 60
+
         val log = LoggerFactory.getLogger(TriggerScheduler::class.java)
     }
 }
@@ -170,10 +237,21 @@ class ScheduledTriggerOccurrence(
 @ConditionalOnProperty(prefix = "db-scheduler", name = ["enabled"], havingValue = "true", matchIfMissing = true)
 class TriggerSchedulerConfig {
 
-    /** One task, one instance, every minute: whoever picks it up does the round. */
+    /**
+     * One task, one instance: whoever picks it up does the round.
+     *
+     * A fixed delay rather than a cron of its own, because what this needs is a
+     * rate and `fixedDelay` says one without a second cron expression to read
+     * alongside the ones it is firing. It is also the floor on how fine a
+     * trigger's own schedule can be: a cron of every second on a tick of ten
+     * fires ten at a time, ten seconds late.
+     */
     @Bean
-    fun scheduledTriggerTask(scheduler: TriggerScheduler): RecurringTask<Void> = Tasks
-        .recurring("scheduled-triggers", Schedules.cron("0 * * * * *"))
+    fun scheduledTriggerTask(
+        scheduler: TriggerScheduler,
+        properties: TriggerSchedulerProperties,
+    ): RecurringTask<Void> = Tasks
+        .recurring("scheduled-triggers", Schedules.fixedDelay(properties.tickInterval))
         .execute { _, _ ->
             runCatching { scheduler.tick() }
                 .onFailure { log.error("The scheduled triggers could not be fired", it) }
@@ -211,4 +289,18 @@ data class TriggerSchedulerProperties(
     val threads: Int = 4,
     /** How often the table is asked what is due. */
     val pollingInterval: Duration = Duration.ofSeconds(10),
+    /**
+     * How often the scheduled triggers are looked at, and so the finest
+     * schedule this installation can actually keep.
+     *
+     * Ten seconds, which matches [pollingInterval] because asking more often
+     * than the table is read buys nothing. It was a minute, which is what made
+     * a cron of seconds parse, save, and then fire at whatever rate the minute
+     * allowed.
+     *
+     * Lowering it is how an installation that genuinely wants a schedule of
+     * seconds gets one, and it is a real cost rather than a free switch: every
+     * tick is a query per enabled scheduled trigger.
+     */
+    val tickInterval: Duration = Duration.ofSeconds(10),
 )

@@ -128,6 +128,12 @@ db-scheduler:
   enabled: ${ORKNUX_SCHEDULER_ENABLED:true}
   threads: ${ORKNUX_SCHEDULER_THREADS:4}
   polling-interval: ${ORKNUX_SCHEDULER_POLLING_INTERVAL:10s}
+  # How often the scheduled triggers are looked at, and so the finest schedule
+  # this installation can keep. A cron of seconds is accepted whatever this
+  # says; it fires in bursts of whatever came due since the last tick, so
+  # lowering this is what turns a schedule of seconds into one that actually
+  # runs every few seconds. Every tick is a query per enabled scheduled trigger.
+  tick-interval: ${ORKNUX_SCHEDULER_TICK_INTERVAL:10s}
 
 orknux:
   # Filled in from the build, and reported on the monitoring screen.

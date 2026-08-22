@@ -240,5 +240,17 @@ class TriggerWebhookShapeRequiredException :
 class TriggerScheduleInvalidException(cron: String) :
     RuntimeException("\"$cron\" is not a cron expression this can schedule")
 
+/**
+ * A cron that parses and never comes round.
+ *
+ * Separate from [TriggerScheduleInvalidException] because it is a different
+ * thing to be told. The expression is well formed; the date it names does not
+ * happen - "0 0 30 2 *" is the thirtieth of February, and Spring answers it
+ * with no next occurrence rather than refusing it. Calling that invalid sends
+ * somebody hunting for a typo in something that has none.
+ */
+class TriggerScheduleUnreachableException(cron: String) :
+    RuntimeException("\"$cron\" is a cron expression that never comes round")
+
 class TriggerPayloadInvalidException :
     RuntimeException("The payload has to be a JSON object, so its fields can be read as input")

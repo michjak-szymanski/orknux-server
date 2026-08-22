@@ -1542,6 +1542,11 @@ type LlmSessionEvent {
     note.
     """
     content: String
+    """
+    What a call gave back, and null on every line that is not one - or on a call
+    whose tool has not answered, since the call is written before the tool runs.
+    """
+    result: String
     "ISO-8601 offset date-time."
     at: String!
 }

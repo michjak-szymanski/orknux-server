@@ -360,6 +360,7 @@ CREATE TABLE llm_session_event
     kind                         varchar(16) not null,
     actor                        varchar(200) not null,
     content                      text,
+    result                       text,
     at                           timestamp not null default CURRENT_TIMESTAMP,
     constraint llm_session_event_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE CASCADE
 );
@@ -1177,6 +1178,7 @@ CREATE INDEX idx_llm_model_provider ON llm_model (provider_id);
 CREATE UNIQUE INDEX llm_session_key_key ON llm_session (workspace_id, session_key);
 CREATE INDEX llm_session_recent_idx ON llm_session (workspace_id, last_event_at DESC);
 CREATE INDEX llm_session_event_session_idx ON llm_session_event (session_id, at, id);
+CREATE INDEX llm_session_event_result_idx ON llm_session_event (session_id, at DESC, id DESC) WHERE result IS NOT NULL;
 CREATE INDEX idx_mcp_server_workspace_id ON mcp_server (workspace_id);
 CREATE INDEX idx_memory_catalog ON memory (catalog_id);
 CREATE INDEX idx_memory_modified ON memory (catalog_id, last_modified_at DESC);

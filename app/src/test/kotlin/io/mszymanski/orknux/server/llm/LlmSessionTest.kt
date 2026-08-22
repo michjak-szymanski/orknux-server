@@ -228,6 +228,148 @@ class LlmSessionTest(
         }
     }
 
+    /**
+     * The bug this half exists for, in one session.
+     *
+     * A tool is called, and what it gave back is kept and handed back as data.
+     * Without it the next turn holds the model's own account of the lookup and
+     * not the lookup - which is how two models on one conversation both came to
+     * report issues as unlabelled that plainly carried a label, each correcting
+     * itself only when it called the tool again.
+     */
+    @Test
+    fun `what a tool returned is kept and comes back as data`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        val call = recorder.toolCalled(session, "orknux_issues", """{"status":"OPEN"}""")
+        recorder.toolReturned(call, "#220 labels=['p1']")
+
+        val recalled = recorder.recalled(session).single()
+        // Under the role a live result already arrives under, so nothing has to
+        // learn a second answer to what a result looks like.
+        assertThat(recalled.role).isEqualTo("user")
+        // The arguments come with it: two calls to one tool are two different
+        // answers, and a result alone does not say which question it answers.
+        assertThat(recalled.content).contains("orknux_issues")
+        assertThat(recalled.content).contains("""{"status":"OPEN"}""")
+        assertThat(recalled.content).contains("#220 labels=['p1']")
+
+        // And none of it is offered as something anybody said. What was said is
+        // the other half of a session's memory and is untouched by this.
+        assertThat(recorder.remembered(session)).isEmpty()
+    }
+
+    /**
+     * A call that never returned is a line to read and nothing to recall.
+     *
+     * The call is written before the tool runs, so one that hangs still leaves
+     * the transcript saying what was asked of it. That row is worth keeping and
+     * worth nothing in a prompt.
+     */
+    @Test
+    fun `a call whose tool never answered is not recalled`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        recorder.toolCalled(session, "orknux_issues", "{}")
+
+        assertThat(events.findAll().single().result).isNull()
+        assertThat(recorder.recalled(session)).isEmpty()
+    }
+
+    /**
+     * The same lookup twice is one answer, and the newer one is it.
+     *
+     * An agent that asked the same question in five rounds would otherwise
+     * spend the whole allowance on five copies of one list, which is the
+     * crowding-out this budget exists to prevent arriving by another route.
+     */
+    @Test
+    fun `the same lookup made twice is recalled once, as the newer answer`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issue", """{"issue":"220"}"""), "labels=[]")
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issue", """{"issue":"220"}"""), "labels=['p1']")
+
+        val recalled = recorder.recalled(session).single().content
+        assertThat(recalled).contains("labels=['p1']")
+        assertThat(recalled).doesNotContain("labels=[]")
+    }
+
+    /**
+     * A result too long to hand back whole is cut, and the cut says so.
+     *
+     * The failure being fixed is a model answering confidently out of something
+     * it does not have. A silently shortened list is that failure again: the
+     * model cannot tell it is short. Told, it can go and get the rest, so the
+     * marker names the tool to call.
+     */
+    @Test
+    fun `a result too long to keep is cut, and names the tool to ask again`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        val whole = "x".repeat(40_864)
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), whole)
+
+        val recalled = requireNotNull(recorder.recalled(session).single().content)
+        assertThat(recalled.length).isLessThan(whole.length)
+        assertThat(recalled).contains("more characters were not kept")
+        assertThat(recalled).contains("Call orknux_issues again")
+
+        // The record keeps all of it. The bound is on what a prompt may hold,
+        // not on what happened.
+        assertThat(events.findAll().single().result).isEqualTo(whole)
+    }
+
+    /**
+     * The design, stated: two allowances rather than one.
+     *
+     * A single listing of a workspace's issues measured forty thousand
+     * characters against twenty-four thousand for everything ever said. Sharing
+     * that allowance, one lookup either takes all of it or is the first thing
+     * dropped - so a conversation is not shortened by a lookup, and a lookup
+     * does not have to fit inside what is left of one.
+     */
+    @Test
+    fun `what was said and what came back are two separate allowances`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        recorder.userSaid(session, "alice", "Which of these carry p1?")
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), "x".repeat(20_000))
+        recorder.agentSaid(session, "Reviewer", "None of them do.")
+
+        assertThat(recorder.remembered(session)).hasSize(2)
+        assertThat(recorder.recalled(session)).hasSize(1)
+    }
+
+    /**
+     * And when there is more than fits, it is the oldest lookup that goes.
+     *
+     * "Check that again" is asked about the last thing that was looked up, so
+     * the recall is filled from the newest backwards and read forwards.
+     */
+    @Test
+    fun `the newest lookups survive the budget and are read oldest first`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        repeat(6) { page ->
+            recorder.toolReturned(
+                recorder.toolCalled(session, "orknux_issues", """{"page":$page}"""),
+                "page $page " + "x".repeat(7_000),
+            )
+        }
+
+        val recalled = requireNotNull(recorder.recalled(session).single().content)
+        assertThat(recalled).contains("page 5").contains("page 4")
+        assertThat(recalled).doesNotContain("page 0")
+        assertThat(recalled.indexOf("page 4")).isLessThan(recalled.indexOf("page 5"))
+    }
+
+    /** The transcript's page shows what came back, beside what was asked. */
+    @Test
+    fun `a call and what it returned are read back as one line`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), "#220 labels=['p1']")
+
+        val line = events(session).single()
+        assertThat(line["kind"]).isEqualTo("TOOL")
+        assertThat(line["content"]).isEqualTo("{}")
+        assertThat(line["result"]).isEqualTo("#220 labels=['p1']")
+    }
+
     private fun list(search: String? = null): List<Map<String, Any?>> {
         val asked = if (search == null) "" else """, search: "$search""""
         return graphQlTester.document(
@@ -255,7 +397,7 @@ class LlmSessionTest(
         return graphQlTester.document(
             """{ llmSessionEvents(sessionId: $session$asked) {
                    totalElements
-                   content { id kind actor content at }
+                   content { id kind actor content result at }
                  } }""",
         ).execute()
             .path("llmSessionEvents.content")

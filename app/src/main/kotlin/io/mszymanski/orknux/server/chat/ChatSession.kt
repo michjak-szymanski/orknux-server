@@ -55,22 +55,32 @@ class ChatSession(
     var agentId: Long? = null,
 
     /**
-     * The LLM session this chat is continuing, or null for a chat continuing
-     * nothing.
+     * The LLM session this chat writes into, or null for a chat that needs
+     * none.
      *
-     * A session is found by a key its caller computed, and a chat computes no
-     * key — inventing one would name a conversation nothing else can arrive at,
-     * which is the opposite of what a session is for. So the binding is a
-     * pointer, set once when the chat is opened from a session's page. Null is
-     * the ordinary case: a chat started from the sidebar has no session.
+     * Two ways it gets one. It was opened from a session's page, and is
+     * continuing a conversation an agent was already having — that is a
+     * pointer, set before the chat exists. Or it has an agent of its own, and
+     * `ChatService.recording` opens it one on the first send: an agent calls
+     * tools, and what a tool returned survives nowhere else once its round has
+     * ended.
      *
-     * Set at the start and never moved. What was already said is copied into
-     * this chat's thread when it opens, and a chat that changed session
-     * afterwards would be holding one conversation's words while writing into
-     * another's.
+     * The second of those bends a rule worth restating. A session is found by a
+     * key its caller computed, and a chat computes no key — one invented for a
+     * chat names a conversation nothing else can arrive at, which is the
+     * opposite of what a session is for. It is bent only where a chat has
+     * something a thread cannot hold, and bent as narrowly as it can be: the
+     * key is this chat's conversation id, so nothing else can arrive at it even
+     * by accident. A chat with a bare model calls no tools, has nothing to
+     * keep, and still gets nothing at all.
+     *
+     * Never moved once set, which is why nothing outside that one method
+     * assigns it. What was already said is copied into this chat's thread when
+     * it opens, and a chat that changed session afterwards would be holding one
+     * conversation's words while writing into another's.
      */
     @Column(name = "llm_session_id")
-    val llmSessionId: Long? = null,
+    var llmSessionId: Long? = null,
 
     @Column(nullable = false)
     var pinned: Boolean = false,

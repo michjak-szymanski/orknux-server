@@ -32,6 +32,14 @@ have failed.
   characters to the token. An agent that sets nothing carries exactly what it
   carried before.
 
+  It is a **Session Memory** slider on the agent's card, under the model it
+  uses. Default is position zero on the same track rather than a switch beside
+  it: an agent either has a share or has the built-in allowance, and zero is the
+  only honest resting place for a slider with nothing set. The figures under it
+  are what that share works out to on the model the form is showing, so changing
+  the model changes them before anything is saved, and a share that model cannot
+  give says so and turns Save off.
+
 - **A picture in the manual opens at the size it was taken.** The screenshots are
   captured at 1440 and drawn into a column about half that, so the detail being
   pointed at was not legible. Clicking one now opens it over the page - Escape,

@@ -358,6 +358,36 @@ class LlmSessionTest(
         assertThat(recalled.indexOf("page 4")).isLessThan(recalled.indexOf("page 5"))
     }
 
+    /**
+     * A budget narrower than the default really is narrower.
+     *
+     * The five numbers moved out of this class and became a share of a model's
+     * context window, and the whole point of the move is that the recorder
+     * reads whichever budget it is handed rather than the one it was compiled
+     * with. Asserted against the same session twice, so what differs is only
+     * the allowance.
+     */
+    @Test
+    fun `a smaller budget brings back less of the same session`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        repeat(6) { recorder.userSaid(session, "alice", "question $it") }
+
+        assertThat(recorder.remembered(session)).hasSize(6)
+        assertThat(recorder.remembered(session, SessionMemoryBudget.of(3_000))).hasSize(3)
+    }
+
+    /** And the same for what tools gave back, which is the other allowance. */
+    @Test
+    fun `a smaller budget cuts a lookup that the default kept whole`() {
+        val session = recorder.open(workspaceId, "issue", "42")
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), "x".repeat(6_000))
+
+        assertThat(requireNotNull(recorder.recalled(session).single().content))
+            .doesNotContain("more characters were not kept")
+        assertThat(requireNotNull(recorder.recalled(session, SessionMemoryBudget.of(10_000)).single().content))
+            .contains("more characters were not kept")
+    }
+
     /** The transcript's page shows what came back, beside what was asked. */
     @Test
     fun `a call and what it returned are read back as one line`() {

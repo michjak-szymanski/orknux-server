@@ -96,6 +96,9 @@ object ComponentSnapshot {
             "systemPrompt" to agent.systemPrompt,
             "enabled" to agent.enabled,
             "modelId" to agent.modelId,
+            // Its share of that model's window. Null is the built-in default,
+            // and a restore has to be able to put it back to that.
+            "memoryShare" to agent.memoryShare,
             "orknuxAccess" to agent.orknuxAccess,
             "shellAccess" to agent.shellAccess,
             "icon" to agent.icon,
@@ -220,6 +223,9 @@ object ComponentSnapshot {
         agent.systemPrompt = text(held, "systemPrompt")
         agent.enabled = held.path("enabled").asBoolean(true)
         agent.modelId = number(held, "modelId")
+        // A version written before this existed has no share, which is what an
+        // agent saved then was actually running on.
+        agent.memoryShare = number(held, "memoryShare")?.toInt()
         agent.orknuxAccess = held.path("orknuxAccess").asBoolean(false)
         agent.shellAccess = held.path("shellAccess").asBoolean(false)
         agent.icon = text(held, "icon")

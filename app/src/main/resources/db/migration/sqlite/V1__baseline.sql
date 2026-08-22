@@ -38,8 +38,10 @@ CREATE TABLE agent
     shell_access                 boolean not null default false,
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default '',
+    memory_share                 integer,
     constraint uk_agent_workspace_name UNIQUE (workspace_id, name),
     constraint ck_agent_type CHECK (((type) = 'LLM')),
+    constraint ck_agent_memory_share CHECK (memory_share IS NULL OR (memory_share >= 1 AND memory_share <= 50)),
     constraint agent_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 

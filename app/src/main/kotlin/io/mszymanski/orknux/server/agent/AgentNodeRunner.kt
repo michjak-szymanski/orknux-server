@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
 import io.mszymanski.orknux.server.llm.LlmSessionKeyTooLongException
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
+import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
 import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
@@ -55,6 +56,7 @@ class AgentNodeRunner(
     private val expressions: NodeExpressions,
     private val runLog: RunLogger,
     private val sessions: LlmSessionRecorder,
+    private val budgets: SessionMemoryBudgets,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.AGENT
@@ -122,11 +124,22 @@ class AgentNodeRunner(
         val session = sessionFor(step, agent, mappings, payload, started)
 
         /*
+         * How much of it this agent is allowed to bring back.
+         *
+         * Its own share of its own model's window, resolved fresh on every run
+         * rather than carried in the published graph: the two things it is made
+         * of - what the agent was given and what the model can take - are both
+         * live rows, and a run that used yesterday's window would be spending
+         * against a number that no longer exists.
+         */
+        val budget = budgets.budget(agent.memoryShare, modelId)
+
+        /*
          * Read before this turn's question is recorded, not after - otherwise
          * the question would come back as part of its own history and the model
          * would be shown it twice.
          */
-        val remembered = session?.let { sessions.remembered(it) }.orEmpty()
+        val remembered = session?.let { sessions.remembered(it, budget) }.orEmpty()
 
         /*
          * And what its tools returned, which is not the same thing.
@@ -139,7 +152,7 @@ class AgentNodeRunner(
          * Last, so the freshest thing in the prompt is the thing most likely to
          * be what the question is about.
          */
-        val recalled = session?.let { sessions.recalled(it) }.orEmpty()
+        val recalled = session?.let { sessions.recalled(it, budget) }.orEmpty()
 
         val turns = buildList {
             system?.let { add(ChatTurn("system", it)) }

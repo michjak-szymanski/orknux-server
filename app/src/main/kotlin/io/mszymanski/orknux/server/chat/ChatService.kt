@@ -9,6 +9,8 @@ import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import io.mszymanski.orknux.server.llm.RememberedTurn
+import io.mszymanski.orknux.server.llm.SessionMemoryBudget
+import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
@@ -46,7 +48,22 @@ class ChatService(
     private val entityManager: EntityManager,
     private val llmSessions: LlmSessionRepository,
     private val recorder: LlmSessionRecorder,
+    private val budgets: SessionMemoryBudgets,
 ) {
+
+    /**
+     * How much of a session this chat is allowed to carry.
+     *
+     * The agent's share of the model the chat is actually using, which for a
+     * chat is not always the agent's own: the picker at the top of a chat can
+     * point it at another model, and the budget has to be a share of the window
+     * the request will really be made against. A chat with no agent has no
+     * share to apply and gets the built-in default, which is what it had.
+     */
+    private fun budget(chat: ChatSession): SessionMemoryBudget {
+        val share = chat.agentId?.let { agents.findByIdOrNull(it)?.memoryShare } ?: return SessionMemoryBudget.DEFAULT
+        return budgets.budget(share, chat.modelId)
+    }
 
     fun sessions(workspaceId: Long, userId: String): List<ChatSession> =
         sessions.findByWorkspaceIdAndUserIdOrderByPinnedDescLastMessageAtDescCreatedAtDesc(workspaceId, userId)
@@ -123,7 +140,9 @@ class ChatService(
     fun messages(session: ChatSession): List<ChatMessage> {
         val thread = history.findByConversationId(session.conversationId).map(::ChatMessage)
         val llmSessionId = session.llmSessionId ?: return thread
-        return carried(thread, recorder.readBefore(llmSessionId, session.createdAt))
+        // The same budget the copy was taken under, so the page shows the
+        // stretch that was actually carried rather than one merely like it.
+        return carried(thread, recorder.readBefore(llmSessionId, session.createdAt, budget(session)))
     }
 
     /**
@@ -270,7 +289,7 @@ class ChatService(
      * audiences with two different answers.
      */
     private fun seed(chat: ChatSession, llmSessionId: Long) {
-        val said = recorder.remembered(llmSessionId)
+        val said = recorder.remembered(llmSessionId, budget(chat))
         if (said.isEmpty()) return
         history.saveAll(
             chat.conversationId,
@@ -432,7 +451,7 @@ class ChatService(
             // thing in the list: what the tools returned goes between.
             turns = briefed(session) +
                 thread.map { ChatTurn(role(it), it.text.orEmpty()) } +
-                recalled(into) +
+                recalled(session, into) +
                 ChatTurn("user", message, images),
         )
     }
@@ -499,7 +518,8 @@ class ChatService(
      * first, and assembled fresh each time - which is what lets a chat carry
      * data it could not afford to carry as history.
      */
-    private fun recalled(into: Long?): List<ChatTurn> = into?.let { recorder.recalled(it) }.orEmpty()
+    private fun recalled(chat: ChatSession, into: Long?): List<ChatTurn> =
+        into?.let { recorder.recalled(it, budget(chat)) }.orEmpty()
 
     /**
      * What the person said, into the session this chat is continuing.

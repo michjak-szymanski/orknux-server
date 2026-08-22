@@ -27,6 +27,27 @@ have failed.
 
 ### Fixed
 
+- **Shift + Enter grows the message box, and it grows all the way to the top.**
+  It was capped at two hundred pixels, so a message of more than about ten lines
+  was written through a letterbox. The cap is now measured rather than chosen:
+  the composer takes what the conversation above it can spare and scrolls past
+  that, so it grows one line at a time until it reaches the top of the
+  conversation and then stops.
+
+- **The send button no longer says "Sending" once the message has been sent.**
+  It reads *Waiting…* while the model is thinking and *Answering…* once text
+  starts arriving. It is derived from the same condition the conversation's own
+  "waiting for" row uses, so the button and the log cannot say different things
+  about the same moment — which was half of what was wrong: the page was
+  disagreeing with itself.
+
+- **The chat selector is no longer cropped, and links to what it names.** Moving
+  the picker into the title row put it in a containing block as wide as the
+  model's name, and a `max-width` beats a `width` — so a panel meant to be 560
+  pixels wide was squeezed into ninety and drew its tabs outside itself. It now
+  opens leftwards from the control, which is the only direction with room. A
+  link beside the name opens the agent or the model it names.
+
 - **The status that says somebody has started is no longer hidden from the
   agents.** `orknux_set_issue_status` accepted `IN_PROGRESS` all along and
   described itself as *"Opens or closes an issue"*, with its one parameter

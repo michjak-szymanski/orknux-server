@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.chat
 
+import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.attachment.InstallationSettings
@@ -141,21 +142,38 @@ class ChatAPI(
         return chats.delete(id)
     }
 
-    /** Sends, and answers. What comes back is the answer and what it cost in time. */
+    /**
+     * Sends, and answers. What comes back is the answer and what it cost in time.
+     *
+     * Composed of the same three calls the streaming path is composed of, and
+     * for the reason [ChatService.ask] gives: the model is asked outside any
+     * transaction, so the turn does not hold a connection - or, on SQLite, the
+     * one write lock there is - for as long as the model and its tools take.
+     * What is written is written either side of the asking.
+     */
     @MutationMapping
     fun sendChatMessage(@Argument id: Long, @Argument text: String): ChatAnswerView {
         requireChat()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        val exchange = chats.send(id, text)
+        val start = chats.beginSend(id, text)
+        val answer = when (val said = chats.ask(start)) {
+            is ChatCompletion.Failed -> throw ChatModelUnusableException(said.reason)
+            // The loop runs tools to a conclusion, so nothing reaching here is
+            // still asking for one.
+            is ChatCompletion.CalledTools ->
+                throw ChatModelUnusableException("The model asked for a tool that could not be run")
+            is ChatCompletion.Answered -> said
+        }
+        chats.finishSend(id, answer.content)
         // Same as the streaming path: a first exchange earns the chat a name.
-        runCatching { titles.nameFrom(id, text, exchange.answer) }
-        val named = chats.session(id) ?: exchange.session
+        runCatching { titles.nameFrom(id, text, answer.content) }
+        val named = chats.session(id) ?: session
         return ChatAnswerView(
             session = describe(named),
-            answer = ChatMessageView("assistant", exchange.answer),
-            millis = exchange.millis,
+            answer = ChatMessageView("assistant", answer.content),
+            millis = answer.millis,
         )
     }
 

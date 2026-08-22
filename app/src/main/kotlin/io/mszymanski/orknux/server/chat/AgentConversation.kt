@@ -27,11 +27,19 @@ import org.springframework.stereotype.Service
  * take minutes; a database connection held for that long is one nobody else has.
  *
  * A caller that named an LLM session gets the round written down as it happens —
- * the tools that were called, and what was finally said. That is not the same
- * record as the chat history and does not contradict the paragraph above: the
- * history is the conversation somebody had, while a session is the conversation
- * the agent had, working included. A caller that named no session pays for a
- * null check and touches no table at all.
+ * the tools that were called, what each of them gave back, and what was finally
+ * said. That is not the same record as the chat history and does not contradict
+ * the paragraph above: the history is the conversation somebody had, while a
+ * session is the conversation the agent had, working included. A caller that
+ * named no session pays for a null check and touches no table at all.
+ *
+ * The results are in that record because nothing else keeps them. They are
+ * threaded into this round and the round is thrown away; what reaches the
+ * history is the text the model wrote out of them. Kept only there, the next
+ * turn is answered from what the model said about a lookup rather than from the
+ * lookup — which is how two models running one conversation came to insist that
+ * labelled issues were unlabelled, each correcting itself only when it called
+ * the tool again.
  */
 @Service
 class AgentConversation(
@@ -79,10 +87,22 @@ class AgentConversation(
                         log.debug("Agent {} called {}", agent.name, call.name)
                         // Written before the tool runs, so one that hangs still
                         // leaves the transcript saying what was asked of it.
-                        into?.let { sessions.toolCalled(it, call.name, call.arguments) }
+                        val line = into?.let { sessions.toolCalled(it, call.name, call.arguments) }
+                        val got = tools.run(agent, call)
+                        /*
+                         * And what came back, onto that same line.
+                         *
+                         * This round threads it into `conversation`, which is
+                         * gone the moment the round ends: the provider's thread
+                         * keeps only the text the model produced out of it. So
+                         * a later turn asking about the same data had the
+                         * model's summary of it and not the data, and answered
+                         * out of the summary. The session is where it survives.
+                         */
+                        sessions.toolReturned(line, got)
                         conversation += ChatTurn(
                             role = "user",
-                            content = tools.run(agent, call),
+                            content = got,
                             respondingTo = call.id,
                         )
                     }

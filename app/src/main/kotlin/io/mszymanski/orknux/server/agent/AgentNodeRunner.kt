@@ -128,9 +128,23 @@ class AgentNodeRunner(
          */
         val remembered = session?.let { sessions.remembered(it) }.orEmpty()
 
+        /*
+         * And what its tools returned, which is not the same thing.
+         *
+         * What was said is the agent's account of the data; this is the data.
+         * An agent that looked something up in the last run and is asked about
+         * it in this one would otherwise be working from its own summary, and a
+         * summary cannot be checked against anything.
+         *
+         * Last, so the freshest thing in the prompt is the thing most likely to
+         * be what the question is about.
+         */
+        val recalled = session?.let { sessions.recalled(it) }.orEmpty()
+
         val turns = buildList {
             system?.let { add(ChatTurn("system", it)) }
             addAll(remembered)
+            addAll(recalled)
             add(ChatTurn("user", question))
         }
 

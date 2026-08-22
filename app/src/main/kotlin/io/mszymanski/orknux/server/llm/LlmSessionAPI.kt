@@ -214,6 +214,7 @@ class LlmSessionAPI(
         kind = event.kind,
         actor = event.actor,
         content = event.content,
+        result = event.result,
         at = event.at.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
@@ -248,6 +249,14 @@ data class LlmSessionEventView(
     val actor: String,
     /** The words, a call's arguments, or the note - whichever the kind says. */
     val content: String?,
+    /**
+     * What a call gave back, and null on every line that is not one.
+     *
+     * Null on a call too, while its tool has not answered - the call is written
+     * before the tool runs, so a line with arguments and no result is a lookup
+     * that was asked for and never came back.
+     */
+    val result: String?,
     /** ISO-8601 offset date-time. */
     val at: String,
 )

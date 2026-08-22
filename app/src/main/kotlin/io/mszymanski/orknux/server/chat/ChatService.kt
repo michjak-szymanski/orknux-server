@@ -382,16 +382,20 @@ class ChatService(
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(message))
         session.lastMessageAt = OffsetDateTime.now()
-        recordSaid(session, message)
+        val into = recording(session)
+        recordSaid(session, into, message)
 
-        val turns = briefed(session) + (thread + UserMessage(message)).map { ChatTurn(role(it), it.text.orEmpty()) }
+        val turns = briefed(session) +
+            thread.map { ChatTurn(role(it), it.text.orEmpty()) } +
+            recalled(into) +
+            ChatTurn("user", message)
         // An agent may need its tools before it can answer; a bare model cannot.
         val asked = session.agentId?.let { agents.findByIdOrNull(it) }
         return when (
             val answer = if (asked == null) {
                 models.complete(modelId, turns)
             } else {
-                conversation.answer(modelId, asked, turns, session.llmSessionId)
+                conversation.answer(modelId, asked, turns, into)
             }
         ) {
             is ChatCompletion.Failed -> throw ChatModelUnusableException(answer.reason)
@@ -405,7 +409,7 @@ class ChatService(
                     history.findByConversationId(session.conversationId) + AssistantMessage(answer.content),
                 )
                 session.lastMessageAt = OffsetDateTime.now()
-                recordAnswer(session, answer.content)
+                recordAnswer(session, into, answer.content)
                 ChatExchange(session, answer.content, answer.millis)
             }
         }
@@ -436,20 +440,21 @@ class ChatService(
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(message))
         session.lastMessageAt = OffsetDateTime.now()
-        recordSaid(session, message)
+        val into = recording(session)
+        recordSaid(session, into, message)
 
         return ChatSendStart(
             modelId = modelId,
             agentId = session.agentId,
-            llmSessionId = session.llmSessionId,
+            llmSessionId = into,
             conversationId = session.conversationId,
+            // The turn being sent now is built on its own rather than picked out
+            // of the thread by its position, because it is no longer the last
+            // thing in the list: what the tools returned goes between.
             turns = briefed(session) +
-                (thread + UserMessage(message)).mapIndexed { at, held ->
-                    // Only the last turn is the one being sent now, so only it
-                    // carries what was attached to it.
-                    val last = at == thread.size
-                    ChatTurn(role(held), held.text.orEmpty(), if (last) images else emptyList())
-                },
+                thread.map { ChatTurn(role(it), it.text.orEmpty()) } +
+                recalled(into) +
+                ChatTurn("user", message, images),
         )
     }
 
@@ -468,8 +473,54 @@ class ChatService(
             history.findByConversationId(session.conversationId) + AssistantMessage(answer),
         )
         session.lastMessageAt = OffsetDateTime.now()
-        recordAnswer(session, answer)
+        // Read off the chat rather than opened: [beginSend] has already opened
+        // whatever this chat records into, and opening one here would be a
+        // session for an answer whose question was never written down.
+        recordAnswer(session, session.llmSessionId, answer)
     }
+
+    /**
+     * The session this chat records into, opened the first time it needs one.
+     *
+     * Two ways a chat comes to have one. It was opened from a session's page,
+     * in which case it is continuing somebody else's conversation and the
+     * pointer was set before it existed. Or it has an agent, in which case it
+     * needs one of its own - because an agent calls tools, and what a tool
+     * returned has nowhere else to survive the round it was fetched in. Without
+     * that, the second question about a lookup is answered out of the model's
+     * own account of the first.
+     *
+     * A chat with a bare model still gets nothing, and that is not an oversight
+     * being preserved. It calls no tools, so there is nothing to keep, and the
+     * rule this bends - that a chat computes no key, because a key is something
+     * two callers can independently arrive at - stays true for every chat that
+     * does not need it bent. Where it is bent, it is bent as narrowly as it can
+     * be: the key is the conversation id, which is this chat's and nothing
+     * else's, so nothing can arrive at it by accident and it is plainly not
+     * pretending to be a shared conversation.
+     *
+     * Opened on the first send rather than when the chat is started, because an
+     * agent can be chosen at any point in a chat's life and a chat that never
+     * gets one should cost nothing.
+     */
+    private fun recording(chat: ChatSession): Long? {
+        chat.llmSessionId?.let { return it }
+        if (chat.agentId == null) return null
+        return recorder.open(chat.workspaceId, CHAT_PREFIX, chat.conversationId)
+            .also { chat.llmSessionId = it }
+    }
+
+    /**
+     * What this chat's tools returned lately, to go in front of the model.
+     *
+     * Between the thread and the question rather than inside the thread. The
+     * thread is what was said and is appended to for ever; a result put in it
+     * would be paid for on every send from then on, with nothing able to drop
+     * the oldest one. Read from the session instead, it is bounded, newest
+     * first, and assembled fresh each time - which is what lets a chat carry
+     * data it could not afford to carry as history.
+     */
+    private fun recalled(into: Long?): List<ChatTurn> = into?.let { recorder.recalled(it) }.orEmpty()
 
     /**
      * What the person said, into the session this chat is continuing.
@@ -483,8 +534,8 @@ class ChatService(
      * goes into the history first: a provider that fails should leave the
      * session holding what was actually said.
      */
-    private fun recordSaid(session: ChatSession, said: String) {
-        session.llmSessionId?.let { recorder.userSaid(it, session.userId, said) }
+    private fun recordSaid(session: ChatSession, into: Long?, said: String) {
+        into?.let { recorder.userSaid(it, session.userId, said) }
     }
 
     /**
@@ -500,8 +551,8 @@ class ChatService(
      * that arrives in eighty pieces is one line in the transcript rather than
      * eighty.
      */
-    private fun recordAnswer(session: ChatSession, answer: String) {
-        val into = session.llmSessionId ?: return
+    private fun recordAnswer(session: ChatSession, into: Long?, answer: String) {
+        if (into == null) return
         if (session.agentId != null) return
         val named = session.modelId?.let { catalogue.model(it) }?.name ?: FALLBACK_ACTOR
         recorder.agentSaid(into, named, answer)
@@ -521,6 +572,16 @@ class ChatService(
 
         /** What a bare model's answer is signed with once the model it named is gone. */
         const val FALLBACK_ACTOR = "model"
+
+        /**
+         * What a chat's own session is namespaced under.
+         *
+         * So the list of sessions says which of them are one chat's private
+         * record and which are conversations an agent is having across runs.
+         * The two are read very differently and there is nothing else on the
+         * row to tell them apart.
+         */
+        const val CHAT_PREFIX = "chat"
     }
 
     /**

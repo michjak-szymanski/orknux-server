@@ -26,12 +26,19 @@ enum class LlmSessionEventKind {
     AGENT,
 
     /**
-     * A tool the agent called, and what it passed.
+     * A tool the agent called, what it passed, and what came back.
      *
-     * The call and not its result. What a tool returned can be the whole of a
-     * file or a page of JSON, and it is already threaded back into the
-     * conversation the model sees; what a reader of the transcript wants to
-     * know is that the agent went and looked, and what it asked for.
+     * Both halves on one line, because they are one thing that happened and
+     * because the pairing is then structural: written as two events they could
+     * only be matched by order, and a round of parallel calls is written inside
+     * a single millisecond.
+     *
+     * It used to be the call alone, on the ground that what a tool returned was
+     * already threaded back into the conversation the model sees. That holds
+     * inside one exchange and fails across two - the provider's loop resolves
+     * the calls and only the assistant text it produced is kept - so the next
+     * turn was answered out of the model's own summary of the data rather than
+     * out of the data.
      */
     TOOL,
 
@@ -163,8 +170,12 @@ internal const val ACTOR_LENGTH = 200
  *
  * What [content] holds depends on [kind] - the words, the arguments of a call,
  * the text of a note - and one column says so rather than four of which exactly
- * one is ever filled. [actor] is who produced it, always, and it is a name
- * rather than an id so the line still reads after the agent has been renamed.
+ * one is ever filled. [result] is the exception and is not one of those four: a
+ * call and what it returned are two halves of one thing that happened, not two
+ * spellings of the payload, and keeping them on one row is what makes the
+ * pairing structural rather than something a reader has to reconstruct from the
+ * order. [actor] is who produced it, always, and it is a name rather than an id
+ * so the line still reads after the agent has been renamed.
  */
 @Entity
 @Table(name = "llm_session_event")
@@ -187,6 +198,22 @@ class LlmSessionEvent(
     /** The words, the call's arguments, or the note. */
     @Column(columnDefinition = "text")
     val content: String? = null,
+
+    /**
+     * What a tool gave back, and null on every line that is not a call.
+     *
+     * Filled in after the fact: the call is written before the tool runs, so
+     * one that hangs still leaves the transcript saying what was asked of it,
+     * and this arrives when there is an answer to write. A call that is still
+     * null long after it was made is a tool that never returned, which is worth
+     * being able to see.
+     *
+     * Unbounded here on purpose. How much of it a model may be shown again is
+     * [LlmSessionRecorder]'s to decide, because that is a question about a
+     * prompt; what the record holds is what actually came back.
+     */
+    @Column(columnDefinition = "text")
+    var result: String? = null,
 
     @Column(nullable = false)
     val at: OffsetDateTime = OffsetDateTime.now(),
@@ -289,6 +316,30 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
         before: OffsetDateTime,
         page: Pageable,
     ): List<LlmSessionEvent>
+
+    /**
+     * The calls that returned something, newest first, for putting the data
+     * back in front of the model.
+     *
+     * The other half of what [latest] does for what was said. A model asked a
+     * follow-up has its own summary of a lookup in front of it and not the
+     * lookup, so "check that again" is answered out of prose; this is what it
+     * is answered out of instead.
+     *
+     * Newest first and reversed by the caller, for the reason [latest] gives.
+     * Calls that never returned are left out rather than shown as empty: a tool
+     * that hung is a line for the transcript and nothing for a prompt.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.kind = :kind
+          and e.result is not null
+        order by e.at desc, e.id desc
+        """,
+    )
+    fun latestResults(sessionId: Long, kind: LlmSessionEventKind, page: Pageable): List<LlmSessionEvent>
 
     /**
      * The calls made inside a stretch of a session, oldest first.

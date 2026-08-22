@@ -13,6 +13,36 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Fixed
+
+- **An agent no longer answers a later question out of its own summary of a
+  lookup.** What a tool returned was threaded into the round that fetched it and
+  the round was thrown away: the provider's loop resolves the calls and only the
+  text the model wrote out of them is kept. So on the next turn the model held
+  its account of the data rather than the data, and "check that again" was
+  answered from prose. It showed up as two models on one conversation both
+  insisting that issues were unlabelled when they plainly carried a label, each
+  correcting itself only when it called the tool again.
+
+  A call and what it returned are now one line of the session, and what tools
+  returned lately goes back in front of the model beside what was said — as
+  data, labelled as data, with a budget of its own rather than a share of the
+  turns' allowance. That budget is the point: a single listing of one
+  workspace's issues measured forty thousand characters against twenty-four
+  thousand for everything anybody had ever said, so a result sharing that
+  allowance either takes all of it or is the first thing dropped. The newest
+  lookups are kept, the same lookup made twice counts once, and a result too
+  large to hand back whole is cut with the cut saying so and naming the tool to
+  call for the rest — a model told it holds half an answer can go and get the
+  other half, which a silently shortened list never lets it do.
+
+  This reaches workflows and chats alike. **A chat with an agent now keeps a
+  session of its own**, which is where its lookups survive; it appears in the
+  session list under the `chat` prefix. A chat with a bare model calls no tools,
+  has nothing to keep, and still opens nothing.
+
 ## 0.9.0
 
 ### Added

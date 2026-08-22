@@ -195,6 +195,38 @@ class LlmSessionRecordingTest(
     }
 
     /**
+     * And the next run is asked with the data, not with what was said about it.
+     *
+     * This is the one the transcript could not do before. The result was
+     * threaded into the round that fetched it and the round was thrown away;
+     * what survived was the sentence the model wrote out of it. So a second run
+     * asking about the same thing worked from the model's summary, and a
+     * summary cannot be checked against anything - which is how a labelled
+     * issue came to be reported as unlabelled twice over.
+     *
+     * Asserted on the first request of the second run, before any tool has run
+     * in it: what is in that body was remembered rather than fetched.
+     */
+    @Test
+    fun `what a tool returned is recorded, and the next run is asked with it`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val agentId = agent("Reviewer", model(serveToolThenAnswer()), granted = "Reviews")
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+
+        val call = events.findAll().single { it.kind == LlmSessionEventKind.TOOL }
+        assertThat(call.content).contains("codeReview")
+        assertThat(call.result).contains("Read the diff twice before commenting.")
+
+        val first = received.size
+        start()
+
+        assertThat(received[first]).contains("Read the diff twice before commenting.")
+    }
+
+    /**
      * A node that names no session costs nothing.
      *
      * Every agent node drawn before this existed is this node, so "nothing" has

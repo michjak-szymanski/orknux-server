@@ -81,9 +81,42 @@ class LlmSessionRecorder(
      * The arguments as the model sent them - unparsed and unprettied. What is
      * being recorded is what the agent asked for, and reformatting it would be
      * this deciding what the model meant.
+     *
+     * @return the line it was written on, to hand back to [toolReturned] when
+     *   the tool answers, or null if it could not be written. Null rather than
+     *   an exception for the reason [write] gives: a lost line of transcript is
+     *   not a reason to fail the work that was being transcribed.
      */
-    fun toolCalled(session: Long, tool: String, arguments: String) =
+    fun toolCalled(session: Long, tool: String, arguments: String): Long? =
         write(session, LlmSessionEventKind.TOOL, tool, arguments)
+
+    /**
+     * And what that call gave back, onto the line the call was written on.
+     *
+     * Two writes rather than one because the call is deliberately recorded
+     * before the tool runs: a tool that hangs still leaves the transcript
+     * saying what was asked of it, and a line written only once the answer
+     * existed would say nothing at all.
+     *
+     * Kept whole. What a model may be shown of it again is bounded in
+     * [recalled], because that bound is about a prompt; the record holds what
+     * came back.
+     *
+     * @param event the line [toolCalled] returned. Null is accepted and does
+     *   nothing, so a caller that could not record the call does not have to
+     *   ask twice whether it can record the answer.
+     */
+    fun toolReturned(event: Long?, result: String) {
+        val line = event ?: return
+        try {
+            events.findByIdOrNull(line)?.let {
+                it.result = result
+                events.save(it)
+            }
+        } catch (failure: Exception) {
+            log.warn("What {} returned could not be recorded", line, failure)
+        }
+    }
 
     /** Something that happened to the conversation rather than in it. */
     fun note(session: Long, said: String) =
@@ -97,12 +130,12 @@ class LlmSessionRecorder(
      * second run asks its question of a model that has never heard of the
      * first - which is a transcript, not a conversation.
      *
-     * Only what was *said* comes back. A tool call is recorded for somebody
-     * reading the session, but replaying one across turns would hand the model
-     * a call it never made in this exchange, with no answer threaded to it, and
-     * a system note is this application talking about the conversation rather
-     * than in it. Both belong in the transcript and neither belongs in the
-     * prompt.
+     * Only what was *said* comes back. Replaying a tool call as a call would
+     * hand the model one it never made in this exchange, and a system note is
+     * this application talking about the conversation rather than in it. What a
+     * tool *returned* does belong in front of the model and comes back from
+     * [recalled] instead - as data rather than as a call, and on a budget of
+     * its own.
      *
      * Bounded twice, because a session is designed to outlive things and will
      * eventually be longer than any context window. The most recent turns are
@@ -145,6 +178,104 @@ class LlmSessionRecorder(
             session,
             tail(session) { events.latestBefore(session, SAID, before, PageRequest.of(0, MEMORY_TURNS)) },
         ).map(::turn)
+
+    /**
+     * What tools returned lately, as a turn to put back in front of the model.
+     *
+     * The half of a session's memory that [remembered] is not. What was said
+     * comes back as turns; this is the data those turns were about, and it is
+     * here because a model holding only its own words about a lookup answers
+     * the next question out of them. Two models on one conversation both
+     * reported issues as unlabelled that carried a label, and each corrected
+     * itself the moment it called the tool again - the tool was never wrong,
+     * and neither was anything either of them had said. What was gone was the
+     * data.
+     *
+     * One turn rather than one per result, because it is one thing being handed
+     * over: a header saying what it is, and the lookups under it oldest first.
+     * It is offered as [ASKED] for the reason a live tool result is - that is
+     * the role a result already arrives under inside a round, and it is the one
+     * role every provider takes. Not as a tool message, because a tool message
+     * answers a call made in the same request and there is no such call here.
+     *
+     * A budget of its own, and that is the whole of the design. A single
+     * listing of one workspace's issues measured forty thousand characters
+     * against a memory of twenty-four thousand for everything anybody ever
+     * said, so a result sharing that allowance either takes all of it or is the
+     * first thing dropped. So: [RECALL_RESULTS] lookups at most,
+     * [RECALL_LONGEST] characters of any one of them, [RECALL_CHARS] across all
+     * of them, and newest first - the answer to "check that again" is in the
+     * last lookup rather than the first.
+     *
+     * Cut rather than dropped where one is too long, and the cut says so and
+     * names the tool to call for the rest. A model told it is holding part of
+     * an answer can go and get the whole of it; one handed a silently shortened
+     * list cannot tell that it is short, which is the failure this exists to
+     * stop rather than a new spelling of it.
+     */
+    fun recalled(session: Long): List<ChatTurn> {
+        val kept = results(session)
+        if (kept.isEmpty()) return emptyList()
+        return listOf(ChatTurn(ASKED, RECALL_HEADER + kept.joinToString("\n\n")))
+    }
+
+    /**
+     * The lookups that survive the budget, written out, oldest first.
+     *
+     * Read newest first and reversed at the end, so what is dropped is the
+     * oldest lookup rather than the most recent - and so the block reads
+     * forwards, which is how the turns beside it read.
+     *
+     * The same call made twice is one answer, and the newer one is it. Without
+     * that, an agent that asked the same question in five rounds spends the
+     * whole allowance on five copies of one list and nothing else fits.
+     *
+     * Failing costs the data and not the turn, which is the bargain the rest of
+     * this class makes: the model is asked with what was said, and that is
+     * exactly what it was asked with before any of this existed.
+     */
+    private fun results(session: Long): List<String> {
+        val recent = try {
+            events.latestResults(session, LlmSessionEventKind.TOOL, PageRequest.of(0, RECALL_RESULTS))
+        } catch (failure: Exception) {
+            log.warn("What the tools in session {} returned could not be read back", session, failure)
+            return emptyList()
+        }
+
+        val seen = mutableSetOf<String>()
+        var room = RECALL_CHARS
+        return recent
+            .asSequence()
+            .mapNotNull { event -> event.result?.takeIf { it.isNotBlank() }?.let { event to it } }
+            .filter { (event, _) -> seen.add(event.actor + " " + event.content.orEmpty()) }
+            .map { (event, got) -> lookup(event, got) }
+            .takeWhile { written ->
+                room -= written.length
+                room >= 0
+            }
+            .toList()
+            .asReversed()
+    }
+
+    /**
+     * One lookup: what was called, what it was passed, and what came back.
+     *
+     * The arguments are in it because a result on its own does not say which
+     * question it answers - two calls to one tool with different arguments are
+     * two different answers, and a model reading a block of them has to be able
+     * to tell which is which.
+     */
+    private fun lookup(event: LlmSessionEvent, got: String): String {
+        val asked = event.content?.takeIf { it.isNotBlank() } ?: "{}"
+        val body = if (got.length <= RECALL_LONGEST) {
+            got
+        } else {
+            got.take(RECALL_LONGEST) +
+                "\n[${got.length - RECALL_LONGEST} more characters were not kept. " +
+                "Call ${event.actor} again if you need them.]"
+        }
+        return "${event.actor} $asked\n$body"
+    }
 
     /**
      * The bounding and the ordering, in one place.
@@ -242,11 +373,15 @@ class LlmSessionRecorder(
      * having, and losing a line of the transcript is not a reason to fail the
      * run that was having it - the answer still reaches whoever asked, and the
      * gap is in the log rather than in the work.
+     *
+     * @return the line's id, or null where it could not be written. Only a call
+     *   has anything to come back to it later, so only [toolCalled] passes it
+     *   on; the rest is written and forgotten.
      */
-    private fun write(session: Long, kind: LlmSessionEventKind, actor: String, content: String?) {
+    private fun write(session: Long, kind: LlmSessionEventKind, actor: String, content: String?): Long? {
         try {
             val at = OffsetDateTime.now()
-            events.save(
+            val written = events.save(
                 LlmSessionEvent(
                     sessionId = session,
                     kind = kind,
@@ -259,8 +394,10 @@ class LlmSessionRecorder(
                 it.lastEventAt = at
                 sessions.save(it)
             }
+            return written.id
         } catch (failure: Exception) {
             log.warn("A {} line could not be recorded in session {}", kind, session, failure)
+            return null
         }
     }
 
@@ -279,6 +416,63 @@ class LlmSessionRecorder(
          * prompt rather than an attempt to fill one exactly.
          */
         const val MEMORY_CHARS = 24_000
+
+        /**
+         * How many lookups may be recalled at most.
+         *
+         * A ceiling on the query rather than the bound that matters, which is
+         * [RECALL_CHARS]. Deliberately more than will usually fit, because
+         * duplicates are dropped after they are read: a smaller number would
+         * mean an agent that asked one thing five times recalls nothing else.
+         */
+        const val RECALL_RESULTS = 24
+
+        /**
+         * And how much of them altogether, in characters.
+         *
+         * On top of [MEMORY_CHARS] rather than inside it. A result is not a
+         * turn and must not compete with one: sharing the allowance, a single
+         * large listing either crowds out everything that was said or is itself
+         * the first thing cut, and both of those are the bug this fixes wearing
+         * a different hat.
+         */
+        const val RECALL_CHARS = 16_000
+
+        /**
+         * And how much of any single one.
+         *
+         * Sized against what the tools here actually return: a workspace's open
+         * issues measured under five thousand characters and comes back whole,
+         * while every issue in it measured over forty thousand and comes back
+         * cut. Two ordinary lookups still fit inside [RECALL_CHARS], which is
+         * the case worth sizing for - one enormous result leaving no room for
+         * the next is the same crowding-out by another route.
+         */
+        const val RECALL_LONGEST = 8_000
+
+        /**
+         * What the block of recalled lookups opens with.
+         *
+         * It says what it is, because unlabelled it reads as something somebody
+         * typed. And it says to prefer it to anything the model said about it,
+         * because that is the failure being fixed: the model's own summary of a
+         * lookup is in the turns above and is what it would otherwise answer
+         * from. The last sentence is the way out of a result that was cut.
+         */
+        const val RECALL_HEADER =
+            "What your tools returned earlier in this conversation, oldest first. " +
+                "This is the data itself rather than a summary of it: answer from it, " +
+                "not from anything said about it above, and call the tool again if what " +
+                "you need is not here.\n\n"
+
+        /**
+         * The role a recalled lookup is offered under.
+         *
+         * The same one a live tool result arrives under inside a round, so
+         * there is one answer to what a result looks like to a model and
+         * nothing to drift from it.
+         */
+        const val ASKED = "user"
 
         /**
          * And how many calls may be threaded back through them.

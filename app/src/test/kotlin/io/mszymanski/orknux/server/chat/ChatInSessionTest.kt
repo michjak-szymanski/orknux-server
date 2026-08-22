@@ -369,6 +369,65 @@ class ChatInSessionTest(
         assertThat(events.findAll()).isEmpty()
     }
 
+    /**
+     * The chat this was found in, and the half of the fix that reaches it.
+     *
+     * A chat's memory is its thread, and the thread never held a tool's result:
+     * the provider's loop resolved the call and only the text the model wrote
+     * out of it was kept. So the second question about a lookup was answered
+     * out of the first answer's prose - which is how a model came to report
+     * issues as unlabelled that carried a label, and to correct itself the
+     * moment it called the tool again.
+     *
+     * A chat with an agent opens a session of its own for exactly this, and the
+     * second send is asked with the data in front of it. Asserted on the first
+     * request of that send, before any tool has run in it, so what is in the
+     * body was remembered rather than fetched again.
+     */
+    @Test
+    fun `a chat with an agent is asked with what its tools returned before`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val chatId = startChat(llmSessionId = null, modelId = model(serveToolThenAnswer()))
+        val agentId = agent("Reviewer", chats.findAll().single().modelId!!, granted = "Reviews")
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
+            .execute()
+
+        send(chatId, "What does the review skill say?")
+
+        // Its own session, named after the one thing that is this chat's and
+        // nothing else's, so nothing can arrive at the key by accident.
+        val session = sessions.findAll().single()
+        assertThat(session.keyPrefix).isEqualTo("chat")
+        assertThat(chats.findAll().single().llmSessionId).isEqualTo(session.id)
+        assertThat(events.findAll().single { it.kind == LlmSessionEventKind.TOOL }.result)
+            .contains("Read the diff twice before commenting.")
+
+        val second = received.size
+        send(chatId, "Are you sure? Check again.")
+
+        assertThat(received[second]).contains("Read the diff twice before commenting.")
+    }
+
+    /**
+     * And a chat with a bare model still opens nothing.
+     *
+     * The rule being bent above is that a chat computes no key, and it is bent
+     * only where a chat has something its thread cannot hold. A bare model
+     * calls no tools, so there is nothing to keep and nothing is invented on
+     * anybody's behalf.
+     */
+    @Test
+    fun `a chat with no agent opens no session even after it is used`() {
+        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+
+        send(chatId, "Anyone there?")
+        send(chatId, "Still there?")
+
+        assertThat(chats.findAll().single().llmSessionId).isNull()
+        assertThat(sessions.findAll()).isEmpty()
+    }
+
     private fun session(prefix: String, key: String): Long = recorder.open(workspaceId, prefix, key)
 
     private fun startChat(llmSessionId: Long?, modelId: Long? = null): Long {
@@ -389,15 +448,33 @@ class ChatInSessionTest(
         ).variable("text", text).execute().path("sendChatMessage.answer.content").hasValue()
     }
 
-    private fun agent(name: String, modelId: Long): Long {
+    private fun agent(name: String, modelId: Long, granted: String? = null): Long {
         val id = graphQlTester.document(
             """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
         ).execute().path("createAgent.id").entity(Long::class.java).get()
+        val grant = granted?.let { """, skillCatalogs: ["$it"]""" }.orEmpty()
         graphQlTester.document(
-            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId$grant }) { id } }""",
         ).execute()
         return id
     }
+
+    private fun catalog(name: String): Long = graphQlTester.document(
+        """mutation { createSkillCatalog(workspaceId: $workspaceId, name: "$name") { id } }""",
+    ).execute().path("createSkillCatalog.id").entity(Long::class.java).get()
+
+    private fun skill(name: String, catalogId: Long, content: String): Long = graphQlTester.document(
+        """mutation { createSkill(input: {
+             workspaceId: $workspaceId, name: "$name", catalogId: $catalogId,
+             content: ${'"'}${'"'}${'"'}---
+name: $name
+description: How to review
+---
+
+$content
+${'"'}${'"'}${'"'}
+           }) { id } }""",
+    ).execute().path("createSkill.id").entity(Long::class.java).get()
 
     private fun model(endpoint: String): Long {
         val providerId = graphQlTester.document(
@@ -413,15 +490,35 @@ class ChatInSessionTest(
     }
 
     /** Answers in one round, and keeps what it was asked so the turns can be read. */
-    private fun serveAnswer(said: String): String {
+    private fun serveAnswer(said: String): String = serve {
+        """
+        {"choices":[{"message":{"role":"assistant","content":"$said"}}],
+         "usage":{"prompt_tokens":11,"completion_tokens":6}}
+        """.trimIndent()
+    }
+
+    /** Asks for a skill first, then answers with what it read. */
+    private fun serveToolThenAnswer(): String = serve { body ->
+        if (body.contains("tool_call_id")) {
+            """{"choices":[{"message":{"role":"assistant","content":"Read the diff twice."}}],
+               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
+        } else {
+            """
+            {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+              {"id":"call_1","type":"function",
+               "function":{"name":"skill_load","arguments":"{\"name\":\"codeReview\"}"}}
+            ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
+            """.trimIndent()
+        }
+    }
+
+    private fun serve(answer: (String) -> String): String {
         val opened = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server = opened
         opened.createContext("/chat/completions") { exchange ->
-            received += exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
-            val bytes = """
-                {"choices":[{"message":{"role":"assistant","content":"$said"}}],
-                 "usage":{"prompt_tokens":11,"completion_tokens":6}}
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8)
+            val body = exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            received += body
+            val bytes = answer(body).toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("Content-Type", "application/json")
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }

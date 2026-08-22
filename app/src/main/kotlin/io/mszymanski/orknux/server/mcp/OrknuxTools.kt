@@ -337,17 +337,26 @@ class OrknuxTools(
             add(
                 ToolSpec(
                     name = "orknux_set_issue_status",
-                    description = "Opens or closes an issue.",
+                    description = "Opens an issue, says somebody is working on it, or closes it.",
                     parameters = listOf(
                         ToolParameterSpec("issue", "Its number in this workspace.", required = true),
-                        ToolParameterSpec("status", "OPEN or CLOSED.", required = true),
+                        ToolParameterSpec(
+                            "status",
+                            "OPEN, IN_PROGRESS or CLOSED. IN_PROGRESS says somebody has picked it up and " +
+                                "open means nobody has yet, so say it when you start rather than when you " +
+                                "finish - it is how anybody else looking at the same list knows not to " +
+                                "start it too.",
+                            required = true,
+                        ),
                     ),
                 ),
             )
             add(
                 ToolSpec(
                     name = "orknux_update_issue",
-                    description = "Changes an issue's title, description or labels. What is left out is left alone.",
+                    description =
+                        "Changes an issue's title, description, labels or who is on it. " +
+                            "What is left out is left alone.",
                     parameters = listOf(
                         ToolParameterSpec("issue", "Its number in this workspace.", required = true),
                         ToolParameterSpec("title", "A new title, 200 characters at most.", required = false),
@@ -363,6 +372,12 @@ class OrknuxTools(
                             required = false,
                         ),
                         ToolParameterSpec("remove_labels", "Labels to take off, comma separated.", required = false),
+                        ToolParameterSpec(
+                            "assignee",
+                            "Who is on it, by name - a person, an agent or a model, matched the way the " +
+                                "assignee box matches. \"nobody\" hands it back to no one.",
+                            required = false,
+                        ),
                     ),
                 ),
             )

@@ -2,7 +2,9 @@ package io.mszymanski.orknux.server.mcp
 
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.issue.Assignee
 import io.mszymanski.orknux.server.issue.AssigneeKind
+import io.mszymanski.orknux.server.issue.auditedAs
 import io.mszymanski.orknux.server.issue.Issue
 import io.mszymanski.orknux.server.issue.IssueComment
 import io.mszymanski.orknux.server.issue.IssueHistoryRecorder
@@ -350,6 +352,50 @@ class IssueTools(
     }
 
     /**
+     * Somebody to put on an issue, by the name an assistant would write.
+     *
+     * The same lookup as [observerNamed] and one kind wider, which is the whole
+     * difference between the two questions: observing is a statement about who
+     * reads, and nothing reads a model's news, while work can perfectly well be
+     * handed to a model. So this is not that method with a flag - the kinds
+     * differ because the questions do.
+     *
+     * People first, then agents, then models, and the first match wins. A name
+     * that is two things in one workspace is somebody's naming problem rather
+     * than something to refuse over, and the order is the one the assignee box
+     * already searches in.
+     */
+    private fun assigneeNamed(scope: OrknuxScope, name: String): Assignee? {
+        val person = users.findAll().firstOrNull {
+            it.username.equals(name, ignoreCase = true) || it.displayName.equals(name, ignoreCase = true)
+        }
+        if (person != null) return Assignee(AssigneeKind.USER, requireNotNull(person.id).toString())
+
+        agents.findNamed(scope.workspaceId, name)
+            ?.let { return Assignee(AssigneeKind.AGENT, requireNotNull(it.id).toString()) }
+
+        return models.models(scope.workspaceId)
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?.let { Assignee(AssigneeKind.MODEL, it.id.toString()) }
+    }
+
+    /**
+     * The words that mean nobody.
+     *
+     * Spelled out because a blank cannot carry it: [text] reads an empty string
+     * as an absent argument, and absent has to keep meaning "left alone" or
+     * every update that did not mention the assignee would clear it. So
+     * unassigning is a word, and it is more than one word because a model
+     * writes the one it would write to a person.
+     */
+    private fun nobody(said: String): Boolean =
+        said.equals("nobody", ignoreCase = true) ||
+            said.equals("none", ignoreCase = true) ||
+            said.equals("no one", ignoreCase = true) ||
+            said.equals("no-one", ignoreCase = true) ||
+            said.equals("unassigned", ignoreCase = true)
+
+    /**
      * Who hears about a finding nobody was named for.
      *
      * The argument against a default is the honest one: a subscription nobody
@@ -411,10 +457,7 @@ class IssueTools(
         issues.save(held)
         if (moved) {
             newsDesk.statusChanged(held, currentUser())
-            audited(
-                scope.workspaceId,
-                "Issue #${held.number} ${if (wanted == IssueStatus.CLOSED) "closed" else "reopened"}",
-            )
+            audited(scope.workspaceId, "Issue #${held.number} ${wanted.auditedAs(was)}")
         }
         // Written here as well as in the controller, because this is the other
         // door into the tracker and a history with a hole exactly where the
@@ -424,11 +467,15 @@ class IssueTools(
     }
 
     /**
-     * Title, description and labels, each left alone unless given.
+     * Title, description, labels and who is on it, each left alone unless
+     * given.
      *
      * Labels arrive as one comma-separated string rather than an array,
      * because "slack, timing" is what a model actually writes and insisting on
-     * JSON here buys nothing.
+     * JSON here buys nothing. The assignee arrives the same way and for the
+     * same reason - as the name somebody would say, not as a kind and an id,
+     * which is a pair no assistant has and the browser only has because it
+     * just drew the list to pick from.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     fun update(scope: OrknuxScope, arguments: String): String {
@@ -455,6 +502,26 @@ class IssueTools(
             }
         }
 
+        /*
+         * Who it is being handed to, worked out before anything is written.
+         *
+         * Absent leaves it alone, which is what every other field here does. A
+         * name that matches nobody is refused by name rather than quietly
+         * ignored: an issue silently left with the wrong person on it is the
+         * failure that is never noticed, because the call answered as though it
+         * had worked.
+         */
+        val handing = text(arguments, "assignee")?.trim()
+        val handedTo = if (handing == null || nobody(handing)) {
+            null
+        } else {
+            assigneeNamed(scope, handing)
+                ?: return refuse("There is nobody called $handing in this workspace")
+        }
+        val heldBy = nameOf(held)
+        val was = held.assignee?.let { it.kind to it.id }
+
+        handing?.let { held.assignee = handedTo }
         text(arguments, "title")?.let { held.title = it.trim() }
         text(arguments, "description")?.let { given ->
             held.description = given.trim().takeIf { it.isNotEmpty() }
@@ -484,11 +551,32 @@ class IssueTools(
         held.lastModifiedBy = currentUser()
         issues.save(held)
         history.labelsChanged(held, labelsWere, held.labels.toSet(), currentUser())
+
+        /*
+         * And only if it actually moved.
+         *
+         * Naming the person who already has it is a thing an assistant does
+         * every time it repeats itself, and a notification for that is a
+         * notification whoever gets it learns to stop reading. Compared on the
+         * kind and the id rather than on the name, because two people can share
+         * a display name and neither of them is the other.
+         */
+        if (held.assignee?.let { it.kind to it.id } != was) {
+            newsDesk.assigned(held, currentUser())
+            history.assigneeChanged(held, heldBy, nameOf(held), currentUser())
+            audited(
+                scope.workspaceId,
+                nameOf(held)
+                    ?.let { "Issue #${held.number} assigned to $it" }
+                    ?: "Issue #${held.number} unassigned",
+            )
+        }
         return mapper.writeValueAsString(
             mapOf(
                 "issue" to held.number,
                 "title" to held.title,
                 "labels" to held.labels.sorted(),
+                "assignee" to nameOf(held),
                 "url" to issueLink(scope.workspaceId, held.number),
             ),
         )

@@ -15,7 +15,32 @@ have failed.
 
 ## Unreleased
 
+### Added
+
+- **An agent can put a name on an issue.** `orknux_update_issue` takes an
+  `assignee` — a person, an agent or a model, by the name somebody would say,
+  rather than the kind-and-id pair the browser sends because it has just drawn
+  the list to pick from. `"nobody"` hands it back. A name that matches nobody is
+  refused by name rather than ignored, because an update that answers as though
+  it worked and leaves the wrong person on the issue is the failure nobody goes
+  looking for.
+
 ### Fixed
+
+- **The status that says somebody has started is no longer hidden from the
+  agents.** `orknux_set_issue_status` accepted `IN_PROGRESS` all along and
+  described itself as *"Opens or closes an issue"*, with its one parameter
+  reading *"OPEN or CLOSED."* — so a model with three values available sent one
+  of two, every time. A capability nobody is told about is worse than a missing
+  one: missing gets noticed.
+
+- **An issue somebody picked up is no longer audited as reopened.** Both doors
+  wrote the line as `if (wanted == CLOSED) "closed" else "reopened"` — two
+  answers to a question with three — so the browser and the tools alike recorded
+  every issue anybody started as having been reopened. The wording now lives
+  beside the enum, decided once for all three values, and knows that only a
+  closed issue can be reopened: one moved back from in progress was put down,
+  which is a different thing to have happened.
 
 - **An agent no longer answers a later question out of its own summary of a
   lookup.** What a tool returned was threaded into the round that fetched it and

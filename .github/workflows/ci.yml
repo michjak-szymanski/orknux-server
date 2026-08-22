@@ -24,9 +24,28 @@ env:
   IMAGE_NAME_ONE: orknux-one
 
 jobs:
+  # Both engines, side by side.
+  #
+  # There are two databases and until now CI ran one of them. The other is the
+  # one `orknux-one` ships with, so the engine nobody tested was the engine most
+  # people run — and it went red without anybody noticing, twice. #169 was a
+  # workspace that could not be deleted, which SQLite refused every time and
+  # Postgres allowed every time; #171 was an agent's tools answering
+  # `Unable to commit against JDBC Connection` for a minute, on that same engine
+  # and nowhere else. Neither could be seen from here.
+  #
+  # `fail-fast: false` is the point of the matrix rather than a detail of it. The
+  # default cancels the surviving leg the moment one fails, which would throw
+  # away exactly the comparison being added: what is worth knowing about a red
+  # build is whether it is red on both engines or on one.
   build:
-    name: Build and test
+    name: Build and test (${{ matrix.engine }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [postgres, sqlite]
 
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +57,9 @@ jobs:
       # while somebody is still editing it. Both files, since this repository
       # publishes two images and each has a description of its own.
       - name: The Docker Hub descriptions have to fit
+        # Once, not once per engine: it weighs two files and the answer cannot
+        # depend on which database the suite ran against.
+        if: matrix.engine == 'postgres'
         run: |
           limit=25000
           comfortable=24000
@@ -61,11 +83,13 @@ jobs:
           java-version: '25'
           cache: maven
 
-      # The suite starts Postgres through Testcontainers, which the runner's
-      # Docker daemon provides. The encryption key comes from the surefire
-      # configuration in app/pom.xml, so nothing secret is needed to run it.
+      # Postgres arrives through Testcontainers, which the runner's Docker
+      # daemon provides; SQLite is a file under app/target and needs no daemon
+      # at all. `TestDatabase` picks between them before any Spring context
+      # exists. The encryption key comes from the surefire configuration in
+      # app/pom.xml, so nothing secret is needed to run either.
       - name: Build and test
-        run: ./mvnw -B -ntp verify
+        run: ./mvnw -B -ntp verify -Dorknux.test.database=${{ matrix.engine }}
 
 
       - name: Publish test report
@@ -74,7 +98,10 @@ jobs:
         # step before this one stopped the job.
         if: always()
         with:
-          name: test-results
+          # Named per engine, or the second leg to finish would collide with the
+          # first — and the SQLite reports are the ones nobody has been able to
+          # read until now.
+          name: test-results-${{ matrix.engine }}
           path: '**/target/surefire-reports/*.xml'
           if-no-files-found: ignore
           retention-days: 7

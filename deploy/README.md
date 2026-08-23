@@ -7,6 +7,7 @@ Docker runs.
 
 ```
 curl -O https://raw.githubusercontent.com/michjak-szymanski/orknux-server/main/deploy/compose.yaml
+export ORKNUX_SECRET_KEY="$(openssl rand -base64 32)"
 docker compose up -d
 ```
 
@@ -17,45 +18,37 @@ server runs its way through ninety-odd Flyway migrations before it answers
 anything. `docker compose logs -f orknux-server` is where it says so.
 
 **If you only want to look at Orknux, there is one container that needs none of
-this**: `docker run -p 8080:8080 orknux/orknux-one`, not even a file to copy.
-It is not a deployment and it says so - see
+this**: `docker run -p 8080:8080 orknux/orknux-one`, no file to copy and no key
+to generate. It is not a deployment and it says so - see
 [One container instead](#one-container-instead-orknux-one) below for what it
 gives up, starting with runs that are not durable.
 
 ## The secret key, before anything else
 
-The secret key encrypts every credential the server is trusted with - model
-provider keys, Slack tokens, MCP secrets - so a copy of the database on its own
-is not enough to use them. It is **32 bytes, base64 encoded**, which is what
-`openssl rand -base64 32` produces; anything else fails when a credential is
-read, not when the server starts.
+`ORKNUX_SECRET_KEY` is the one setting with no default, and the compose file
+refuses to start without it rather than letting you find out later.
 
-**You do not have to supply one to start.** When `ORKNUX_SECRET_KEY` is empty
-the server generates a key on its first start and keeps it at
-`ORKNUX_SECRET_KEY_FILE`, which this compose file points at `/home/orknux/secret.key`
-inside the `orknux-data` volume. The path is the part to be careful with: a
-generated key is only useful if the next start reads the same one back, and a
-key on a path that does not survive a restart is worse than no key at all - the
-server comes up, calls itself healthy, and cannot read a thing it wrote
-yesterday. There is no default key and there never will be, because a key
-written into a file people copy is a key every installation shares.
+It encrypts every credential the server is trusted with - model provider keys,
+Slack tokens, MCP secrets - so a copy of the database on its own is not enough
+to use them. It has to be **32 bytes, base64 encoded**, which is what `openssl
+rand -base64 32` produces; anything else fails when a credential is read, not
+when the server starts.
 
-**Supply your own for a deployment.** Set `ORKNUX_SECRET_KEY` and it wins over
-the file, nothing is written to disk, and the key lives wherever you already
-keep secrets. That is the difference worth caring about: a generated key sits on
-the same volume as the data it protects, so it defends a stolen database and
-travels with a stolen copy of that volume, while a supplied key is one the disk
-never held.
+There is no default on purpose. A key written into a file people copy is a key
+every installation shares, which is the same as having no key at all.
 
-**Whichever you end up with, the key and the database are one thing.** Back them
-up together and restore them together. Changing the key or losing it strands
-every secret already stored - nothing decrypts them afterwards, they are not
-corrupted and they are not recoverable, they simply have to be entered again by
-hand, one at a time. A backup of the database without the key restores
-everything except the credentials, and no part of that is visible until somebody
-opens a provider or a Slack connection and finds it broken. Admin -> Doctor is
-the screen that says whether the key is set, the right length, and whether every
-stored secret can still be read with it.
+**Changing it or losing it strands every secret already stored.** Nothing
+decrypts them afterwards. They are not corrupted and they are not recoverable -
+they simply have to be entered again, by hand, one at a time. So the key is
+permanent from the moment you save the first credential, and it belongs in
+whatever you already use to keep secrets, backed up somewhere other than the
+database it protects.
+
+The server reads it on first use rather than at startup, which is why the guard
+is in the compose file: without it the server would boot, report itself
+perfectly healthy, and fail the first time anybody pressed Save on a provider
+key. Admin -> Doctor is the screen that says whether the key is set, the right
+length, and whether every stored secret can still be read with it.
 
 ## What it runs, and why each thing is there
 
@@ -293,8 +286,7 @@ or in a `.env` file next to `compose.yaml`.
 
 | Variable | Default | What it changes |
 | --- | --- | --- |
-| `ORKNUX_SECRET_KEY` | *empty; one is generated* | See above. Empty generates a key into the `orknux-data` volume on the first start; set it and that file is never written or read. |
-| `ORKNUX_SECRET_KEY_FILE` | `/home/orknux/secret.key` | Where a generated key is kept. Only move it somewhere else on the volume - a path that does not survive a restart is a new key on every start. |
+| `ORKNUX_SECRET_KEY` | *none, required* | See above. |
 | `ORKNUX_HTTP_PORT` | `8080` | The port you open in a browser. |
 | `ORKNUX_DB_PASSWORD` | `orknux` | The Postgres password, used by Postgres, the server and Temporal alike. Only read when the database volume is first created. |
 | `ORKNUX_LDAP_ADMIN_PASSWORD` | `admin` | The directory's admin password, which is also what the server binds with. |
@@ -383,9 +375,7 @@ The defaults are chosen so that the file runs when you copy it, not so that it
 is safe when you leave it. In rough order of how much it will hurt to have
 skipped:
 
-1. **Supply the secret key, and keep it somewhere.** The generated one exists so
-   that this file runs when you copy it, not because a key on the same volume as
-   the data is where a key belongs. Everything above.
+1. **Keep the secret key somewhere.** Everything above.
 2. **Replace the seeded people.** Delete the `alice` and `bob` entries from the
    `ldap-bootstrap` config, or point the server at a directory you already run
    by changing `ORKNUX_LDAP_URLS`, `ORKNUX_LDAP_BASE`, `ORKNUX_LDAP_BIND_DN` and
@@ -423,12 +413,9 @@ skipped:
    every start, which is what makes it a one-line dependency here and what makes
    it wrong to keep: a restart should not be a migration. Run
    `temporalio/server` and apply the schema yourself with `temporal-sql-tool`.
-8. **Back up the Postgres volume**, and back up the secret key with it - not
-   inside it. A backup of the database without the key restores everything
-   except the credentials, which is a restore that does not work; a backup that
-   carries both in one archive hands over the credentials to whoever gets the
-   archive. If the key is still the generated one, it is in `orknux-data`, and
-   backing that volume up is what keeps it.
+8. **Back up the Postgres volume**, and back up the secret key separately from
+   it. A backup of the database without the key restores everything except the
+   credentials, which is a restore that does not work.
 
 ## Where the data lives
 
@@ -438,7 +425,7 @@ Four named volumes, so nothing depends on a path on your machine:
 | --- | --- |
 | `postgres-data` | Everything Orknux and Temporal know. |
 | `ldap-data`, `ldap-config` | The directory, if you are using the one in this file. |
-| `orknux-data` | Attached files, under `/home/orknux/attachments`, and the generated secret key at `/home/orknux/secret.key` if you supplied none. |
+| `orknux-data` | Attached files, under `/home/orknux/attachments`. |
 
 `orknux-data` is mounted at the server user's home directory rather than at
 something tidier like `/app/data`, and that is not a style choice. The image
@@ -465,11 +452,8 @@ query. Take the Postgres volume first if you would mind going back.
 
 ## When it does not come up
 
-- **The credentials from a restored installation cannot be read** - the database
-  came back and the secret key did not, which is what happens when only the
-  Postgres volume was in the backup. Put the original key back as
-  `ORKNUX_SECRET_KEY` and restart; if it is genuinely gone, the credentials have
-  to be entered again and Admin -> Doctor lists which.
+- **`required variable ORKNUX_SECRET_KEY is missing a value`** - the guard doing
+  its job. Export one, as above.
 - **`orknux-ui` restarts in a loop** - nginx resolves the server's name once,
   when it starts, so it will not start before the server exists. `docker compose
   logs orknux-server` first.

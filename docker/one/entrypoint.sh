@@ -3,9 +3,9 @@
 # What has to be true before an Orknux with nothing supplied can be signed into.
 #
 # `docker run orknux/orknux-one` is meant to be the whole command. That means
-# two things have to be invented here, because nobody was asked for them: a
-# first administrator, and somewhere to put the database. The encryption key was
-# a third until the server started making its own - see below.
+# three things have to be invented here, because nobody was asked for them: an
+# encryption key, a first administrator, and somewhere to put the database. The
+# first of those is the one that has to be right - see below.
 #
 # Everything is only ever created, never replaced. A file that is already in the
 # data directory is what this installation is, and a start that overwrote one
@@ -43,37 +43,57 @@ if [ -n "$DB_FILE" ]; then
     mkdir -p "$(dirname "$DB_FILE")"
 fi
 
-# Is this a database that already holds something? The answer decides whether an
-# administrator may be invented: seeding one into an installation that already
-# has accounts would be handing out a way in that nobody asked for.
+# Is this a database that already holds something? The answer decides whether
+# anything below may be invented: a key generated beside an existing database is
+# a key that cannot read it.
 existing_installation() {
     [ -n "$DB_FILE" ] && [ -s "$DB_FILE" ]
 }
 
 # ---------------------------------------------------------------------------
-# The encryption key, which is not generated here any more.
+# The encryption key. The one thing in this script that can lose data.
 #
-# This script used to invent one and write it into the data directory, in sh,
-# for this image alone. The reason for doing it applies to every way the server
-# is started, so it moved into the server - SecretKeySource - and two spellings
-# of one rule is one too many. A key supplied in ORKNUX_SECRET_KEY still wins
-# and is still never written down; the server decides that too.
+# Every credential the server is trusted with - model provider keys, Slack
+# tokens, MCP secrets - is encrypted with it before it reaches the database.
+# Generating a *different* key on the next start does not fail loudly: the server
+# boots, reports itself healthy, and every stored credential is unreadable from
+# then on, discovered one at a time by whoever pressed Save on them. So the key
+# is written into the data directory, beside the database it protects, and the
+# two travel together or not at all.
 #
-# What is left is the one part that is specific to this image: which path the
-# key belongs at. It has to be inside $DATA, beside the database it protects, so
-# that the two are on the volume together and travel together or not at all. The
-# server's own default is relative to the working directory, which here is a
-# container layer that goes when the container does.
-#
-# The banner this block used to print - a database is here and the key is not -
-# went with it, and is not missed. It asked whether the database file was
-# non-empty, which is not the same question; the server reads the stored
-# credentials back and names the ones the current key cannot open, in the log
-# and on Admin -> Doctor, which is the answer that block was approximating.
+# A key supplied in the environment always wins and is never written down - an
+# operator who keeps their own is keeping it somewhere better than this.
 # ---------------------------------------------------------------------------
 
-ORKNUX_SECRET_KEY_FILE="${ORKNUX_SECRET_KEY_FILE:-$DATA/secret.key}"
-export ORKNUX_SECRET_KEY_FILE
+KEY_FILE="$DATA/secret.key"
+
+if [ -n "${ORKNUX_SECRET_KEY:-}" ]; then
+    note "Using the encryption key from ORKNUX_SECRET_KEY."
+elif [ -f "$KEY_FILE" ]; then
+    ORKNUX_SECRET_KEY="$(cat "$KEY_FILE")"
+    export ORKNUX_SECRET_KEY
+    note "Using the encryption key kept at $KEY_FILE."
+else
+    if existing_installation; then
+        # The database survived and the key did not, which is what happens when
+        # only part of the data directory was restored, or when the database was
+        # bind-mounted from one place and the rest of the directory from another.
+        # Generating one here would encrypt new credentials with a key that
+        # cannot read the old ones, so the server would come up half working. It
+        # still starts - the database is worth more than the credentials - but
+        # nobody gets to find this out later.
+        banner "There is a database at $DB_FILE but no $KEY_FILE.
+A new key is being generated, and every credential stored with the old one is
+unreadable from now on. They are not corrupted and they are not recoverable:
+they have to be entered again, by hand. Admin -> Doctor lists which.
+If the old key still exists somewhere, stop this container, put it back at
+$KEY_FILE, and start again before anybody saves anything."
+    fi
+    ( umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "$KEY_FILE" )
+    ORKNUX_SECRET_KEY="$(cat "$KEY_FILE")"
+    export ORKNUX_SECRET_KEY
+    note "Generated an encryption key and kept it at $KEY_FILE. It belongs with the database; back the two up together."
+fi
 
 # ---------------------------------------------------------------------------
 # The first administrator.

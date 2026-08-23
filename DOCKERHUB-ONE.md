@@ -75,15 +75,11 @@ because the two are only useful together:
   credentials in it; the key without the database is 44 characters of nothing.
 - **Copying the database somewhere without the key strands every secret in it.**
   They are not corrupted and they are not recoverable — they have to be typed in
-  again, one at a time. A start that finds a database and no key generates a new
-  one rather than refusing, because the database is worth more than the
-  credentials in it, and then it is the stored values themselves that say so:
-  the log warns as each one fails to open, and Admin → Doctor lists which, by
-  table and column.
+  again, one at a time. The container says so, loudly, when it finds a database
+  and no key.
 - Set `ORKNUX_SECRET_KEY` to supply your own, and nothing is written to disk.
-  That is what to do if you already keep secrets somewhere better than a volume.
-  Admin → Doctor is also the screen that says whether the key is set and the
-  right length.
+  Admin → Doctor is the screen that says whether the key is set, the right
+  length, and whether every stored secret can still be read with it.
 
 ## What this cannot do
 
@@ -136,8 +132,7 @@ when everything is one container.
 
 | Variable | What it does | Default here |
 | --- | --- | --- |
-| `ORKNUX_SECRET_KEY` | Encrypts stored credentials. Set it and nothing is written to disk. | generated into `/var/lib/orknux/secret.key` |
-| `ORKNUX_SECRET_KEY_FILE` | Where that generated key is kept. On the volume, so it survives the container. | `$ORKNUX_DATA/secret.key` |
+| `ORKNUX_SECRET_KEY` | Encrypts stored credentials. | generated into `/var/lib/orknux/secret.key` |
 | `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | The first administrator. | `admin` |
 | `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | Their password, once. At least 12 characters. | generated into `/var/lib/orknux/admin-password` |
 | `ORKNUX_DATA` | Where this image keeps the key and the first password. | `/var/lib/orknux` |

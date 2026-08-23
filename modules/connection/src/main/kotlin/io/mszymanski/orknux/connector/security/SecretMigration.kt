@@ -70,8 +70,6 @@ class SecretMigration(
             return
         }
 
-        reportGeneratedBesideStrangers()
-
         var rewritten = 0
         var failed = 0
         for (column in columns.all) {
@@ -125,56 +123,6 @@ class SecretMigration(
             },
         )
     }
-
-    /**
-     * A key made this morning, beside credentials written last year.
-     *
-     * [SecretKeySource] generates a key when none was supplied and writes it to
-     * a path, and the one thing it cannot check is whether that path survives a
-     * restart. On a filesystem that does not — a container with no volume, a
-     * data directory only half restored — every start makes a new key, the
-     * server comes up healthy, and nothing it stored is readable any more. The
-     * symptom arrives days later as one integration at a time, which is the
-     * worst possible way to find out.
-     *
-     * The evidence is here rather than there: a key that was *generated* on this
-     * start, sitting beside values already in the envelope that it cannot open,
-     * means the key those values were written with is gone. Said loudly and
-     * once, because unlike a missing key this one has already cost something.
-     *
-     * A key read from a file, or supplied, says nothing here even when values
-     * cannot be read — that is the doctor's "Stored secrets" card, it is not new
-     * information, and a warning on every boot is a warning people learn to
-     * skip.
-     */
-    private fun reportGeneratedBesideStrangers() {
-        val at = (cipher.origin as? SecretKeySource.Origin.Generated)?.at ?: return
-
-        val stranded = columns.all.sumOf { column ->
-            sealedValues(column).count { !cipher.canRead(it) }.toLong()
-        }
-        if (stranded == 0L) return
-
-        log.warn(
-            "A secret key was generated on this start and kept at {}, but {} stored credential(s) " +
-                "were written with a key this installation no longer has. They are not corrupted and " +
-                "not recoverable: they have to be entered again, and Admin -> Doctor lists which. " +
-                "If the old key still exists, stop the server, put it back at {}, and start again " +
-                "before anybody saves anything. If this happens on every start, the path is not " +
-                "surviving a restart - point orknux.security.secret-key-file at storage that does.",
-            at,
-            stranded,
-            at,
-        )
-    }
-
-    /** Every value in one column that is already in the envelope. */
-    private fun sealedValues(column: SecretColumns.SecretColumn): List<String> = runCatching {
-        jdbc.queryForList(
-            "SELECT ${column.column} AS value FROM ${column.table} " +
-                "WHERE ${column.column} LIKE '$PREFIX%'",
-        ).mapNotNull { it["value"] as? String }
-    }.getOrNull() ?: emptyList()
 
     /** How many values in one column have never been through the cipher. */
     private fun plaintextCount(column: SecretColumns.SecretColumn): Long = runCatching {

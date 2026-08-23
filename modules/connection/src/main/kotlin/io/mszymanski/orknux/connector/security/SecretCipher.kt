@@ -1,7 +1,7 @@
 package io.mszymanski.orknux.connector.security
 
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.security.SecureRandom
 import java.util.Base64
@@ -18,11 +18,9 @@ import javax.crypto.spec.SecretKeySpec
  * the database on its own is not enough.
  *
  * **What this does and does not defend against.** The key comes from the
- * environment the application runs in, or from a file beside the database when
- * nothing was supplied - [SecretKeySource] decides which - so this protects the
- * data at rest: backups, disk, a replica, anyone with a database login. It does
- * not protect against someone who can already read the application's own
- * environment, or the key file it keeps one in; for
+ * environment the application runs in, so this protects the data at rest —
+ * backups, disk, a replica, anyone with a database login. It does not protect
+ * against someone who can already read the application's own environment; for
  * that the key has to live somewhere the application only borrows it from, which
  * is a different job and a different deployment.
  *
@@ -35,37 +33,17 @@ import javax.crypto.spec.SecretKeySpec
  * encrypted can be recognised on sight.
  */
 @Component
-class SecretCipher @Autowired constructor(private val keys: SecretKeySource) {
-
-    /**
-     * For a caller that already holds a key rather than a way of finding one.
-     *
-     * The primary constructor is annotated because of this one. A class with two
-     * constructors and no mark on either is a class Spring will not build, and
-     * the failure is `NoSuchMethodException: SecretCipher.<init>()` at context
-     * load - so every test in the suite, rather than anything that looks like
-     * this file.
-     *
-     * The tests, mostly, and anything encrypting against a key it was handed —
-     * a rotation reading values back with the key they were written with. It
-     * configures no key file, so this constructor reads nothing off disk and
-     * writes nothing to it.
-     */
-    constructor(key: String) : this(SecretKeySource.of(key))
-
-    private val configuredKey: String get() = keys.key
-
-    /** Where the key came from, for anything that has to explain it. */
-    val origin: SecretKeySource.Origin get() = keys.origin
+class SecretCipher(
+    @param:Value("\${orknux.security.secret-key:}") private val configuredKey: String,
+) {
 
     private val random = SecureRandom()
 
     private val key: SecretKeySpec by lazy {
         check(configuredKey.isNotBlank()) {
-            "There is no secret key. Credentials are encrypted with it, and without it the ones " +
-                "already stored cannot be read. One is generated on first start unless " +
-                "orknux.security.secret-key-file is empty; set orknux.security.secret-key to " +
-                "supply your own (openssl rand -base64 32)"
+            "orknux.security.secret-key is not set. Credentials are encrypted with it, and " +
+                "without it the ones already stored cannot be read. Generate one with: " +
+                "openssl rand -base64 32"
         }
 
         val decoded = runCatching { Base64.getDecoder().decode(configuredKey.trim()) }

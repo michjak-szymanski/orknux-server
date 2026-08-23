@@ -35,11 +35,9 @@ docker compose up -d                        # postgres, openldap and temporal
 ./mvnw test -Dorknux.test.database=sqlite   # the same suite, on SQLite
 ```
 
-`ORKNUX_SECRET_KEY` no longer has to be set. Without it the server generates a
-key on its first start and keeps it at `app/data/secret.key`, which is ignored
-by git, so the same key is read on every run after that and the credentials a
-run stores are still there in the next one. Set it to work against a key you
-supply, and the file is neither written nor read.
+`ORKNUX_SECRET_KEY` has to be set in the environment the server is started in.
+It is read on first use, so without it the application starts perfectly, reports
+itself healthy, and fails the first time anything reads or writes a credential.
 
 Three Maven modules: `app` (the deployable), `modules/connection` and
 `modules/execution`. Neither module may depend on `app`; where one needs

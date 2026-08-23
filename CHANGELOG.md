@@ -27,6 +27,16 @@ have failed.
   turning it from a secret into a plain value, because a plain value is returned
   with the listing and that would put the key on every member's screen.
 
+- **A Slack action says whether the connection can see what you typed.** The
+  User and Channel fields are still free text and still save whatever is in
+  them; what is new is that Orknux asks Slack and tells you. Three answers, not
+  two: it found it, it could not find it, or it never asked. That last one
+  matters — a bot token set up only to post carries no read scope at all, and
+  "could not check" and "does not exist" want opposite things done about them,
+  one a scope to add and the other a name to correct. Nothing here refuses a
+  save, because a private channel the bot was never invited to and a member who
+  joined a minute ago look exactly like a typo from outside.
+
 - **Publishing a workflow has a keystroke.** Ctrl+Enter, rebindable in
   Preferences, and the Publish control's own tooltip says which key it is. It
   refuses exactly where the button refuses rather than carrying its own idea of
@@ -74,6 +84,15 @@ have failed.
   it moves from a menu rather than from a link. It still leaves — what you were
   writing belongs to the workspace you were writing it in — but it asks, and it
   offers to file it where it was written before it switches.
+
+- **A run's graph is drawn even when its size arrives a moment late.** Loading
+  an execution sometimes showed an empty canvas that only a reload fixed. A node
+  whose size has not been measured is drawn invisible, and every measurement is
+  thrown away whenever the nodes are rebuilt — which happens on every read of
+  the run, and the page reads it twice on load and again on every refresh. When
+  the two land together nothing takes a fresh measurement and the nodes stay
+  invisible. They declare their size now. The workflow editor's canvas was one
+  step from the same fault for the same reason and got the same guard.
 
 - **An audit feed written in one moment comes back in one order.** Both audit
   queries sorted on the timestamp alone, so two entries written in the same

@@ -117,6 +117,35 @@ type Query {
     "The connections one workspace holds, ordered by name."
     workspaceConnections(workspaceId: ID!): [WorkspaceConnection!]!
     workspaceConnection(id: ID!): WorkspaceConnection
+    """
+    Whether a Slack connection can see the user or channel somebody has typed
+    into an action's target field.
+
+    It never fails. A name that is wrong, a token that cannot look anything up,
+    a Slack that will not answer: each comes back as an `outcome` and a sentence
+    to show, so a form can say something useful beside a field without the field
+    itself being able to break. `NOT_FOUND` is advice and `UNCHECKED` is not an
+    error - read `SlackTargetOutcome` before deciding what a screen does with
+    either.
+
+    **It does not gate the save.** `createAction` and `updateAction` do not ask
+    this and are not affected by it. `targetName` stays free text, because the
+    answers this can give are wrong about a real member often enough that
+    refusing on them would cost more than the typos it catches.
+
+    One lookup per question, with no page after the first and nothing cached, so
+    a workspace larger than a single lookup reads comes back `UNCHECKED` rather
+    than being ruled on. Suggesting from the same two endpoints is a separate
+    thing that wants a cache, and is not this.
+    """
+    slackTarget(
+        "The connection the action sends through."
+        connectionId: ID!,
+        "Which of the two fields is being asked about."
+        target: MessageTarget!,
+        "Exactly what is in the field: \"#general\", \"@alice\", an address, or an id pasted out of Slack."
+        name: String!
+    ): SlackTargetCheck!
     "The MCP servers a workspace's agents may connect to, ordered by name."
     mcpServers(workspaceId: ID!): [McpServer!]!
     mcpServer(id: ID!): McpServer
@@ -2363,6 +2392,48 @@ enum ConnectionStatus {
     NOT_CHECKED
     CONNECTED
     FAILED
+}
+
+"What asking a Slack connection about a typed user or channel came back with."
+enum SlackTargetOutcome {
+    "Slack named it."
+    FOUND
+    """
+    Slack answered, and nothing it can see goes by that.
+
+    Advice and never a verdict. A private channel the bot was never invited to,
+    and a member who joined a moment ago, both look like this from here.
+    """
+    NOT_FOUND
+    """
+    The question was never put, and `message` says why.
+
+    Its own outcome rather than a failure, because "could not check" and "does
+    not exist" want opposite things done about them: one is a scope to add to
+    the Slack app, the other is a name to correct. The commonest case by far is
+    a bot token carrying no read scope at all, which is what a token set up only
+    to post looks like.
+    """
+    UNCHECKED
+}
+
+"""
+Whether a Slack action's User or Channel field names something the connection
+can see.
+
+Nothing here refuses anything. The field it describes stays free text: it is
+still saved as typed whatever this says, because a `NOT_FOUND` can be a member
+who joined a minute ago, an id pasted out of somebody else's message, or a
+private channel this bot has not been invited to.
+"""
+type SlackTargetCheck {
+    outcome: SlackTargetOutcome!
+    "One sentence or two, ready to show. Never empty, and never carries a credential."
+    message: String!
+    "Slack's own id, when it was found."
+    id: String
+    "What Slack calls it, when it was found: \"#general\", \"Alice Adams\"."
+    label: String
 }
 
 input CreateWorkspaceConnectionInput {

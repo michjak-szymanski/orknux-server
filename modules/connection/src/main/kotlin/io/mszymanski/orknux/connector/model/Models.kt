@@ -127,10 +127,37 @@ class ModelProvider(
      *
      * Encrypted in the database. The column is wider than the value it holds
      * because the envelope is base64 and carries an initialisation vector.
+     *
+     * Null when the credential is [secretVariableId]'s instead. The two are
+     * exclusive, in the entity and in a CHECK constraint: a provider told to
+     * read a variable and still holding an old copy of a key would be a
+     * credential kept past the moment somebody decided to stop keeping it.
      */
     @Convert(converter = SecretConverter::class)
     @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
+
+    /**
+     * The workspace variable this provider reads its credential from, if it does.
+     *
+     * By id rather than by name, which is the opposite of how an agent's MCP
+     * server grants work and deliberately so. A grant by name is what made #170
+     * and #228 - a variable renamed, or moved to another catalog, would leave
+     * the provider holding a name that matches nothing, and the loss would be
+     * silent until the next call. An id survives both, so the only tidying
+     * operation left to guard is the destructive one, and `VariableAPI` refuses
+     * to delete a variable a provider is reading.
+     *
+     * Not a foreign key: `workspace_variable` is the application's table and this
+     * is the connection module's, and module tables carry no keys across that
+     * boundary. The guard is therefore in code, and the reference is still
+     * reported as broken rather than assumed sound - a restore, a hand-edited
+     * database or a workspace removed out from under it can all leave one
+     * dangling, and a provider that cannot say why it has no key is the failure
+     * this whole arrangement exists to avoid.
+     */
+    @Column(name = "secret_variable_id")
+    var secretVariableId: Long? = null,
 
     @Column(name = "api_version", length = 32)
     var apiVersion: String? = null,
@@ -166,12 +193,21 @@ class ModelProvider(
      *
      * A key is enough on its own; Entra ID needs the three things the token
      * request is made of, and no amount of one of them substitutes for another.
+     *
+     * A reference counts as a credential without the variable being read. What
+     * this decides is whether the provider is worth checking, and a provider
+     * pointed at a variable is - if the variable has gone or is still empty, the
+     * check is where that gets said, in words about the variable. Reporting it
+     * as "Not configured" instead would describe a provider nobody had finished
+     * setting up, which is not what happened.
      */
     fun configured(): Boolean = when (authMethod) {
-        ProviderAuthMethod.API_KEY -> !secret.isNullOrBlank()
-        ProviderAuthMethod.ENTRA_ID ->
-            !secret.isNullOrBlank() && !tenantId.isNullOrBlank() && !clientId.isNullOrBlank()
+        ProviderAuthMethod.API_KEY -> credentialSet()
+        ProviderAuthMethod.ENTRA_ID -> credentialSet() && !tenantId.isNullOrBlank() && !clientId.isNullOrBlank()
     }
+
+    /** A copy of its own, or a variable to read one from. Never both. */
+    private fun credentialSet(): Boolean = secretVariableId != null || !secret.isNullOrBlank()
 
     /**
      * Where this provider's OpenAI-compatible surface begins.
@@ -315,6 +351,9 @@ interface ModelProviderRepository : JpaRepository<ModelProvider, Long> {
     fun findByWorkspaceId(workspaceId: Long, sort: Sort): List<ModelProvider>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): ModelProvider?
+
+    /** Who is reading a variable, which is what stands between it and a delete. */
+    fun findByWorkspaceIdAndSecretVariableId(workspaceId: Long, secretVariableId: Long): List<ModelProvider>
 }
 
 interface LlmModelRepository : JpaRepository<LlmModel, Long> {
@@ -346,6 +385,34 @@ class ModelProviderNameTakenException(name: String) :
 class ModelProviderNameInvalidException : RuntimeException("A provider name is required")
 
 class ModelProviderEndpointInvalidException : RuntimeException("A provider API endpoint is required")
+
+/**
+ * A save that asked for both kinds of credential at once.
+ *
+ * Refused rather than resolved by a precedence rule nobody could look up. The
+ * two are a choice, and a caller sending both has not made it.
+ */
+class ModelProviderCredentialAmbiguousException : RuntimeException(
+    "A provider keeps its own credential or reads one from a workspace variable, not both. " +
+        "Send a key or a variable, not the two together.",
+)
+
+class ModelProviderVariableNotFoundException(id: Long) :
+    RuntimeException("No workspace variable with id $id in this workspace")
+
+/**
+ * A credential was bound to a variable anybody can read off the list.
+ *
+ * A VALUE is returned with the listing on purpose - hiding a channel name or a
+ * threshold only makes them awkward to work with - so binding a provider's key
+ * to one would put that key on every member's screen. Only a SECRET may be a
+ * credential, which is also why `VariableAPI` refuses to turn a bound one back
+ * into a value.
+ */
+class ModelProviderVariableNotSecretException(name: String) : RuntimeException(
+    "\"$name\" is a workspace value rather than a secret, and a value is read with the list. " +
+        "A provider's credential has to be one of the ones kept out of sight.",
+)
 
 class ModelNotFoundException(id: Long) : RuntimeException("No model with id $id")
 

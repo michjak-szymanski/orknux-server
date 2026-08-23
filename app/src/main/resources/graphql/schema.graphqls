@@ -880,7 +880,13 @@ type Mutation {
     updateModelProvider(id: ID!, input: UpdateModelProviderInput!): ModelProvider!
     "Takes the provider's models with it."
     removeModelProvider(id: ID!): Boolean!
-    "Returns the stored key and records that it was revealed."
+    """
+    Returns the stored key and records that it was revealed.
+
+    Null for a provider reading a workspace variable: it holds no key, and
+    revealing that variable is `revealVariable`, which records the reading
+    against the variable rather than against the provider.
+    """
     revealModelProviderSecret(id: ID!): String
     "Asks the provider whether it answers, and records what it said."
     testModelProvider(id: ID!): ModelProvider!
@@ -2506,7 +2512,27 @@ type ModelProvider {
     "What the last check found, and when it ran."
     lastCheckMessage: String
     lastCheckedAt: String
+    "Whether the provider holds a credential of its own. False for one reading a variable."
     secretSet: Boolean!
+    """
+    The workspace variable secret this provider reads its credential from, or
+    null when it keeps its own copy. Those are the two, and they are exclusive.
+    """
+    secretVariableId: ID
+    """
+    What that variable is called and which catalog holds it, for showing the
+    reference without a second round trip. Null when there is no reference, and
+    also when there is one that points at nothing — see `secretVariableMissing`.
+    """
+    secretVariableName: String
+    secretVariableCatalog: String
+    """
+    A reference pointing at nothing. A variable a provider reads cannot be
+    deleted, so this should not happen — but a restore or a database edited by
+    hand can produce one, and a provider that cannot say why it has no key is
+    the failure worth reporting rather than assuming away.
+    """
+    secretVariableMissing: Boolean!
 }
 
 """
@@ -2594,8 +2620,20 @@ input CreateModelProviderInput {
     endpoint: String!
     type: ProviderType
     authMethod: ProviderAuthMethod
-    "The API key, or the Entra client secret."
+    "The API key, or the Entra client secret. Not together with `secretVariableId`."
     secret: String
+    """
+    A workspace variable secret to read the credential from, instead of keeping
+    a copy here. Every provider type supports both; sending this and `secret`
+    together is refused rather than resolved by precedence.
+
+    The variable has to be this workspace's and has to be of kind SECRET — a
+    VALUE is returned with the variable listing, and a key on a listing is a key
+    on a screen. It is referenced by id, so renaming it or moving it to another
+    catalog does not disturb the provider, and deleting it is refused while a
+    provider reads it.
+    """
+    secretVariableId: ID
     apiVersion: String
     deploymentName: String
     region: String
@@ -2609,8 +2647,19 @@ input UpdateModelProviderInput {
     endpoint: String!
     type: ProviderType
     authMethod: ProviderAuthMethod
-    "Null leaves the stored credential alone; empty clears it."
+    """
+    Null leaves the stored credential alone; empty clears it, reference and all.
+    A value stores a copy on the provider and drops any reference it held.
+    """
     secret: String
+    """
+    Points the provider at a workspace variable secret, dropping any copy it
+    held. Null leaves the credential as it is. Sending it together with `secret`
+    is refused: that is a caller who has not chosen between the two.
+
+    Same rules as on create — this workspace's, kind SECRET, referenced by id.
+    """
+    secretVariableId: ID
     apiVersion: String
     deploymentName: String
     region: String

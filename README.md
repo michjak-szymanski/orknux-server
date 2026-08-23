@@ -421,10 +421,22 @@ who belongs to no workspace at all. The base URL is configured rather than read
 off the `Host` header because that header is written by whoever is calling, and
 the link in question opens an account.
 
-Everybody who signs in is recorded: `UserDetection` writes an `EXTERNAL` row the
-first time somebody arrives, which is what makes an issue assignable to a person
-without the application enumerating a directory it was never given permission to
-read.
+Everybody who signs in through a directory or a provider is recorded:
+`UserDetection` writes an `EXTERNAL` row the first time somebody arrives, which
+is what makes an issue assignable to a person without the application
+enumerating a directory it was never given permission to read.
+
+It listens for Spring Security's `AuthenticationSuccessEvent`, and **which doors
+publish that event is a fact worth stating rather than assuming**. The two OIDC
+paths do, because they are built through `AuthenticationManagerBuilder` and the
+publisher reaches them. The directory did not: `LdapAuthenticationConfig` builds
+its manager straight from `LdapBindAuthenticationManagerFactory`, which returns a
+`ProviderManager` with no publisher on it, so no LDAP account was ever written
+down and the Users page could only ever list internal ones. It sets the publisher
+now, and the cast is a `check` so that a change of factory fails at startup
+rather than quietly restoring the hole. The two doors that record nobody — an
+internal password, an API token — say in the code that they mean to: neither is a
+person arriving from somewhere this installation cannot see.
 
 ### Audit
 
@@ -715,15 +727,39 @@ decision worth making once, not once per note.
 
 ### Models
 
-A workspace reaches models through **providers**, and a provider holds a key — which
-is why it lives in `modules/connection` beside MCP servers: credentials are read
-in one place. Each provider has a type, and the type decides what else it needs.
+A workspace reaches models through **providers**, and a provider has a credential —
+which is why it lives in `modules/connection` beside MCP servers: credentials are
+read in one place. Each provider has a type, and the type decides what else it
+needs.
+
+**The credential is its own or somebody else's, and never both.** A provider
+either holds a key of its own, encrypted like every other credential here, or it
+references a workspace variable secret and reads that instead. Every type offers
+both, and the two are exclusive rather than resolved by precedence — sending a
+key and a reference together is refused, because that is a caller who has not
+chosen. The reference is by **id**, not by name: a name is not an identity, and
+the grants that were held by name are exactly what a rename stranded in #170 and
+#228. So renaming the variable or moving it to another catalog leaves the
+provider working, deleting one a provider reads is refused and names the
+provider, and turning a secret into a plain value is refused too — a value comes
+back with the listing, and that would put the key on every member's screen.
 
 **A type exists where something branches on it**, and nowhere else. `OPENAI` is
 the shape the rest are measured against, `ANTHROPIC` has its own body, streaming
 events and `/messages` path, `AZURE_OPENAI` puts the deployment and the API
-version in the URL, `OLLAMA` is the OpenAI shape at an address of your own — and
-`CUSTOM` is anything that speaks one of those well enough, which is most things.
+version in the URL, `OLLAMA` is the OpenAI shape at an address of your own and
+hangs it off `/v1` — and `CUSTOM` is anything that speaks one of those well
+enough, which is most things.
+
+`OLLAMA` earns its branch on that one line and did not always have it. The whole
+client was built on the endpoint as written, so a provider pointed at the address
+the daemon listens on was asked for `/models`, which Ollama does not serve, and
+answered *"check the endpoint"* about an endpoint that was correct. It worked
+only if the address was written ending in `/v1` — at which point picking Ollama
+did nothing that picking OpenAI would not, and the type was decoration. The
+suffix belongs to the client rather than to the check, because proving
+`/api/tags` answers would say the daemon is up and nothing about the surface a
+message is actually sent to.
 A service reached through **Custom** is not a second-class one: Google's own
 OpenAI-compatible endpoint is a Custom provider pointed at
 `https://generativelanguage.googleapis.com/v1beta/openai`, and a type of its own
@@ -1095,6 +1131,22 @@ an `app_mention` then matches every enabled definition watching that connection
 for a mention, and runs each workflow instancing one, with the message, channel
 and thread handed to the run. Set
 `orknux.slack.enabled: false` to open no sockets at all.
+
+**A Slack action's target is checked and never gated.** The User and Channel
+fields are free text, and `slackTarget` answers whether the connection can see
+what somebody has typed. Three outcomes rather than two, because the third is the
+common one: found, not found, and **never asked**. A bot token set up only to
+post carries no read scope at all — `users:read` and `channels:read` are needed
+to look anything up and nothing about sending requires them — so "could not
+check" and "does not exist" want opposite things done about them, one a scope to
+add to the Slack app and the other a name to correct. A workspace with more
+members or channels than a single lookup reads is also "never asked", since
+ruling a name out from a list that was cut short is the wrong answer.
+
+Nothing about it refuses a save. `createAction` and `updateAction` do not call
+it, and a name it could not find is advice: a private channel the bot was never
+invited to, a member who joined a minute ago and an id pasted out of somebody
+else's message all look identical to a typo from outside.
 
 ## Licence
 

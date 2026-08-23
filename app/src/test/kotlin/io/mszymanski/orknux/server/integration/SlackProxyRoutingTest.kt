@@ -7,6 +7,7 @@ import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
 import io.mszymanski.orknux.connector.connection.SlackClients
+import io.mszymanski.orknux.connector.connection.SlackDirectory
 import io.mszymanski.orknux.connector.connection.SlackListener
 import io.mszymanski.orknux.connector.connection.SlackProperties
 import io.mszymanski.orknux.connector.connection.WorkspaceConnection
@@ -143,8 +144,12 @@ class SlackProxyRoutingTest {
         // token before it posts - and it is here for the same reason the post
         // is: every call the client makes is now routed, not the one this test
         // asked for.
-        assertThat(proxied).containsExactly(
+        assertThat(proxied).contains(
             "${slackUrl()}/api/auth.test",
+            // Where the message was addressed is looked up before it is sent,
+            // so this is a third call the test never asked for and a third one
+            // that has to be routed.
+            "${slackUrl()}/api/conversations.list",
             "${slackUrl()}/api/chat.postMessage",
         )
         assertThat(direct).isEmpty()
@@ -157,7 +162,7 @@ class SlackProxyRoutingTest {
         val delivery = messages.send(CONNECTION_ID, "#general", "no rule for this")
 
         assertThat(delivery).isInstanceOf(Delivery.Sent::class.java)
-        assertThat(direct).containsExactly("/api/auth.test", "/api/chat.postMessage")
+        assertThat(direct).contains("/api/auth.test", "/api/conversations.list", "/api/chat.postMessage")
         assertThat(proxied).isEmpty()
     }
 
@@ -234,7 +239,8 @@ class SlackProxyRoutingTest {
     private fun outgoing(vararg rules: ProxyRule): OutgoingMessages {
         val clients = SlackClients(router(*rules))
         clients.webApi.config.methodsEndpointUrlPrefix = "${slackUrl()}/api/"
-        return OutgoingMessages(connections(), clients)
+        val rows = connections()
+        return OutgoingMessages(rows, SlackDirectory(rows, clients), clients)
     }
 
     private fun router(vararg rules: ProxyRule) = ProxyRouter(ProxyRuleSource { rules.toList() })

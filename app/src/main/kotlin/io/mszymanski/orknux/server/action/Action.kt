@@ -68,12 +68,6 @@ enum class ConnectionAction {
     UPDATE_ISSUE,
 }
 
-/** Who a message is addressed to. */
-enum class MessageTarget {
-    CHANNEL,
-    USER,
-}
-
 /** One function argument, and what the action hands it. */
 @Embeddable
 class ArgumentMapping(
@@ -126,10 +120,18 @@ class WorkflowAction(
     @Column(columnDefinition = "text")
     var content: String? = null,
 
-    @Enumerated(EnumType.STRING)
-    @Column(length = 16)
-    var target: MessageTarget? = null,
-
+    /**
+     * Where a send goes, exactly as it was typed: "#general", "general",
+     * "@alice", "alice", an address, or an id pasted out of Slack.
+     *
+     * One column and no kind beside it. There used to be a `target` of CHANNEL
+     * or USER here; it never reached Slack, because `OutgoingMessages` takes a
+     * destination as a string, and all it could do was narrow a lookup - a
+     * setting that changed nothing when it ran and could still be filled in
+     * wrongly. What makes one column enough is that sending resolves this to
+     * Slack's own id first, so a handle reaches a person and a name reaches a
+     * channel without anything stored saying which is which.
+     */
     @Column(name = "target_name", length = 120)
     var targetName: String? = null,
 

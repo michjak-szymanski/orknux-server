@@ -79,7 +79,9 @@ import io.mszymanski.orknux.server.variable.VariableCatalogNameInvalidException
 import io.mszymanski.orknux.server.variable.VariableCatalogNameTakenException
 import io.mszymanski.orknux.server.variable.VariableCatalogNotEmptyException
 import io.mszymanski.orknux.server.variable.VariableCatalogNotFoundException
+import io.mszymanski.orknux.server.variable.VariableHeldByProviderException
 import io.mszymanski.orknux.server.variable.VariableInUseException
+import io.mszymanski.orknux.server.variable.VariableSecrecyHeldException
 import io.mszymanski.orknux.server.variable.VariableNameInvalidException
 import io.mszymanski.orknux.server.variable.VariableNameTakenException
 import io.mszymanski.orknux.server.variable.VariableNotFoundException
@@ -146,6 +148,8 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is VariableNameTakenException,
             is VariableNameInvalidException,
             is VariableInUseException,
+            is VariableHeldByProviderException,
+            is VariableSecrecyHeldException,
             is VariableCatalogNameTakenException,
             is VariableCatalogNameInvalidException,
             is VariableCatalogNotEmptyException,

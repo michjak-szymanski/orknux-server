@@ -7,6 +7,7 @@ import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import io.mszymanski.orknux.connector.connection.HttpHeader
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretVariables
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
 import java.net.URLEncoder
@@ -35,6 +36,8 @@ class ModelProviderProbe(
     private val mapper: ObjectMapper,
     /** Only to recognise a credential that never came out of its envelope. */
     private val cipher: SecretCipher,
+    /** Where a provider reading a workspace secret gets its credential from. */
+    private val variables: SecretVariables,
     private val proxies: ProxyRouter,
 ) {
 
@@ -203,12 +206,65 @@ class ModelProviderProbe(
      * Both the check and an actual call need it, and it is resolved here so the
      * stored credential is read in one place — including the Entra ID case,
      * where there is no credential to send until a token has been fetched with
-     * one.
+     * one, and the case where the provider keeps no credential at all and reads
+     * a workspace secret instead. One place, so that adding the second kind of
+     * credential did not add a second place to get it wrong.
      */
     fun credentials(provider: ModelProvider): Credential {
         if (!provider.configured()) {
             return Credential.Failed("There are no credentials to call this provider with")
         }
+
+        val key = when (val resolved = key(provider)) {
+            is Key.Failed -> return Credential.Failed(resolved.reason)
+            is Key.Held -> resolved.value
+        }
+
+        return when (provider.authMethod) {
+            ProviderAuthMethod.API_KEY -> Credential.Header(keyHeader(provider, key))
+            ProviderAuthMethod.ENTRA_ID -> when (val token = entraToken(provider, key)) {
+                is EntraToken.Failed -> Credential.Failed(token.reason)
+                is EntraToken.Issued -> Credential.Header(HttpHeader("Authorization", "Bearer ${token.value}"))
+            }
+        }
+    }
+
+    /**
+     * The credential itself: the provider's own copy, or the workspace secret it
+     * was pointed at.
+     *
+     * Every failure here is worded about the credential rather than about the
+     * provider, because that is what is wrong. A reference that has come apart
+     * used to be unimaginable and now is not, and the difference between "the
+     * variable is gone", "the variable is empty" and "the endpoint is wrong" is
+     * the difference between three completely different afternoons. None of them
+     * says what the value is, and the reason is not logged - it is returned, and
+     * becomes the sentence on the provider's card.
+     */
+    private fun key(provider: ModelProvider): Key {
+        val variableId = provider.secretVariableId
+        if (variableId != null) {
+            val held = variables.find(provider.workspaceId, variableId)
+                ?: return Key.Failed(
+                    "This provider reads its credential from a workspace secret that no longer exists " +
+                        "(variable $variableId). Point it at another one, or give it a key of its own.",
+                )
+            val value = held.value?.ifBlank { null }
+                ?: return Key.Failed(
+                    "The workspace secret \"${held.name}\" has no value yet, so there is nothing to call " +
+                        "this provider with.",
+                )
+            if (cipher.isEncrypted(value)) {
+                return Key.Failed(
+                    "The workspace secret \"${held.name}\" cannot be read with the current secret key. " +
+                        "Enter it again, or restore the key it was saved with.",
+                )
+            }
+            return Key.Held(value)
+        }
+
+        val own = provider.secret?.ifBlank { null }
+            ?: return Key.Failed("There are no credentials to call this provider with")
 
         /*
          * Stored, but not with the key this installation has now.
@@ -217,20 +273,20 @@ class ModelProviderProbe(
          * back a 401, which reads as a wrong credential rather than an
          * unreadable one — and those two want opposite things done about them.
          */
-        if (cipher.isEncrypted(provider.secret)) {
-            return Credential.Failed(
+        if (cipher.isEncrypted(own)) {
+            return Key.Failed(
                 "This provider's credential cannot be read with the current secret key. " +
                     "Enter it again, or restore the key it was saved with.",
             )
         }
+        return Key.Held(own)
+    }
 
-        return when (provider.authMethod) {
-            ProviderAuthMethod.API_KEY -> Credential.Header(keyHeader(provider))
-            ProviderAuthMethod.ENTRA_ID -> when (val token = entraToken(provider)) {
-                is EntraToken.Failed -> Credential.Failed(token.reason)
-                is EntraToken.Issued -> Credential.Header(HttpHeader("Authorization", "Bearer ${token.value}"))
-            }
-        }
+    /** The credential, or why there is not one to send. */
+    private sealed interface Key {
+        /** Not a data class: a generated `toString` puts the credential in whatever logs it. */
+        class Held(val value: String) : Key
+        data class Failed(val reason: String) : Key
     }
 
     /** What authenticating resolved to: a header to send, or why there is none. */
@@ -240,8 +296,7 @@ class ModelProviderProbe(
     }
 
     /** Each service wants the key somewhere different, and none of them are wrong. */
-    private fun keyHeader(provider: ModelProvider): HttpHeader {
-        val key = provider.secret.orEmpty()
+    private fun keyHeader(provider: ModelProvider, key: String): HttpHeader {
         return when (provider.type) {
             ProviderType.ANTHROPIC -> HttpHeader("x-api-key", key)
             ProviderType.AZURE_OPENAI -> HttpHeader("api-key", key)
@@ -262,11 +317,11 @@ class ModelProviderProbe(
      * token. Expiry is what Entra said, less a minute: a token that expires
      * while a request is in the air is a failure nobody can explain.
      */
-    private fun entraToken(provider: ModelProvider): EntraToken {
+    private fun entraToken(provider: ModelProvider, secret: String): EntraToken {
         val key = TokenKey(
             tenantId = provider.tenantId.orEmpty(),
             clientId = provider.clientId.orEmpty(),
-            secret = provider.secret.orEmpty(),
+            secret = secret,
             scope = provider.scope?.ifBlank { null } ?: DEFAULT_SCOPE,
         )
         cached[key]?.let { held ->
@@ -274,7 +329,7 @@ class ModelProviderProbe(
             cached.remove(key, held)
         }
 
-        return when (val fetched = fetchEntraToken(provider)) {
+        return when (val fetched = fetchEntraToken(provider, secret)) {
             is EntraToken.Failed -> fetched
             is EntraToken.Issued -> {
                 cached[key] = HeldToken(fetched.value, Instant.now().plusSeconds(fetched.seconds - EXPIRY_MARGIN))
@@ -283,18 +338,28 @@ class ModelProviderProbe(
         }
     }
 
-    /** What a token is for: change any of it and the old one is the wrong one. */
+    /**
+     * What a token is for: change any of it and the old one is the wrong one.
+     *
+     * The resolved secret rather than the column, so a provider reading a
+     * workspace variable stops using the old token the moment that variable is
+     * given a new value - which is the whole point of putting the credential
+     * somewhere it can be rotated from.
+     */
     private data class TokenKey(
         val tenantId: String,
         val clientId: String,
         val secret: String,
         val scope: String,
-    )
+    ) {
+        /** A credential must not reach a log, and a data class would put it in one. */
+        override fun toString(): String = "TokenKey($tenantId/$clientId/$scope)"
+    }
 
     private data class HeldToken(val value: String, val goodUntil: Instant)
 
     /** The client credentials grant itself. */
-    private fun fetchEntraToken(provider: ModelProvider): EntraToken {
+    private fun fetchEntraToken(provider: ModelProvider, secret: String): EntraToken {
         val address = "${properties.entraAuthority.trimEnd('/')}/${provider.tenantId}/oauth2/v2.0/token"
 
         /*
@@ -325,7 +390,7 @@ class ModelProviderProbe(
         val form = listOf(
             "grant_type" to "client_credentials",
             "client_id" to provider.clientId.orEmpty(),
-            "client_secret" to provider.secret.orEmpty(),
+            "client_secret" to secret,
             "scope" to (provider.scope?.ifBlank { null } ?: DEFAULT_SCOPE),
         ).joinToString("&") { (name, value) -> "$name=" + URLEncoder.encode(value, StandardCharsets.UTF_8) }
 

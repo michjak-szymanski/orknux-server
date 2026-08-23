@@ -155,7 +155,7 @@ services:
   # ---------------------------------------------------------------------------
   orknux-server:
     # Pinned, so what you bring up today is what you bring up next week.
-    # ORKNUX_SERVER_TAG moves it: a release (`0.9`, `0.9.1`), `sha-<commit>`
+    # ORKNUX_SERVER_TAG moves it: a release (`0.9`, `0.9.2`), `sha-<commit>`
     # which never moves, or `latest` to follow main and accept that an upgrade
     # can happen to you. The interface below is pinned to the same number on
     # purpose - the two halves are released together.

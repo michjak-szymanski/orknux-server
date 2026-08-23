@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.monitoring
 
+import io.mszymanski.orknux.server.database.isSqlite
+import io.mszymanski.orknux.server.database.jdbcUrlOf
 import io.mszymanski.orknux.server.security.AuthMethod
 import io.mszymanski.orknux.server.security.SecurityProperties
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -11,6 +13,7 @@ import org.springframework.ldap.core.LdapTemplate
 import org.springframework.stereotype.Controller
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
+import javax.sql.DataSource
 
 /** What a component reports about itself. */
 enum class ComponentStatus {
@@ -47,14 +50,38 @@ class MonitoringAPI(
     private val access: WorkspaceAccess,
     /** Read for one thing only: whether there is a directory to have an opinion about. */
     private val security: SecurityProperties,
+    /** Read for one thing only: which engine the card below should name. See [engine]. */
+    dataSource: DataSource,
 ) {
+
+    /**
+     * Which database this installation actually keeps its rows in.
+     *
+     * The card used to say "Postgres" whatever was underneath, and `orknux-one`
+     * — the image most people meet this product through — is SQLite. So the
+     * screen an operator opens when something is wrong named the wrong engine
+     * precisely where they were least likely to already know better.
+     *
+     * It is not cosmetic. The two differ in ways that reach whoever is reading
+     * this: SQLite takes one writer at a time, has no `information_schema`, and
+     * does not enforce a varchar length. Somebody diagnosing a lock timeout on a
+     * page that says Postgres goes looking for the wrong thing entirely.
+     *
+     * Asked the way the rest of the application asks — [isSqlite] over the URL
+     * the pool was built from — because that is what already chooses the
+     * dialect, the scheduler's SQL, the session store's propagation and the
+     * doctor's catalogue query, and a second way of deciding is a second answer
+     * waiting to disagree with them. Settled once here: a pool does not change
+     * the database it was built against.
+     */
+    private val engine: String = if (isSqlite(jdbcUrlOf(dataSource))) "SQLite" else "Postgres"
 
     @QueryMapping
     fun components(): List<ComponentView> {
         access.requireAdmin()
 
         val dependencies = listOfNotNull(
-            check("Database", "Postgres, for everything the platform stores") {
+            check("Database", "$engine, for everything the platform stores") {
                 entityManager.createNativeQuery("SELECT 1").singleResult
             },
             /*

@@ -1,10 +1,13 @@
 package io.mszymanski.orknux.server.ldap
 
 import org.springframework.boot.context.properties.EnableConfigurationProperties
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.ldap.core.support.BaseLdapPathContextSource
 import org.springframework.security.authentication.AuthenticationManager
+import org.springframework.security.authentication.DefaultAuthenticationEventPublisher
+import org.springframework.security.authentication.ProviderManager
 import org.springframework.security.config.ldap.LdapBindAuthenticationManagerFactory
 import org.springframework.security.ldap.userdetails.DefaultLdapAuthoritiesPopulator
 import org.springframework.security.ldap.userdetails.InetOrgPersonContextMapper
@@ -23,17 +26,49 @@ class LdapAuthenticationConfig {
             setGroupSearchFilter(properties.groupSearchFilter)
         }
 
+    /**
+     * The directory door, and — since it is built here rather than by Spring —
+     * the announcement that somebody came through it.
+     *
+     * `createAuthenticationManager()` hands back a bare [ProviderManager]. Spring
+     * Boot puts an event publisher on the manager it assembles itself, through
+     * `AuthenticationManagerBuilder`, and a manager constructed directly is not
+     * that manager: it keeps the null publisher a `ProviderManager` starts with
+     * and every successful bind is silent. That silence is not a detail. It is
+     * the only signal an LDAP sign-in gives off — `UserDetection` listens for it
+     * to write the person down — so for as long as it was missing, an
+     * installation signing in against a directory recorded nobody, and the Users
+     * page could only ever list the accounts it had made itself.
+     *
+     * The publisher is given the context's own [ApplicationEventPublisher] so the
+     * events land in the same place every other event in this application does.
+     */
     @Bean
     fun authenticationManager(
         contextSource: BaseLdapPathContextSource,
         authoritiesPopulator: LdapAuthoritiesPopulator,
         properties: LdapProperties,
-    ): AuthenticationManager =
-        LdapBindAuthenticationManagerFactory(contextSource).apply {
+        events: ApplicationEventPublisher,
+    ): AuthenticationManager {
+        val manager = LdapBindAuthenticationManagerFactory(contextSource).apply {
             setUserSearchBase(properties.userSearchBase)
             setUserSearchFilter(properties.userSearchFilter)
             setLdapAuthoritiesPopulator(authoritiesPopulator)
             // Keeps the inetOrgPerson attributes, mail among them, on the principal.
             setUserDetailsContextMapper(InetOrgPersonContextMapper())
         }.createAuthenticationManager()
+
+        /*
+         * Asserted rather than assumed. The factory's return type says only
+         * `AuthenticationManager`, and a silent `as?` that missed would put the
+         * bug back exactly as it was — invisible, and only findable by noticing
+         * that a page is empty. Failing at startup is the loud version.
+         */
+        check(manager is ProviderManager) {
+            "LdapBindAuthenticationManagerFactory no longer builds a ProviderManager, so a sign-in " +
+                "against the directory can no longer be published. See UserDetection."
+        }
+        manager.setAuthenticationEventPublisher(DefaultAuthenticationEventPublisher(events))
+        return manager
+    }
 }

@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.connector.security
 
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 import java.security.SecureRandom
 import java.util.Base64
@@ -34,10 +35,16 @@ import javax.crypto.spec.SecretKeySpec
  * encrypted can be recognised on sight.
  */
 @Component
-class SecretCipher(private val keys: SecretKeySource) {
+class SecretCipher @Autowired constructor(private val keys: SecretKeySource) {
 
     /**
      * For a caller that already holds a key rather than a way of finding one.
+     *
+     * The primary constructor is annotated because of this one. A class with two
+     * constructors and no mark on either is a class Spring will not build, and
+     * the failure is `NoSuchMethodException: SecretCipher.<init>()` at context
+     * load - so every test in the suite, rather than anything that looks like
+     * this file.
      *
      * The tests, mostly, and anything encrypting against a key it was handed —
      * a rotation reading values back with the key they were written with. It

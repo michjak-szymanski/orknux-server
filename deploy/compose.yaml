@@ -15,16 +15,18 @@
 #
 #   temporal-ui     optional, behind the `debug` profile. See the bottom.
 #
-# Two commands:
+# One command:
 #
-#   export ORKNUX_SECRET_KEY="$(openssl rand -base64 32)"
 #   docker compose -f compose.yaml up -d
 #
 # Then http://localhost:8080, and sign in as `alice` / `password`.
 #
-# The one variable with no default is deliberate; read the comment on it before
-# you decide it is in your way. Everything else has a working default, and the
-# whole list of knobs is at the bottom of this file.
+# Nothing has to be exported first. The encryption key every installation needs
+# is generated into the server's volume when you supply none, which is what
+# makes that one line the whole of it - read the comment on ORKNUX_SECRET_KEY
+# below before this holds a credential you would mind entering again. Every
+# other variable has a working default too, and the whole list of knobs is at
+# the bottom of this file.
 #
 # Read this alongside deploy/README.md, which says what to change before this
 # is anything other than a demonstration.
@@ -178,20 +180,38 @@ services:
       #
       #     openssl rand -base64 32
       #
-      # There is no default here on purpose. A key written into a file people
-      # copy is a key every installation shares, which is the same as having no
-      # key at all - so compose stops with the message below rather than
-      # starting a server that will look perfectly healthy and then fail the
-      # first time anything touches a credential.
+      # There is no default key here and there never will be: a key written
+      # into a file people copy is a key every installation shares, which is
+      # the same as having no key at all. Left empty, the server generates one
+      # on its first start and keeps it at the path below - a key nobody else
+      # has, made once and read on every start after that. That is why this
+      # file needs nothing exported before it runs.
       #
-      # Keep it. Back it up somewhere other than the database it protects.
-      # Changing it or losing it makes every secret already stored unreadable -
-      # nothing recovers them, they have to be typed in again - so treat it as
-      # permanent from the moment you save the first credential. Admin ->
-      # Doctor tells you whether the key is set, the right length, and whether
-      # every stored secret can still be read with it.
+      # Supplying your own is still what you want for anything real. A
+      # generated key lives on the same volume as the data it protects, so it
+      # goes wherever a copy of that volume goes and it is one `docker compose
+      # down -v` away from being gone; a key set here comes from wherever you
+      # already keep secrets and is never written to disk at all.
+      #
+      # Either way, the key and the database are one thing. Back them up
+      # together and restore them together. A database restored without the key
+      # it was written with has credentials in it that nothing can read again -
+      # they are not corrupted and they are not recoverable, they have to be
+      # entered by hand - and nothing looks wrong until somebody opens a
+      # provider or a Slack connection and finds it broken. Admin -> Doctor
+      # tells you whether the key is set, the right length, and whether every
+      # stored secret can still be read with it.
       # ---------------------------------------------------------------------
-      ORKNUX_SECRET_KEY: ${ORKNUX_SECRET_KEY:?generate one with `openssl rand -base64 32`, export it as ORKNUX_SECRET_KEY, and keep it - changing it later makes every credential already stored unreadable}
+      ORKNUX_SECRET_KEY: ${ORKNUX_SECRET_KEY:-}
+
+      # Where a generated key is kept, and ignored entirely when one is
+      # supplied above. Absolute and on the volume below, for the same reason
+      # the attachments path is: the default is relative to the working
+      # directory, which in a container means a key written into a layer that
+      # goes when the container does. A key that does not survive a restart is
+      # worse than no key - the next start makes a different one, the server
+      # comes up healthy, and everything written yesterday is unreadable.
+      ORKNUX_SECRET_KEY_FILE: /home/orknux/secret.key
 
       ORKNUX_DB_URL: jdbc:postgresql://postgres:5432/orknux
       ORKNUX_DB_USERNAME: orknux
@@ -391,7 +411,8 @@ volumes:
   # Named, not bound to a path on your machine, so this file has nothing in it
   # that only works on the computer it was written on. `docker compose down -v`
   # removes all four, which is how you start over - and is also how you lose
-  # everything, including the credentials your secret key was protecting.
+  # everything: the database, and the generated secret key in orknux-data that
+  # the credentials in it were encrypted with.
   postgres-data:
   ldap-data:
   ldap-config:

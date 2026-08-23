@@ -758,6 +758,28 @@ type Mutation {
     true` for what this mutation would accept.
     """
     setWorkspaceDefaultMemoryShare(workspaceId: ID!, share: Int): Workspace!
+    """
+    Sets how voice mode decides somebody has finished talking, for this
+    workspace.
+
+    All three are stated on every call and null clears one, which puts it back
+    on voice mode's own value rather than leaving it on whatever was set last —
+    the same rule `setWorkspaceDefaultMemoryShare` follows, and what lets a form
+    offer "the default" as a thing to choose.
+
+    Each is refused outside its bounds with a sentence naming what is allowed: a
+    pause between 1.5 and 10 seconds, a sensitivity between 120% and 600% of the
+    room, and an unattended microphone between 5 minutes and an hour.
+
+    Whoever can see the workspace may set it — a workspace setting rather than
+    an administrative one — and it is recorded either way.
+    """
+    setWorkspaceVoiceTurnTaking(
+        workspaceId: ID!,
+        pauseEndsTurnMs: Int,
+        speechOverRoomPercent: Int,
+        unattendedMicrophoneMs: Int
+    ): Workspace!
 
     createObject(input: CreateObjectInput!): WorkflowObject!
     "Backs the object editor: the properties on the left, the details on the right."
@@ -983,6 +1005,37 @@ type Workspace {
     somebody sets this. An agent with a share of its own never consults it.
     """
     defaultMemoryShare: Int
+    """
+    How long a pause has to run, after somebody has been talking, before their
+    turn ends and what they said is sent.
+
+    Null means the workspace has decided nothing and voice mode uses its own
+    pause, which is where every workspace starts. This is the setting that ends
+    a turn; the other two decide who counts as talking and when an open
+    microphone gives up.
+    """
+    voicePauseEndsTurnMs: Int
+    """
+    How far above the room's own noise a sound has to stand to count as a voice,
+    as a percentage — 250 is two and a half times the room.
+
+    Lower is more sensitive, and the number to lower for somebody who talks
+    quietly or sits far from the microphone. A room is measured as it is heard,
+    so this travels between microphones in a way a fixed loudness does not.
+    Null means the workspace has decided nothing.
+    """
+    voiceSpeechOverRoomPercent: Int
+    """
+    How long an open microphone stays open when nothing else has ended the turn.
+
+    A fuse, not a limit on how much anybody may say: the pause above is what
+    ends a turn, and this only fires when no pause ever came — a microphone left
+    open in an empty room, or a room noisy enough to read as somebody talking.
+    Every value this has held that looked like a reasonable limit turned out to
+    cut somebody off mid-sentence, which is why the floor is where it is.
+    Null means the workspace has decided nothing.
+    """
+    voiceUnattendedMicrophoneMs: Int
 }
 
 input CreateWorkspaceInput {

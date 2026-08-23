@@ -21,6 +21,7 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
             // not, it is that what they sent does not hold together.
             is WorkspaceAdminRoleNotAssignedException,
             is WorkspaceMemoryShareUnusableException,
+            is WorkspaceVoiceTurnTakingUnusableException,
             -> ErrorType.BAD_REQUEST
             is WorkspaceNotFoundException -> ErrorType.NOT_FOUND
             else -> return null

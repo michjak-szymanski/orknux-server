@@ -116,10 +116,10 @@ class SlackTargetAPITest(
         graphQlTester.document(query(target = "CHANNEL", name = "#notifications")).execute()
             .path("slackTarget.outcome").entity(String::class.java).isEqualTo("UNCHECKED")
             .path("slackTarget.message").entity(String::class.java).satisfies {
-                assertThat(it)
-                    .contains("does not carry the channels:read and groups:read scopes")
-                    .contains("sending a message needs no such scope")
-                    .contains("has not been checked rather than found to be wrong")
+                // One line, and it names the scope. A form draws this under a
+                // field in a side panel; a paragraph there gets scrolled past.
+                assertThat(it).startsWith("Not checked").contains("channels:read and groups:read")
+                assertThat(it.length).isLessThan(120)
             }
     }
 

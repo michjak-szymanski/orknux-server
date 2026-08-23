@@ -97,8 +97,11 @@ class SlackDirectoryTest {
         // A private channel the bot was never invited to is not in the list
         // either, so the sentence has to leave room for one.
         assertThat(check.message)
-            .contains("No channel Support Slack can see is called #notifcations")
-            .contains("advice rather than a verdict")
+            .contains("No channel called #notifcations")
+            .contains("a private one this bot is not in looks the same")
+        // One line. This is drawn under a field in a side panel, and a
+        // paragraph there is scrolled past rather than read.
+        assertThat(check.message.length).isLessThan(120)
     }
 
     @Test
@@ -110,16 +113,13 @@ class SlackDirectoryTest {
         // The distinction this whole feature exists for.
         assertThat(check.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
         assertThat(check.outcome).isNotEqualTo(SlackTargetOutcome.NOT_FOUND)
+        // "Not checked" and the scope that is missing. The distinction this
+        // feature exists for has to survive being said in one line, because a
+        // line is what there is room for.
         assertThat(check.message)
-            .contains("Slack was not asked whether #notifications exists")
-            .contains("does not carry the channels:read and groups:read scopes")
-            // Nothing is broken, and nothing typed here has been judged: the two
-            // things a person reading this under a correct name needs told.
-            .contains("Nothing is wrong with the connection and nothing is wrong with what is typed here")
-            .contains("sending a message needs no such scope")
-            .contains("has not been checked rather than found to be wrong")
-            // And what to do about it, because the scope is addable.
-            .contains("Add the channels:read and groups:read scopes to the Slack app and reinstall it")
+            .startsWith("Not checked")
+            .contains("channels:read and groups:read")
+        assertThat(check.message.length).isLessThan(120)
     }
 
     @Test
@@ -129,9 +129,8 @@ class SlackDirectoryTest {
         val check = directory().check(CONNECTION_ID, SlackTargetKind.USER, "@alice")
 
         assertThat(check.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
-        assertThat(check.message)
-            .contains("does not carry the users:read scope")
-            .contains("Add the users:read scope to the Slack app and reinstall it")
+        assertThat(check.message).startsWith("Not checked").contains("users:read")
+        assertThat(check.message.length).isLessThan(120)
     }
 
     @Test
@@ -145,7 +144,7 @@ class SlackDirectoryTest {
         val check = directory().check(CONNECTION_ID, SlackTargetKind.CHANNEL, "#somewhere-else")
 
         assertThat(check.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
-        assertThat(check.message).contains("more channels than one lookup reads")
+        assertThat(check.message).contains("more channels here than one lookup reads")
     }
 
     @Test
@@ -198,18 +197,18 @@ class SlackDirectoryTest {
     fun `a connection with nothing to ask with says so instead of calling Slack`() {
         val none = directory(secret = null).check(CONNECTION_ID, SlackTargetKind.CHANNEL, "#notifications")
         assertThat(none.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
-        assertThat(none.message).contains("has no bot token stored")
+        assertThat(none.message).contains("no bot token stored")
 
         // The token that opens the socket cannot look anything up either, and
         // saying so beats reading an invalid_auth back and guessing why.
         val appToken = directory(secret = "xapp-1-test").check(CONNECTION_ID, SlackTargetKind.USER, "@alice")
         assertThat(appToken.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
-        assertThat(appToken.message).contains("app-level token where its bot token belongs")
+        assertThat(appToken.message).contains("xoxb- bot token, not the app-level one")
 
         // And a connection that is not Slack at all has no such question to answer.
         val http = directory(type = ConnectionType.HTTP).check(CONNECTION_ID, SlackTargetKind.CHANNEL, "#anything")
         assertThat(http.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
-        assertThat(http.message).contains("only a Slack connection can be asked")
+        assertThat(http.message).contains("Not a Slack connection")
 
         assertThat(asked).isEmpty()
     }

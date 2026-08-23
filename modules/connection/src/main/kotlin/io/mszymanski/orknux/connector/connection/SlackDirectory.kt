@@ -101,28 +101,22 @@ class SlackDirectory(
      */
     fun check(connectionId: Long, kind: SlackTargetKind, typed: String): SlackTargetCheck {
         val name = typed.trim()
-        if (name.isEmpty()) return unchecked("There is nothing to check yet.")
+        if (name.isEmpty()) return unchecked("")
 
         val connection = connections.findByIdOrNull(connectionId)
-            ?: return unchecked("That connection no longer exists, so nothing could be asked about $name.")
+            ?: return unchecked("That connection no longer exists.")
 
         if (connection.type != ConnectionType.SLACK) {
-            return unchecked(
-                "${connection.name} is a ${connection.type} connection, and only a Slack connection can be " +
-                    "asked about a user or a channel.",
-            )
+            return unchecked("Not a Slack connection.")
         }
 
         val token = connection.secret?.takeIf { it.isNotBlank() }
-            ?: return unchecked("${connection.name} has no bot token stored, so Slack cannot be asked about $name.")
+            ?: return unchecked("Not checked - no bot token stored.")
 
         // The token that opens the socket is not the token that looks anything
         // up, and the same sentence [OutgoingMessages] gives about posting.
         if (token.startsWith(APP_TOKEN_PREFIX)) {
-            return unchecked(
-                "${connection.name} has an app-level token where its bot token belongs, so $name was not " +
-                    "checked; looking anything up needs the xoxb- token.",
-            )
+            return unchecked("Not checked - needs the xoxb- bot token, not the app-level one.")
         }
 
         return try {
@@ -135,7 +129,7 @@ class SlackDirectory(
             // response body and has never held a token, but a message that goes
             // to a screen is not the place to start relying on that.
             log.warn("Could not ask Slack about a {} on connection {}", kind, connectionId, failure)
-            unchecked("Slack could not be reached, so $name was not checked.")
+            unchecked("Not checked - Slack could not be reached.")
         }
     }
 
@@ -155,14 +149,10 @@ class SlackDirectory(
             val answer = slack.methods(token).conversationsInfo { it.channel(name) }
             if (answer.isOk) {
                 val hit = answer.channel
-                return found(hit.id, "#${hit.name}", "#${hit.name} is a channel $connectionName can see.")
+                return found(hit.id, "#${hit.name}", "#${hit.name}")
             }
             return when (answer.error) {
-                CHANNEL_NOT_FOUND -> notFound(
-                    "Slack has no channel with the id $name that $connectionName can see. A private channel " +
-                        "this bot was never invited to looks the same from here, so this is advice rather " +
-                        "than a verdict.",
-                )
+                CHANNEL_NOT_FOUND -> notFound("No channel with the id $name.")
                 else -> refusal(connectionName, typed, answer.error, CHANNEL_SCOPES, "channel names")
             }
         }
@@ -177,22 +167,16 @@ class SlackDirectory(
         val hit = answer.channels.orEmpty().firstOrNull {
             name.equals(it.name, ignoreCase = true) || name.equals(it.nameNormalized, ignoreCase = true)
         }
-        if (hit != null) return found(hit.id, "#${hit.name}", "#${hit.name} is a channel $connectionName can see.")
+        if (hit != null) return found(hit.id, "#${hit.name}", "#${hit.name}")
 
         // Nothing beyond the first page is read, so nothing beyond it is ruled
         // out either. Saying "no such channel" off a list that was cut short is
         // exactly the wrong answer to give about a name somebody knows is right.
         if (!answer.responseMetadata?.nextCursor.isNullOrBlank()) {
-            return unchecked(
-                "$connectionName has more channels than one lookup reads, and #$name was not among the first " +
-                    "$PAGE of them. It has not been checked, rather than found to be wrong.",
-            )
+            return unchecked("Not checked - more channels here than one lookup reads.")
         }
 
-        return notFound(
-            "No channel $connectionName can see is called #$name. A private channel this bot was never " +
-                "invited to looks the same from here, so this is advice rather than a verdict.",
-        )
+        return notFound("No channel called #$name - though a private one this bot is not in looks the same.")
     }
 
     /** A member by id, by address, or by whichever of the several names Slack keeps. */
@@ -204,7 +188,7 @@ class SlackDirectory(
             return when {
                 answer.isOk -> found(answer.user)
                 answer.error == USER_NOT_FOUND ->
-                    notFound("$connectionName has no member with the id $name.")
+                    notFound("No member with the id $name.")
                 else -> refusal(connectionName, typed, answer.error, USER_SCOPES, "user names")
             }
         }
@@ -217,7 +201,7 @@ class SlackDirectory(
             return when {
                 answer.isOk -> found(answer.user)
                 answer.error == USERS_NOT_FOUND || answer.error == USER_NOT_FOUND ->
-                    notFound("No member of $connectionName has the address $name.")
+                    notFound("No member with the address $name.")
                 else -> refusal(connectionName, typed, answer.error, EMAIL_SCOPES, "addresses")
             }
         }
@@ -229,16 +213,10 @@ class SlackDirectory(
         if (hit != null) return found(hit)
 
         if (!answer.responseMetadata?.nextCursor.isNullOrBlank()) {
-            return unchecked(
-                "$connectionName has more members than one lookup reads, and @$name was not among the first " +
-                    "$PAGE of them. It has not been checked, rather than found to be wrong.",
-            )
+            return unchecked("Not checked - more members here than one lookup reads.")
         }
 
-        return notFound(
-            "No active member of $connectionName is called @$name. Somebody who joined a moment ago can look " +
-                "the same from here, so this is advice rather than a verdict.",
-        )
+        return notFound("No member called @$name - though somebody who just joined looks the same.")
     }
 
     /**
@@ -258,7 +236,7 @@ class SlackDirectory(
         val label = user.profile?.displayName?.ifBlank { null }
             ?: user.realName?.ifBlank { null }
             ?: user.name
-        return found(user.id, label, "$label is a member this connection can see.")
+        return found(user.id, label, label)
     }
 
     /**
@@ -276,18 +254,11 @@ class SlackDirectory(
         what: String,
     ): SlackTargetCheck = when (error) {
         MISSING_SCOPE, NOT_ALLOWED_TOKEN_TYPE -> missingScope(connectionName, typed, scopes, what)
-        RATELIMITED -> unchecked(
-            "Slack is rate-limiting $connectionName, so $typed was not checked. It is worth asking again in " +
-                "a moment.",
-        )
+        RATELIMITED -> unchecked("Not checked - Slack is rate-limiting this connection. Try again shortly.")
         INVALID_AUTH, TOKEN_REVOKED, ACCOUNT_INACTIVE -> unchecked(
-            "Slack would not accept the bot token on $connectionName ($error), so $typed was not checked. " +
-                "That is the connection to look at, and nothing to read into this field.",
+            "Not checked - Slack refused this connection's bot token ($error).",
         )
-        else -> unchecked(
-            "Slack answered ${error ?: "nothing usable"} rather than an answer about $typed, so it has not " +
-                "been checked.",
-        )
+        else -> unchecked("Not checked - Slack answered ${error ?: "nothing usable"}.")
     }
 
     /**
@@ -307,13 +278,7 @@ class SlackDirectory(
         typed: String,
         scopes: String,
         what: String,
-    ): SlackTargetCheck = unchecked(
-        "Slack was not asked whether $typed exists, because the bot token on $connectionName does not carry " +
-            "$scopes. Nothing is wrong with the connection and nothing is wrong with what is typed here: " +
-            "sending a message needs no such scope, so a token that posts perfectly well can still be unable " +
-            "to look anything up, and this has not been checked rather than found to be wrong. Add $scopes to " +
-            "the Slack app and reinstall it to have $what checked here.",
-    )
+    ): SlackTargetCheck = unchecked("Not checked - this connection's bot token has no $scopes scope.")
 
     private fun found(id: String?, label: String, message: String) =
         SlackTargetCheck(SlackTargetOutcome.FOUND, message, id, label)

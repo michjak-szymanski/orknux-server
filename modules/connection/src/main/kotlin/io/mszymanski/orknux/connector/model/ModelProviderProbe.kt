@@ -111,14 +111,20 @@ class ModelProviderProbe(
         data class Failed(val reason: String) : Listing
     }
 
-    /** Where a provider says what it can run. */
+    /**
+     * Where a provider says what it can run.
+     *
+     * Azure puts the version in the query; everything else lists at `/models` of
+     * its OpenAI surface, which is not always the endpoint that was typed in -
+     * see [ModelProvider.openAiBase].
+     */
     private fun modelsUrl(provider: ModelProvider): String {
-        val base = provider.endpoint.trimEnd('/')
         return if (provider.type == ProviderType.AZURE_OPENAI) {
+            val base = provider.endpoint.trimEnd('/')
             val version = provider.apiVersion?.ifBlank { null } ?: DEFAULT_AZURE_VERSION
             "$base/openai/models?api-version=$version"
         } else {
-            "$base/models"
+            "${provider.openAiBase()}/models"
         }
     }
 

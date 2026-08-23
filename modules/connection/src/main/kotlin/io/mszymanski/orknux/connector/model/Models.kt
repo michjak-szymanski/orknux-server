@@ -46,9 +46,10 @@ enum class ResetInterval {
  * A type is here because something branches on it. OPENAI is the shape the rest
  * are measured against; ANTHROPIC has its own body, its own streaming events and
  * its own `/messages` path; AZURE_OPENAI puts the deployment and the API version
- * in the URL and can authenticate through Entra ID; OLLAMA is the OpenAI shape at
- * an address of your own. GOOGLE_AI was removed in V170 because it branched on
- * nothing except the name of its auth header - see the migration.
+ * in the URL and can authenticate through Entra ID; OLLAMA serves the OpenAI
+ * shape under `/v1` of an address of your own, which is what [ModelProvider.openAiBase]
+ * is for. GOOGLE_AI was removed in V170 because it branched on nothing except
+ * the name of its auth header - see the migration.
  */
 enum class ProviderType {
     OPENAI,
@@ -172,11 +173,44 @@ class ModelProvider(
             !secret.isNullOrBlank() && !tenantId.isNullOrBlank() && !clientId.isNullOrBlank()
     }
 
+    /**
+     * Where this provider's OpenAI-compatible surface begins.
+     *
+     * Every path this application builds for a provider that is not Anthropic or
+     * Azure is an OpenAI-shaped one - `/models`, `/chat/completions`,
+     * `/audio/speech` - hung off whatever endpoint somebody typed. That is right
+     * for every type but one. Ollama listens on `http://host:11434`, which is
+     * where an operator naturally points it, and serves none of those paths
+     * there: its OpenAI surface is under `/v1`, and its own listing is
+     * `/api/tags`.
+     *
+     * So the type supplies the segment rather than the operator. `/v1/models` is
+     * chosen over the native `/api/tags` because the check has to prove the
+     * surface the chat will actually use: `/api/tags` answering says the Ollama
+     * daemon is up and says nothing about `/v1/chat/completions` being there,
+     * which is 7876cdd's failure exactly - a check that reports Connected while
+     * every message 404s. It also answers in the `data[].id` shape the rest of
+     * the providers do, so a discovered id is the string the chat call is given.
+     *
+     * An endpoint already written `.../v1` - the workaround people have been
+     * using - is left as it is rather than doubled.
+     */
+    fun openAiBase(): String {
+        val base = endpoint.trimEnd('/')
+        if (type != ProviderType.OLLAMA) return base
+        return if (base.endsWith(OLLAMA_OPENAI_PATH)) base else "$base$OLLAMA_OPENAI_PATH"
+    }
+
     /** Called after anything that could change whether it is worth checking. */
     fun forgetCheck() {
         status = if (configured()) ProviderStatus.NOT_CHECKED else ProviderStatus.NOT_CONFIGURED
         lastCheckMessage = null
         lastCheckedAt = null
+    }
+
+    private companion object {
+        /** Ollama's OpenAI-compatible surface, which is not where it listens. */
+        const val OLLAMA_OPENAI_PATH = "/v1"
     }
 }
 

@@ -394,6 +394,57 @@ class WorkspaceAPI(
         return workspace
     }
 
+    /**
+     * How voice mode decides somebody has finished talking, for this workspace.
+     *
+     * Three settings and one call, because they are one decision. The pause is
+     * what ends a turn, the ratio decides who counts as talking while it is
+     * running, and the fuse is what happens when no pause ever comes; changing
+     * one without seeing the other two is how a workspace ends up with a
+     * generous pause that a ratio never lets it reach.
+     *
+     * All three are stated on every call and null clears one, which puts it
+     * back on voice mode's own value rather than leaving it on whatever was set
+     * last - the same rule `setWorkspaceDefaultMemoryShare` follows, and what
+     * lets a form offer "the default" as a thing to choose. Nothing here states
+     * what those values are: they belong to the interface, and a copy on this
+     * side would be a second source of truth that drifts the first time either
+     * moves. Null travels to the client as null and the client supplies its
+     * own.
+     *
+     * Only the bounds are checked, and each refusal names what is allowed
+     * rather than saying no - see [VoiceTurnTaking] for why each bound is where
+     * it is. Whoever can see the workspace may set it, like the model settings
+     * above and unlike the roles: it is a workspace setting rather than an
+     * administrative one, and it is recorded either way.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceVoiceTurnTaking(
+        @Argument workspaceId: Long,
+        @Argument pauseEndsTurnMs: Int?,
+        @Argument speechOverRoomPercent: Int?,
+        @Argument unattendedMicrophoneMs: Int?,
+    ): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        VoiceTurnTaking.refusalFor(pauseEndsTurnMs, speechOverRoomPercent, unattendedMicrophoneMs)
+            ?.let { throw WorkspaceVoiceTurnTakingUnusableException(it) }
+
+        workspace.voicePauseEndsTurnMs = pauseEndsTurnMs
+        workspace.voiceSpeechOverRoomPercent = speechOverRoomPercent
+        workspace.voiceUnattendedMicrophoneMs = unattendedMicrophoneMs
+
+        auditRecorder.record(
+            workspaceId,
+            // What happens inside a chat: the microphone is a chat's, not a model's.
+            WorkspaceAuditCategory.CHAT,
+            VoiceTurnTaking.audit(pauseEndsTurnMs, speechOverRoomPercent, unattendedMicrophoneMs),
+        )
+        return workspace
+    }
+
     @MutationMapping
     @Transactional
     fun deleteWorkspace(@Argument id: Long): Boolean {
@@ -495,3 +546,100 @@ class ModelNotFoundForWorkspaceException(id: Long) :
  * same setting and must not come to disagree about which numbers are allowed.
  */
 class WorkspaceMemoryShareUnusableException(message: String) : RuntimeException(message)
+
+/**
+ * The bounds voice mode's turn-taking settings are held to, and the reasons.
+ *
+ * Bounds only, and nothing that resembles a default: what a workspace that has
+ * decided nothing gets belongs to the interface, which is the half that can
+ * judge it, and every number named here is a limit rather than a value anybody
+ * is given. The units are the interface's own too, so nothing converts at the
+ * boundary - the other place a second source of truth hides.
+ */
+object VoiceTurnTaking {
+
+    /**
+     * A pause between one and a half and ten seconds.
+     *
+     * The floor sits strictly above 1.2 seconds, which is the value that was
+     * demonstrated to cut people off at clause breaks: people stop to think in
+     * the middle of a sentence and every one of those stops was read as their
+     * turn ending. Putting the floor above it is what stops the reported bug
+     * from being reproducible through configuration.
+     *
+     * Ten seconds is the ceiling because past it nothing happening no longer
+     * reads as the application being patient; it reads as the application being
+     * broken, and somebody starts talking again to see whether it is alive.
+     */
+    val pauseEndsTurnMs = 1_500..10_000
+
+    /**
+     * A voice between 1.2 and 6 times the room, as a percentage of it.
+     *
+     * Below about 1.2 the ratio cannot separate a voice from the room it is
+     * spoken in, and the failure inverts: a breath or a keystroke clears the
+     * line, holds the turn open, and the turn never ends at all. Above 6 you
+     * have to raise your voice to be heard, which is the complaint this setting
+     * exists to answer in the first place.
+     */
+    val speechOverRoomPercent = 120..600
+
+    /**
+     * An unattended microphone between five minutes and an hour.
+     *
+     * Thirty seconds and two minutes both looked like defensible limits on a
+     * turn and both cut the same person off mid-sentence, so the floor has to
+     * be well clear of a long spoken thought rather than merely above whatever
+     * failed last. It is not a limit on how much anybody may say: it fires only
+     * where no pause occurred in the whole span, which is extraordinary for a
+     * person and ordinary for a microphone left open in an empty room.
+     *
+     * An hour is the ceiling because a fuse that never blows is not a fuse.
+     */
+    val unattendedMicrophoneMs = 300_000..3_600_000
+
+    /**
+     * The first of the three that is out of bounds, said as a sentence.
+     *
+     * Each names what is allowed rather than reporting that something was
+     * refused, because "out of range" tells whoever typed it nothing about what
+     * to type instead.
+     */
+    fun refusalFor(pauseMs: Int?, speechPercent: Int?, unattendedMs: Int?): String? = when {
+        pauseMs != null && pauseMs !in pauseEndsTurnMs ->
+            "A pause that ends a turn has to be between 1.5 and 10 seconds " +
+                "(${pauseEndsTurnMs.first} to ${pauseEndsTurnMs.last} ms). " +
+                "Below that it lands in the middle of a sentence; above it the microphone looks broken."
+
+        speechPercent != null && speechPercent !in speechOverRoomPercent ->
+            "A voice has to stand between ${speechOverRoomPercent.first}% and ${speechOverRoomPercent.last}% " +
+                "of the room to be heard as one. Below that a breath holds the turn open and it never ends; " +
+                "above it you have to raise your voice."
+
+        unattendedMs != null && unattendedMs !in unattendedMicrophoneMs ->
+            "An unattended microphone has to give up between 5 minutes and an hour " +
+                "(${unattendedMicrophoneMs.first} to ${unattendedMicrophoneMs.last} ms). " +
+                "It is a fuse for a microphone nobody is at, not a limit on how long anybody may talk."
+
+        else -> null
+    }
+
+    /** One line for the log, whichever of the three were set and whichever were cleared. */
+    fun audit(pauseMs: Int?, speechPercent: Int?, unattendedMs: Int?): String =
+        if (pauseMs == null && speechPercent == null && unattendedMs == null) {
+            "Voice turn-taking back to the default"
+        } else {
+            "Voice turn-taking set to a pause of ${pauseMs?.let { "$it ms" } ?: "the default"}, " +
+                "a voice at ${speechPercent?.let { "$it%" } ?: "the default"} of the room and " +
+                "an unattended microphone of ${unattendedMs?.let { "$it ms" } ?: "the default"}"
+        }
+}
+
+/**
+ * A voice turn-taking setting outside its bounds, refused where it was set.
+ *
+ * Refused rather than clamped, because what a clamp produces is a form that
+ * saves a number nobody typed and a microphone that behaves in a way the
+ * settings page does not describe. The sentence names what is allowed instead.
+ */
+class WorkspaceVoiceTurnTakingUnusableException(message: String) : RuntimeException(message)

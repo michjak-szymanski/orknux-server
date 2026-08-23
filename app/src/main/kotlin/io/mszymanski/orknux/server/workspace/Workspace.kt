@@ -148,4 +148,62 @@ class Workspace(
      */
     @Column(name = "default_memory_share")
     var defaultMemoryShare: Int? = null,
+
+    /**
+     * How long a pause has to run, after somebody has been talking, before
+     * voice mode ends their turn and sends what they said.
+     *
+     * The setting that actually ends a turn, and the one to move when somebody
+     * is cut off. It is a judgement about how people talk rather than a fact
+     * about audio: people stop mid-sentence to think, and a pause shorter than
+     * an ordinary one of those reads every stop as "your go".
+     *
+     * Null is what every workspace starts as and means the workspace has
+     * decided nothing, so voice mode uses its own pause. The number is
+     * deliberately not written down here as well - it belongs to the interface,
+     * which is the only place that can judge it, and a copy on this side would
+     * be a second source of truth that drifts the first time one of them
+     * changes.
+     */
+    @Column(name = "voice_pause_ends_turn_ms")
+    var voicePauseEndsTurnMs: Int? = null,
+
+    /**
+     * How far above the room's own noise a sound has to stand to count as a
+     * voice, as a percentage - 300 is three times the room.
+     *
+     * A ratio rather than a loudness, because speech is several times the level
+     * of the room it is spoken in whatever that room is, so this travels
+     * between microphones in a way a fixed level does not. Lower is more
+     * sensitive, and it is what to lower for somebody who talks quietly or sits
+     * away from the microphone.
+     *
+     * There is a fixed level in the interface as well, OR'd with this one, and
+     * it is not exposed here on purpose. The two ask the same question twice;
+     * the fixed one exists only so that a silent room is not absurdly
+     * sensitive - where the room is next to nothing, three times nothing is
+     * still nothing and every breath clears the ratio. It is a guard against
+     * this setting's failure mode rather than a second knob to turn, and
+     * offering it as one would invite somebody to defeat the guard.
+     *
+     * Null means the workspace has decided nothing.
+     */
+    @Column(name = "voice_speech_over_room_percent")
+    var voiceSpeechOverRoomPercent: Int? = null,
+
+    /**
+     * How long an open microphone stays open when nothing else has ended the
+     * turn.
+     *
+     * A fuse, not a limit on how much anybody may say. The pause above is what
+     * ends a turn; this only fires when no pause ever came, which means a
+     * microphone left open in an empty room or a room noisy enough to read as
+     * somebody talking. Every value this has held that looked like a reasonable
+     * limit on a turn turned out to cut somebody off in the middle of a
+     * sentence, which is why the bound on it is where it is.
+     *
+     * Null means the workspace has decided nothing.
+     */
+    @Column(name = "voice_unattended_microphone_ms")
+    var voiceUnattendedMicrophoneMs: Int? = null,
 )

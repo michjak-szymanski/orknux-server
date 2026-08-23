@@ -17,6 +17,13 @@ have failed.
 
 ### Added
 
+- **A workspace decides when voice mode has heard enough.** Three settings on a
+  Voice card: how long a pause ends your turn, how far above the room's own noise
+  a sound has to stand to count as a voice, and how long an open microphone stays
+  open when nothing else ends the turn. All three start empty, meaning voice mode
+  uses its own numbers, and each is refused outside bounds chosen so the failure
+  that prompted this cannot be configured back.
+
 - **A model provider's key can be a reference to a workspace secret instead of a
   copy of its own.** The choice belongs to the field rather than to the card:
   beside *API Key* — or *Client Secret*, depending on how the provider
@@ -54,6 +61,25 @@ have failed.
   when publishing is possible.
 
 ### Fixed
+
+- **Voice mode stops when you have finished, not when you go quiet.** It ended a
+  turn while people were still talking, three different ways. The line between a
+  voice and a room was a fixed loudness — fair in the middle of a word, and wrong
+  for a quieter microphone, a softer voice, or the falling away at the end of a
+  phrase, all of which started the clock. It is measured from the room now. The
+  pause that ended a turn was 1.2 seconds, which is shorter than an ordinary
+  break between clauses. And a turn was capped at thirty seconds however much was
+  left to say — that cap is a fuse against a microphone left open in an empty
+  room, not a limit on how much anybody may explain, and it is now ten minutes.
+
+- **A Slack action's target no longer asks which kind it is.** There was a
+  Channel-or-User control beside it, and nothing read it to send anything: Slack
+  takes one destination and works it out. Its only real job was choosing which
+  list to search, and now both are searched. Removing it turned up what it had
+  been hiding — Slack resolves a channel by name but not a person by handle, so
+  `@alice` reached nobody, before this change as much as after. Sending resolves
+  what it is given, whether that is a name, a handle, an address or an id, so the
+  `#` and the `@` save a lookup rather than deciding anything.
 
 - **A provider of type Ollama is now spoken to in Ollama's dialect.** It was
   asked for `/models`, which Ollama does not serve, so a provider pointed at the

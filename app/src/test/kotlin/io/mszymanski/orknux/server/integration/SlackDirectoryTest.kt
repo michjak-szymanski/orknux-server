@@ -238,6 +238,127 @@ class SlackDirectoryTest {
         assertThat(authorizations).isNotEmpty().allMatch { it == "Bearer $SECRET" }
     }
 
+    @Test
+    fun `a name with no kind given is looked for in both places, and the answer says which it was`() {
+        answers["conversations.list"] = channels("C0000000001" to "notifications")
+        answers["users.list"] =
+            """{"ok":true,"members":[{"id":"U0000000001","name":"alice","real_name":"Alice Adams"}]}"""
+        val directory = directory()
+
+        val channel = directory.check(CONNECTION_ID, null, "notifications")
+        assertThat(channel.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(channel.id).isEqualTo("C0000000001")
+        // The whole point of not having to say which: the caller is told.
+        assertThat(channel.kind).isEqualTo(SlackTargetKind.CHANNEL)
+
+        val member = directory.check(CONNECTION_ID, null, "alice")
+        assertThat(member.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(member.id).isEqualTo("U0000000001")
+        assertThat(member.kind).isEqualTo(SlackTargetKind.USER)
+
+        // A bare name could be either, so both were genuinely asked.
+        assertThat(asked).contains("conversations.list", "users.list")
+    }
+
+    @Test
+    fun `a name in neither place is a not-found that names both places once`() {
+        answers["conversations.list"] = channels("C0000000001" to "notifications")
+        answers["users.list"] = """{"ok":true,"members":[{"id":"U0000000001","name":"alice"}]}"""
+
+        val check = directory().check(CONNECTION_ID, null, "nobody")
+
+        assertThat(check.outcome).isEqualTo(SlackTargetOutcome.NOT_FOUND)
+        assertThat(check.kind).isNull()
+        assertThat(check.message).contains("No channel or member called nobody")
+        assertThat(check.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `half an answer is not a name that does not exist`() {
+        // The case the merge was built for: a token set up to post, given
+        // channels:read at some point and never users:read.
+        answers["conversations.list"] = channels("C0000000001" to "notifications")
+        answers["users.list"] = """{"ok":false,"error":"missing_scope","needed":"users:read"}"""
+
+        val check = directory().check(CONNECTION_ID, null, "alice")
+
+        // Absent from the half that could be read is not absent. Saying
+        // NOT_FOUND here would send somebody off to correct a name that was
+        // right, which is the one mistake this vocabulary exists to prevent.
+        assertThat(check.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
+        assertThat(check.outcome).isNotEqualTo(SlackTargetOutcome.NOT_FOUND)
+        // The scope that is actually missing, and only that one: the channel
+        // half answered perfectly well and naming its scopes would be advice
+        // about something that is not wrong.
+        assertThat(check.message).startsWith("Not checked").contains("users:read")
+        assertThat(check.message).doesNotContain("channels:read").doesNotContain("groups:read")
+        assertThat(check.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `a token that can read neither half names both, in one line`() {
+        answers["conversations.list"] = """{"ok":false,"error":"missing_scope","needed":"channels:read"}"""
+        answers["users.list"] = """{"ok":false,"error":"missing_scope","needed":"users:read"}"""
+
+        val check = directory().check(CONNECTION_ID, null, "support")
+
+        assertThat(check.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
+        assertThat(check.message)
+            .startsWith("Not checked")
+            .contains("the channels:read, groups:read and users:read scopes")
+        // Three scopes and still one line, which is the constraint the whole
+        // wording of this feature is written against.
+        assertThat(check.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `what was typed settles which half to ask whenever it can`() {
+        answers["conversations.list"] = channels("C0000000001" to "notifications")
+        answers["users.list"] = """{"ok":true,"members":[{"id":"U0000000001","name":"alice"}]}"""
+        val directory = directory()
+
+        // A sigil is somebody saying which half they meant, so the other one is
+        // not a lookup worth spending.
+        assertThat(directory.check(CONNECTION_ID, null, "#notifications").kind)
+            .isEqualTo(SlackTargetKind.CHANNEL)
+        assertThat(asked).contains("conversations.list").doesNotContain("users.list")
+
+        assertThat(directory.check(CONNECTION_ID, null, "@alice").kind).isEqualTo(SlackTargetKind.USER)
+        assertThat(asked).contains("users.list")
+    }
+
+    @Test
+    fun `an id with no kind given goes to the one endpoint its first letter names`() {
+        answers["users.info"] = """{"ok":true,"user":{"id":"U0000000001","name":"alice","real_name":"Alice Adams"}}"""
+
+        val check = directory().check(CONNECTION_ID, null, "U0000000001")
+
+        assertThat(check.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(check.kind).isEqualTo(SlackTargetKind.USER)
+        // Slack's own id space says which it is, so a merged question about one
+        // costs exactly what a narrowed question costs.
+        assertThat(asked).contains("users.info")
+            .doesNotContain("users.list", "conversations.list", "conversations.info")
+    }
+
+    @Test
+    fun `a name both halves answer to picks the channel and says the other is there`() {
+        answers["conversations.list"] = channels("C0000000001" to "support")
+        answers["users.list"] = """{"ok":true,"members":[{"id":"U0000000001","name":"support"}]}"""
+
+        val check = directory().check(CONNECTION_ID, null, "support")
+
+        // Something has to break the tie; a channel name means one thing in a
+        // Slack and a handle need not.
+        assertThat(check.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(check.kind).isEqualTo(SlackTargetKind.CHANNEL)
+        assertThat(check.id).isEqualTo("C0000000001")
+        // And the other one is said out loud, because the field takes one value
+        // and only the person knows which they meant.
+        assertThat(check.message).contains("#support").contains("a member goes by that too")
+        assertThat(check.message.length).isLessThan(120)
+    }
+
     /** [SlackDirectory] as the application builds it, pointed at the stand-in. */
     private fun directory(
         secret: String? = SECRET,

@@ -1168,6 +1168,25 @@ pasted out of somebody else's message, a member who joined a minute ago, a
 private channel this bot was never invited to, and an archived channel, which is
 deliberately not offered and exists all the same.
 
+**Neither question needs to be told whether it is about a channel or a person.**
+Slack does not differentiate when sending — one `chat.postMessage` takes a
+channel id or a user id, because a direct message is a conversation — and the
+split only ever described which endpoint does the looking up. So `target` is
+optional on both: given, nothing changes; omitted, both are asked and the answers
+merged, the check saying which kind the name turned out to be and every suggested
+row saying which kind it is. A leading `#` or `@`, an address and an id's own
+first letter each settle it without a second lookup, so only a bare name that
+could be either costs two.
+
+Merging is where the third outcome earns itself twice over. A name found in
+either half is found; a name in neither, both read whole, is not found; and a
+name absent from the half that could be read while the other was refused is
+**never asked**, because it may well be sitting in the half nobody read. The line
+under the field names the scopes that are actually missing and no others — a
+token holding `channels:read` and not `users:read` is told about `users:read`,
+and is shown every channel with "Channels only" under the picker rather than the
+nothing at all it used to get for being unable to say which half to ask about.
+
 ## Licence
 
 **GNU Affero General Public License v3.0 or later** — see [LICENSE](LICENSE),

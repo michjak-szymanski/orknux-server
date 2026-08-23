@@ -169,11 +169,64 @@ class SlackTargetAPITest(
             }
     }
 
-    private fun query(target: String, name: String, connection: Long = connectionId) =
+    @Test
+    fun `a name asked about without a target is looked for in both places`() {
+        answers["conversations.list"] =
+            """{"ok":true,"channels":[{"id":"C0000000001","name":"notifications","name_normalized":"notifications"}]}"""
+        answers["users.list"] =
+            """{"ok":true,"members":[{"id":"U0000000001","name":"alice","real_name":"Alice Adams"}]}"""
+
+        // The shape a caller actually has. An action whose target kind is not
+        // set yet could not name one here, so it asked nothing at all and its
+        // panel drew nothing - which is what this merge was reported for.
+        graphQlTester.document(query(target = null, name = "alice")).execute()
+            .path("slackTarget.outcome").entity(String::class.java).isEqualTo("FOUND")
+            .path("slackTarget.id").entity(String::class.java).isEqualTo("U0000000001")
+            // And it is told which kind, in the vocabulary createAction takes,
+            // so the field it could not fill in is now fillable.
+            .path("slackTarget.target").entity(String::class.java).isEqualTo("USER")
+
+        graphQlTester.document(query(target = null, name = "notifications")).execute()
+            .path("slackTarget.outcome").entity(String::class.java).isEqualTo("FOUND")
+            .path("slackTarget.target").entity(String::class.java).isEqualTo("CHANNEL")
+    }
+
+    @Test
+    fun `a token that can read only one half does not report the other as missing`() {
+        answers["conversations.list"] = """{"ok":true,"channels":[]}"""
+        answers["users.list"] = """{"ok":false,"error":"missing_scope","needed":"users:read"}"""
+
+        graphQlTester.document(query(target = null, name = "alice")).execute()
+            // Not NOT_FOUND. A name absent from the half that could be read is
+            // not a name that does not exist.
+            .path("slackTarget.outcome").entity(String::class.java).isEqualTo("UNCHECKED")
+            .path("slackTarget.target").valueIsNull()
+            .path("slackTarget.message").entity(String::class.java).satisfies {
+                // The scope that is actually missing, and only that one.
+                assertThat(it).startsWith("Not checked").contains("users:read")
+                assertThat(it).doesNotContain("channels:read").doesNotContain("groups:read")
+                assertThat(it.length).isLessThan(120)
+            }
+    }
+
+    @Test
+    fun `a token that can read neither half names both scopes in one line`() {
+        answers["conversations.list"] = """{"ok":false,"error":"missing_scope","needed":"channels:read"}"""
+        answers["users.list"] = """{"ok":false,"error":"missing_scope","needed":"users:read"}"""
+
+        graphQlTester.document(query(target = null, name = "support")).execute()
+            .path("slackTarget.outcome").entity(String::class.java).isEqualTo("UNCHECKED")
+            .path("slackTarget.message").entity(String::class.java).satisfies {
+                assertThat(it).contains("the channels:read, groups:read and users:read scopes")
+                assertThat(it.length).isLessThan(120)
+            }
+    }
+
+    private fun query(target: String?, name: String, connection: Long = connectionId) =
         """
         query {
-          slackTarget(connectionId: $connection, target: $target, name: "$name") {
-            outcome message id label
+          slackTarget(connectionId: $connection, target: ${target ?: "null"}, name: "$name") {
+            outcome message id label target
           }
         }
         """

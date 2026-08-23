@@ -7,7 +7,15 @@ import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
-/** One connection's copy of one of the two Slack lists. */
+/**
+ * One connection's copy of one of the two Slack lists.
+ *
+ * Two keys per connection and never a third. A question asked without a kind
+ * wants both lists and asks for both of these rather than caching their union
+ * under a key of its own, which would read everything a second time and then
+ * expire on its own clock. Whichever half a narrowed question already warmed is
+ * a merged question's for free.
+ */
 internal data class SlackListingKey(val connectionId: Long, val kind: SlackTargetKind)
 
 /**

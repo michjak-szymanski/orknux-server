@@ -192,13 +192,54 @@ class SlackSuggestionAPITest(
             }
     }
 
-    private fun query(target: String, typed: String?, connection: Long = connectionId) =
+    @Test
+    fun `a picker with no target set gets one list, and every row says which it is`() {
+        answers["conversations.list"] =
+            """{"ok":true,"channels":[{"id":"C0000000001","name":"alerts","name_normalized":"alerts"}]}"""
+        answers["users.list"] =
+            """{"ok":true,"members":[{"id":"U0000000001","name":"alastair"}]}"""
+
+        graphQlTester.document(query(target = null, typed = "al")).execute()
+            .path("slackSuggestions.outcome").entity(String::class.java).isEqualTo("FOUND")
+            // Channels before members where they tie, which is what a merged
+            // list needs a rule for at all.
+            .path("slackSuggestions.matches[*].name").entityList(String::class.java)
+            .containsExactly("#alerts", "@alastair")
+            // In createAction's own vocabulary, so picking a row sets the
+            // action's kind and its name together.
+            .path("slackSuggestions.matches[*].target").entityList(String::class.java)
+            .containsExactly("CHANNEL", "USER")
+            .path("slackSuggestions.complete").entity(Boolean::class.java).isEqualTo(true)
+    }
+
+    @Test
+    fun `a token that can read one list still fills the picker, and says what is missing`() {
+        answers["conversations.list"] =
+            """{"ok":true,"channels":[{"id":"C0000000001","name":"notifications","name_normalized":"notifications"}]}"""
+        answers["users.list"] = """{"ok":false,"error":"missing_scope","needed":"users:read"}"""
+
+        graphQlTester.document(query(target = null, typed = "not")).execute()
+            .path("slackSuggestions.outcome").entity(String::class.java).isEqualTo("FOUND")
+            .path("slackSuggestions.matches[*].name").entityList(String::class.java)
+            .containsExactly("#notifications")
+            // Half a search is not a search, whatever it found.
+            .path("slackSuggestions.complete").entity(Boolean::class.java).isEqualTo(false)
+            .path("slackSuggestions.message").entity(String::class.java).satisfies {
+                assertThat(it).isEqualTo(
+                    "Channels only - this connection's bot token is missing the users:read scope.",
+                )
+                assertThat(it.length).isLessThan(120)
+            }
+    }
+
+    private fun query(target: String?, typed: String?, connection: Long = connectionId) =
         """
         query {
           slackSuggestions(
-            connectionId: $connection, target: $target, typed: ${typed?.let { "\"$it\"" } ?: "null"}
+            connectionId: $connection, target: ${target ?: "null"},
+            typed: ${typed?.let { "\"$it\"" } ?: "null"}
           ) {
-            outcome message complete matches { id name realName }
+            outcome message complete matches { id name realName target }
           }
         }
         """

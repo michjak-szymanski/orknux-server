@@ -133,6 +133,18 @@ type Query {
     answers this can give are wrong about a real member often enough that
     refusing on them would cost more than the typos it catches.
 
+    **`target` narrows the question; it is not needed to ask it.** Slack does not
+    differentiate when sending - one `chat.postMessage` takes a channel id or a
+    user id, because a direct message is a conversation - and the split here only
+    ever described which endpoint does the looking up. Omitted, both are asked
+    and the answers merged, and `target` on the result says which kind the name
+    turned out to be. A caller whose field has no kind set yet asks without one
+    rather than asking nothing.
+
+    A merged answer never turns half a search into a verdict: found in either is
+    `FOUND`, absent from both is `NOT_FOUND`, and absent from the half that could
+    be read while the other was refused is `UNCHECKED` with the refusal's reason.
+
     One lookup per question, live, with no page after the first and nothing
     cached, so a workspace larger than a single lookup reads comes back
     `UNCHECKED` rather than being ruled on. `slackSuggestions` is the same two
@@ -142,8 +154,15 @@ type Query {
     slackTarget(
         "The connection the action sends through."
         connectionId: ID!,
-        "Which of the two fields is being asked about."
-        target: MessageTarget!,
+        """
+        Which of the two fields is being asked about, or omitted to ask about
+        both and be told which it was.
+
+        Omitting it costs a second lookup only for a bare name that could be
+        either: a leading "#" or "@", an address, and an id's own first letter
+        all settle it for free.
+        """
+        target: MessageTarget,
         "Exactly what is in the field: \"#general\", \"@alice\", an address, or an id pasted out of Slack."
         name: String!
     ): SlackTargetCheck!
@@ -170,12 +189,27 @@ type Query {
     values never will: an id pasted out of somebody else's message, a member who
     joined a minute ago, a private channel this bot was never invited to, and an
     archived channel, which is deliberately not offered and still exists.
+
+    **`target` narrows the list; it is not needed to ask for one.** Omitted, one
+    list comes back holding channels and members together, each row saying which
+    it is in its own `target`, so picking a row settles the kind as well as the
+    name. Ordering across the two is unchanged - exact, then what starts with the
+    typing, then what contains it - with channels before members where those tie,
+    because a channel name means one thing in a Slack and a display name need
+    not.
     """
     slackSuggestions(
         "The connection the action sends through."
         connectionId: ID!,
-        "Which of the two fields is being asked about. It decides which list is read."
-        target: MessageTarget!,
+        """
+        Which of the two lists to read, or omitted to read both and offer one
+        list.
+
+        Omitting it does not read a third list: the two per-connection lists are
+        the ones already cached, so a merged question reuses whichever of them
+        has been read. A leading "#" or "@" narrows it to that half anyway.
+        """
+        target: MessageTarget,
         """
         What is in the field so far, with or without its "#" or "@". Empty or
         omitted asks for the first few of everything, which is what a picker
@@ -2456,6 +2490,11 @@ enum SlackTargetOutcome {
     the Slack app, the other is a name to correct. The commonest case by far is
     a bot token carrying no read scope at all, which is what a token set up only
     to post looks like.
+
+    A question asked without a `target` comes back like this when one of the two
+    lookups answered and the other was refused: a name absent from the half that
+    could be read is not a name that does not exist, and `message` names the
+    scopes that are actually missing and no others.
     """
     UNCHECKED
 }
@@ -2484,6 +2523,14 @@ type SlackTargetCheck {
     id: String
     "What Slack calls it, when it was found: \"#general\", \"Alice Adams\"."
     label: String
+    """
+    Which of the two it turned out to be, when it was found, and null otherwise.
+
+    The answer to a question asked without a `target`: a caller holding a name
+    and no kind is told which it is and can fill that in, rather than asking
+    twice to find out. It is the same value `createAction` takes.
+    """
+    target: MessageTarget
 }
 
 """
@@ -2506,7 +2553,15 @@ type SlackSuggestions {
     where it says why.
     """
     message: String!
-    "Best first: what the typing matches exactly, then what starts with it, then what contains it."
+    """
+    Best first: what the typing matches exactly, then what starts with it, then
+    what contains it.
+
+    One list whether one kind was asked for or both. Where a channel and a
+    member match equally well the channel comes first, because a channel name
+    means one thing in a Slack and a display name need not, so the row read
+    first is the unambiguous one.
+    """
     matches: [SlackSuggestion!]!
     """
     Whether `matches` is everything that matches.
@@ -2515,6 +2570,10 @@ type SlackSuggestions {
     than one read gets through - and false when more matched than are returned.
     Both mean the same thing to somebody typing, which is that there may be more
     and that narrowing will find it. Never a reason to refuse what they type.
+
+    When both lists were searched it is false unless both were read whole, so a
+    token that can read channels and not members reports an incomplete list and
+    says so in `message` rather than passing half a Slack off as all of it.
     """
     complete: Boolean!
 }
@@ -2531,6 +2590,16 @@ type SlackSuggestion {
     convenience rather than a second way of saying things.
     """
     name: String!
+    """
+    Which of the two this row is.
+
+    On the row rather than on the list, because one list holds both when
+    `slackSuggestions` was asked without a `target`, and a row that cannot say
+    which it is can be neither drawn nor acted on. It is the same value
+    `createAction` takes, so picking a row sets the action's kind and its name
+    together.
+    """
+    target: MessageTarget!
     """
     The member's own name where Slack has one and it says something the handle
     does not: "Alice Adams".
@@ -3593,6 +3662,14 @@ enum ConnectionActionKind {
     UPDATE_ISSUE
 }
 
+"""
+Who a message is addressed to, which is what an action decides at run time.
+
+Required where it decides sending. Optional on `slackTarget` and
+`slackSuggestions`, which only ever needed it to pick an endpoint: Slack itself
+takes either id in the one `channel` argument, so looking a name up does not
+depend on knowing which of the two it is.
+"""
 enum MessageTarget {
     CHANNEL
     USER

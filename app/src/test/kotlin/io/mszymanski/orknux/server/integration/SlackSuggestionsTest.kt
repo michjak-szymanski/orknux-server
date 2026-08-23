@@ -337,6 +337,129 @@ class SlackSuggestionsTest {
         assertThat(authorizations).isNotEmpty().allMatch { it == "Bearer $SECRET" }
     }
 
+    @Test
+    fun `one list holds both when no kind was asked for, and every row says which it is`() {
+        answering("conversations.list", channels("C0000000001" to "alerts"))
+        answering("users.list", members("U0000000001" to "alastair"))
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "al")
+
+        assertThat(suggestions.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(suggestions.matches.map { it.name }).containsExactly("#alerts", "@alastair")
+        // A row in a merged list that cannot say which kind it is can neither be
+        // drawn nor acted on, so the kind travels on the row.
+        assertThat(suggestions.matches.map { it.kind })
+            .containsExactly(SlackTargetKind.CHANNEL, SlackTargetKind.USER)
+        assertThat(suggestions.complete).isTrue()
+        assertThat(suggestions.message).isEmpty()
+    }
+
+    @Test
+    fun `a channel comes before a member that matches just as well`() {
+        answering("conversations.list", channels("C0000000001" to "support"))
+        answering("users.list", members("U0000000001" to "support"))
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "support")
+
+        // Both are exact, so the tie-break decides. Channels first: a channel
+        // name means one thing in a Slack and a display name need not, so the
+        // row read first is the unambiguous one.
+        assertThat(suggestions.matches.map { it.name }).containsExactly("#support", "@support")
+    }
+
+    @Test
+    fun `a token that can read one list offers that one and names the scope for the other`() {
+        answering("conversations.list", channels("C0000000001" to "notifications"))
+        answering("users.list", """{"ok":false,"error":"missing_scope","needed":"users:read"}""")
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "not")
+
+        // Somebody in this position used to be shown nothing at all, because
+        // nothing could say which half to ask about. They are shown the half
+        // that works, and told what would bring back the other.
+        assertThat(suggestions.outcome).isEqualTo(SlackTargetOutcome.FOUND)
+        assertThat(suggestions.matches.map { it.name }).containsExactly("#notifications")
+        // Half a search is not a search, whatever it found.
+        assertThat(suggestions.complete).isFalse()
+        assertThat(suggestions.message).isEqualTo(
+            "Channels only - this connection's bot token is missing the users:read scope.",
+        )
+        assertThat(suggestions.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `nothing matching in the half that could be read is not a name that does not exist`() {
+        answering("conversations.list", channels("C0000000001" to "general"))
+        answering("users.list", """{"ok":false,"error":"missing_scope","needed":"users:read"}""")
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "alice")
+
+        assertThat(suggestions.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
+        assertThat(suggestions.outcome).isNotEqualTo(SlackTargetOutcome.NOT_FOUND)
+        assertThat(suggestions.message).startsWith("Not checked").contains("users:read")
+        assertThat(suggestions.message).doesNotContain("channels:read").doesNotContain("groups:read")
+        assertThat(suggestions.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `a token that can read neither list names both scopes`() {
+        answering("conversations.list", """{"ok":false,"error":"missing_scope","needed":"channels:read"}""")
+        answering("users.list", """{"ok":false,"error":"missing_scope","needed":"users:read"}""")
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "al")
+
+        assertThat(suggestions.outcome).isEqualTo(SlackTargetOutcome.UNCHECKED)
+        assertThat(suggestions.matches).isEmpty()
+        assertThat(suggestions.message)
+            .startsWith("Not checked")
+            .contains("the channels:read, groups:read and users:read scopes")
+        assertThat(suggestions.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `a name in neither list is a not-found that names both`() {
+        answering("conversations.list", channels("C0000000001" to "general"))
+        answering("users.list", members("U0000000001" to "alice"))
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "nobody")
+
+        assertThat(suggestions.outcome).isEqualTo(SlackTargetOutcome.NOT_FOUND)
+        assertThat(suggestions.complete).isTrue()
+        assertThat(suggestions.message).contains("No channel or member matches nobody")
+        assertThat(suggestions.message.length).isLessThan(120)
+    }
+
+    @Test
+    fun `a merged question reads the two lists that already exist, once each`() {
+        answering("conversations.list", channels("C0000000001" to "alerts"))
+        answering("users.list", members("U0000000001" to "alice"))
+        val directory = directory()
+
+        // A picker that was open on channels and is then asked for everything
+        // pays for the member list and nothing else.
+        directory.suggest(CONNECTION_ID, SlackTargetKind.CHANNEL, "a")
+        directory.suggest(CONNECTION_ID, null, "al")
+        val third = directory.suggest(CONNECTION_ID, null, "ali")
+
+        // The cache is keyed by connection and kind, and a merged question asks
+        // it for both of those keys rather than inventing a third that would
+        // read everything a second time.
+        assertThat(asked.count { it == "conversations.list" }).isEqualTo(1)
+        assertThat(asked.count { it == "users.list" }).isEqualTo(1)
+        assertThat(third.matches.map { it.name }).containsExactly("@alice")
+    }
+
+    @Test
+    fun `a sigil narrows a merged question to the half it names`() {
+        answering("conversations.list", channels("C0000000001" to "notifications"))
+        answering("users.list", members("U0000000001" to "nobody"))
+
+        val suggestions = directory().suggest(CONNECTION_ID, null, "#not")
+
+        assertThat(suggestions.matches.map { it.name }).containsExactly("#notifications")
+        assertThat(asked).contains("conversations.list").doesNotContain("users.list")
+    }
+
     /** [SlackDirectory] as the application builds it, pointed at the stand-in. */
     private fun directory(
         secret: String? = SECRET,

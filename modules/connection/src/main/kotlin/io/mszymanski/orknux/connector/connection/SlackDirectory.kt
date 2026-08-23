@@ -6,7 +6,18 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
 
-/** Which of an action's two target fields is being asked about. */
+/**
+ * Which of Slack's two lookups a question is about, and never which of them a
+ * caller has to know in advance.
+ *
+ * It exists because the *endpoints* differ - `conversations.list` for one,
+ * `users.list` for the other - and for no other reason. Slack does not
+ * differentiate when sending: `chat.postMessage` takes one `channel` argument
+ * that accepts either id, because a direct message is a conversation. So both
+ * [SlackDirectory.check] and [SlackDirectory.suggest] take this as a *narrowing*
+ * and answer perfectly well without one, and every answer says which kind it
+ * turned out to be.
+ */
 enum class SlackTargetKind {
     CHANNEL,
     USER,
@@ -30,6 +41,12 @@ enum class SlackTargetOutcome {
      * [NOT_FOUND] because the two want opposite things done about them, and
      * because a field that reads as broken when the token merely cannot
      * introspect is worse than a field with no checking in it.
+     *
+     * **Half an answer is this and not [NOT_FOUND].** When no kind was given and
+     * one of the two lookups was refused, a name absent from the half that could
+     * be read is not a name that does not exist - it may be sitting in the half
+     * that was never read. Ruling on it would be the one mistake this vocabulary
+     * exists to prevent, so the merged answer keeps the refusal.
      */
     UNCHECKED,
 }
@@ -48,12 +65,17 @@ enum class SlackTargetOutcome {
  * @property id Slack's own id, when it was found.
  * @property label what Slack calls it - `#general`, `Alice Adams` - when it was
  *   found.
+ * @property kind which of the two it turned out to be, when it was found. The
+ *   answer to a question asked without one: a caller that did not know whether
+ *   it held a channel or a person is told, and can fill that in rather than
+ *   asking again.
  */
 data class SlackTargetCheck(
     val outcome: SlackTargetOutcome,
     val message: String,
     val id: String? = null,
     val label: String? = null,
+    val kind: SlackTargetKind? = null,
 )
 
 /**
@@ -66,6 +88,9 @@ data class SlackTargetCheck(
  * @property id Slack's own id - `C0123456789`, `U0123456789`.
  * @property name what the field is filled with when this is picked, and what a
  *   person recognises: `#general`, `@alice`.
+ * @property kind which of the two this row is. Carried on the row rather than
+ *   on the list, because one list holds both when no kind was asked for and a
+ *   row that cannot say which it is cannot be drawn or acted on.
  * @property realName the member's own name where Slack has one and it says
  *   something the handle does not - `Alice Adams`. Always null for a channel,
  *   whose one name is [name].
@@ -73,6 +98,7 @@ data class SlackTargetCheck(
 data class SlackSuggestion(
     val id: String,
     val name: String,
+    val kind: SlackTargetKind,
     val realName: String? = null,
 )
 
@@ -92,7 +118,8 @@ data class SlackSuggestion(
  * @property complete whether [matches] is everything that matches. False when
  *   Slack was not read to the end, and false when more matched than are
  *   returned; both mean the same thing to somebody typing, which is that there
- *   may be more and narrowing will find it.
+ *   may be more and narrowing will find it. When both lists were searched it is
+ *   false unless *both* were read whole, because half a search is not a search.
  */
 data class SlackSuggestions(
     val outcome: SlackTargetOutcome,
@@ -116,6 +143,25 @@ data class SlackSuggestions(
  * cost: [check] reads one page and reports what it could not settle, while
  * [suggest] pages, caches per connection, and is bounded on both.
  *
+ * **Neither of them needs to be told which kind.** [SlackTargetKind] is a
+ * narrowing and not a requirement, because it describes Slack's lookups rather
+ * than Slack's addressing - one `chat.postMessage` sends to either. A question
+ * asked without one searches both halves and merges them, and the merge has
+ * three rules worth stating:
+ *
+ *  - **A sigil or an id shape settles it and costs nothing.** `#support` is a
+ *    channel, `@alice`, an address and a `U…` id are people, and a `C…` id is a
+ *    channel. Only a bare name that could be either is asked about twice.
+ *  - **Channels come before people at equal rank.** Something has to break the
+ *    tie and this is the side to break it towards: a channel name is unique in
+ *    a Slack and a display name is not, so the row a person sees first is the
+ *    one that can only mean one thing.
+ *  - **Half an answer never becomes a verdict.** Found in one half is
+ *    [SlackTargetOutcome.FOUND]. Absent from both, both read whole, is
+ *    [SlackTargetOutcome.NOT_FOUND]. Absent from the half that answered while
+ *    the other was refused is [SlackTargetOutcome.UNCHECKED] and the refusal's
+ *    own sentence, because the name may well be in the half nobody read.
+ *
  * **The scope is the whole design.** `users.list` and `users.info` need
  * `users:read`, and the channel lookups need `channels:read` and `groups:read`.
  * A bot token that posts perfectly well carries none of them, because nothing
@@ -125,6 +171,28 @@ data class SlackSuggestions(
  * [SlackTargetOutcome.UNCHECKED], and suggesting degrades to it rather than to
  * a failure: an empty picker with no reason under it reads as a broken
  * connection, which is the one impression this must not leave.
+ *
+ * A merged answer names the scopes that are actually missing and only those. A
+ * token carrying `channels:read` and not `users:read` is the case this merge was
+ * built for - it used to be shown nothing at all, because nothing could tell it
+ * which half to ask - and what it is shown now is every channel, and one line
+ * saying that the members need `users:read`.
+ *
+ * **What a merged question costs, and why nothing had to change for it.** A
+ * merged miss reads two lists where a narrowed one reads one, and that is one
+ * request against each of two budgets rather than two against one: Slack meters
+ * per method, so `conversations.list` and `users.list` do not share a bucket and
+ * a merged read spends the same share of each as a narrowed read of that half
+ * did. [suggest] pays it once and not per keystroke, because the two entries it
+ * fills are the two the cache already keeps and the next question - merged or
+ * not - is a lookup in a map. [check] is uncached by design and pays for both
+ * halves each time, which is why a sigil, an address or an id is taken as the
+ * answer it is rather than confirmed against the other half.
+ *
+ * The one bound worth restating is [SlackListingCache]'s: thirty-two lists, two
+ * per connection, so sixteen Slacks being typed against at once. A merged
+ * question keeps both of one connection's entries warm rather than one, which is
+ * what that cap was always counted in.
  *
  * **Neither of them gates anything.** The field they describe is free text and
  * stays free text. `createAction` and `updateAction` do not call either.
@@ -152,10 +220,12 @@ class SlackDirectory(
     private val cache = SlackListingCache()
 
     /**
+     * @param kind which lookup to put the question to, or null to put it to
+     *   both and merge the answers.
      * @param typed exactly what is in the field: `#general`, `general`,
      *   `@alice`, an address, or an id pasted out of Slack.
      */
-    fun check(connectionId: Long, kind: SlackTargetKind, typed: String): SlackTargetCheck {
+    fun check(connectionId: Long, kind: SlackTargetKind?, typed: String): SlackTargetCheck {
         val name = typed.trim()
         if (name.isEmpty()) return unchecked("")
 
@@ -163,18 +233,11 @@ class SlackDirectory(
         if (opening is Opening.Shut) return unchecked(opening.why)
         val token = (opening as Opening.Ready).token
 
-        return try {
-            when (kind) {
-                SlackTargetKind.CHANNEL -> channel(token, name)
-                SlackTargetKind.USER -> user(token, name)
-            }
-        } catch (failure: Exception) {
-            // Logged rather than passed on. The SDK's own exception text is a
-            // response body and has never held a token, but a message that goes
-            // to a screen is not the place to start relying on that.
-            log.warn("Could not ask Slack about a {} on connection {}", kind, connectionId, failure)
-            unchecked("Not checked - Slack could not be reached.")
-        }
+        val halves = asked(kind, name).map { half(connectionId, token, it, name) }
+
+        // One half is its own answer, whether it was named or narrowed to. Two
+        // is the only case there is anything to merge.
+        return halves.singleOrNull()?.check ?: merge(name, halves)
     }
 
     /**
@@ -187,20 +250,115 @@ class SlackDirectory(
      * question - it asks for the first few of everything, which is what a
      * picker shows when it opens.
      *
+     * **A merged question reads the two lists that already exist.** The cache is
+     * keyed by connection and kind, and asking without a kind asks it for both
+     * of those keys rather than inventing a third. So a picker that has been
+     * open on channels and is then asked for everything pays for the member list
+     * only, and the two answers stay one read apart from each other for as long
+     * as they are worth keeping.
+     *
+     * @param kind which list to read, or null to read both and offer one list.
      * @param typed what is in the field so far, with or without its `#` or `@`.
      */
-    fun suggest(connectionId: Long, kind: SlackTargetKind, typed: String): SlackSuggestions {
+    fun suggest(connectionId: Long, kind: SlackTargetKind?, typed: String): SlackSuggestions {
         val opening = open(connectionId)
         if (opening is Opening.Shut) return none(opening.why)
         val token = (opening as Opening.Ready).token
 
-        // A miss is filled here, on this call. Being read is a state and not an
-        // emptiness, which is why the wait ending has an answer of its own
-        // rather than coming back as a list with nothing in it.
-        val listing = cache.listing(SlackListingKey(connectionId, kind)) { read(connectionId, kind, token) }
-            ?: return none("Not checked - this Slack is still being read. Try again in a moment.")
+        val name = typed.trim()
+        val lists = asked(kind, name).map { it to listing(connectionId, token, it) }
 
-        return offer(kind, listing, typed.trim())
+        return offer(lists, name)
+    }
+
+    /**
+     * Which lookups one question turns into.
+     *
+     * A named kind is that kind and nothing else - the behaviour every existing
+     * caller has. A question with no kind is narrowed by what was typed where
+     * Slack's own notation settles it, and only a bare name that could be either
+     * costs two lookups. The sigils are not a guess: somebody who typed `#` said
+     * which half they meant, and an id's first letter is Slack's own answer.
+     */
+    private fun asked(kind: SlackTargetKind?, typed: String): List<SlackTargetKind> = when {
+        kind != null -> listOf(kind)
+        typed.startsWith("#") || CHANNEL_ID.matches(typed) -> listOf(SlackTargetKind.CHANNEL)
+        typed.startsWith("@") || USER_ID.matches(typed) || EMAIL.matches(typed) -> listOf(SlackTargetKind.USER)
+        else -> listOf(SlackTargetKind.CHANNEL, SlackTargetKind.USER)
+    }
+
+    /**
+     * One lookup, and never an exception.
+     *
+     * Caught per half rather than around the pair, so that a channel lookup that
+     * fell over does not throw away a member lookup that answered. The sentence
+     * is the one a single-kind question has always been given.
+     */
+    private fun half(connectionId: Long, token: String, kind: SlackTargetKind, name: String): Half = try {
+        when (kind) {
+            SlackTargetKind.CHANNEL -> channel(token, name)
+            SlackTargetKind.USER -> user(token, name)
+        }
+    } catch (failure: Exception) {
+        // Logged rather than passed on. The SDK's own exception text is a
+        // response body and has never held a token, but a message that goes
+        // to a screen is not the place to start relying on that.
+        log.warn("Could not ask Slack about a {} on connection {}", kind, connectionId, failure)
+        Half(kind, unchecked("Not checked - Slack could not be reached."))
+    }
+
+    /**
+     * Two answers about one name, made into one.
+     *
+     * Reached only when nothing about what was typed said which half it belonged
+     * to, so the two are genuinely being weighed against each other. See the
+     * class comment for why a channel wins a tie and why a refusal outranks an
+     * absence.
+     */
+    private fun merge(name: String, halves: List<Half>): SlackTargetCheck {
+        val hit = halves.firstOrNull { it.check.outcome == SlackTargetOutcome.FOUND }
+        if (hit != null) {
+            val other = halves.firstOrNull { it !== hit && it.check.outcome == SlackTargetOutcome.FOUND }
+                ?: return hit.check
+            // Both. Rare, entirely legal, and worth saying out loud: the field
+            // takes one value and the person is the only one who knows which
+            // they meant.
+            return hit.check.copy(message = alsoTheOther(hit.check, other.kind))
+        }
+
+        val refused = halves.filter { it.check.outcome == SlackTargetOutcome.UNCHECKED }
+        if (refused.isEmpty()) return notFound(nothingAnywhere(name))
+
+        return unchecked(whyRefused(refused))
+    }
+
+    /** Both halves named something, in the one line there is room for. */
+    private fun alsoTheOther(hit: SlackTargetCheck, other: SlackTargetKind): String {
+        val also = if (other == SlackTargetKind.CHANNEL) "a channel" else "a member"
+        return "${hit.message.take(TYPED_SHOWN)} - $also goes by that too; the # or @ picks which."
+    }
+
+    private fun nothingAnywhere(name: String) =
+        "No channel or member called ${name.take(TYPED_SHOWN)} - a private one or a new joiner looks the same."
+
+    /**
+     * Why a merged answer is [SlackTargetOutcome.UNCHECKED], naming the scopes
+     * that are actually missing and no others.
+     *
+     * The point of the sentence is what somebody does next, and "add
+     * `users:read`" is only useful advice when `users:read` is the scope that is
+     * missing. A token short of both is told both; a token short of one is told
+     * that one, whatever the other half happened to answer. Anything that was
+     * refused for some other reason - a rate limit, a revoked token - keeps its
+     * own sentence, because a scope list would be the wrong thing to act on.
+     */
+    private fun whyRefused(refused: List<Half>): String {
+        val wanting = refused.map { it.missing }
+        if (wanting.all { it != null }) {
+            val scopes = scopeList(wanting.filterNotNull().flatten())
+            return "Not checked - this connection's bot token is missing $scopes."
+        }
+        return refused.first { it.missing == null }.check.message
     }
 
     /**
@@ -212,18 +370,19 @@ class SlackDirectory(
      * that can read one and not the other therefore gets "not checked", which is
      * true.
      */
-    private fun channel(token: String, typed: String): SlackTargetCheck {
+    private fun channel(token: String, typed: String): Half {
+        val kind = SlackTargetKind.CHANNEL
         val name = typed.removePrefix("#")
 
         if (CHANNEL_ID.matches(name)) {
             val answer = slack.methods(token).conversationsInfo { it.channel(name) }
             if (answer.isOk) {
                 val hit = answer.channel
-                return found(hit.id, "#${hit.name}", "#${hit.name}")
+                return Half(kind, found(kind, hit.id, "#${hit.name}", "#${hit.name}"))
             }
             return when (answer.error) {
-                CHANNEL_NOT_FOUND -> notFound("No channel with the id $name.")
-                else -> refusal(answer.error, CHANNEL_SCOPES)
+                CHANNEL_NOT_FOUND -> Half(kind, notFound("No channel with the id $name."))
+                else -> refused(kind, answer.error, CHANNEL_SCOPES)
             }
         }
 
@@ -232,34 +391,35 @@ class SlackDirectory(
                 .excludeArchived(false)
                 .types(listOf(ConversationType.PUBLIC_CHANNEL, ConversationType.PRIVATE_CHANNEL))
         }
-        if (!answer.isOk) return refusal(answer.error, CHANNEL_SCOPES)
+        if (!answer.isOk) return refused(kind, answer.error, CHANNEL_SCOPES)
 
         val hit = answer.channels.orEmpty().firstOrNull {
             name.equals(it.name, ignoreCase = true) || name.equals(it.nameNormalized, ignoreCase = true)
         }
-        if (hit != null) return found(hit.id, "#${hit.name}", "#${hit.name}")
+        if (hit != null) return Half(kind, found(kind, hit.id, "#${hit.name}", "#${hit.name}"))
 
         // Nothing beyond the first page is read, so nothing beyond it is ruled
         // out either. Saying "no such channel" off a list that was cut short is
         // exactly the wrong answer to give about a name somebody knows is right.
         if (!answer.responseMetadata?.nextCursor.isNullOrBlank()) {
-            return unchecked("Not checked - more channels here than one lookup reads.")
+            return Half(kind, unchecked("Not checked - more channels here than one lookup reads."))
         }
 
-        return notFound("No channel called #$name - though a private one this bot is not in looks the same.")
+        return Half(kind, notFound("No channel called #$name - though a private one this bot is not in looks the same."))
     }
 
     /** A member by id, by address, or by whichever of the several names Slack keeps. */
-    private fun user(token: String, typed: String): SlackTargetCheck {
+    private fun user(token: String, typed: String): Half {
+        val kind = SlackTargetKind.USER
         val name = typed.removePrefix("@")
 
         if (USER_ID.matches(name)) {
             val answer = slack.methods(token).usersInfo { it.user(name) }
             return when {
-                answer.isOk -> found(answer.user)
+                answer.isOk -> Half(kind, found(answer.user))
                 answer.error == USER_NOT_FOUND ->
-                    notFound("No member with the id $name.")
-                else -> refusal(answer.error, USER_SCOPES)
+                    Half(kind, notFound("No member with the id $name."))
+                else -> refused(kind, answer.error, USER_SCOPES)
             }
         }
 
@@ -269,24 +429,24 @@ class SlackDirectory(
         if (EMAIL.matches(name)) {
             val answer = slack.methods(token).usersLookupByEmail { it.email(name) }
             return when {
-                answer.isOk -> found(answer.user)
+                answer.isOk -> Half(kind, found(answer.user))
                 answer.error == USERS_NOT_FOUND || answer.error == USER_NOT_FOUND ->
-                    notFound("No member with the address $name.")
-                else -> refusal(answer.error, EMAIL_SCOPES)
+                    Half(kind, notFound("No member with the address $name."))
+                else -> refused(kind, answer.error, EMAIL_SCOPES)
             }
         }
 
         val answer = slack.methods(token).usersList { it.limit(PAGE) }
-        if (!answer.isOk) return refusal(answer.error, USER_SCOPES)
+        if (!answer.isOk) return refused(kind, answer.error, USER_SCOPES)
 
         val hit = answer.members.orEmpty().firstOrNull { !it.isDeleted && it.answersTo(name) }
-        if (hit != null) return found(hit)
+        if (hit != null) return Half(kind, found(hit))
 
         if (!answer.responseMetadata?.nextCursor.isNullOrBlank()) {
-            return unchecked("Not checked - more members here than one lookup reads.")
+            return Half(kind, unchecked("Not checked - more members here than one lookup reads."))
         }
 
-        return notFound("No member called @$name - though somebody who just joined looks the same.")
+        return Half(kind, notFound("No member called @$name - though somebody who just joined looks the same."))
     }
 
     /**
@@ -322,6 +482,34 @@ class SlackDirectory(
         /** @property why one line, ready to show. */
         data class Shut(val why: String) : Opening
     }
+
+    /**
+     * One half of a merged answer, and the whole of an unmerged one.
+     *
+     * [missing] rather than a message to match on: whether a merge may name a
+     * scope is a fact about what Slack said, and reading it back out of a
+     * sentence meant for a screen would break the first time the sentence was
+     * reworded.
+     *
+     * @property missing the scopes Slack said were wanting, and null when it
+     *   refused for any other reason or did not refuse at all.
+     */
+    private class Half(
+        val kind: SlackTargetKind,
+        val check: SlackTargetCheck,
+        val missing: List<String>? = null,
+    )
+
+    private fun refused(kind: SlackTargetKind, error: String?, scopes: List<String>) =
+        Half(kind, refusal(error, scopes), scopes.takeIf { error in SCOPE_REFUSALS })
+
+    /** One connection's copy of one list, or an empty one that says it is still being read. */
+    private fun listing(connectionId: Long, token: String, kind: SlackTargetKind): SlackListing =
+        // A miss is filled here, on this call. Being read is a state and not an
+        // emptiness, which is why the wait ending has an answer of its own
+        // rather than coming back as a list with nothing in it.
+        cache.listing(SlackListingKey(connectionId, kind)) { read(connectionId, kind, token) }
+            ?: SlackListing(emptyList(), complete = false, stoppedOn = BEING_READ)
 
     /**
      * Reads one of the two lists whole, as far as the caps allow.
@@ -363,7 +551,7 @@ class SlackDirectory(
             answer.channels.orEmpty().forEach { channel ->
                 val id = channel.id ?: return@forEach
                 val name = channel.name ?: channel.nameNormalized ?: return@forEach
-                entries += SlackSuggestion(id, "#$name")
+                entries += SlackSuggestion(id, "#$name", SlackTargetKind.CHANNEL)
             }
 
             cursor = answer.responseMetadata?.nextCursor
@@ -391,7 +579,7 @@ class SlackDirectory(
                 if (member.isDeleted) return@forEach
                 val id = member.id ?: return@forEach
                 val handle = member.name ?: return@forEach
-                entries += SlackSuggestion(id, "@$handle", member.ownName(handle))
+                entries += SlackSuggestion(id, "@$handle", SlackTargetKind.USER, member.ownName(handle))
             }
 
             cursor = answer.responseMetadata?.nextCursor
@@ -419,31 +607,48 @@ class SlackDirectory(
      * stopped short. No matches in a complete list is [SlackTargetOutcome.NOT_FOUND];
      * no matches in a partial one is [SlackTargetOutcome.UNCHECKED] and the
      * reason it is partial, because the name may be in the part that was never
-     * read.
+     * read. With two lists that rule is the same rule and is what makes half a
+     * search an [SlackTargetOutcome.UNCHECKED] rather than a "no such channel".
      */
-    private fun offer(kind: SlackTargetKind, listing: SlackListing, typed: String): SlackSuggestions {
+    private fun offer(lists: List<Pair<SlackTargetKind, SlackListing>>, typed: String): SlackSuggestions {
         val wanted = typed.removePrefix("#").removePrefix("@")
 
-        val matched = listing.entries
+        val matched = lists
+            .flatMap { (_, listing) -> listing.entries }
             .mapNotNull { entry -> rank(entry, wanted)?.let { it to entry } }
-            .sortedWith(compareBy({ (rank, _) -> rank }, { (_, entry) -> entry.name.lowercase() }))
+            .sortedWith(
+                compareBy(
+                    { (rank, _) -> rank },
+                    // The tie-break across the two kinds. Channels first: a
+                    // channel name means one thing in a Slack and a display
+                    // name need not, so the row somebody reads first is the
+                    // unambiguous one.
+                    { (_, entry) -> if (entry.kind == SlackTargetKind.CHANNEL) CHANNELS_FIRST else PEOPLE_AFTER },
+                    { (_, entry) -> entry.name.lowercase() },
+                ),
+            )
             .map { (_, entry) -> entry }
 
         val shown = matched.take(MOST_SHOWN)
-        val complete = listing.complete && shown.size == matched.size
+        val whole = lists.all { (_, listing) -> listing.complete }
+        val complete = whole && shown.size == matched.size
 
         if (shown.isNotEmpty()) {
             return SlackSuggestions(
                 SlackTargetOutcome.FOUND,
-                if (complete) "" else partial(kind, listing),
+                if (complete) "" else partial(lists),
                 shown,
                 complete,
             )
         }
 
-        if (!listing.complete) return none(reason(kind, listing.stoppedOn))
+        if (!whole) return none(reason(lists))
 
-        return SlackSuggestions(SlackTargetOutcome.NOT_FOUND, nothingMatches(kind, typed), complete = true)
+        return SlackSuggestions(
+            SlackTargetOutcome.NOT_FOUND,
+            nothingMatches(lists.map { (kind, _) -> kind }, typed),
+            complete = true,
+        )
     }
 
     /**
@@ -456,7 +661,7 @@ class SlackDirectory(
      */
     private fun rank(entry: SlackSuggestion, wanted: String): Int? {
         // Nothing typed yet, so everything answers equally and the sort falls
-        // through to the name.
+        // through to the kind and then the name.
         if (wanted.isBlank()) return EXACTLY
         val fields = listOfNotNull(entry.name.removePrefix("#").removePrefix("@"), entry.realName, entry.id)
         return fields.minOf { field ->
@@ -469,12 +674,32 @@ class SlackDirectory(
         }.takeIf { it != NOT_AT_ALL }
     }
 
-    /** Why a list somebody is being shown is not the whole of it. */
-    private fun partial(kind: SlackTargetKind, listing: SlackListing): String = when {
-        listing.complete -> "Showing the first $MOST_SHOWN - keep typing to narrow it down."
-        listing.stoppedOn == RATELIMITED -> "Slack is rate-limiting this connection, so this list is partial."
-        listing.stoppedOn == null -> "More ${plural(kind)} here than one lookup reads - keep typing to narrow it."
-        else -> "Slack stopped answering part way, so this list is partial."
+    /**
+     * Why a list somebody is being shown is not the whole of it.
+     *
+     * The case this is really for is the last one: channels read, members
+     * refused for want of `users:read`, and a picker quietly showing half a
+     * Slack. Saying "channels only" and naming the scope is the difference
+     * between a list that looks short and a list that explains itself.
+     */
+    private fun partial(lists: List<Pair<SlackTargetKind, SlackListing>>): String {
+        val short = lists.filter { (_, listing) -> !listing.complete }
+        if (short.isEmpty()) return "Showing the first $MOST_SHOWN - keep typing to narrow it down."
+
+        val silent = short.singleOrNull()?.takeIf { lists.size > 1 }
+        val wanting = silent?.let { (kind, listing) -> missingScopes(kind, listing) }
+        if (silent != null && wanting != null) {
+            val left = if (silent.first == SlackTargetKind.USER) "Channels" else "Members"
+            return "$left only - this connection's bot token is missing ${scopeList(wanting)}."
+        }
+
+        val (kind, listing) = short.first()
+        return when {
+            listing.stoppedOn == BEING_READ -> "Still reading this Slack's ${plural(kind)} - try again in a moment."
+            listing.stoppedOn == RATELIMITED -> "Slack is rate-limiting this connection, so this list is partial."
+            listing.stoppedOn == null -> "More ${plural(kind)} here than one lookup reads - keep typing to narrow it."
+            else -> "Slack stopped answering part way, so this list is partial."
+        }
     }
 
     /**
@@ -482,28 +707,65 @@ class SlackDirectory(
      *
      * Deliberately the same sentences. A person meets these under one field or
      * the other and there is no version of this where two wordings for a
-     * missing scope help them.
+     * missing scope help them. Where every list that stopped short stopped on a
+     * scope, they are named together and only they are named - one line, whether
+     * that is one scope or three.
      */
-    private fun reason(kind: SlackTargetKind, stoppedOn: String?): String = when (stoppedOn) {
-        null -> "Not checked - more ${plural(kind)} here than one lookup reads."
-        NOT_REACHED -> "Not checked - Slack could not be reached."
-        else -> refusal(stoppedOn, scopesFor(kind)).message
+    private fun reason(lists: List<Pair<SlackTargetKind, SlackListing>>): String {
+        val short = lists.filter { (_, listing) -> !listing.complete }
+        val wanting = short.map { (kind, listing) -> missingScopes(kind, listing) }
+        if (wanting.isNotEmpty() && wanting.all { it != null }) {
+            val scopes = scopeList(wanting.filterNotNull().flatten())
+            return "Not checked - this connection's bot token is missing $scopes."
+        }
+
+        val (kind, listing) = short.first { (aKind, aListing) -> missingScopes(aKind, aListing) == null }
+        return when (listing.stoppedOn) {
+            null -> "Not checked - more ${plural(kind)} here than one lookup reads."
+            NOT_REACHED -> "Not checked - Slack could not be reached."
+            BEING_READ -> "Not checked - this Slack is still being read. Try again in a moment."
+            else -> refusal(listing.stoppedOn, scopesFor(kind)).message
+        }
     }
 
-    private fun nothingMatches(kind: SlackTargetKind, typed: String): String = when {
-        typed.isBlank() && kind == SlackTargetKind.CHANNEL -> "No channels this connection can see."
-        typed.isBlank() -> "No members this connection can see."
-        // The same caveat [check] gives, for the same reason: a list read to the
-        // end is still not everything that exists.
-        kind == SlackTargetKind.CHANNEL ->
-            "No channel matches ${typed.take(TYPED_SHOWN)} - though a private one this bot is not in looks the same."
-        else -> "No member matches ${typed.take(TYPED_SHOWN)} - though somebody who just joined looks the same."
+    /** The scopes a read was refused for, and null when it stopped short of Slack for any other reason. */
+    private fun missingScopes(kind: SlackTargetKind, listing: SlackListing): List<String>? =
+        scopesFor(kind).takeIf { listing.stoppedOn in SCOPE_REFUSALS }
+
+    private fun nothingMatches(kinds: List<SlackTargetKind>, typed: String): String {
+        val both = kinds.size > 1
+        val channels = kinds.singleOrNull() == SlackTargetKind.CHANNEL
+        return when {
+            typed.isBlank() && both -> "No channels or members this connection can see."
+            typed.isBlank() && channels -> "No channels this connection can see."
+            typed.isBlank() -> "No members this connection can see."
+            // The same caveat [check] gives, for the same reason: a list read to
+            // the end is still not everything that exists.
+            both -> "No channel or member matches ${typed.take(TYPED_SHOWN)} - " +
+                "a private one or a new joiner looks the same."
+            channels ->
+                "No channel matches ${typed.take(TYPED_SHOWN)} - though a private one this bot is not in looks the same."
+            else -> "No member matches ${typed.take(TYPED_SHOWN)} - though somebody who just joined looks the same."
+        }
     }
 
     private fun plural(kind: SlackTargetKind) = if (kind == SlackTargetKind.CHANNEL) "channels" else "members"
 
     private fun scopesFor(kind: SlackTargetKind) =
         if (kind == SlackTargetKind.CHANNEL) CHANNEL_SCOPES else USER_SCOPES
+
+    /**
+     * The scopes, written the one way, however many there are.
+     *
+     * Assembled rather than kept as three finished sentences, because a merged
+     * refusal names the scopes of both halves and a fourth stored sentence for
+     * that combination is a fourth to keep under 120 characters.
+     */
+    private fun scopeList(scopes: List<String>): String {
+        val named = scopes.distinct()
+        val body = if (named.size == 1) named.first() else named.dropLast(1).joinToString(", ") + " and " + named.last()
+        return "the $body ${if (named.size == 1) "scope" else "scopes"}"
+    }
 
     /**
      * Every name Slack lets a person be addressed by, because a field somebody
@@ -533,7 +795,7 @@ class SlackDirectory(
         val label = user.profile?.displayName?.ifBlank { null }
             ?: user.realName?.ifBlank { null }
             ?: user.name
-        return found(user.id, label, label)
+        return found(SlackTargetKind.USER, user.id, label, label)
     }
 
     /**
@@ -543,7 +805,7 @@ class SlackDirectory(
      * them is quietly turned into "it does not exist", which is the only way
      * this feature can do harm.
      */
-    private fun refusal(error: String?, scopes: String): SlackTargetCheck = when (error) {
+    private fun refusal(error: String?, scopes: List<String>): SlackTargetCheck = when (error) {
         MISSING_SCOPE, NOT_ALLOWED_TOKEN_TYPE -> missingScope(scopes)
         RATELIMITED -> unchecked("Not checked - Slack is rate-limiting this connection. Try again shortly.")
         INVALID_AUTH, TOKEN_REVOKED, ACCOUNT_INACTIVE -> unchecked(
@@ -563,11 +825,11 @@ class SlackDirectory(
      * that the app has to be reinstalled - was true and was eight lines in a box
      * with room for one.
      */
-    private fun missingScope(scopes: String): SlackTargetCheck =
-        unchecked("Not checked - this connection's bot token is missing $scopes.")
+    private fun missingScope(scopes: List<String>): SlackTargetCheck =
+        unchecked("Not checked - this connection's bot token is missing ${scopeList(scopes)}.")
 
-    private fun found(id: String?, label: String, message: String) =
-        SlackTargetCheck(SlackTargetOutcome.FOUND, message, id, label)
+    private fun found(kind: SlackTargetKind, id: String?, label: String, message: String) =
+        SlackTargetCheck(SlackTargetOutcome.FOUND, message, id, label, kind)
 
     private fun notFound(message: String) = SlackTargetCheck(SlackTargetOutcome.NOT_FOUND, message)
 
@@ -613,6 +875,9 @@ class SlackDirectory(
          * How many matches come back. A picker shows a handful and a person
          * narrows it by typing; a list longer than this is scrolled rather than
          * read, and it is a lot of JSON to send on every keystroke.
+         *
+         * One cap for the merged list rather than one each, because it is the
+         * length of what a person reads and not a quota to be shared out.
          */
         const val MOST_SHOWN = 25
 
@@ -623,6 +888,9 @@ class SlackDirectory(
         const val FROM_THE_START = 1
         const val SOMEWHERE = 2
         const val NOT_AT_ALL = 3
+
+        const val CHANNELS_FIRST = 0
+        const val PEOPLE_AFTER = 1
 
         /**
          * A Slack id is nine characters or more and is written in upper case, so
@@ -637,9 +905,9 @@ class SlackDirectory(
         /** Enough to tell an address from a handle, and no more than that. */
         val EMAIL = Regex("""[^@\s]+@[^@\s]+\.[^@\s]+""")
 
-        const val CHANNEL_SCOPES = "the channels:read and groups:read scopes"
-        const val USER_SCOPES = "the users:read scope"
-        const val EMAIL_SCOPES = "the users:read and users:read.email scopes"
+        val CHANNEL_SCOPES = listOf("channels:read", "groups:read")
+        val USER_SCOPES = listOf("users:read")
+        val EMAIL_SCOPES = listOf("users:read", "users:read.email")
 
         const val MISSING_SCOPE = "missing_scope"
         const val NOT_ALLOWED_TOKEN_TYPE = "not_allowed_token_type"
@@ -651,7 +919,13 @@ class SlackDirectory(
         const val USER_NOT_FOUND = "user_not_found"
         const val USERS_NOT_FOUND = "users_not_found"
 
+        /** The two Slack says with when the token is short of a scope, and the only two a scope may be named for. */
+        val SCOPE_REFUSALS = setOf(MISSING_SCOPE, NOT_ALLOWED_TOKEN_TYPE)
+
         /** Not one of Slack's, and never shown: a read that never reached it. */
         const val NOT_REACHED = "not_reached"
+
+        /** Not one of Slack's either: a read somebody else started and this caller stopped waiting for. */
+        const val BEING_READ = "being_read"
     }
 }

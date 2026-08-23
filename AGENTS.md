@@ -128,19 +128,25 @@ which Postgres never sees because it defers the check to the end of the
 statement. A guard is a list of the mistakes somebody already made; the SQLite
 run is what covers the rest.
 
-**The suite runs on two engines, and CI runs one of them.** `./mvnw test` is
-Postgres and CI's `./mvnw -B -ntp verify` is the same engine, so
-`./mvnw test -Dorknux.test.database=sqlite` only ever runs where somebody
-remembers to run it. It is not the second-class half of the switch: it is the
-engine `orknux-one` ships with, and it is the only one that can see the class of
-bug above - #169 was a workspace that could not be deleted, a delete SQLite
-refused every time and Postgres allowed every time, and it lasted until somebody
-ran the other engine. Run both, and not only when the schema moved.
+**The suite runs on two engines and CI runs both, in parallel and both
+blocking.** It used to run only Postgres, so `-Dorknux.test.database=sqlite`
+went where somebody remembered it - and SQLite is the engine `orknux-one` ships
+with, so the engine nobody tested was the engine most people run. It went red
+twice without anybody noticing: #169, a workspace SQLite refused to delete and
+Postgres deleted every time, and #171, every tracker tool an agent called from a
+chat answering `Unable to commit against JDBC Connection`. Neither could be seen
+from a Postgres run.
 
-**SQLite is not green at the moment - issue #171.** A red run there is a state
-that was already there rather than something a change did, so read the failures
-before assuming they are yours. What is not acceptable is treating the whole run
-as noise, because that is how #169 lasted as long as it did.
+The matrix sets `fail-fast: false` on purpose. What is worth knowing about a red
+build is whether it is red on both engines or on one, and cancelling the
+surviving leg throws away exactly that.
+
+**Both engines are green, and a red SQLite run is now yours.** That was not true
+until #171 - the old advice here was to read the failures before assuming they
+were yours, because three of them were already there. They are gone, so the
+opposite applies: a failure on SQLite and not on Postgres is a real difference
+between the engines and is the most interesting kind of failure this repository
+produces. Do not treat it as noise, which is how #169 lasted as long as it did.
 
 `TestDatabase` is what switches them, before any Spring context exists: a
 Postgres container by default, and a file in `app/target` for SQLite, which needs

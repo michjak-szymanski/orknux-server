@@ -13,6 +13,73 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **A model provider can read its key from a workspace secret instead of keeping
+  its own copy.** Every provider type offers both, and they are exclusive: a key
+  typed in is a key this provider holds, a variable chosen is a reference to one
+  somebody else maintains. The reference is by id, so renaming the variable or
+  moving it to another catalog does not disturb the provider — which is the
+  lesson of the grants that were held by name and stranded by a rename. Deleting
+  a variable a provider reads is refused and names the provider, and so is
+  turning it from a secret into a plain value, because a plain value is returned
+  with the listing and that would put the key on every member's screen.
+
+- **Publishing a workflow has a keystroke.** Ctrl+Enter, rebindable in
+  Preferences, and the Publish control's own tooltip says which key it is. It
+  refuses exactly where the button refuses rather than carrying its own idea of
+  when publishing is possible.
+
+### Fixed
+
+- **A provider of type Ollama is now spoken to in Ollama's dialect.** It was
+  asked for `/models`, which Ollama does not serve, so a provider pointed at the
+  address the daemon actually listens on answered *"No model list — check the
+  endpoint"* about an endpoint that was correct. It works only if the address is
+  written ending in `/v1`, at which point picking Ollama did nothing that
+  picking OpenAI would not. The whole client speaks it, not only the check:
+  proving `/api/tags` answers would have said the daemon is up and nothing about
+  the surface a message is actually sent to, which is a provider that connects
+  and then fails every message.
+
+- **Somebody who signs in through the directory is written down again.** Every
+  external user was supposed to be recorded the first time they arrived — it is
+  the only thing that puts them on the Users page, deliberately, since a
+  directory is not ours to enumerate. The event that records them was never
+  published for the directory door, so the page could only ever list internal
+  accounts. Of the five ways into this product, that was the one that was wrong;
+  the two that record nobody — an internal password, an API token — now say in
+  the code that they mean to.
+
+- **Monitoring names the database the installation actually stores in.** It said
+  Postgres to everybody, including every `orknux-one`, which stores in SQLite.
+  The engines differ in ways that reach an operator, so somebody diagnosing a
+  lock timeout on a page naming the wrong one is looking for the wrong thing.
+
+- **A new issue is written on a blank form.** Opening Create issue from an issue
+  you were reading brought that issue's title, description and labels with it —
+  and the same defect put a comment typed under one issue into the box under
+  another. The two addresses are one page, and moving between them changed
+  neither its type nor its position, so nothing told it to start again. It is
+  told by its own identity now: a different issue is a different page. Clearing
+  the boxes on arrival would have looked like the same fix and was not — "File
+  another" keeps your labels for the next report without changing address, and
+  so does a link that was refused.
+
+- **Switching workspace no longer throws away a half-written issue.** The issue
+  form was the only editor in the product with nothing guarding it, and the
+  workspace picker could not have been caught by that guard in any case, because
+  it moves from a menu rather than from a link. It still leaves — what you were
+  writing belongs to the workspace you were writing it in — but it asks, and it
+  offers to file it where it was written before it switches.
+
+- **An audit feed written in one moment comes back in one order.** Both audit
+  queries sorted on the timestamp alone, so two entries written in the same
+  instant came back in whatever order the database chose, and could come back in
+  a different one on the next page load.
+
 ## 0.9.1
 
 ### Added

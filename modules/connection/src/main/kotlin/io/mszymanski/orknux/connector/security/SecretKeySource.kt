@@ -246,8 +246,11 @@ class SecretKeySource(
             }
         } catch (failure: IOException) {
             log.warn(
-                "No secret key was supplied and one could not be written to {} ({}). Credentials will " +
-                    "be stored as plain text until a key is configured.",
+                "No secret key was supplied and one could not be written to {} ({}). Saving a " +
+                    "credential will fail until a key is configured - not be stored in the clear: " +
+                    "the cipher refuses to encrypt without one, so the write does not happen at all. " +
+                    "Set ORKNUX_SECRET_KEY, or point orknux.security.secret-key-file somewhere this " +
+                    "process can write.",
                 at,
                 failure.javaClass.simpleName,
             )

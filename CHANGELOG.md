@@ -17,25 +17,36 @@ have failed.
 
 ### Added
 
-- **A model provider can read its key from a workspace secret instead of keeping
-  its own copy.** Every provider type offers both, and they are exclusive: a key
-  typed in is a key this provider holds, a variable chosen is a reference to one
-  somebody else maintains. The reference is by id, so renaming the variable or
+- **A model provider's key can be a reference to a workspace secret instead of a
+  copy of its own.** The choice belongs to the field rather than to the card:
+  beside *API Key* — or *Client Secret*, depending on how the provider
+  authenticates — sit **Value** and **Reference**, the same two words a node's
+  parameter has always used for the same idea. They are exclusive: a key typed in
+  is a key this provider holds, a variable chosen is a reference to one somebody
+  else maintains. The reference is by id, so renaming the variable or
   moving it to another catalog does not disturb the provider — which is the
   lesson of the grants that were held by name and stranded by a rename. Deleting
   a variable a provider reads is refused and names the provider, and so is
   turning it from a secret into a plain value, because a plain value is returned
   with the listing and that would put the key on every member's screen.
 
-- **A Slack action says whether the connection can see what you typed.** The
-  User and Channel fields are still free text and still save whatever is in
-  them; what is new is that Orknux asks Slack and tells you. Three answers, not
-  two: it found it, it could not find it, or it never asked. That last one
-  matters — a bot token set up only to post carries no read scope at all, and
-  "could not check" and "does not exist" want opposite things done about them,
-  one a scope to add and the other a name to correct. Nothing here refuses a
-  save, because a private channel the bot was never invited to and a member who
-  joined a minute ago look exactly like a typo from outside.
+- **A Slack action's target can be picked from what the connection can see, and
+  is judged when it is typed.** The User and Channel fields used to be free text
+  and hope. They now suggest the users and channels that connection can actually
+  reach, filtered as you type, in both places a target is set — the action's own
+  dialog and a node's parameters. They are still free text: a member who joined a
+  minute ago, an id pasted from somewhere else and a private channel the bot was
+  never invited to all still work, so the list is a convenience and never a gate.
+
+  What is typed rather than picked gets an answer under the field, and there are
+  three of them rather than two. It found it; it could not find it; or **it never
+  asked**. That last one is the common one and the reason this is worth saying at
+  all — a bot token set up only to post carries no permission to look anything
+  up, so a perfectly working connection can be unable to answer, and "could not
+  check" and "does not exist" want opposite things done about them: one a scope
+  to add to the Slack app, the other a name to correct. A Slack too large to read
+  in one lookup answers the same way, because ruling a name out from a list that
+  was cut short would be worse than saying nothing.
 
 - **Publishing a workflow has a keystroke.** Ctrl+Enter, rebindable in
   Preferences, and the Publish control's own tooltip says which key it is. It

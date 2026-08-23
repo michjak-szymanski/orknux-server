@@ -7,7 +7,6 @@ import io.mszymanski.orknux.server.action.ConnectionAction
 import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
-import io.mszymanski.orknux.server.action.MessageTarget
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowAction
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -781,7 +780,15 @@ class ComponentImporter(
                     connectionId = boundId(externalIn(node.path("connectionRef"), ExternalKind.CONNECTION)),
                     connectionAction = node.enumOrNull<ConnectionAction>("connectionAction", component),
                     content = node.text("content"),
-                    target = node.enumOrNull<MessageTarget>("target", component),
+                    /*
+                     * `target` is not read. An export written before an action
+                     * stopped holding a message kind still carries one, and it
+                     * is ignored rather than refused: the column it went into is
+                     * gone, nothing sends by it - a send resolves `targetName`
+                     * against the connection instead - and failing an import
+                     * over a key that never decided anything would strand every
+                     * file made before this.
+                     */
                     targetName = node.text("targetName"),
                     emailTo = node.text("emailTo"),
                     emailCc = node.text("emailCc"),

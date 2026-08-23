@@ -9,7 +9,6 @@ import io.mszymanski.orknux.connector.connection.SlackTargetKind
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionView
 import io.mszymanski.orknux.connector.connection.UpdateWorkspaceConnectionInput
-import io.mszymanski.orknux.server.action.MessageTarget
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -63,10 +62,9 @@ class WorkspaceConnectionAPI(
      *
      * **The target is a narrowing, not a requirement.** Omitted, both halves of
      * the connection are asked and the answers merged, and the answer says which
-     * kind it turned out to be. That is the shape the caller actually has: an
-     * action whose target kind has not been set yet could not name one here, so
-     * it asked nothing and its panel drew nothing - which is a worse answer than
-     * any of the three this can give.
+     * kind it turned out to be. That is the shape every caller has, because an
+     * action stores no kind: there is one field, holding what somebody typed,
+     * and this says what that turned out to be rather than being told first.
      *
      * Access is the one thing it does refuse on, and for the usual reason: the
      * question is asked of somebody else's connection or of none.
@@ -99,9 +97,9 @@ class WorkspaceConnectionAPI(
      * this never offered. `createAction` and `updateAction` do not call it.
      *
      * **The target is a narrowing here too.** Omitted, one list comes back
-     * holding both, every row saying which it is, so a picker over a field whose
-     * kind is not settled yet has something to draw - and picking a row settles
-     * the kind as well as the name.
+     * holding both, every row saying which it is, so the one target field has a
+     * single list to draw - and picking a row fills that field in, which is all
+     * an action holds.
      *
      * Cheap to call on a keystroke, which is what it is for: the module reads
      * each connection's list once and filters it in memory. A merged question
@@ -122,11 +120,11 @@ class WorkspaceConnectionAPI(
      * Which of the two a suggested row is, in the vocabulary the caller sends
      * with.
      *
-     * The row carries the module's own kind and the schema says `MessageTarget`,
-     * because what a picker does with a row is put it in an action - and the
-     * value it needs there is the one `createAction` takes. A row that could not
-     * say which kind it was would be undrawable in a merged list and unusable
-     * after it.
+     * The row carries the module's own kind and the schema says [MessageTarget],
+     * because a merged list holds both and a row that could not say which it is
+     * would be undrawable. It is a mark beside a name and nothing an action
+     * stores: what picking a row fills in is `targetName`, which is the whole of
+     * where a send goes.
      */
     @SchemaMapping(typeName = "SlackSuggestion", field = "target")
     fun suggestionTarget(suggestion: SlackSuggestion): MessageTarget = targetOf(suggestion.kind)
@@ -257,3 +255,22 @@ class WorkspaceConnectionAPI(
 }
 
 class ConnectionNotFoundException(id: Long) : RuntimeException("No connection with id $id")
+
+/**
+ * Which of Slack's two kinds of name a lookup was asked about, or turned up.
+ *
+ * Here rather than on an action because nothing stores it. An action used to
+ * carry one beside its target name and it never reached Slack; sending resolves
+ * the name itself now, so which of the two it belongs to is found out at the
+ * time. All that is left for this is picking which endpoint a lookup reads, and
+ * a lookup asked without one reads both and says which the name turned out to
+ * be.
+ *
+ * The connection module has its own `SlackTargetKind` and this is translated
+ * into it by hand at the boundary, because the module holds no notion of the
+ * server's vocabulary.
+ */
+enum class MessageTarget {
+    CHANNEL,
+    USER,
+}

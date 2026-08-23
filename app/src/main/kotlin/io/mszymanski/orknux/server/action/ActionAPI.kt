@@ -69,7 +69,6 @@ class ActionAPI(
                 connectionId = input.connectionId,
                 connectionAction = input.connectionAction,
                 content = input.content?.trim()?.ifEmpty { null },
-                target = input.target,
                 targetName = input.targetName?.trim()?.ifEmpty { null },
                 emailTo = input.emailTo?.trim()?.ifEmpty { null },
                 emailCc = input.emailCc?.trim()?.ifEmpty { null },
@@ -112,7 +111,6 @@ class ActionAPI(
         input.connectionId?.let { action.connectionId = it }
         input.connectionAction?.let { action.connectionAction = it }
         input.content?.let { action.content = it.trim().ifEmpty { null } }
-        input.target?.let { action.target = it }
         input.targetName?.let { action.targetName = it.trim().ifEmpty { null } }
         input.emailTo?.let { action.emailTo = it.trim().ifEmpty { null } }
         input.emailCc?.let { action.emailCc = it.trim().ifEmpty { null } }
@@ -194,7 +192,6 @@ class ActionAPI(
             connectionName = action.connectionId?.let { connections.workspaceConnection(it)?.name },
             connectionAction = action.connectionAction,
             content = action.content,
-            target = action.target,
             targetName = action.targetName,
             emailTo = action.emailTo,
             emailCc = action.emailCc,
@@ -400,7 +397,7 @@ data class CreateActionInput(
     val connectionId: Long? = null,
     val connectionAction: ConnectionAction? = null,
     val content: String? = null,
-    val target: MessageTarget? = null,
+    /** Where a send goes, as typed; a send resolves it. See [WorkflowAction.targetName]. */
     val targetName: String? = null,
     /** A mail's recipients and copy list, comma-separated, and what it is about. */
     val emailTo: String? = null,
@@ -430,7 +427,7 @@ data class UpdateActionInput(
     val connectionId: Long? = null,
     val connectionAction: ConnectionAction? = null,
     val content: String? = null,
-    val target: MessageTarget? = null,
+    /** Where a send goes, as typed; a send resolves it. See [WorkflowAction.targetName]. */
     val targetName: String? = null,
     /** A mail's recipients and copy list, comma-separated, and what it is about. */
     val emailTo: String? = null,
@@ -472,7 +469,7 @@ data class ActionView(
     val connectionName: String?,
     val connectionAction: ConnectionAction?,
     val content: String?,
-    val target: MessageTarget?,
+    /** Where a send goes, as typed; a send resolves it. See [WorkflowAction.targetName]. */
     val targetName: String?,
     /** A mail's recipients and copy list, comma-separated, and what it is about. */
     val emailTo: String?,

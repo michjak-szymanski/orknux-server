@@ -2579,9 +2579,9 @@ type SlackTargetCheck {
     """
     Which of the two it turned out to be, when it was found, and null otherwise.
 
-    The answer to a question asked without a `target`: a caller holding a name
-    and no kind is told which it is and can fill that in, rather than asking
-    twice to find out. It is the same value `createAction` takes.
+    The answer to a question asked without a `target`, which is how every caller
+    asks: an action holds a name and no kind, so this is what a form draws a
+    mark from rather than something it saves.
     """
     target: MessageTarget
 }
@@ -2648,9 +2648,9 @@ type SlackSuggestion {
 
     On the row rather than on the list, because one list holds both when
     `slackSuggestions` was asked without a `target`, and a row that cannot say
-    which it is can be neither drawn nor acted on. It is the same value
-    `createAction` takes, so picking a row sets the action's kind and its name
-    together.
+    which it is can be neither drawn nor acted on. A mark beside the name and
+    nothing more: picking a row fills in `targetName`, which is all an action
+    holds.
     """
     target: MessageTarget!
     """
@@ -3716,12 +3716,15 @@ enum ConnectionActionKind {
 }
 
 """
-Who a message is addressed to, which is what an action decides at run time.
+Which of Slack's two kinds of name this is: a channel, or a person.
 
-Required where it decides sending. Optional on `slackTarget` and
-`slackSuggestions`, which only ever needed it to pick an endpoint: Slack itself
-takes either id in the one `channel` argument, so looking a name up does not
-depend on knowing which of the two it is.
+Nothing stores it. An action holds `targetName` and no kind beside it, because
+a send resolves the name it is given to Slack's own id before it posts - so
+whether that name belongs to a channel or to a person is something found out at
+the time and never something filled in on a form. This is what is left of it: a
+mark beside a row, optional on `slackTarget` and `slackSuggestions` where it
+narrows which endpoint is read, and returned on their answers to say what a
+name turned out to be.
 """
 enum MessageTarget {
     CHANNEL
@@ -3755,7 +3758,22 @@ type Action {
     connectionName: String
     connectionAction: ConnectionActionKind
     content: String
-    target: MessageTarget
+    """
+    Where a send goes, exactly as it was typed: "#general", "general",
+    "@alice", "alice", an address, or an id pasted out of Slack.
+
+    One field and no kind beside it, because sending resolves what is in it:
+    the connection is asked what the name is at the moment the message goes,
+    and Slack is posted to the id that comes back. So none of the six shapes
+    above needs a sigil to work and none of them needs a setting saved
+    alongside. `slackTarget` answers the same question while somebody types,
+    and nothing stores its answer.
+
+    Free text, and never gated. A private channel this bot is in, a member who
+    joined a minute ago and an id pasted out of somebody else's message are all
+    valid and none of them can be looked up, so what cannot be resolved is sent
+    exactly as typed and Slack's own answer about it is what is reported.
+    """
     targetName: String
     "A mail's recipients and copy list, comma-separated."
     emailTo: String
@@ -3841,7 +3859,10 @@ input CreateActionInput {
     connectionId: ID
     connectionAction: ConnectionActionKind
     content: String
-    target: MessageTarget
+    """
+    Where a send goes, as typed: "#general", "general", "@alice", "alice", an
+    address, or an id. No kind goes with it - sending resolves the name itself.
+    """
     targetName: String
     "A mail's recipients and copy list, comma-separated."
     emailTo: String
@@ -3872,7 +3893,10 @@ input UpdateActionInput {
     connectionId: ID
     connectionAction: ConnectionActionKind
     content: String
-    target: MessageTarget
+    """
+    Where a send goes, as typed: "#general", "general", "@alice", "alice", an
+    address, or an id. No kind goes with it - sending resolves the name itself.
+    """
     targetName: String
     "A mail's recipients and copy list, comma-separated."
     emailTo: String

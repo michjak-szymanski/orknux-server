@@ -1,9 +1,13 @@
 package io.mszymanski.orknux.server.integration
 
 import io.mszymanski.orknux.connector.connection.CreateWorkspaceConnectionInput
+import io.mszymanski.orknux.connector.connection.SlackDirectory
+import io.mszymanski.orknux.connector.connection.SlackTargetCheck
+import io.mszymanski.orknux.connector.connection.SlackTargetKind
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionView
 import io.mszymanski.orknux.connector.connection.UpdateWorkspaceConnectionInput
+import io.mszymanski.orknux.server.action.MessageTarget
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -24,6 +28,7 @@ class WorkspaceConnectionAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val slackDirectory: SlackDirectory,
 ) {
 
     @QueryMapping
@@ -35,6 +40,45 @@ class WorkspaceConnectionAPI(
     @QueryMapping
     fun workspaceConnection(@Argument id: Long): WorkspaceConnectionView? =
         connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+
+    /**
+     * Whether a Slack connection can see the user or channel typed into an
+     * action's target field.
+     *
+     * A query and not a mutation, because it changes nothing and records
+     * nothing: the connection's own check is a mutation because it stores what
+     * it found and writes an audit entry, and this stores nothing. The shape it
+     * follows is `memoryBudget` instead - a form asking a question about
+     * something it has not saved yet, and being answered rather than refused.
+     *
+     * **Nothing here gates a save.** `createAction` and `updateAction` neither
+     * call this nor know it exists, and `targetName` stays free text. The
+     * answers it can give are wrong about a correct name often enough - a
+     * private channel the bot is not in, a member who joined a minute ago, an
+     * id from elsewhere - that refusing on them would cost more than the typos
+     * it catches. So it advises and the person decides.
+     *
+     * Access is the one thing it does refuse on, and for the usual reason: the
+     * question is asked of somebody else's connection or of none.
+     */
+    @QueryMapping
+    fun slackTarget(
+        @Argument connectionId: Long,
+        @Argument target: MessageTarget,
+        @Argument name: String,
+    ): SlackTargetCheck {
+        connections.workspaceConnection(connectionId)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(connectionId)
+
+        // Matched by hand rather than by name, so that adding a target the
+        // module cannot look up is a compiler error here and not a surprise at
+        // runtime. The module holds no notion of an action.
+        val kind = when (target) {
+            MessageTarget.CHANNEL -> SlackTargetKind.CHANNEL
+            MessageTarget.USER -> SlackTargetKind.USER
+        }
+        return slackDirectory.check(connectionId, kind, name)
+    }
 
     @MutationMapping
     fun createWorkspaceConnection(@Argument input: CreateWorkspaceConnectionInput): WorkspaceConnectionView {

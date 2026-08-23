@@ -39,7 +39,7 @@ services:
       ORKNUX_ALLOWED_ORIGINS: https://orknux.example.com
       ORKNUX_ATTACHMENTS_LOCATION: /home/orknux/attachments
     volumes:
-      - orknux-data:/home/orknux   # only if attachments are on
+      - orknux-data:/home/orknux   # the generated key lives here too
 ```
 
 The volume is on the server user's home directory on purpose: a named volume on
@@ -70,7 +70,7 @@ and Temporal. Several are wrong in a deployment, and those say so.
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
 | `ORKNUX_SECRET_KEY` | Encrypts every credential this server is trusted with - provider keys, Slack tokens, MCP secrets - so the database alone is not enough to use them. 32 bytes, base64. | generated into `ORKNUX_SECRET_KEY_FILE` | **Conditional** - this or the next one |
-| `ORKNUX_SECRET_KEY_FILE` | Where a generated key is kept, and where an existing one is read from. Ignored when `ORKNUX_SECRET_KEY` is set. Empty turns generation off. | `data/secret.key`, in the container's own layer | **Conditional** - this or the one above |
+| `ORKNUX_SECRET_KEY_FILE` | Where a generated key is kept, and where an existing one is read from. Ignored when `ORKNUX_SECRET_KEY` is set. Empty turns generation off. | `/home/orknux/secret.key` in this image | **Conditional** - this or the one above |
 
 There is deliberately **no default key**: a key committed to an image is a key
 every installation shares, which is the same as no key at all. With nothing
@@ -85,20 +85,24 @@ one this image makes plain. Generate it with `openssl rand -base64 32`, set
 whatever you already use to keep secrets, rather than beside the data it
 protects.
 
-**The default key file works, and it is still not where you want it.** `/app/data`
-belongs to the server's own user, so a container started with nothing set does
-generate a key and does encrypt what it stores. But that path is the container's
-own layer: it goes when the container is replaced, and the next one generates a
-different key, comes up healthy, and cannot read a single credential the last one
-wrote. The server says so at WARN when it happens, and Admin -> Doctor reports
-the key as generated on this start - if it says that on every start, this is why.
+**Mount the volume, and it keeps working across restarts on its own.** The key
+file defaults to `/home/orknux/secret.key`, which is the path this image already
+tells you to mount `orknux-data` at - so a deployment that follows the snippet
+above gets the same key back on every start without setting anything.
 
-So for anything that has to survive an upgrade, set `ORKNUX_SECRET_KEY`, or point
-`ORKNUX_SECRET_KEY_FILE` at a path on a volume that outlives the container -
-`/home/orknux/secret.key` with `orknux-data:/home/orknux` mounted, which is what
+Without that volume it is a layer, and a layer goes when the container is
+replaced. The database usually does not go with it, and that is the combination
+that loses credentials: the data comes back, the key does not, and the next start
+generates a different one. The server says so at WARN when it happens, and
+Admin -> Doctor reports the key as generated on this start - if it says that on
+every start, this is why.
+
+The other answer is to supply `ORKNUX_SECRET_KEY` and keep it wherever you keep
+secrets. That is what a deployment does, and
 [`deploy/compose.yaml`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/compose.yaml)
-does. The all-in-one image, `orknux/orknux-one`, needs neither: its entrypoint
-points the key at its own data volume already.
+takes it if you export one - it brings the whole installation up without it, on
+a volume, if you do not. The all-in-one image, `orknux/orknux-one`, needs neither:
+its entrypoint points the key at its own data directory already.
 
 Whichever it is, **the key and the database are backed up together and restored
 together**. Changing or losing the key makes every stored credential unreadable

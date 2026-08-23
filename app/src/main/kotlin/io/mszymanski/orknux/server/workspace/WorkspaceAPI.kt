@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.workspace
 
 import io.mszymanski.orknux.connector.connection.WorkspaceLifecycleService
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleNotFoundException
 import io.mszymanski.orknux.server.security.RoleRepository
@@ -27,6 +28,7 @@ class WorkspaceAPI(
     private val access: WorkspaceAccess,
     private val connections: WorkspaceLifecycleService,
     private val models: ModelService,
+    private val budgets: SessionMemoryBudgets,
 ) {
 
     /**
@@ -343,6 +345,55 @@ class WorkspaceAPI(
         return workspace
     }
 
+    /**
+     * What agents in this workspace are given when they ask for nothing.
+     *
+     * The middle step of three - the agent's own share, then this, then the
+     * built-in allowance - and it exists because the per-agent setting is the
+     * right place to make an exception and the wrong place to state a policy.
+     * An installation that has decided its agents should remember more than the
+     * built-in allowance was saying so once per agent, again on every agent
+     * made afterwards, and could only read the decision back by looking at
+     * every row.
+     *
+     * Null clears it, which puts every agent that sets nothing back on the
+     * built-in allowance rather than leaving them on the last value; that is
+     * the same rule the agent's own share follows, and it is what lets a form
+     * offer "the default" as a thing to choose.
+     *
+     * Only the bounds are checked, and the sentence is the one the agent form
+     * raises because it comes from the same calculation. What is *not* checked
+     * is everything that needs a model - a window too small to carry an
+     * exchange, a model reserving most of its window for its answer - because
+     * this default is not tied to a model. A workspace runs several at once
+     * whose windows differ by an order of magnitude, so refusing a default
+     * because the smallest of them could not give it would refuse a setting
+     * that is right for every other model in the workspace. Those refusals
+     * still happen, in `SessionMemoryBudgets`, against the model an agent
+     * actually uses, at the point its budget is worked out.
+     *
+     * Whoever can see the workspace may set it, like the model settings above
+     * and unlike the roles: it is a workspace setting rather than an
+     * administrative one, and it is recorded either way.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceDefaultMemoryShare(@Argument workspaceId: Long, @Argument share: Int?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        budgets.resolveDefault(share).refusal?.let { throw WorkspaceMemoryShareUnusableException(it) }
+
+        workspace.defaultMemoryShare = share
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            share?.let { "Agents default to $it% of their model's context window" }
+                ?: "Agent memory default cleared",
+        )
+        return workspace
+    }
+
     @MutationMapping
     @Transactional
     fun deleteWorkspace(@Argument id: Long): Boolean {
@@ -435,3 +486,12 @@ class ModelNotSpeechException(name: String) : RuntimeException(
 
 class ModelNotFoundForWorkspaceException(id: Long) :
     RuntimeException("No model with id $id in this workspace")
+
+/**
+ * A default share of a context window that could not work, refused where it was set.
+ *
+ * Carries the sentence `SessionMemoryBudgets` wrote, which is the same sentence
+ * the agent form is refused with, from the same check - two surfaces set the
+ * same setting and must not come to disagree about which numbers are allowed.
+ */
+class WorkspaceMemoryShareUnusableException(message: String) : RuntimeException(message)

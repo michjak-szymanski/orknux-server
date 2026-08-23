@@ -126,13 +126,13 @@ class AgentNodeRunner(
         /*
          * How much of it this agent is allowed to bring back.
          *
-         * Its own share of its own model's window, resolved fresh on every run
-         * rather than carried in the published graph: the two things it is made
-         * of - what the agent was given and what the model can take - are both
-         * live rows, and a run that used yesterday's window would be spending
+         * Its own share of its own model's window - or, where it has none of
+         * its own, its workspace's default - resolved fresh on every run rather
+         * than carried in the published graph: everything it is made of is a
+         * live row, and a run that used yesterday's window would be spending
          * against a number that no longer exists.
          */
-        val budget = budgets.budget(agent.memoryShare, modelId)
+        val budget = budgets.budget(agent.memoryShare, agent.workspaceId, modelId)
 
         /*
          * Read before this turn's question is recorded, not after - otherwise

@@ -948,7 +948,9 @@ CREATE TABLE workspace
     speech_model_id              integer,
     quick_chat_model_id          integer,
     quick_chat_may_write         boolean not null default false,
+    default_memory_share         integer,
     constraint uk_workspace_name UNIQUE (name),
+    constraint ck_workspace_default_memory_share CHECK (default_memory_share IS NULL OR (default_memory_share >= 1 AND default_memory_share <= 50)),
     constraint workspace_quick_chat_model_id_fkey FOREIGN KEY (quick_chat_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_speech_model_id_fkey FOREIGN KEY (speech_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_transcription_model_id_fkey FOREIGN KEY (transcription_model_id) REFERENCES llm_model(id) ON DELETE SET NULL

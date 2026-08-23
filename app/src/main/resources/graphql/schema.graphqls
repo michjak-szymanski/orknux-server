@@ -294,14 +294,30 @@ type Query {
     Asked of a workspace and a model rather than of an agent, because the form
     setting this may have changed the model in the same edit and a preview read
     off the stored agent would answer for the model it used to have. A null
-    share is the built-in default, and a null model is what an agent with none
-    chosen gets.
+    share falls through to the workspace's `defaultMemoryShare` and then to the
+    built-in allowance, which is what an agent that sets nothing gets; a null
+    model is what an agent with none chosen gets.
 
     It never fails. A share that could not be saved comes back with `refusal`
     set to the sentence `updateAgent` would raise, so a slider can say why
     while it is being dragged.
+
+    `workspaceDefault: true` asks the other question about the same setting:
+    what the *workspace's* default would be, for the workspace settings form.
+    It is judged on the bounds alone and nothing else, because a workspace
+    default is not tied to one model - see `setWorkspaceDefaultMemoryShare` -
+    so `modelId` is ignored and the numbers come back as the built-in
+    allowance with `derived: false`. To show what that default would mean
+    against one particular model, ask this query again without the flag and
+    with that model: it is the same question an agent asks, and it comes back
+    with the same answer.
     """
-    memoryBudget(workspaceId: ID!, modelId: ID, share: Int): SessionMemoryBudget!
+    memoryBudget(
+        workspaceId: ID!,
+        modelId: ID,
+        share: Int,
+        workspaceDefault: Boolean = false
+    ): SessionMemoryBudget!
     """
     One workspace's LLM sessions, most recently spoken in first.
 
@@ -724,6 +740,24 @@ type Mutation {
     setWorkspaceQuickChatModel(workspaceId: ID!, modelId: ID): Workspace!
     "Whether the quick chat may start things, or only look them up."
     setWorkspaceQuickChatWrites(workspaceId: ID!, allowed: Boolean!): Workspace!
+    """
+    What agents in this workspace are given when they set no share of their own.
+
+    The middle step of three: an agent's own `memoryShare`, then this, then the
+    built-in allowance. Null clears it, which puts every agent that sets nothing
+    back on the built-in allowance.
+
+    Only the bounds are checked - between 1% and 50% - and the sentence a
+    refusal carries is the one `updateAgent` raises, from the same calculation.
+    What is not checked here is anything that needs a model, because a default
+    is not tied to one: a workspace runs several models whose windows differ by
+    an order of magnitude, and refusing a default because the smallest of them
+    could not give it would refuse a setting that is right for every other. The
+    per-model refusals still apply, against the model an agent really uses,
+    where its budget is worked out. Ask `memoryBudget` with `workspaceDefault:
+    true` for what this mutation would accept.
+    """
+    setWorkspaceDefaultMemoryShare(workspaceId: ID!, share: Int): Workspace!
 
     createObject(input: CreateObjectInput!): WorkflowObject!
     "Backs the object editor: the properties on the left, the details on the right."
@@ -940,6 +974,15 @@ type Workspace {
     default, including for a workspace that has already chosen a model.
     """
     quickChatMayWrite: Boolean!
+    """
+    What agents here are given when they set no share of their own, as a
+    percentage of their model's context window.
+
+    Null means the workspace has decided nothing, and those agents fall through
+    to the built-in allowance - which is what every workspace does until
+    somebody sets this. An agent with a share of its own never consults it.
+    """
+    defaultMemoryShare: Int
 }
 
 input CreateWorkspaceInput {
@@ -1474,7 +1517,11 @@ type Agent {
     icon: String
     """
     How much of its model's context window one of its sessions may take back,
-    as a percentage of that window. Null is the built-in default.
+    as a percentage of that window. Null follows the workspace's
+    `defaultMemoryShare`, and where that is null too, the built-in allowance —
+    so this being null does not mean the agent has no share, only that it set
+    none. `memoryBudget.share` is the one that applies, and
+    `memoryBudget.inherited` says which of the two it came from.
 
     One number rather than five. How many turns come back, how much of them,
     how much of what its tools returned and how much of any one result are all
@@ -1500,8 +1547,22 @@ one that can be counted without the provider's own tokeniser, and reported here
 at four characters to the token.
 """
 type SessionMemoryBudget {
-    "The share that was asked for. Null when nothing is set and the default applies."
+    """
+    The share that applies. Null when neither the agent nor its workspace set
+    one and the built-in allowance applies.
+    """
     share: Int
+    """
+    True when `share` is the workspace's `defaultMemoryShare` rather than the
+    agent's own.
+
+    The one thing a form cannot work out for itself: an agent showing 10% has
+    to say whether that is its own answer or the one it inherits, because
+    clearing its own lands on the workspace's rather than on the built-in
+    allowance. Always false for the preview asked with `workspaceDefault: true`,
+    which is setting that default rather than inheriting it.
+    """
+    inherited: Boolean!
     """
     The context window of the model in question, in tokens.
 
@@ -1963,7 +2024,7 @@ input UpdateAgentInput {
     How much of its model's context window a session may take back, as a
     percentage of it, between 1 and 50.
 
-    Sent whenever the form saves, so null is the built-in default rather than
+    Sent whenever the form saves, so null is "follow the workspace" rather than
     "leave it alone" — the rule the icon follows, and what lets a screen put it
     back to the default.
 

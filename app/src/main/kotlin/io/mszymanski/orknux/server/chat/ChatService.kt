@@ -57,12 +57,17 @@ class ChatService(
      * The agent's share of the model the chat is actually using, which for a
      * chat is not always the agent's own: the picker at the top of a chat can
      * point it at another model, and the budget has to be a share of the window
-     * the request will really be made against. A chat with no agent has no
-     * share to apply and gets the built-in default, which is what it had.
+     * the request will really be made against.
+     *
+     * A chat with no agent has no share of its own and falls through to the
+     * workspace default, which is the same step an agent that sets nothing
+     * takes - the default is the workspace's answer for the sessions held in
+     * it, and a chat is one of those. Where the workspace has set none either,
+     * it is the built-in allowance, which is what every chat had before.
      */
     private fun budget(chat: ChatSession): SessionMemoryBudget {
-        val share = chat.agentId?.let { agents.findByIdOrNull(it)?.memoryShare } ?: return SessionMemoryBudget.DEFAULT
-        return budgets.budget(share, chat.modelId)
+        val share = chat.agentId?.let { agents.findByIdOrNull(it)?.memoryShare }
+        return budgets.budget(share, chat.workspaceId, chat.modelId)
     }
 
     fun sessions(workspaceId: Long, userId: String): List<ChatSession> =

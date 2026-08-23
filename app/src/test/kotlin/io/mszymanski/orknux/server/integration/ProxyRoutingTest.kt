@@ -14,6 +14,7 @@ import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRule
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretVariables
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -214,6 +215,8 @@ class ProxyRoutingTest {
             properties,
             ObjectMapper(),
             SecretCipher(TEST_KEY),
+            // No provider here reads a workspace secret; each holds its own.
+            SecretVariables { _, _ -> null },
             router,
         )
 

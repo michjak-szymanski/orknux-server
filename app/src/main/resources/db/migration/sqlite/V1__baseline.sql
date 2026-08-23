@@ -419,6 +419,7 @@ CREATE TABLE model_provider
     name                         varchar(120) not null,
     endpoint                     varchar(1000) not null,
     secret                       varchar(4000),
+    secret_variable_id           integer,
     type                         varchar(24) not null default 'OPENAI',
     auth_method                  varchar(16) not null default 'API_KEY',
     api_version                  varchar(32),
@@ -432,6 +433,10 @@ CREATE TABLE model_provider
     last_checked_at              timestamp,
     constraint uk_model_provider_name UNIQUE (workspace_id, name),
     constraint ck_model_provider_auth CHECK (((auth_method) IN ('API_KEY', 'ENTRA_ID'))),
+    -- V188: the two kinds of credential are exclusive. No foreign key to
+    -- workspace_variable on either engine - that is the application's table and
+    -- this is the connection module's.
+    constraint ck_model_provider_credential CHECK (secret_variable_id IS NULL OR secret IS NULL),
     constraint ck_model_provider_status CHECK (((status) IN ('NOT_CONFIGURED', 'NOT_CHECKED', 'CONNECTED', 'FAILED'))),
     constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'OLLAMA', 'CUSTOM')))
 );

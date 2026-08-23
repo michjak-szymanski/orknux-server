@@ -198,3 +198,35 @@ class VariableInUseException(name: String, functions: List<String>) : RuntimeExc
     "\"$name\" is an external parameter of ${functions.joinToString(", ")}. " +
         "Take it off those functions first; removing it here would change what they are handed.",
 )
+
+/**
+ * A variable a model provider reads its credential from cannot be deleted.
+ *
+ * Refused rather than allowed with the provider reporting a broken reference,
+ * which was the other way it could have gone. Removing an MCP server entry is
+ * ordinary housekeeping — the server is somebody else's and may genuinely be
+ * gone — so #170 let that through and reported it. A credential is this
+ * installation's own, nothing about the provider has stopped existing, and the
+ * only thing a delete accomplishes is taking the provider offline at some later
+ * moment nobody will connect to this. Renaming and moving are free, because the
+ * reference is by id, so this refuses the one operation that actually destroys
+ * something, and it names what is holding on.
+ */
+class VariableHeldByProviderException(name: String, providers: List<String>) : RuntimeException(
+    "\"$name\" is the credential of the model provider${if (providers.size == 1) "" else "s"} " +
+        "${providers.joinToString(", ")}. Give ${if (providers.size == 1) "it" else "them"} a key of " +
+        "${if (providers.size == 1) "its" else "their"} own, or point at another secret, first — removing it " +
+        "here would leave nothing to call the provider with.",
+)
+
+/**
+ * And it cannot stop being a secret while a provider reads it.
+ *
+ * A [VariableKind.VALUE] is returned with the listing, so turning a bound
+ * variable into one would put an API key on every member's screen. The same
+ * rule refuses the binding in the first place; this is the other end of it.
+ */
+class VariableSecrecyHeldException(name: String, providers: List<String>) : RuntimeException(
+    "\"$name\" is the credential of ${providers.joinToString(", ")}, so it has to stay a secret. " +
+        "A value is read with the list, and a key on a list is a key on a screen.",
+)

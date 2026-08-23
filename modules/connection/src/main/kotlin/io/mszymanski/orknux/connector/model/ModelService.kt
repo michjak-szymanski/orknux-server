@@ -1,7 +1,9 @@
 package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.CheckOutcome
+import io.mszymanski.orknux.connector.security.HeldSecret
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretVariables
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Sort
@@ -34,15 +36,27 @@ class ModelService(
     private val events: ApplicationEventPublisher,
     /** Only to recognise a credential that never came out of its envelope. */
     private val cipher: SecretCipher,
+    /** What a provider reading its credential from a workspace variable is pointed at. */
+    private val secretVariables: SecretVariables,
     /** Defaulted rather than a bean, the way `ConditionEvaluator` takes one. */
     private val clock: Clock = Clock.systemDefaultZone(),
 ) {
 
     fun providers(workspaceId: Long): List<ModelProviderView> =
-        providers.findByWorkspaceId(workspaceId, Sort.by("name")).map(::ModelProviderView)
+        providers.findByWorkspaceId(workspaceId, Sort.by("name")).map(::view)
 
     fun provider(id: Long): ModelProviderView? =
-        providers.findByIdOrNull(id)?.let(::ModelProviderView)
+        providers.findByIdOrNull(id)?.let(::view)
+
+    /**
+     * The providers in this workspace reading [variableId], by name.
+     *
+     * What `VariableAPI` asks before it removes a variable or takes its secrecy
+     * away. Names rather than rows: the answer is a sentence somebody reads, and
+     * a provider row is a credential holder this has no business handing out.
+     */
+    fun providersReading(workspaceId: Long, variableId: Long): List<String> =
+        providers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId).map { it.name }.sorted()
 
     /** Every model the workspace may reach, provider first and then name. */
     fun models(workspaceId: Long): List<LlmModelView> {
@@ -70,13 +84,17 @@ class ModelService(
             throw ModelProviderNameTakenException(name)
         }
 
+        val own = input.secret?.trim()?.ifEmpty { null }
+        val reference = bindable(input.workspaceId, input.secretVariableId, own)
+
         val provider = ModelProvider(
             workspaceId = input.workspaceId,
             name = name,
             type = input.type ?: ProviderType.OPENAI,
             endpoint = endpoint,
             authMethod = input.authMethod ?: ProviderAuthMethod.API_KEY,
-            secret = input.secret?.trim()?.ifEmpty { null },
+            secret = if (reference == null) own else null,
+            secretVariableId = reference,
             apiVersion = input.apiVersion?.trim()?.ifEmpty { null },
             deploymentName = input.deploymentName?.trim()?.ifEmpty { null },
             region = input.region?.trim()?.ifEmpty { null },
@@ -89,11 +107,20 @@ class ModelService(
         // Checked as soon as the transaction lands, so a provider that was just
         // given a key does not sit on "Not checked" until the next sweep.
         events.publishEvent(ModelProviderSaved(requireNotNull(saved.id)))
-        return ModelProviderView(saved)
+        return view(saved)
     }
 
     /**
      * Backs the provider form; a null secret keeps the stored one, empty clears it.
+     *
+     * The credential is a choice of two and the choice is made by what arrives.
+     * A key given is a provider keeping its own copy, so any reference it held is
+     * dropped; a variable given is a provider reading one, so any copy it held is
+     * dropped with it. An empty key clears the credential whichever kind it was,
+     * which is the only way back to a provider with nothing configured. Both at
+     * once is refused rather than resolved by precedence: the caller has not
+     * chosen, and guessing for them is how a key ends up somewhere nobody
+     * intended.
      *
      * Anything saved here can change what a check would find, so the last one is
      * forgotten rather than left to describe a provider that has moved.
@@ -110,11 +137,24 @@ class ModelService(
             throw ModelProviderNameTakenException(name)
         }
 
+        val own = input.secret?.trim()
+        val reference = bindable(provider.workspaceId, input.secretVariableId, own?.ifEmpty { null })
+
         provider.name = name
         provider.endpoint = endpoint
         input.type?.let { provider.type = it }
         input.authMethod?.let { provider.authMethod = it }
-        input.secret?.let { provider.secret = it.trim().ifEmpty { null } }
+        when {
+            reference != null -> {
+                provider.secretVariableId = reference
+                provider.secret = null
+            }
+
+            own != null -> {
+                provider.secret = own.ifEmpty { null }
+                provider.secretVariableId = null
+            }
+        }
         provider.apiVersion = input.apiVersion?.trim()?.ifEmpty { null }
         provider.deploymentName = input.deploymentName?.trim()?.ifEmpty { null }
         provider.region = input.region?.trim()?.ifEmpty { null }
@@ -124,7 +164,39 @@ class ModelService(
 
         provider.forgetCheck()
         events.publishEvent(ModelProviderSaved(id))
-        return ModelProviderView(provider)
+        return view(provider)
+    }
+
+    /**
+     * The variable a save asked to be bound to, checked, or null for a provider
+     * keeping its own copy.
+     *
+     * Three refusals, all of them at the moment somebody can still fix it rather
+     * than at the moment a chat needs the key: a caller that sent both kinds of
+     * credential, an id this workspace does not hold, and a variable that is not
+     * one of the ones kept out of sight.
+     */
+    private fun bindable(workspaceId: Long, variableId: Long?, own: String?): Long? {
+        if (variableId == null) return null
+        if (own != null) throw ModelProviderCredentialAmbiguousException()
+
+        val held = secretVariables.find(workspaceId, variableId)
+            ?: throw ModelProviderVariableNotFoundException(variableId)
+        if (!held.secret) throw ModelProviderVariableNotSecretException(held.name)
+        return held.id
+    }
+
+    /**
+     * A provider as a screen sees it, with the variable it reads named.
+     *
+     * The name is read here rather than left to the caller so that a broken
+     * reference has somewhere to be reported from. There is one lookup per
+     * provider and a workspace has a handful of them, which is not a query
+     * budget worth complicating this for.
+     */
+    private fun view(provider: ModelProvider): ModelProviderView {
+        val held = provider.secretVariableId?.let { secretVariables.find(provider.workspaceId, it) }
+        return ModelProviderView(provider, held)
     }
 
     /**
@@ -145,7 +217,7 @@ class ModelService(
         }
         provider.lastCheckMessage = result.message.take(MESSAGE_LENGTH)
         provider.lastCheckedAt = OffsetDateTime.now(clock)
-        return ModelProviderView(provider)
+        return view(provider)
     }
 
     /**
@@ -282,10 +354,17 @@ class ModelService(
      * One that could not be decrypted comes back as null rather than as its
      * envelope: `orkx1:…` in a reveal box looks like the credential somebody
      * saved, and copying it somewhere would be copying nothing usable.
+     *
+     * A provider reading a variable reveals nothing here, and that is not an
+     * omission. Revealing a secret is a deliberate act recorded against the
+     * secret - `revealVariable` writes "Variable X revealed" into the audit log -
+     * and a second door onto the same value through the provider would be the
+     * same value read with the wrong thing's name on the record.
      */
     @Transactional
     fun revealProviderSecret(id: Long): String? {
         val provider = providers.findByIdOrNull(id) ?: throw ModelProviderNotFoundException(id)
+        if (provider.secretVariableId != null) return null
         log.info("Credentials for model provider {} (workspace {}) revealed", provider.name, provider.workspaceId)
         return provider.secret?.takeUnless { cipher.isEncrypted(it) }
     }
@@ -420,8 +499,10 @@ data class CreateProviderInput(
     val endpoint: String,
     val type: ProviderType? = null,
     val authMethod: ProviderAuthMethod? = null,
-    /** The API key, or the Entra client secret. */
+    /** The API key, or the Entra client secret; not with [secretVariableId]. */
     val secret: String? = null,
+    /** A workspace secret to read the credential from instead of keeping a copy. */
+    val secretVariableId: Long? = null,
     val apiVersion: String? = null,
     val deploymentName: String? = null,
     val region: String? = null,
@@ -435,8 +516,16 @@ data class UpdateProviderInput(
     val endpoint: String,
     val type: ProviderType? = null,
     val authMethod: ProviderAuthMethod? = null,
-    /** Null leaves the stored credential alone; empty clears it. */
+    /**
+     * Null leaves the stored credential alone; empty clears it, reference and
+     * all. A value stores a copy here and drops any reference.
+     */
     val secret: String? = null,
+    /**
+     * Points the provider at a workspace secret, dropping any copy it held.
+     * Null leaves the credential as it is; sending it with [secret] is refused.
+     */
+    val secretVariableId: Long? = null,
     val apiVersion: String? = null,
     val deploymentName: String? = null,
     val region: String? = null,
@@ -498,9 +587,25 @@ data class ModelProviderView(
     val lastCheckMessage: String?,
     /** ISO-8601, as `WorkspaceConnectionView` reports its own. */
     val lastCheckedAt: String?,
+    /** Whether the provider holds a copy of its own. False for one reading a variable. */
     val secretSet: Boolean,
+    /** The workspace secret it reads instead, or null when it keeps its own copy. */
+    val secretVariableId: Long?,
+    /** What that variable is called, and which catalog holds it. */
+    val secretVariableName: String?,
+    val secretVariableCatalog: String?,
+    /**
+     * A reference pointing at nothing.
+     *
+     * Should not happen - a variable a provider reads cannot be deleted - but a
+     * restore, a workspace removed out from under it or a hand-edited database
+     * can each produce one, and a provider that cannot say why it has no key is
+     * precisely the failure this design exists to avoid. So it is reported here
+     * as well as in the check's own words.
+     */
+    val secretVariableMissing: Boolean,
 ) {
-    constructor(provider: ModelProvider) : this(
+    constructor(provider: ModelProvider, held: HeldSecret? = null) : this(
         id = requireNotNull(provider.id),
         workspaceId = provider.workspaceId,
         name = provider.name,
@@ -517,6 +622,10 @@ data class ModelProviderView(
         lastCheckMessage = provider.lastCheckMessage,
         lastCheckedAt = provider.lastCheckedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         secretSet = !provider.secret.isNullOrBlank(),
+        secretVariableId = provider.secretVariableId,
+        secretVariableName = held?.name,
+        secretVariableCatalog = held?.catalog,
+        secretVariableMissing = provider.secretVariableId != null && held == null,
     )
 }
 

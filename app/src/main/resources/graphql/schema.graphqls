@@ -1123,7 +1123,7 @@ type Workspace {
     voicePauseEndsTurnMs: Int
     """
     How far above the room's own noise a sound has to stand to count as a voice,
-    as a percentage — 250 is two and a half times the room.
+    as a percentage — 300 is three times the room.
 
     Lower is more sensitive, and the number to lower for somebody who talks
     quietly or sits far from the microphone. A room is measured as it is heard,

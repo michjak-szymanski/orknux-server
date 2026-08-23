@@ -685,7 +685,6 @@ CREATE TABLE workflow_action
     connection_id                integer,
     connection_action            varchar(32),
     content                      text,
-    target                       varchar(16),
     target_name                  varchar(120),
     url                          varchar(1000),
     method                       varchar(8),

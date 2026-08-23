@@ -368,7 +368,8 @@ class ComponentExporter(
             putExternal("connectionRef", externals.connectionReference(workspaceId, held.connectionId))
             put("connectionAction", held.connectionAction?.name)
             put("content", held.content)
-            put("target", held.target?.name)
+            // Where a send goes, and no kind beside it: an action stopped
+            // holding one, and an older export carrying `target` is read past.
             put("targetName", held.targetName)
             put("emailTo", held.emailTo)
             put("emailCc", held.emailCc)

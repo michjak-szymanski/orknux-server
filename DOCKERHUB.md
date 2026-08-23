@@ -30,7 +30,7 @@ services:
     image: orknux/orknux-server:latest
     ports: ["8080:8080"]
     environment:
-      ORKNUX_SECRET_KEY: "a-32-byte-key-you-generated"     # see below
+      ORKNUX_SECRET_KEY: "a-32-byte-key-you-generated"     # or a key file; see below
       ORKNUX_DB_URL: jdbc:postgresql://postgres:5432/orknux
       ORKNUX_DB_USERNAME: orknux
       ORKNUX_DB_PASSWORD: orknux
@@ -69,14 +69,42 @@ and Temporal. Several are wrong in a deployment, and those say so.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_SECRET_KEY` | Encrypts every credential this server is trusted with - provider keys, Slack tokens, MCP secrets - so the database alone is not enough to use them. 32 bytes, base64. | *none* | **Yes** |
+| `ORKNUX_SECRET_KEY` | Encrypts every credential this server is trusted with - provider keys, Slack tokens, MCP secrets - so the database alone is not enough to use them. 32 bytes, base64. | generated into `ORKNUX_SECRET_KEY_FILE` | **Conditional** - this or the next one |
+| `ORKNUX_SECRET_KEY_FILE` | Where a generated key is kept, and where an existing one is read from. Ignored when `ORKNUX_SECRET_KEY` is set. Empty turns generation off. | `data/secret.key`, which this image cannot write | **Conditional** - this or the one above |
 
-There is deliberately **no default**: a key committed to an image is a key every
-installation shares, which is the same as no key at all. Generate one with
-`openssl rand -base64 32` and keep it somewhere other than the database it
-protects. **Changing or losing it makes every stored credential unreadable**,
-and they have to be entered again. Admin -> Doctor says whether the key is set,
-the right length, and whether every stored secret still reads with it.
+There is deliberately **no default key**: a key committed to an image is a key
+every installation shares, which is the same as no key at all. With nothing
+supplied the server generates one on its first start and writes it to
+`ORKNUX_SECRET_KEY_FILE`, so an installation started with no configuration still
+encrypts what it stores instead of coming up healthy and failing on the first
+credential somebody saves.
+
+Supplying your own is what a deployment does, and it is the better answer for
+one this image makes plain. Generate it with `openssl rand -base64 32`, set
+`ORKNUX_SECRET_KEY`, and nothing is written to disk at all - the key stays in
+whatever you already use to keep secrets, rather than beside the data it
+protects.
+
+**The default key file is no use in this image, so one of the two has to be
+set.** It is relative to the working directory, `/app`, which belongs to root
+while the server runs as `orknux` - so no key is written there, none is
+generated, and the first credential somebody saves fails. Even where it could be
+written it would be the wrong place: a key in the container's own layer goes when
+the container is replaced, and the next one would generate a different key, come
+up healthy, and be unable to read a single credential the last one wrote. Set
+`ORKNUX_SECRET_KEY`, or point `ORKNUX_SECRET_KEY_FILE` at a path on a volume that
+outlives the container - `/home/orknux/secret.key` with `orknux-data:/home/orknux`
+mounted, which is what
+[`deploy/compose.yaml`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/compose.yaml)
+does. The all-in-one image, `orknux/orknux-one`, needs neither: its entrypoint
+points the key at its own data volume already.
+
+Whichever it is, **the key and the database are backed up together and restored
+together**. Changing or losing the key makes every stored credential unreadable
+- not corrupted, not recoverable, entered again by hand - and a restore of the
+database without it is a restore that does not work. Admin -> Doctor says
+whether the key is set, the right length, and whether every stored secret still
+reads with it.
 
 ## Database
 

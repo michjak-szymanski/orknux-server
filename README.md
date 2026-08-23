@@ -86,15 +86,20 @@ server, the interface, Postgres, a directory to sign in against and Temporal:
 
 ```
 curl -O https://raw.githubusercontent.com/michjak-szymanski/orknux-server/main/deploy/compose.yaml
-export ORKNUX_SECRET_KEY="$(openssl rand -base64 32)"
 docker compose up -d                 # http://localhost:8080, sign in as alice / password
 ```
+
+Nothing has to be exported first. The key every stored credential is encrypted
+with is generated into the server's volume on the first start when nobody
+supplies one, so the file runs as it is.
 
 [deploy/README.md](deploy/README.md) is the whole of it: what each service is
 for and whether it is genuinely required, which image tags to pin to, where the
 data lives, and what to change before it is anything more than a demonstration.
 Read the part about `ORKNUX_SECRET_KEY` before you save a credential rather than
-after.
+after: a deployment supplies its own key, and whichever key an installation ends
+up with, it is backed up and restored with the database or the credentials in
+that database cannot be read again.
 
 ### To look at Orknux
 
@@ -134,13 +139,15 @@ fails on a symbol that is plainly there in the source.
 Temporal's own UI is on http://localhost:8233, for looking at a run that went
 wrong.
 
-**`ORKNUX_SECRET_KEY` has to be in the environment it is started in** — 32 bytes,
-base64, from `openssl rand -base64 32`, and the same one every time or the
-credentials already stored cannot be read. There is deliberately no default. It
-is read on first use rather than at startup, so a server without it starts
-perfectly, reports itself healthy, and fails the first time anything reads or
-writes a credential; the Doctor page under Admin is what says so before somebody
-trips over it.
+**Nothing has to be exported to start it.** A server given no
+`ORKNUX_SECRET_KEY` generates one and keeps it at `app/data/secret.key`, which
+is ignored by git and is the same key on the next run — which is the point, since
+a different key each time reads back nothing the last one stored. Set
+`ORKNUX_SECRET_KEY` (32 bytes, base64, from `openssl rand -base64 32`) and it
+wins over that file and nothing is written down, which is what a deployment
+does. The start that generates a key says so in the log, and the Doctor page
+under Admin is where to see whether the key is the right length and whether
+every credential already stored still reads with it.
 
 ### The front end
 
@@ -472,13 +479,23 @@ a real SMTP conversation, negotiates, authenticates and closes.
 
 Secrets are encrypted at rest with AES-256-GCM, keyed by
 `orknux.security.secret-key` — 32 bytes, base64, and deliberately without a
-default. `SecretConverter` puts every credential column through it on the way in
+default value, because a key in a file people copy is a key every installation
+shares. `SecretConverter` puts every credential column through it on the way in
 and out, and a stored value is recognisable by its envelope, `orkx1:iv:ciphertext`.
-The key comes from the environment, so this defends a backup, a disk or a replica
-and not somebody who can already read the application's own environment. Losing
-it makes every stored credential unreadable; the Doctor page under Admin is where
-to find out whether the key is set, the right length, and able to read what is
-already there.
+`SecretKeySource` decides where the key comes from, in one order: a supplied key
+wins and is never written down, otherwise the file at
+`orknux.security.secret-key-file` is read, otherwise one is generated and written
+there. That last case is what lets an installation start with nothing configured
+and still encrypt what it stores, and it is only safe because the key is written
+once and read again — a key regenerated on the next start would leave a server
+that boots, calls itself healthy, and cannot read a thing it wrote yesterday.
+What it defends is a backup, a disk or a replica; a key on the same disk as the
+database does nothing about somebody who can already read that disk, and a
+deployment that wants more supplies its own key from somewhere the application
+only borrows it. Losing the key makes every stored credential unreadable, which
+is why it is backed up with the database and never instead of it; the Doctor page
+under Admin is where to find out whether the key is set, the right length, and
+able to read what is already there.
 
 ### Networking
 

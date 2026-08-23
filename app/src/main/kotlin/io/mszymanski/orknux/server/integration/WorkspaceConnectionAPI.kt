@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.integration
 
 import io.mszymanski.orknux.connector.connection.CreateWorkspaceConnectionInput
 import io.mszymanski.orknux.connector.connection.SlackDirectory
+import io.mszymanski.orknux.connector.connection.SlackSuggestions
 import io.mszymanski.orknux.connector.connection.SlackTargetCheck
 import io.mszymanski.orknux.connector.connection.SlackTargetKind
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
@@ -67,17 +68,55 @@ class WorkspaceConnectionAPI(
         @Argument target: MessageTarget,
         @Argument name: String,
     ): SlackTargetCheck {
+        requireSlackConnection(connectionId)
+        return slackDirectory.check(connectionId, kindOf(target), name)
+    }
+
+    /**
+     * The users or channels a Slack connection can see that match what somebody
+     * has typed into an action's target field so far.
+     *
+     * The same question as `slackTarget` asked the other way round, and it
+     * answers in the same vocabulary: an outcome and one line, with `UNCHECKED`
+     * where there are no suggestions and why. A picker that empties itself with
+     * nothing said under it reads as a broken connection, and the commonest
+     * reason for it to empty is a bot token carrying no read scope - which is
+     * what a token set up to post looks like.
+     *
+     * **This suggests and never gates.** `targetName` is free text and stays
+     * free text: an id pasted out of somebody else's message, a member who
+     * joined a minute ago and a private channel this bot is not in are all
+     * unsuggestable and all perfectly valid, so the field has to accept what
+     * this never offered. `createAction` and `updateAction` do not call it.
+     *
+     * Cheap to call on a keystroke, which is what it is for: the module reads
+     * each connection's list once and filters it in memory. Access is the one
+     * thing it refuses on.
+     */
+    @QueryMapping
+    fun slackSuggestions(
+        @Argument connectionId: Long,
+        @Argument target: MessageTarget,
+        @Argument typed: String?,
+    ): SlackSuggestions {
+        requireSlackConnection(connectionId)
+        return slackDirectory.suggest(connectionId, kindOf(target), typed.orEmpty())
+    }
+
+    /**
+     * Matched by hand rather than by name, so that adding a target the module
+     * cannot look up is a compiler error here and not a surprise at runtime. The
+     * module holds no notion of an action.
+     */
+    private fun kindOf(target: MessageTarget) = when (target) {
+        MessageTarget.CHANNEL -> SlackTargetKind.CHANNEL
+        MessageTarget.USER -> SlackTargetKind.USER
+    }
+
+    /** Access, and nothing else: what the connection turns out to be is the module's answer to give. */
+    private fun requireSlackConnection(connectionId: Long) {
         connections.workspaceConnection(connectionId)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw ConnectionNotFoundException(connectionId)
-
-        // Matched by hand rather than by name, so that adding a target the
-        // module cannot look up is a compiler error here and not a surprise at
-        // runtime. The module holds no notion of an action.
-        val kind = when (target) {
-            MessageTarget.CHANNEL -> SlackTargetKind.CHANNEL
-            MessageTarget.USER -> SlackTargetKind.USER
-        }
-        return slackDirectory.check(connectionId, kind, name)
     }
 
     @MutationMapping

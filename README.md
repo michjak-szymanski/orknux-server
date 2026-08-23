@@ -1148,6 +1148,26 @@ it, and a name it could not find is advice: a private channel the bot was never
 invited to, a member who joined a minute ago and an id pasted out of somebody
 else's message all look identical to a typo from outside.
 
+**And the same two lists are offered to pick from.** `slackSuggestions` reads a
+connection's members or channels once, keeps them for five minutes and filters
+them in memory, so a picker may ask on every keystroke. That cache is the whole
+of the feature's cost: Slack's rate limit belongs to the connection rather than
+to this, so a read per keystroke would be paid for by whatever the workflow was
+posting. It answers in the same three outcomes and the same one-line sentences,
+including **never asked** where a token carries no read scope — a picker that
+empties itself with nothing said under it reads as a broken connection, which is
+the impression this exists to avoid. The lists are bounded: ten pages of two
+hundred, thirty-two lists at a time and the least recently typed against dropped
+first. A Slack larger than that suggests from what was read and says the list is
+a part, which is also what a rate limit half way through gets, because ruling a
+name out from a list that stopped short is the one thing this must never do.
+
+Picking is a convenience and never the way in. `targetName` is free text and
+stays free text, and plenty of correct values will never be suggested: an id
+pasted out of somebody else's message, a member who joined a minute ago, a
+private channel this bot was never invited to, and an archived channel, which is
+deliberately not offered and exists all the same.
+
 ## Licence
 
 **GNU Affero General Public License v3.0 or later** — see [LICENSE](LICENSE),

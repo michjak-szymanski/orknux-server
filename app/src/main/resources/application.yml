@@ -387,10 +387,23 @@ orknux:
     # read them. 32 bytes, base64: `openssl rand -base64 32`.
     #
     # Deliberately no default. A key committed here would be a key every
-    # installation shares, which is the same as no key at all. Set it in the
-    # environment; lose it and the stored credentials cannot be recovered, only
-    # entered again.
+    # installation shares, which is the same as no key at all. Set it and it
+    # wins over the file below, and nothing is ever written down; lose it and
+    # the stored credentials cannot be recovered, only entered again.
     secret-key: ${ORKNUX_SECRET_KEY:}
+    # Where a key lives when nobody supplied one. Read if it is there, generated
+    # and written if it is not — so a server started with nothing configured
+    # still encrypts what it stores, instead of coming up healthy and failing on
+    # the first credential somebody saves.
+    #
+    # The path has to survive a restart. A generated key that does not is the one
+    # failure in here that loses data quietly: the server boots, reports the key
+    # usable, and cannot read a thing it wrote yesterday. It is under the same
+    # `data` directory as the attachments for that reason, and every image and
+    # compose file that mounts a volume points this at it. Empty turns generation
+    # off altogether, for a deployment that supplies its own key and wants no
+    # copy of one on disk.
+    secret-key-file: ${ORKNUX_SECRET_KEY_FILE:data/secret.key}
   ldap:
     user-search-base: ${ORKNUX_LDAP_USER_SEARCH_BASE:ou=people}
     user-search-filter: ${ORKNUX_LDAP_USER_SEARCH_FILTER:(uid={0})}

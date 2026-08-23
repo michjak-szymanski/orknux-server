@@ -113,6 +113,13 @@ class InternalAuthentication(
  * No session is created. A token is presented on every request by things that
  * do not keep state, and minting a session for each one would fill the session
  * table with rows nobody returns to.
+ *
+ * Nor is an arrival announced. The context is set here rather than through an
+ * [org.springframework.security.authentication.AuthenticationManager], so no
+ * `AuthenticationSuccessEvent` is published and [UserDetection] never hears of
+ * this — deliberately, and for the same reason there is no session: a token
+ * belongs to a user who is a row already, and every request carrying one is not
+ * somebody arriving at the door.
  */
 @Component
 class TokenAuthenticationFilter(private val internal: InternalAuthentication) : OncePerRequestFilter() {

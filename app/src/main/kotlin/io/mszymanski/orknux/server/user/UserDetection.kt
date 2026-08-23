@@ -19,8 +19,26 @@ import org.springframework.transaction.annotation.Transactional
  * not ours to enumerate, and the people who matter here are the ones who have
  * actually been here.
  *
- * One listener for both doors. Spring publishes this event for the password
- * path and the OIDC path alike, so neither flow needs its own hook.
+ * **Which doors announce an arrival, and which deliberately do not.** This used
+ * to claim Spring published the event for every path, which was never true and
+ * was expensive to believe: the listener was correct from the day it was
+ * written and recorded nobody, because the one door most installations use said
+ * nothing when somebody came through it.
+ *
+ * - **The directory.** [io.mszymanski.orknux.server.ldap.LdapAuthenticationConfig]
+ *   builds its manager itself, so it has to put the publisher on itself. That is
+ *   the fix; the comment there says why it was missing.
+ * - **OIDC**, both ways in — the browser flow and a bearer token. Spring
+ *   Security registers those providers on the manager it assembles for the
+ *   filter chain, and that one carries a publisher already.
+ * - **A password this installation holds.** No event, and nothing to record: an
+ *   internal user is checked against a row in this very table, so they cannot
+ *   sign in without already being written down. Announcing them would only mean
+ *   looking them up to find nothing had changed.
+ * - **An API token.** No event, and that is the intent rather than an omission.
+ *   A token is a key its owner left somewhere, not a person arriving; it is
+ *   minted for a user who is a row already, and it is presented on every single
+ *   request by things that keep no session.
  */
 @Component
 class UserDetection(private val users: AppUserRepository) {

@@ -74,6 +74,11 @@ class SessionAPI(
          * internal user exists precisely because the provider does not know
          * them, so an installation signing in with OIDC still has to let them
          * in. Everybody else falls through to the door below.
+         *
+         * Nothing is announced for them. This is not an `AuthenticationManager`
+         * and publishes no event, which is right: the password was checked
+         * against a row in `app_user`, so there is nobody here to write down.
+         * UserDetection lists the doors that do announce, and why these do not.
          */
         internal.authenticate(credentials.username, credentials.password)?.let { authenticated ->
             throttle.succeeded(credentials.username, from)

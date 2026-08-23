@@ -139,7 +139,7 @@ class SlackTargetAPITest(
               createAction(input: {
                 workspaceId: $workspaceId, name: "Tell the room", type: EXECUTE, subtype: OUTGOING_CONNECTION,
                 connectionId: $connectionId, connectionAction: SEND_MESSAGE, content: "done",
-                target: CHANNEL, targetName: "#nowhere"
+                targetName: "#nowhere"
               }) { targetName }
             }
             """,

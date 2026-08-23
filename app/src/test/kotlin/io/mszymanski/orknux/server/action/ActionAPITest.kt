@@ -80,7 +80,7 @@ class ActionAPITest(
                 workspaceId: $workspaceId, name: "Send Slack Notification", type: EXECUTE, subtype: OUTGOING_CONNECTION,
                 connectionId: $connectionId, connectionAction: SEND_MESSAGE,
                 content: "Your request is approved",
-                target: CHANNEL, targetName: "#notifications"
+                targetName: "#notifications"
               }) { subtypeLabel connectionName inputParams { display } outputParams { display } }
             }
             """,

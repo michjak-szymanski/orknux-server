@@ -35,6 +35,7 @@ sealed interface Delivery {
 @Component
 class OutgoingMessages(
     private val connections: WorkspaceConnectionRepository,
+    private val directory: SlackDirectory,
     slackClients: SlackClients,
 ) {
 
@@ -48,8 +49,9 @@ class OutgoingMessages(
     private val slack = slackClients.webApi
 
     /**
-     * @param target a channel id, a channel name, or a user id — Slack accepts
-     *   all three where it wants a conversation.
+     * @param target where it goes, exactly as somebody typed it: `#general`,
+     *   `general`, `@alice`, an address, or an id pasted out of Slack. Resolved
+     *   to Slack's own id before it is posted — see below.
      * @param threadTs when set, the message joins that thread instead of the
      *   channel. This is what makes a workflow answer where it was asked.
      */
@@ -73,15 +75,32 @@ class OutgoingMessages(
             )
         }
 
+        /*
+         * What was typed, turned into what Slack answers to.
+         *
+         * `chat.postMessage` resolves a channel *name* itself and does not
+         * resolve a person's handle: "@alice" in that argument is a
+         * `channel_not_found`, and a person is reached by their user id. So the
+         * one field a workflow fills in cannot be handed over as it stands, and
+         * the fix belongs here rather than in a rule people have to remember
+         * about which sigil to type.
+         *
+         * Falling back to what was typed is deliberate. A name the connection's
+         * listing does not hold is not a name Slack does not have - a private
+         * channel this bot is in is the obvious case - and Slack's own answer
+         * about it is better than one invented here.
+         */
+        val channel = directory.resolve(connectionId, target) ?: target
+
         return try {
             val answer = slack.methods(token).chatPostMessage { request ->
-                request.channel(target).text(text)
+                request.channel(channel).text(text)
                 if (!threadTs.isNullOrBlank()) request.threadTs(threadTs)
                 request
             }
 
             if (answer.isOk) {
-                Delivery.Sent(answer.channel ?: target, answer.ts)
+                Delivery.Sent(answer.channel ?: channel, answer.ts)
             } else {
                 // Slack's own words: `channel_not_found`, `not_in_channel`,
                 // `invalid_auth`. Passed through rather than reworded, because

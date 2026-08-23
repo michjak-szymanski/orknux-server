@@ -1,0 +1,36 @@
+-- A Slack action stops holding which kind of thing it sends to.
+--
+-- `target` was CHANNEL or USER beside `target_name`, and it never reached
+-- Slack. `OutgoingMessages.send` takes the destination as a plain string, the
+-- runner reads `target_name` and the node's own parameter overrides it, and
+-- this column was read by the form, by the export and by nothing that sends.
+-- Its last real job was picking which Slack endpoint a name lookup reads, and
+-- that went earlier in #176: `slackTarget` and `slackSuggestions` take the kind
+-- as optional, read both halves when it is absent, and say which the name
+-- turned out to be. What was left was a setting that changed nothing when it
+-- ran, silently narrowed the picker's list, and answered wrongly whenever it
+-- was unset or set to the other kind.
+--
+-- **Sending resolves the name instead.** Dropping the column is only honest if
+-- the one field is enough on its own, and it was not quite: `chat.postMessage`
+-- resolves a channel *name* but not a person's handle, so "@alice" in that
+-- argument is a `channel_not_found` and a person is reached by their user id.
+-- So `OutgoingMessages` now asks `SlackDirectory` what the typed destination
+-- is before it posts - an id for itself, an address through its own endpoint, a
+-- name against the lists the picker's cache already holds - and posts to what
+-- comes back. Nothing about the sigil is load-bearing any more, which is the
+-- point: the alternative was a rule saying "type an @ for a person", and a rule
+-- like that is forgotten by somebody whose message then goes nowhere.
+--
+-- **So the stored names are left exactly as they are.** It is tempting to write
+-- a "#" or an "@" onto every bare `target_name` on the way past, on the grounds
+-- that the column was what disambiguated it. It was not: the column never took
+-- part in sending, so a bare name is worth no less today than it was yesterday,
+-- and it is now resolved by asking Slack rather than by a guess made years ago
+-- in a form. Rewriting one would be the only thing in this change that could
+-- alter where a working action delivers - a "#" onto a name that is really a
+-- person, an "@" onto one that is really a channel - and there is nothing to
+-- gain by it.
+
+ALTER TABLE workflow_action
+    DROP COLUMN target;

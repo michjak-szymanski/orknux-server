@@ -73,7 +73,9 @@ class ModelTranscriptionClient(
         val provider = providers.findByIdOrNull(model.providerId)
             ?: return Transcription.Failed("The provider ${model.name} belongs to has been removed")
 
-        val endpoint = "${provider.endpoint.trimEnd('/')}/audio/transcriptions"
+        // Off the OpenAI surface rather than off the endpoint, for the reason
+        // [ModelProvider.openAiBase] gives: on some types they are not the same place.
+        val endpoint = "${provider.openAiBase()}/audio/transcriptions"
         val uri = try {
             URI(endpoint)
         } catch (_: Exception) {

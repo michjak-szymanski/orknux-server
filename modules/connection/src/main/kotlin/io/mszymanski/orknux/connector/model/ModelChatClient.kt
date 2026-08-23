@@ -390,6 +390,12 @@ class ModelChatClient(
      * Where the request goes. Azure OpenAI puts the deployment and the API
      * version in the path rather than in the body, which is the whole of its
      * difference from the shape everything else uses.
+     *
+     * The OpenAI shape hangs off [ModelProvider.openAiBase] rather than off the
+     * endpoint directly, so that a type whose compatible surface is not at the
+     * root - Ollama's is under `/v1` - is called where the check reached it.
+     * Checking one path and calling another is how a provider comes back
+     * Connected and then 404s on every message.
      */
     private fun endpointFor(provider: ModelProvider, model: LlmModel, anthropic: Boolean): String {
         val base = provider.endpoint.trimEnd('/')
@@ -400,7 +406,7 @@ class ModelChatClient(
                 val version = provider.apiVersion?.ifBlank { null } ?: DEFAULT_AZURE_VERSION
                 "$base/openai/deployments/$deployment/chat/completions?api-version=$version"
             }
-            else -> "$base/chat/completions"
+            else -> "${provider.openAiBase()}/chat/completions"
         }
     }
 

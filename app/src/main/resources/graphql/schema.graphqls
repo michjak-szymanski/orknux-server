@@ -2448,6 +2448,11 @@ enum ProviderType {
     OPENAI
     ANTHROPIC
     AZURE_OPENAI
+    """
+    Ollama. Give it the address it listens on, e.g. `http://host:11434` — the
+    `/v1` its OpenAI-compatible surface lives under is added by the type, so
+    nobody has to know it. An endpoint already written `.../v1` still works.
+    """
     OLLAMA
     CUSTOM
 }

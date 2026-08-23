@@ -44,10 +44,14 @@ class AgentAPI(
      * A field of its own rather than part of [describe], so the list of a
      * workspace's agents does not resolve a model and a budget per row to fill
      * in something only the settings screen asks for.
+     *
+     * Its own share where it has one and its workspace's default where it does
+     * not, which is why the answer can carry a share while `memoryShare` beside
+     * it is null: `inherited` on the budget says which of the two it is.
      */
     @SchemaMapping(typeName = "Agent", field = "memoryBudget")
     fun memoryBudget(agent: AgentView): SessionMemoryBudgetView =
-        SessionMemoryBudgetView(budgets.resolve(agent.memoryShare, agent.modelId))
+        SessionMemoryBudgetView(budgets.resolve(agent.memoryShare, agent.workspaceId, agent.modelId))
 
     /**
      * What a share would work out to, before anybody saves it.
@@ -61,16 +65,28 @@ class AgentAPI(
      * saving would raise, in the same words, so the slider can say why while it
      * is being dragged instead of only once Save has been pressed. The mutation
      * is what actually refuses, from the same calculation.
+     *
+     * The workspace settings form asks the same question about the same
+     * setting, so it asks it here rather than through a query of its own - with
+     * [workspaceDefault] set, because the two questions differ in what may be
+     * refused. A share being set as the workspace's default is not tied to one
+     * model and is judged on the bounds alone; the reasoning is on
+     * `SessionMemoryBudgets.resolveDefault`. A form wanting to show what that
+     * default would mean against one particular model asks this same query
+     * again without the flag and with that model, which is exactly the
+     * per-agent question and comes back with the per-agent answer.
      */
     @QueryMapping
     fun memoryBudget(
         @Argument workspaceId: Long,
         @Argument modelId: Long?,
         @Argument share: Int?,
+        @Argument workspaceDefault: Boolean?,
     ): SessionMemoryBudgetView {
         requireWorkspaceAccess(workspaceId)
+        if (workspaceDefault == true) return SessionMemoryBudgetView(budgets.resolveDefault(share))
         val model = modelId?.takeIf { models.model(it)?.workspaceId == workspaceId }
-        return SessionMemoryBudgetView(budgets.resolve(share, model))
+        return SessionMemoryBudgetView(budgets.resolve(share, workspaceId, model))
     }
 
     @QueryMapping
@@ -168,7 +184,7 @@ class AgentAPI(
          */
         agent.memoryShare = input.memoryShare
         if (input.memoryShare != null) {
-            budgets.resolve(input.memoryShare, agent.modelId).refusal
+            budgets.resolve(input.memoryShare, agent.workspaceId, agent.modelId).refusal
                 ?.let { throw AgentMemoryShareUnusableException(it) }
         }
 
@@ -427,8 +443,9 @@ data class UpdateAgentInput(
      * How much of its model's context window a session may take back, as a
      * percentage.
      *
-     * Sent whenever the form saves, so null is the built-in default rather than
-     * "leave it alone" - the icon's rule, and what lets the screen put it back.
+     * Sent whenever the form saves, so null is "whatever the workspace says"
+     * rather than "leave it alone" - the icon's rule, and what lets the screen
+     * put it back.
      */
     val memoryShare: Int? = null,
 )
@@ -454,7 +471,7 @@ data class AgentView(
     val tools: List<String>,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String?,
-    /** Its share of the model's context window; null is the built-in default. */
+    /** Its own share of the model's window; null follows the workspace default. */
     val memoryShare: Int?,
 ) {
     constructor(agent: Agent, modelName: String? = null) : this(
@@ -498,6 +515,8 @@ data class SessionMemoryBudgetView(
     val share: Int?,
     val contextWindow: Int?,
     val derived: Boolean,
+    /** True when [share] is the workspace's default rather than the agent's own. */
+    val inherited: Boolean,
     val totalTokens: Int,
     val conversationTokens: Int,
     val toolResultTokens: Int,
@@ -510,6 +529,7 @@ data class SessionMemoryBudgetView(
         share = resolved.share,
         contextWindow = resolved.contextWindow,
         derived = resolved.derived,
+        inherited = resolved.inherited,
         totalTokens = resolved.budget.totalChars / CHARS_PER_TOKEN,
         conversationTokens = resolved.budget.memoryChars / CHARS_PER_TOKEN,
         toolResultTokens = resolved.budget.recallChars / CHARS_PER_TOKEN,

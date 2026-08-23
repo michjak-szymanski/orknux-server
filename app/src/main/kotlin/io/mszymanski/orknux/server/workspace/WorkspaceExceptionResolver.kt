@@ -20,6 +20,7 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
             // Bad request rather than forbidden: it is not that the caller may
             // not, it is that what they sent does not hold together.
             is WorkspaceAdminRoleNotAssignedException,
+            is WorkspaceMemoryShareUnusableException,
             -> ErrorType.BAD_REQUEST
             is WorkspaceNotFoundException -> ErrorType.NOT_FOUND
             else -> return null

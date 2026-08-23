@@ -71,9 +71,11 @@ class Agent(
      * How much of that model's context window a session may take back, as a
      * percentage of it.
      *
-     * Null is the built-in default, which is the five numbers this used to be
-     * five constants for - so an agent nobody has touched carries exactly what
-     * it carried before there was a setting.
+     * Null falls through to `workspace.default_memory_share`, and where that is
+     * null too, to the built-in default - which is the five numbers this used
+     * to be five constants for, so an agent nobody has touched in a workspace
+     * nobody has touched carries exactly what it carried before there was a
+     * setting.
      *
      * A share rather than a count of tokens, and on the agent rather than
      * anywhere else, because a budget is two things owned by two rows: the

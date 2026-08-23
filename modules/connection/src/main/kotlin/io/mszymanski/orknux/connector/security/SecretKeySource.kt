@@ -218,10 +218,32 @@ class SecretKeySource(
             )
             Resolved(generated, Origin.Generated(at))
         } catch (_: java.nio.file.FileAlreadyExistsException) {
-            // Somebody else got there between the check and the write.
-            readKept(at)
-                ?.let { Resolved(it, Origin.Kept(at)) }
-                ?: Resolved("", Origin.None("$at exists but is empty"))
+            /*
+             * Two ways to get here and they want opposite things.
+             *
+             * Another server started against the same directory in the moment
+             * between the check and the write, in which case the file now holds
+             * its key and the right answer is to use that one - both processes
+             * end up on the same key, which is the point.
+             *
+             * Or the file was there all along and holds nothing: a restore that
+             * copied a name without its contents, a write that was interrupted,
+             * a volume mounted over the top. `CREATE_NEW` refuses either way,
+             * and refusing the second one leaves the installation with no key
+             * because of a zero-byte file - which is a worse outcome than the
+             * one this whole class exists to produce. So an empty file is
+             * written over.
+             */
+            readKept(at)?.let { return Resolved(it, Origin.Kept(at)) }
+
+            try {
+                Files.writeString(at, generated)
+                ownerOnly(at)
+                log.info("The key file at {} was empty, so a key was generated and written to it.", at)
+                Resolved(generated, Origin.Generated(at))
+            } catch (failure: IOException) {
+                Resolved("", Origin.None("$at is empty and could not be written (${failure.javaClass.simpleName})"))
+            }
         } catch (failure: IOException) {
             log.warn(
                 "No secret key was supplied and one could not be written to {} ({}). Credentials will " +

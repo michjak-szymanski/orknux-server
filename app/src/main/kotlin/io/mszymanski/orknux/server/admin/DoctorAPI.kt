@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.admin
 
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretKeySource
 import io.mszymanski.orknux.connector.security.SecretColumns
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
 import io.mszymanski.orknux.server.database.isSqlite
@@ -84,15 +85,24 @@ class DoctorAPI(
      *
      * Asked of the cipher rather than re-derived here, so the check and the thing it
      * checks cannot disagree about what a usable key is.
+     *
+     * Where the key came from is on the card as well, because a server can now
+     * make one for itself and the three cases want different things of whoever
+     * is reading. A supplied key is somebody's to look after. A kept key is
+     * fine. A key *generated on this start* is the one worth a second look: it
+     * is correct on a first run and it is the symptom of a data directory that
+     * does not survive a restart on every run after that, and the person who can
+     * tell those apart is the one on this page.
      */
     private fun secretKey(): DoctorCheckView = when (val status = cipher.keyStatus()) {
         SecretCipher.KeyStatus.Usable ->
-            ok("Secret key", "Set, and the right length for AES-256.")
+            ok("Secret key", "The right length for AES-256. ${whereFrom()}")
 
         SecretCipher.KeyStatus.Missing -> fail(
             "Secret key",
-            "Not set — every credential write will fail, and stored ones cannot be read. " +
-                "Set ORKNUX_SECRET_KEY; generate one with: openssl rand -base64 32",
+            "There is none — every credential write will fail, and stored ones cannot be read. " +
+                "One is generated on first start unless orknux.security.secret-key-file is empty; " +
+                "set ORKNUX_SECRET_KEY to supply your own (openssl rand -base64 32).",
         )
 
         SecretCipher.KeyStatus.NotBase64 -> fail(
@@ -104,6 +114,22 @@ class DoctorAPI(
             "Secret key",
             "Set, but decodes to ${status.bytes} bytes; AES-256 needs 32.",
         )
+    }
+
+    /** Which of the three sources this installation's key came from, in a sentence. */
+    private fun whereFrom(): String = when (val origin = cipher.origin) {
+        SecretKeySource.Origin.Supplied ->
+            "Supplied in the environment, so nothing on this machine has a copy of it."
+
+        is SecretKeySource.Origin.Kept ->
+            "Kept at ${origin.at}. Back it up with the database and restore the two together."
+
+        is SecretKeySource.Origin.Generated ->
+            "Generated on this start and kept at ${origin.at}. That is right the first time and " +
+                "wrong every time after it: if this says generated again on the next start, that " +
+                "path is not surviving a restart and everything stored under the last key is lost."
+
+        is SecretKeySource.Origin.None -> "There is no key file — ${origin.why}."
     }
 
     /**

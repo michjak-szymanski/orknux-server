@@ -17,6 +17,16 @@ have failed.
 
 ### Added
 
+- **A cron expression says what it does, under the field it is typed in.** Every
+  10 seconds. At 03:00, Monday to Friday. At 09:30 on the 1st of every month.
+  It follows what is typed rather than what was saved, so a mistake is visible
+  before Save rather than after the first run that did not happen - and one that
+  can never come round says so in those words: *This never comes round: February
+  has no 30th.* The six positions and what each accepts are behind the question
+  mark beside the field. Written against what this server actually parses, not
+  against cron in general: a five-field expression gets a zero second put in
+  front of it, and both 0 and 7 are Sunday.
+
 - **How much conversation an agent carries is now a setting, and it is one
   number.** What a session put back in front of a model was five constants in
   the source - forty turns, twenty-four thousand characters of them, and three
@@ -82,6 +92,21 @@ have failed.
   agents will no longer be holding it afterwards.
 
 ### Fixed
+
+- **The text in the chat composer sits in the middle of its box.** It was low,
+  and the padding was not why: it is symmetric, and always was. The row aligns
+  its contents to the floor so the buttons stay put while the field grows, which
+  put the whole difference between a line of text and a 32px button above the
+  text and none of it below. Centring the field divides it instead, and changes
+  nothing from the second line on, where the field is the tallest thing in the
+  row. The box is the same height, so nothing beside it moved.
+
+- **The control in a node's corner wears a rotate arrow, and no longer crowds
+  the node.** It turns the node - the same thing `R` does - and it was drawn
+  with the two-arrow glyph that everywhere else in the product means refresh. It
+  is a rotate arrow now, and it floats just off the top-right corner rather than
+  sitting inside it, clear of the resize handles. The node's first line has its
+  full width back.
 
 - **CI runs both databases now, side by side.** There are two engines and the
   build tested one of them - the other being the one `orknux-one` actually ships

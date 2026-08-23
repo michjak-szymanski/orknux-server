@@ -15,11 +15,17 @@ import org.springframework.security.test.context.support.WithMockUser
 /**
  * How much of a session an agent may carry, as the API offers it.
  *
- * The setting is stored in two places on purpose - the window on the model, the
- * share on the agent - so most of what is worth pinning down here is that the
- * two halves are actually joined: a share means nothing without a window, and
- * one that cannot work is refused where it is typed rather than found out at
- * the provider on somebody's turn.
+ * The setting is stored in more than one place on purpose - the window on the
+ * model, the share on the agent, and the share the agent falls back to on the
+ * workspace - so most of what is worth pinning down here is that the pieces are
+ * actually joined: a share means nothing without a window, an agent that sets
+ * nothing follows its workspace, and one that cannot work is refused where it
+ * is typed rather than found out at the provider on somebody's turn.
+ *
+ * The order is agent, then workspace, then the built-in allowance, and it is
+ * asserted from both ends - what the API reports and what is stored - because
+ * a fallback that quietly ran the other way would be a workspace overriding
+ * every agent that had bothered to answer.
  *
  * And that the surface speaks tokens. It is counted in characters everywhere
  * inside, because that is the unit every model agrees on; whoever sets this is
@@ -59,11 +65,13 @@ class AgentMemoryBudgetTest(
 
         graphQlTester.document(
             """query { agent(id: $id) { memoryShare memoryBudget {
-                 derived totalTokens conversationTokens toolResultTokens longestResultTokens turns refusal
+                 derived inherited totalTokens conversationTokens toolResultTokens longestResultTokens turns refusal
                } } }""",
         ).execute()
             .path("agent.memoryShare").valueIsNull()
             .path("agent.memoryBudget.derived").entity(Boolean::class.java).isEqualTo(false)
+            // Nothing inherited either: the workspace has decided nothing.
+            .path("agent.memoryBudget.inherited").entity(Boolean::class.java).isEqualTo(false)
             .path("agent.memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(10_000)
             .path("agent.memoryBudget.conversationTokens").entity(Int::class.java).isEqualTo(6_000)
             .path("agent.memoryBudget.toolResultTokens").entity(Int::class.java).isEqualTo(4_000)
@@ -224,6 +232,209 @@ class AgentMemoryBudgetTest(
         assertThat(audit.findAll().map { it.message })
             .contains("Agent Reviewer memory set to 10% of its model's context window")
             .contains("Agent Reviewer memory reset to the default")
+    }
+
+    /**
+     * An agent that sets nothing takes the workspace's answer.
+     *
+     * The point of the workspace default: an installation that wants its agents
+     * to remember more than the built-in allowance says so once, rather than
+     * once per agent and again on every agent made afterwards. The agent's own
+     * column stays null - it has not been given a share, it is following one -
+     * and `inherited` is what says so, because a form showing 10% has to know
+     * whether clearing it lands on the workspace's answer or on the built-in
+     * one.
+     */
+    @Test
+    fun `an agent with no share of its own follows the workspace default`() {
+        val model = model("Sonnet", contextWindow = 200_000)
+        val id = agent("Reviewer", model)
+        setDefault(10)
+
+        graphQlTester.document(
+            """query { agent(id: $id) { memoryShare memoryBudget {
+                 share inherited derived totalTokens conversationTokens turns
+               } } }""",
+        ).execute()
+            .path("agent.memoryShare").valueIsNull()
+            .path("agent.memoryBudget.share").entity(Int::class.java).isEqualTo(10)
+            .path("agent.memoryBudget.inherited").entity(Boolean::class.java).isEqualTo(true)
+            .path("agent.memoryBudget.derived").entity(Boolean::class.java).isEqualTo(true)
+            // The same arithmetic the agent's own share would have gone through.
+            .path("agent.memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(20_000)
+            .path("agent.memoryBudget.conversationTokens").entity(Int::class.java).isEqualTo(12_000)
+            .path("agent.memoryBudget.turns").entity(Int::class.java).isEqualTo(80)
+
+        assertThat(agents.findAll().single().memoryShare).isNull()
+    }
+
+    /**
+     * And an agent that has answered for itself is not overruled.
+     *
+     * A default is what applies where nothing was said. An agent reading whole
+     * files and one reading issue lists are the reason the per-agent setting
+     * exists, and a workspace-wide number that reached past them would be the
+     * installation-wide number this whole feature was built instead of.
+     */
+    @Test
+    fun `an agent with its own share ignores the workspace default`() {
+        val model = model("Sonnet", contextWindow = 200_000)
+        val id = agent("Reviewer", model)
+        setDefault(20)
+        save(id, model, share = 5)
+
+        graphQlTester.document(
+            """query { agent(id: $id) { memoryShare memoryBudget { share inherited totalTokens } } }""",
+        ).execute()
+            .path("agent.memoryShare").entity(Int::class.java).isEqualTo(5)
+            .path("agent.memoryBudget.share").entity(Int::class.java).isEqualTo(5)
+            .path("agent.memoryBudget.inherited").entity(Boolean::class.java).isEqualTo(false)
+            .path("agent.memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(10_000)
+    }
+
+    /**
+     * Clearing the default puts everyone following it back where they started.
+     *
+     * Null is "the workspace has decided nothing" rather than "leave the last
+     * number in place", which is what lets a form offer the built-in allowance
+     * as a thing to choose again.
+     */
+    @Test
+    fun `clearing the workspace default returns its agents to the built-in allowance`() {
+        val model = model("Sonnet", contextWindow = 200_000)
+        val id = agent("Reviewer", model)
+        setDefault(10)
+        setDefault(null)
+
+        graphQlTester.document(
+            """query { agent(id: $id) { memoryBudget { share inherited derived totalTokens turns } } }""",
+        ).execute()
+            .path("agent.memoryBudget.share").valueIsNull()
+            .path("agent.memoryBudget.inherited").entity(Boolean::class.java).isEqualTo(false)
+            .path("agent.memoryBudget.derived").entity(Boolean::class.java).isEqualTo(false)
+            .path("agent.memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(10_000)
+            .path("agent.memoryBudget.turns").entity(Int::class.java).isEqualTo(40)
+
+        assertThat(workspaces.findAll().single().defaultMemoryShare).isNull()
+    }
+
+    /**
+     * The bounds are the same bounds, in the same words.
+     *
+     * Two surfaces set this setting now, and the one thing that must not happen
+     * is their coming to disagree about which numbers are allowed - so the
+     * workspace form is refused by the same check the agent form is, and the
+     * sentence it carries is the same sentence.
+     */
+    @Test
+    fun `a workspace default outside the bounds is refused`() {
+        graphQlTester.document(
+            """mutation { setWorkspaceDefaultMemoryShare(workspaceId: $workspaceId, share: 60) { id } }""",
+        ).execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors).singleElement()
+                    .extracting { it.message }
+                    .asString()
+                    .contains("between 1% and 50%")
+            }
+
+        assertThat(workspaces.findAll().single().defaultMemoryShare).isNull()
+    }
+
+    /** And the floor of the same rule, from the other end. */
+    @Test
+    fun `a workspace default of nothing at all is refused`() {
+        graphQlTester.document(
+            """mutation { setWorkspaceDefaultMemoryShare(workspaceId: $workspaceId, share: 0) { id } }""",
+        ).execute()
+            .errors()
+            .satisfy { errors -> assertThat(errors).hasSize(1) }
+
+        assertThat(workspaces.findAll().single().defaultMemoryShare).isNull()
+    }
+
+    /**
+     * And nothing beyond the bounds, because a default names no model.
+     *
+     * A workspace runs several models at once whose windows differ by an order
+     * of magnitude. Refusing a default because one of them could not give it
+     * would refuse a setting that is right for every other model in the
+     * workspace, and for agents that may not use that one at all - so the
+     * per-model refusals stay where the budget is worked out. Here, 45% is
+     * allowed even though the workspace holds a model that could not give it.
+     */
+    @Test
+    fun `a workspace default is not judged against any one model`() {
+        model("Local", contextWindow = 8_000, maxOutput = 4_000)
+        setDefault(45)
+
+        assertThat(workspaces.findAll().single().defaultMemoryShare).isEqualTo(45)
+    }
+
+    /**
+     * The preview answers for the workspace form too, and answers differently.
+     *
+     * The same query rather than one of its own, because it is the same
+     * setting - but a share being set as the workspace default is not tied to a
+     * model, so the "choose a model first" the agent form gets would be an
+     * answer to a question nobody asked.
+     */
+    @Test
+    fun `the preview judges a workspace default on the bounds alone`() {
+        graphQlTester.document(
+            """query { memoryBudget(workspaceId: $workspaceId, share: 45, workspaceDefault: true)
+               { share inherited derived totalTokens refusal } }""",
+        ).execute()
+            .path("memoryBudget.share").entity(Int::class.java).isEqualTo(45)
+            .path("memoryBudget.inherited").entity(Boolean::class.java).isEqualTo(false)
+            .path("memoryBudget.derived").entity(Boolean::class.java).isEqualTo(false)
+            .path("memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(10_000)
+            .path("memoryBudget.refusal").valueIsNull()
+
+        // Without the flag it is an agent's share, and an agent needs a model.
+        graphQlTester.document(
+            """query { memoryBudget(workspaceId: $workspaceId, share: 45) { refusal } }""",
+        ).execute()
+            .path("memoryBudget.refusal").entity(String::class.java).satisfies {
+                assertThat(it).contains("Choose a model first")
+            }
+    }
+
+    /** And it reports the bounds it does enforce, rather than raising them. */
+    @Test
+    fun `the preview reports a workspace default that is out of bounds`() {
+        graphQlTester.document(
+            """query { memoryBudget(workspaceId: $workspaceId, share: 60, workspaceDefault: true)
+               { refusal } }""",
+        ).execute()
+            .path("memoryBudget.refusal").entity(String::class.java).satisfies {
+                assertThat(it).contains("between 1% and 50%")
+            }
+    }
+
+    /**
+     * Setting it is worth a line of its own, for the same reason the agent's is.
+     *
+     * It changes what every turn every agent that follows it costs, which is a
+     * larger change than the per-agent one and a question somebody asks the
+     * audit log rather than the workspace.
+     */
+    @Test
+    fun `changing the workspace default is recorded, and clearing it says so`() {
+        setDefault(10)
+        setDefault(null)
+
+        assertThat(audit.findAll().map { it.message })
+            .contains("Agents default to 10% of their model's context window")
+            .contains("Agent memory default cleared")
+    }
+
+    private fun setDefault(share: Int?) {
+        graphQlTester.document(
+            """mutation { setWorkspaceDefaultMemoryShare(workspaceId: $workspaceId, share: ${share ?: "null"})
+               { id } }""",
+        ).execute().path("setWorkspaceDefaultMemoryShare.id").hasValue()
     }
 
     private fun totalOf(agent: String, share: Int): Int {

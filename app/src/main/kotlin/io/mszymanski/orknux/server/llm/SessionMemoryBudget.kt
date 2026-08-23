@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.llm
 
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import java.util.Locale
 
@@ -27,11 +29,21 @@ import java.util.Locale
  *   budget should be depends on what that agent's tools give back: an agent
  *   reading whole files needs a different allowance from one reading issue
  *   lists, and both may be pointed at the same model.
+ * - And where the agent says nothing, the share belongs to the workspace:
+ *   `workspace.default_memory_share`. The per-agent setting is the right place
+ *   to make an exception and the wrong place to state a policy - an
+ *   installation that wants its agents to remember more than the built-in
+ *   allowance was saying so once per agent and again on every agent made
+ *   afterwards. So the order is **agent, then workspace, then built-in**, and a
+ *   workspace that sets nothing leaves every agent exactly where it was.
  *
  * There is deliberately no `ORKNUX_` variable for any of it. An installation-
  * wide number is the one answer that is wrong for every model in the
  * installation, which is the thing this replaces rather than a cheaper spelling
- * of it.
+ * of it. The workspace default is not that number wearing a different hat: it
+ * is a share rather than a count, so it still means something different against
+ * each of the workspace's models, and it is one workspace's decision rather
+ * than the whole installation's.
  *
  * **One number, not five.** Somebody setting this is answering "how much
  * conversation should it carry", and four of the five fall out of that answer:
@@ -183,12 +195,25 @@ private const val RESERVED_PERCENT = 10
  */
 data class ResolvedMemoryBudget(
     val budget: SessionMemoryBudget,
-    /** The share asked for; null when nothing is set. */
+    /**
+     * The share that applies, after the workspace default has been consulted;
+     * null when neither the agent nor its workspace set one.
+     */
     val share: Int?,
     /** The window it is a share of, in tokens; null when the model has none. */
     val contextWindow: Int?,
     /** True when [share] and [contextWindow] produced [budget]. */
     val derived: Boolean,
+    /**
+     * True when [share] came from the workspace default rather than from the
+     * agent.
+     *
+     * The one thing a form cannot work out for itself: an agent showing 10%
+     * needs to say whether that is its own answer or the one it inherits,
+     * because clearing the first lands on the second rather than on the
+     * built-in allowance.
+     */
+    val inherited: Boolean,
     /** Why this share cannot be saved, or null when it can. */
     val refusal: String?,
 )
@@ -202,40 +227,102 @@ data class ResolvedMemoryBudget(
  * that previews one.
  */
 @Service
-class SessionMemoryBudgets(private val models: ModelService) {
+class SessionMemoryBudgets(
+    private val models: ModelService,
+    private val workspaces: WorkspaceRepository,
+) {
 
     /** The budget to build a prompt with; a refused share falls back to the default. */
-    fun budget(share: Int?, modelId: Long?): SessionMemoryBudget = resolve(share, modelId).budget
+    fun budget(share: Int?, workspaceId: Long, modelId: Long?): SessionMemoryBudget =
+        resolve(share, workspaceId, modelId).budget
 
     /**
      * The whole answer: the numbers, and whether the share is one that can work.
+     *
+     * The one place the resolution order lives - the agent's own share, then
+     * its workspace's default, then the built-in allowance - so that nothing
+     * else has to know there are three steps. Every caller passes what the
+     * agent itself was given, which is null far more often than not, and the
+     * fallback happens here rather than four times over.
      *
      * Refused rather than clamped. A share silently reduced to what fits is a
      * setting that does not say what it does, and the person who set it finds
      * out by reading the prompts - which is the discovery-at-the-provider this
      * exists to avoid, moved one step earlier and made quieter.
      */
-    fun resolve(share: Int?, modelId: Long?): ResolvedMemoryBudget {
+    fun resolve(share: Int?, workspaceId: Long, modelId: Long?): ResolvedMemoryBudget {
+        val inherited = share == null
+        val applied = share ?: defaultShareOf(workspaceId)
         val model = modelId?.let { models.model(it) }
         val window = model?.contextWindow
 
-        if (share == null) {
-            return ResolvedMemoryBudget(SessionMemoryBudget.DEFAULT, null, window, derived = false, refusal = null)
+        if (applied == null) {
+            return ResolvedMemoryBudget(
+                SessionMemoryBudget.DEFAULT,
+                null,
+                window,
+                derived = false,
+                inherited = false,
+                refusal = null,
+            )
         }
 
-        refusalFor(share, model?.name, window, model?.maxOutput)?.let {
-            return ResolvedMemoryBudget(SessionMemoryBudget.DEFAULT, share, window, derived = false, refusal = it)
+        refusalFor(applied, model?.name, window, model?.maxOutput)?.let {
+            return ResolvedMemoryBudget(
+                SessionMemoryBudget.DEFAULT,
+                applied,
+                window,
+                derived = false,
+                inherited = inherited,
+                refusal = it,
+            )
         }
 
-        val chars = (requireNotNull(window).toLong() * share / 100 * CHARS_PER_TOKEN).toInt()
+        val chars = (requireNotNull(window).toLong() * applied / 100 * CHARS_PER_TOKEN).toInt()
         return ResolvedMemoryBudget(
             SessionMemoryBudget.of(chars),
-            share,
+            applied,
             window,
             derived = true,
+            inherited = inherited,
             refusal = null,
         )
     }
+
+    /**
+     * A workspace default judged on its own, which is the bounds and nothing else.
+     *
+     * The narrower refusals all name a model - its window, and the tokens it
+     * reserves for its answer - and a workspace default is deliberately not
+     * tied to one. A workspace runs several models at once whose windows differ
+     * by an order of magnitude, so a default refused because the smallest of
+     * them could not give it would be refusing a setting that is right for
+     * every other model in the workspace, and one that only ever applies to
+     * agents that may not use that model at all.
+     *
+     * Nothing is lost by not checking here: [resolve] still checks, against the
+     * model an agent actually uses, at the point the budget is worked out. What
+     * changes is only where the refusal appears - beside the agent whose model
+     * cannot give it, rather than in front of everyone.
+     *
+     * The bounds are the part that is true of every model: above half a window
+     * there is no room for the instructions, the tools and the answer whatever
+     * the window is. That check is [boundsRefusal], and it is the same call
+     * [refusalFor] makes first, so the two surfaces cannot drift into refusing
+     * different numbers or explaining them in different words.
+     */
+    fun resolveDefault(share: Int?): ResolvedMemoryBudget = ResolvedMemoryBudget(
+        SessionMemoryBudget.DEFAULT,
+        share,
+        contextWindow = null,
+        derived = false,
+        inherited = false,
+        refusal = share?.let(::boundsRefusal),
+    )
+
+    /** The workspace's answer for agents that give none of their own. */
+    private fun defaultShareOf(workspaceId: Long): Int? =
+        workspaces.findByIdOrNull(workspaceId)?.defaultMemoryShare
 
     /**
      * Why a share cannot work, in the words the person setting it needs.
@@ -245,11 +332,7 @@ class SessionMemoryBudgets(private val models: ModelService) {
      * that was larger than expected.
      */
     private fun refusalFor(share: Int, model: String?, window: Int?, maxOutput: Int?): String? {
-        if (share < MIN_MEMORY_SHARE || share > MAX_MEMORY_SHARE) {
-            return "A session may be given between $MIN_MEMORY_SHARE% and $MAX_MEMORY_SHARE% of a model's " +
-                "context window. Above half of it there is no room left for the instructions, the tools and " +
-                "the answer."
-        }
+        boundsRefusal(share)?.let { return it }
         if (model == null) {
             return "Choose a model first. How much a session may carry is a share of that model's context " +
                 "window, so there is nothing to take a share of until one is chosen."
@@ -277,6 +360,25 @@ class SessionMemoryBudgets(private val models: ModelService) {
                 "$model can give a session at most $most% of its ${window.thousands()}-token window once the " +
                     "${answer.thousands()} tokens it reserves for its answer are allowed for."
             }
+        }
+        return null
+    }
+
+    /**
+     * The half of the rule that needs no model, and so applies wherever a share
+     * is typed.
+     *
+     * Its own function because two surfaces set a share now - an agent's, and
+     * the workspace default it falls back to - and only one of them has a model
+     * to judge against. Written once so they cannot come to disagree about
+     * which numbers are allowed, or explain the same refusal in two sets of
+     * words.
+     */
+    private fun boundsRefusal(share: Int): String? {
+        if (share < MIN_MEMORY_SHARE || share > MAX_MEMORY_SHARE) {
+            return "A session may be given between $MIN_MEMORY_SHARE% and $MAX_MEMORY_SHARE% of a model's " +
+                "context window. Above half of it there is no room left for the instructions, the tools and " +
+                "the answer."
         }
         return null
     }

@@ -17,6 +17,24 @@ have failed.
 
 ### Added
 
+- **A workspace sets what its agents default to.** The memory share below is per
+  agent, and an installation with thirty agents should not have to answer the
+  same question thirty times. A workspace now carries a default share, and the
+  order is: the agent's own share, else its workspace's default, else the
+  built-in allowance. An agent that sets nothing follows its workspace, and a
+  workspace that sets nothing behaves exactly as it did.
+
+  It is the same slider, on an **Agents** card in workspace settings. The
+  difficulty it has to be honest about is that a workspace runs several models
+  and a percentage that is generous for a 200k window is impossible for an 8k
+  one, so a workspace default is judged on its bounds alone rather than against
+  any one model. The card says as much by naming the model it is working the
+  figures out against: at Default the built-in allowance is the answer and
+  depends on no model, and under a share the figures belong to one model and say
+  which. Where that model could not give the share, its sentence is printed in
+  place of the figures and Save still works, because nothing has been refused.
+  On an agent's own card, Default now says where its number comes from.
+
 - **A cron expression says what it does, under the field it is typed in.** Every
   10 seconds. At 03:00, Monday to Friday. At 09:30 on the 1st of every month.
   It follows what is typed rather than what was saved, so a mistake is visible

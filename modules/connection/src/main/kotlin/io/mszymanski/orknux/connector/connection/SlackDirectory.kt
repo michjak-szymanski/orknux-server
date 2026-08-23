@@ -272,6 +272,69 @@ class SlackDirectory(
     }
 
     /**
+     * Slack's own id for what somebody typed into a target field, or null when
+     * nothing this connection can see answers to it.
+     *
+     * **Why sending needs this.** `chat.postMessage` takes one `channel`
+     * argument, and what that argument accepts is an id or a *channel* name.
+     * "#general" and "general" reach a channel; "@alice" and "alice" reach
+     * nobody, because a bot token does not resolve a handle there. A person is
+     * reached by their user id, which the same argument does take - a direct
+     * message is a conversation. So a field that has to accept both kinds of
+     * name has to be resolved before it is posted to. The alternative is a rule
+     * saying "type an id for a person", and a rule like that is forgotten by
+     * somebody whose message then goes nowhere and says it went somewhere.
+     *
+     * **Cheap on purpose.** An id resolves to itself with no call at all. An
+     * address has its own endpoint, which is a cheaper tier than either list.
+     * A name is matched against the lists the cache already holds for a picker,
+     * so a workflow sending in a loop does not spend the connection's rate
+     * limit that the cache exists to protect - see [SlackListingCache], whose
+     * reason for existing names this caller.
+     *
+     * **Null is not a refusal.** A name nothing answers to is handed to Slack
+     * as it was typed: a private channel this bot is in but that the listing
+     * never returned still posts by name, and where it genuinely is wrong
+     * Slack's own `channel_not_found` is a better sentence than a guess made
+     * here. Nothing about this gates a save, and `targetName` stays free text.
+     */
+    fun resolve(connectionId: Long, typed: String): String? {
+        val name = typed.trim()
+        if (name.isEmpty()) return null
+
+        // Already Slack's own answer. Verifying it would be a call spent
+        // proving what the caller is about to find out anyway.
+        if (CHANNEL_ID.matches(name) || USER_ID.matches(name)) return name
+
+        val opening = open(connectionId)
+        if (opening is Opening.Shut) return null
+        val token = (opening as Opening.Ready).token
+
+        if (EMAIL.matches(name)) {
+            // Never throws, for the reason the whole method answers with null:
+            // this runs on the way to a send, and Slack being unreachable
+            // belongs to the send's own report rather than to a stack trace
+            // out of a lookup nobody asked for.
+            return try {
+                val answer = slack.methods(token).usersLookupByEmail { it.email(name) }
+                if (answer.isOk) answer.user?.id else null
+            } catch (failure: Exception) {
+                log.warn("Could not look up the address on connection {}", connectionId, failure)
+                null
+            }
+        }
+
+        // The same narrowing a lookup does, for the same reason: a "#" or an
+        // "@" says which half was meant, and only a bare name costs both.
+        val wanted = name.removePrefix("#").removePrefix("@")
+        return asked(null, name)
+            .asSequence()
+            .flatMap { listing(connectionId, token, it).entries.asSequence() }
+            .firstOrNull { it.name.removePrefix("#").removePrefix("@").equals(wanted, ignoreCase = true) }
+            ?.id
+    }
+
+    /**
      * Which lookups one question turns into.
      *
      * A named kind is that kind and nothing else - the behaviour every existing

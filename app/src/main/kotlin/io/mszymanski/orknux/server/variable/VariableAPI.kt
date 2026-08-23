@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.variable
 
+import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.action.ActionHeaders
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
@@ -34,6 +35,8 @@ class VariableAPI(
     private val functions: WorkflowFunctionRepository,
     private val actions: WorkflowActionRepository,
     private val actionHeaders: ActionHeaders,
+    /** Asked what still reads a variable before one is removed or made readable. */
+    private val models: ModelService,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -205,7 +208,16 @@ class VariableAPI(
         }
         input.description?.let { variable.description = it.trim().ifEmpty { null } }
         input.type?.let { variable.type = it }
-        input.kind?.let { variable.kind = it }
+        input.kind?.let { kind ->
+            // A VALUE is returned with the listing, so a credential turned into
+            // one is a credential on a screen. The other end of the rule that
+            // refuses to bind a provider to anything but a SECRET.
+            if (kind != VariableKind.SECRET && variable.kind == VariableKind.SECRET) {
+                val credentialOf = models.providersReading(variable.workspaceId, requireNotNull(variable.id))
+                if (credentialOf.isNotEmpty()) throw VariableSecrecyHeldException(variable.name, credentialOf)
+            }
+            variable.kind = kind
+        }
         input.value?.takeIf { it.isNotEmpty() }?.let { variable.value = it }
         variable.lastModifiedAt = java.time.OffsetDateTime.now()
         variable.lastModifiedBy = currentUser()
@@ -269,6 +281,16 @@ class VariableAPI(
                 .filter { action -> actionHeaders.reads(action, requireNotNull(variable.id)) }
                 .map { it.name }
         if (usedBy.isNotEmpty()) throw VariableInUseException(variable.name, usedBy)
+
+        /*
+         * And a model provider reading it for its credential holds it in place
+         * too - see [VariableHeldByProviderException] for why that is a refusal
+         * rather than a warning. Asked of the connection module, which owns
+         * providers, rather than joined to: there is no foreign key across that
+         * boundary and there is not meant to be one.
+         */
+        val credentialOf = models.providersReading(variable.workspaceId, requireNotNull(variable.id))
+        if (credentialOf.isNotEmpty()) throw VariableHeldByProviderException(variable.name, credentialOf)
 
         variables.delete(variable)
         auditRecorder.record(

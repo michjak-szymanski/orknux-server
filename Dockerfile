@@ -40,6 +40,18 @@ WORKDIR /app
 
 COPY --from=build --chown=orknux:orknux /build/app/target/orknux-app-*.jar app.jar
 
+# Somewhere the server can write, under the working directory the defaults are
+# relative to. WORKDIR creates /app as root, and this image runs as orknux, so
+# `data/secret.key` and `data/attachments` - both defaults - landed on a path
+# their own process could not create. The server answered that by generating no
+# key at all and failing the first credential somebody saved, which is the exact
+# failure the generated key exists to prevent.
+#
+# It makes the defaults work. It does not make them right: this is the
+# container's own layer and it goes when the container is replaced, so anything
+# meant to outlive a `docker pull` still wants a volume over it.
+RUN mkdir -p /app/data && chown orknux:orknux /app/data
+
 USER orknux
 
 EXPOSE 8080

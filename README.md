@@ -308,10 +308,12 @@ to be running, LDAP still comes from compose.
 suite on purpose: a suite that only ever exercises one database will not notice
 the day the other stops working.
 
-**The SQLite run is not green at the moment** — issue #171 — and CI does not run
-it, so it is a red that is already known about rather than something a checkout
-did. It is the engine `orknux-one` ships with, which is why it is worth running
-by hand rather than treating as the second-class half of the switch.
+**CI runs both, in parallel and both blocking**, so neither engine can go red
+without somebody being told. That is new: for a long time CI ran Postgres only,
+and SQLite — the engine `orknux-one` ships with, so the one most installations
+run — went red twice without anybody noticing. Both are green now, which means a
+failure on SQLite and not on Postgres is a real difference between the engines
+and is worth reading rather than re-running.
 
 They run with `orknux.temporal.enabled=false`, so a workflow runs on the calling
 thread and no Temporal server is needed; the Temporal path has its own test,
@@ -344,7 +346,7 @@ away, and a real key has no business in a build file.
 | `issue`          | The workspace's issue tracker: issues, comments, mentions, and the feed a bell and an assistant read |
 | `memory`         | Memory catalogs, the notes in them, and the tool an agent reads them through |
 | `model`          | The API over the workspace's LLM providers, the models reached through them, and what they were used for |
-| `llm`            | LLM sessions: a conversation an agent keeps across the runs that share its key, and the transcript of what was said and called |
+| `llm`            | LLM sessions: a conversation an agent keeps across the runs that share its key, the transcript of what was said and called, and how much of it a turn carries back |
 | `mcp`            | The MCP endpoint this server serves, and the tools an outside assistant calls through it |
 | `shell`          | The tool an agent runs commands through, on the machines Admin -> Shell holds; the sessions themselves belong to `modules/connection` |
 | `mail`           | The installation's own relay, and the one thing it sends: a password reset link |

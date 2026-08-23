@@ -38,7 +38,21 @@ class WorkspaceAuditAPI(
         @Argument userId: String?,
         @Argument days: Int?,
     ): WorkspaceAuditPage {
-        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date"))
+        /*
+         * Newest first, and `id` to break a tie.
+         *
+         * Two entries written in the same moment sort by date alike, and what
+         * came back then was whatever the engine felt like - so one feed could
+         * come back in a different order on the next page load. SQLite is where
+         * it shows: it keeps less of a timestamp than Postgres does, so two
+         * writes a few hundred microseconds apart land on one value there and
+         * stay distinct here. It went red on CI and green on every machine that
+         * ran it by hand, which is the shape of this class of bug.
+         *
+         * The key is monotonic, so within one instant it orders them the way
+         * the date orders them everywhere else.
+         */
+        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date", "id"))
         val since = days?.takeIf { it > 0 }?.let { OffsetDateTime.now().minusDays(it.toLong()) }
         val term = search?.trim()?.ifEmpty { null }
 
@@ -90,7 +104,10 @@ class WorkspaceAuditAPI(
         val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
         access.requireVisible(workspace)
 
-        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date"))
+        /*
+         * The same tie, in the query that pages the whole installation's log.
+         */
+        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date", "id"))
         val since = days?.takeIf { it > 0 }?.let { OffsetDateTime.now().minusDays(it.toLong()) }
         val term = search?.trim()?.ifEmpty { null }
 

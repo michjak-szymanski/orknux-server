@@ -54,6 +54,22 @@ RUN mkdir -p /app/data && chown orknux:orknux /app/data
 
 USER orknux
 
+# The generated key goes on the home directory, not under /app.
+#
+# Because the two halves have to persist together, and in this image they do not
+# live in the same place. The database is somewhere else entirely - a Postgres
+# container, usually - so it survives this container being replaced, while /app
+# is a layer that does not. That combination is the one that loses credentials:
+# the data comes back, the key does not, and the next start generates a
+# different one.
+#
+# /home/orknux is where the documentation already says to mount a volume, and
+# where deploy/compose.yaml mounts one, so a deployment that follows either gets
+# a key that outlives an upgrade without configuring anything. Without a volume
+# it is still a layer and still goes - but then it is the same layer the server
+# already warns about on the next start.
+ENV ORKNUX_SECRET_KEY_FILE=/home/orknux/secret.key
+
 EXPOSE 8080
 
 # Containers get a share of the host, not the host: this lets the JVM see the

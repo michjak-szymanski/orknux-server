@@ -133,10 +133,11 @@ type Query {
     answers this can give are wrong about a real member often enough that
     refusing on them would cost more than the typos it catches.
 
-    One lookup per question, with no page after the first and nothing cached, so
-    a workspace larger than a single lookup reads comes back `UNCHECKED` rather
-    than being ruled on. Suggesting from the same two endpoints is a separate
-    thing that wants a cache, and is not this.
+    One lookup per question, live, with no page after the first and nothing
+    cached, so a workspace larger than a single lookup reads comes back
+    `UNCHECKED` rather than being ruled on. `slackSuggestions` is the same two
+    endpoints read the other way round, and it is cached; this one is not,
+    because a name being checked is a name that has just been typed.
     """
     slackTarget(
         "The connection the action sends through."
@@ -146,6 +147,42 @@ type Query {
         "Exactly what is in the field: \"#general\", \"@alice\", an address, or an id pasted out of Slack."
         name: String!
     ): SlackTargetCheck!
+    """
+    The users or channels a Slack connection can see that match what somebody
+    has typed into an action's target field so far.
+
+    Cheap enough to call on a keystroke: each connection's list is read from
+    Slack once and filtered in memory, so this is a lookup in a map and not a
+    call to Slack. Neither endpoint takes a search term, which is why the
+    filtering is here rather than there.
+
+    It never fails, and it answers in `slackTarget`'s vocabulary. `FOUND` is at
+    least one match. `NOT_FOUND` is a list read to the end with nothing in it
+    that matches. `UNCHECKED` is no suggestions and the one-line reason -
+    usually a bot token with no read scope, sometimes a Slack that is
+    rate-limiting, briefly a list still being read - and it is what a picker has
+    to draw rather than emptying itself in silence, because a picker with
+    nothing in it and nothing said under it reads as a broken connection.
+
+    **It suggests and never gates.** `targetName` is free text and stays free
+    text; `createAction` and `updateAction` do not ask this. Anything typed has
+    to remain usable whether or not it appears here, and plenty of correct
+    values never will: an id pasted out of somebody else's message, a member who
+    joined a minute ago, a private channel this bot was never invited to, and an
+    archived channel, which is deliberately not offered and still exists.
+    """
+    slackSuggestions(
+        "The connection the action sends through."
+        connectionId: ID!,
+        "Which of the two fields is being asked about. It decides which list is read."
+        target: MessageTarget!,
+        """
+        What is in the field so far, with or without its "#" or "@". Empty or
+        omitted asks for the first few of everything, which is what a picker
+        shows when it opens.
+        """
+        typed: String
+    ): SlackSuggestions!
     "The MCP servers a workspace's agents may connect to, ordered by name."
     mcpServers(workspaceId: ID!): [McpServer!]!
     mcpServer(id: ID!): McpServer
@@ -2434,12 +2471,74 @@ private channel this bot has not been invited to.
 """
 type SlackTargetCheck {
     outcome: SlackTargetOutcome!
-    "One sentence or two, ready to show. Never empty, and never carries a credential."
+    """
+    One line, ready to show under the field, and empty only when nothing has
+    been typed yet. Never carries a credential.
+
+    One line on purpose. This is drawn in a side panel with room for about that
+    much, and what was written here as a paragraph arrived as eight lines with
+    its own scrollbar and was read by nobody.
+    """
     message: String!
     "Slack's own id, when it was found."
     id: String
     "What Slack calls it, when it was found: \"#general\", \"Alice Adams\"."
     label: String
+}
+
+"""
+What a Slack connection has to offer against what somebody has typed into an
+action's target field so far.
+
+The outcomes are `SlackTargetCheck`'s and mean the same things here, so a form
+can treat the two answers alike. Nothing in it is a verdict: `matches` is what
+was worth offering, not what may be entered.
+"""
+type SlackSuggestions {
+    outcome: SlackTargetOutcome!
+    """
+    One line, ready to show under the field, and empty when there is nothing
+    worth saying - which is the usual answer. Never carries a credential.
+
+    It says something in three cases: `UNCHECKED`, where it is the reason there
+    are no suggestions; `NOT_FOUND`, where it is the caveat that keeps that
+    advice rather than a verdict; and a `FOUND` whose list is not complete,
+    where it says why.
+    """
+    message: String!
+    "Best first: what the typing matches exactly, then what starts with it, then what contains it."
+    matches: [SlackSuggestion!]!
+    """
+    Whether `matches` is everything that matches.
+
+    False when Slack was not read to the end - a rate limit, a workspace larger
+    than one read gets through - and false when more matched than are returned.
+    Both mean the same thing to somebody typing, which is that there may be more
+    and that narrowing will find it. Never a reason to refuse what they type.
+    """
+    complete: Boolean!
+}
+
+"One user or channel a connection can see, offered for somebody to pick."
+type SlackSuggestion {
+    "Slack's own id: \"C0123456789\", \"U0123456789\". Unique, and what a list keys its rows by."
+    id: String!
+    """
+    What the field is filled with when this is picked, and what a person
+    recognises: "#general", "@alice".
+
+    Exactly what somebody could have typed, which is what keeps picking a
+    convenience rather than a second way of saying things.
+    """
+    name: String!
+    """
+    The member's own name where Slack has one and it says something the handle
+    does not: "Alice Adams".
+
+    Always null for a channel, whose one name is `name`, and null for a member
+    whose name only repeats their handle.
+    """
+    realName: String
 }
 
 input CreateWorkspaceConnectionInput {

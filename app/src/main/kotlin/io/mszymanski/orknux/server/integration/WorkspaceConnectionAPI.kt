@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.integration
 
 import io.mszymanski.orknux.connector.connection.CreateWorkspaceConnectionInput
 import io.mszymanski.orknux.connector.connection.SlackDirectory
+import io.mszymanski.orknux.connector.connection.SlackSuggestion
 import io.mszymanski.orknux.connector.connection.SlackSuggestions
 import io.mszymanski.orknux.connector.connection.SlackTargetCheck
 import io.mszymanski.orknux.connector.connection.SlackTargetKind
@@ -16,6 +17,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.graphql.data.method.annotation.SchemaMapping
 import org.springframework.stereotype.Controller
 
 /**
@@ -59,17 +61,24 @@ class WorkspaceConnectionAPI(
      * id from elsewhere - that refusing on them would cost more than the typos
      * it catches. So it advises and the person decides.
      *
+     * **The target is a narrowing, not a requirement.** Omitted, both halves of
+     * the connection are asked and the answers merged, and the answer says which
+     * kind it turned out to be. That is the shape the caller actually has: an
+     * action whose target kind has not been set yet could not name one here, so
+     * it asked nothing and its panel drew nothing - which is a worse answer than
+     * any of the three this can give.
+     *
      * Access is the one thing it does refuse on, and for the usual reason: the
      * question is asked of somebody else's connection or of none.
      */
     @QueryMapping
     fun slackTarget(
         @Argument connectionId: Long,
-        @Argument target: MessageTarget,
+        @Argument target: MessageTarget?,
         @Argument name: String,
     ): SlackTargetCheck {
         requireSlackConnection(connectionId)
-        return slackDirectory.check(connectionId, kindOf(target), name)
+        return slackDirectory.check(connectionId, target?.let(::kindOf), name)
     }
 
     /**
@@ -89,19 +98,42 @@ class WorkspaceConnectionAPI(
      * unsuggestable and all perfectly valid, so the field has to accept what
      * this never offered. `createAction` and `updateAction` do not call it.
      *
+     * **The target is a narrowing here too.** Omitted, one list comes back
+     * holding both, every row saying which it is, so a picker over a field whose
+     * kind is not settled yet has something to draw - and picking a row settles
+     * the kind as well as the name.
+     *
      * Cheap to call on a keystroke, which is what it is for: the module reads
-     * each connection's list once and filters it in memory. Access is the one
-     * thing it refuses on.
+     * each connection's list once and filters it in memory. A merged question
+     * reads the same two per-connection lists rather than a third of its own.
+     * Access is the one thing it refuses on.
      */
     @QueryMapping
     fun slackSuggestions(
         @Argument connectionId: Long,
-        @Argument target: MessageTarget,
+        @Argument target: MessageTarget?,
         @Argument typed: String?,
     ): SlackSuggestions {
         requireSlackConnection(connectionId)
-        return slackDirectory.suggest(connectionId, kindOf(target), typed.orEmpty())
+        return slackDirectory.suggest(connectionId, target?.let(::kindOf), typed.orEmpty())
     }
+
+    /**
+     * Which of the two a suggested row is, in the vocabulary the caller sends
+     * with.
+     *
+     * The row carries the module's own kind and the schema says `MessageTarget`,
+     * because what a picker does with a row is put it in an action - and the
+     * value it needs there is the one `createAction` takes. A row that could not
+     * say which kind it was would be undrawable in a merged list and unusable
+     * after it.
+     */
+    @SchemaMapping(typeName = "SlackSuggestion", field = "target")
+    fun suggestionTarget(suggestion: SlackSuggestion): MessageTarget = targetOf(suggestion.kind)
+
+    /** The same, for the one name a check settled - and null when it settled none. */
+    @SchemaMapping(typeName = "SlackTargetCheck", field = "target")
+    fun checkTarget(check: SlackTargetCheck): MessageTarget? = check.kind?.let(::targetOf)
 
     /**
      * Matched by hand rather than by name, so that adding a target the module
@@ -111,6 +143,12 @@ class WorkspaceConnectionAPI(
     private fun kindOf(target: MessageTarget) = when (target) {
         MessageTarget.CHANNEL -> SlackTargetKind.CHANNEL
         MessageTarget.USER -> SlackTargetKind.USER
+    }
+
+    /** And back, for the same reason. */
+    private fun targetOf(kind: SlackTargetKind) = when (kind) {
+        SlackTargetKind.CHANNEL -> MessageTarget.CHANNEL
+        SlackTargetKind.USER -> MessageTarget.USER
     }
 
     /** Access, and nothing else: what the connection turns out to be is the module's answer to give. */

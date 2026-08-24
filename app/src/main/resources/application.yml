@@ -464,6 +464,27 @@ orknux:
       # the step fails and says what would have carried it. A Temporal wait is a
       # timer, holds nothing, and is bounded by run-timeout-hours instead.
       max-wait: ${ORKNUX_INLINE_MAX_WAIT:5m}
+  task:
+    # What one task may spend before it is stopped and told so. An agent running
+    # until it decides it is done is an unbounded bill, so there are two
+    # ceilings: the turns bound how often the model is asked, and the working
+    # time bounds what happens between two of them - a shell command, an MCP
+    # server that takes its time - which no count of turns can express.
+    #
+    # Both are copied onto a task when it is created, so raising these does not
+    # extend a task already running and lowering them does not kill one.
+    max-turns: ${ORKNUX_TASK_MAX_TURNS:40}
+    # Working time, and not wall clock: a task parked for two days waiting to be
+    # approved has spent none of it.
+    working-time: ${ORKNUX_TASK_WORKING_TIME:2h}
+    # How long a task parked for permission or for an answer waits before it
+    # gives up. Long enough to cover a holiday, short enough that a forgotten
+    # task is eventually a finished one.
+    patience: ${ORKNUX_TASK_PATIENCE:7d}
+    # How often a parked task looks to see whether it has been answered. It
+    # lengthens tenfold once a task has been waiting a while, so a week of
+    # waiting is not a week of polling.
+    poll-while-waiting: ${ORKNUX_TASK_POLL_WHILE_WAITING:30s}
   temporal:
     # False runs workflows on the calling thread, with no retries and no
     # resumption. The tests do that; a deployment should not.

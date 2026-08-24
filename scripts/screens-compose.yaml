@@ -1,0 +1,144 @@
+# The installation the manual's pictures are taken of.
+#
+# It is not the development one, and that is the whole reason this file exists.
+# `seed-demo.mjs` builds a workspace by deleting and rebuilding it, so pointed at
+# somebody's own server it edits somebody's own data — which is why the pictures
+# were taken of a purpose-built container for a year, at twenty minutes a build.
+# The server itself no longer needs one: `screenshots.ps1` runs the jar the
+# reactor has just produced, on the host, against a SQLite file in a temporary
+# directory. What is left here is what could not be a jar.
+#
+# Everything is on ports nobody else here is on, under a project name of its own,
+# so `docker compose up` in this directory and `docker compose up` in orknux-ui
+# never see each other's containers. Started, used and thrown away by
+# scripts/screenshots.ps1; there is no reason to run it by hand.
+name: orknux-screens
+
+services:
+  # Why a directory is not optional.
+  #
+  # The pictures are taken as alice, and alice is a directory account: the users
+  # page has an External row on it precisely because somebody signed in through
+  # the directory and was written down, and the manual's paragraph about the two
+  # kinds of account needs both kinds to be there. Internal authentication would
+  # photograph a page with half its subject missing.
+  #
+  # The same bootstrap.ldif the development directory is seeded from, so the cast
+  # is the one every script here already assumes.
+  ldap:
+    image: osixia/openldap:1.5.0
+    command: [ "--copy-service" ]
+    environment:
+      LDAP_ORGANISATION: Orknux
+      LDAP_DOMAIN: orknux.io
+      LDAP_ADMIN_PASSWORD: admin
+    ports:
+      - "3899:389"
+    volumes:
+      - ../docker/ldap/bootstrap.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=orknux,dc=io -D cn=admin,dc=orknux,dc=io -w admin" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Temporal's, and nothing else's. The application stores in the SQLite file the
+  # script makes; this is here only because Temporal will not start without a
+  # database, and pointing it at the development Postgres would put a
+  # documentation run's workflows in somebody's own cluster.
+  #
+  # Not published. Only Temporal talks to it.
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: orknux
+      POSTGRES_USER: orknux
+      POSTGRES_PASSWORD: orknux
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U orknux -d orknux" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Why durable execution is here for a screenshot.
+  #
+  # Monitoring lists what this installation needs and leaves out what it was
+  # never configured with, so an installation with `ORKNUX_TEMPORAL_ENABLED=false`
+  # draws no Temporal row at all — and the manual's monitoring chapter describes
+  # that row. One container, so the page says what the prose says.
+  temporal:
+    image: temporalio/auto-setup:1.29.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: orknux
+      POSTGRES_PWD: orknux
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - "7299:7233"
+    volumes:
+      - ../docker/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    healthcheck:
+      test: [ "CMD", "temporal", "operator", "cluster", "health", "--address", "temporal:7233" ]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # The interface, the seed and the camera - one container, because there is no
+  # Node on this machine and because a browser reaching the dev server by any
+  # name but the one vite is listening on is refused by `server.allowedHosts`,
+  # which arrives as a sign-in failure and points at the wrong thing entirely.
+  #
+  # The same port inside the container as outside it, which is not tidiness. The
+  # browser loads the page at the port vite listens on and sends that origin with
+  # every GraphQL call; the server checks it against ORKNUX_ALLOWED_ORIGINS and
+  # answers 403 when they disagree, while curl is served perfectly. One number,
+  # defaulted here and overridable from screenshots.ps1's -UiPort, is one number
+  # that cannot disagree with itself.
+  ui:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    # The browser and the system libraries it needs are the container's, not the
+    # node_modules volume's, so a recreated container loses them. The binaries
+    # are kept in a volume of their own and the `install` re-adds the apt
+    # packages in about a minute; it is the one part of this that repeats.
+    command: >
+      sh -c "npm install --no-fund --no-audit
+      && npx playwright install --with-deps chromium
+      && npm run dev -- --host 0.0.0.0 --port ${ORKNUX_SCREENS_UI_PORT:-5199}"
+    ports:
+      - "${ORKNUX_SCREENS_UI_PORT:-5199}:${ORKNUX_SCREENS_UI_PORT:-5199}"
+    environment:
+      # The jar, running on the host on a port nobody else is on.
+      ORKNUX_SERVER_URL: http://host.docker.internal:${ORKNUX_SCREENS_SERVER_PORT:-8181}
+      # What seed-demo.mjs and screenshots.mjs both talk to.
+      ORKNUX_UI_URL: http://localhost:${ORKNUX_SCREENS_UI_PORT:-5199}
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The working copy this script was run from, so the pictures land in it.
+      - ../orknux-ui:/app
+      # Keeps the Linux-built dependency tree out of the Windows working copy.
+      - node_modules:/app/node_modules
+      - playwright:/ms-playwright
+    healthcheck:
+      # node rather than curl: this image has no curl, and adding one to answer a
+      # health check is a package to keep up to date for no other reason.
+      test: [ "CMD", "node", "-e", "fetch('http://localhost:${ORKNUX_SCREENS_UI_PORT:-5199}/').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))" ]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+volumes:
+  postgres-data:
+  node_modules:
+  playwright:

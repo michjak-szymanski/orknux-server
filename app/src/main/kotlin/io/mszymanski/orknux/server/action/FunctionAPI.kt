@@ -1,7 +1,8 @@
 package io.mszymanski.orknux.server.action
 
-import io.mszymanski.orknux.server.agent.AgentToolRepository
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.library.ImportedLibraryView
 import io.mszymanski.orknux.server.library.LibraryImports
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
@@ -10,7 +11,6 @@ import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.revision.ComponentRevisionKind
 import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.variable.VariableNotFoundException
 import io.mszymanski.orknux.server.variable.VariableType
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
@@ -43,9 +43,7 @@ import java.time.format.DateTimeFormatter
 @Controller
 class FunctionAPI(
     private val functions: WorkflowFunctionRepository,
-    private val actions: WorkflowActionRepository,
     private val conditions: WorkflowConditionRepository,
-    private val triggers: WorkflowTriggerRepository,
     private val scripts: ScriptRunner,
     private val workspaces: WorkspaceRepository,
     private val variables: WorkspaceVariableRepository,
@@ -56,7 +54,7 @@ class FunctionAPI(
     private val revisions: ComponentRevisionRecorder,
     private val scriptImports: ScriptImports,
     private val libraryImports: LibraryImports,
-    private val tools: AgentToolRepository,
+    private val dependants: ComponentDependants,
 ) {
 
     /**
@@ -247,10 +245,8 @@ class FunctionAPI(
          * [PluginFunctionRegistry] has asked this question all along; the
          * workspace's own delete did not.
          */
-        val callers = actions.findByFunctionId(id).map { it.name } +
-            conditions.findByWorkspaceId(workspaceId).filter { it.functionId == id }.map { it.name } +
-            triggers.findByAuthFunctionId(id).map { "the webhook ${it.name}" }
-        if (callers.isNotEmpty()) throw FunctionInUseException(function.name, callers)
+        val callers = dependants.callersOfFunction(id)
+        if (callers.isNotEmpty()) throw FunctionInUseException(function.name, callers.phrases())
 
         /*
          * And nothing may import it either. Said separately from the callers above
@@ -262,9 +258,8 @@ class FunctionAPI(
          * resolving is a `TypeError` in the middle of a script, which is the worst
          * possible moment and the worst possible wording to learn this in.
          */
-        val importers = functions.findByImportedFunctionId(id).map { it.name } +
-            tools.findByImportedFunctionId(id).map { "the tool ${it.name}" }
-        if (importers.isNotEmpty()) throw FunctionImportedException(function.name, importers)
+        val importers = dependants.importersOfFunction(id)
+        if (importers.isNotEmpty()) throw FunctionImportedException(function.name, importers.phrases())
 
         functions.delete(function)
         // Its history goes with it: the rows point at an id in a table that no

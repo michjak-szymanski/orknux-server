@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.CredentialReader
 import io.mszymanski.orknux.connector.security.HeldSecret
 import io.mszymanski.orknux.connector.security.SecretReferences
 import org.slf4j.LoggerFactory
@@ -26,13 +27,18 @@ class McpServerService(
         servers.findByIdOrNull(id)?.let(::view)
 
     /**
-     * The MCP servers in this workspace reading [variableId], by name.
+     * The MCP servers in this workspace reading [variableId].
      *
      * What `VariableAPI` asks before it removes a variable or takes its secrecy
-     * away. Names rather than rows: the answer is a sentence somebody reads.
+     * away. A [CredentialReader] rather than the row: the answer is read by
+     * somebody, and a server row is a credential holder this has no business
+     * handing out. The id travels with the name so that whoever is told about it
+     * can open it — see [CredentialReader].
      */
-    fun serversReading(workspaceId: Long, variableId: Long): List<String> =
-        servers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId).map { it.name }.sorted()
+    fun serversReading(workspaceId: Long, variableId: Long): List<CredentialReader> =
+        servers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId)
+            .map { CredentialReader(requireNotNull(it.id), it.name) }
+            .sortedBy { it.name }
 
     @Transactional
     fun createMcpServer(input: CreateMcpServerInput): McpServerView {

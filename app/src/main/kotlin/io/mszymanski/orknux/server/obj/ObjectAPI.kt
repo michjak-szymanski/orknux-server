@@ -1,7 +1,9 @@
 package io.mszymanski.orknux.server.obj
 
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -32,7 +34,7 @@ class ObjectAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
-    private val triggers: WorkflowTriggerRepository,
+    private val dependants: ComponentDependants,
 ) {
 
     @QueryMapping
@@ -137,11 +139,8 @@ class ObjectAPI(
     fun deleteObject(@Argument id: Long): Boolean {
         val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val users = objects.findByWorkspaceId(held.workspaceId)
-            .filter { it.id != id && it.properties.any { property -> property.refObjectId == id } }
-            .map { it.name } +
-            triggers.findByObjectId(id).map { "the webhook ${it.name}" }
-        if (users.isNotEmpty()) throw ObjectInUseException(held.name, users)
+        val users = dependants.of(DependencyKind.OBJECT, id)
+        if (users.isNotEmpty()) throw ObjectInUseException(held.name, users.phrases())
 
         objects.delete(held)
         auditRecorder.record(held.workspaceId, WorkspaceAuditCategory.OBJECT, "Object ${held.name} deleted")

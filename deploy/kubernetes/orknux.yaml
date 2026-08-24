@@ -1,0 +1,860 @@
+# A whole Orknux, on Kubernetes, from the published images.
+#
+# The same five things deploy/compose.yaml runs, in the same arrangement, from
+# the same images on Docker Hub - nothing here is built from source:
+#
+#   postgres        the database. Flyway migrates it on the server's first start.
+#   ldap            somewhere to sign in against. Required, in the sense that
+#                   without a directory or an OIDC provider nobody can get in.
+#   temporal        what makes a run durable. Required with the configuration
+#                   below, and the server is pointed at it.
+#   orknux-server   the API and the engine.
+#   orknux-ui       what you open in a browser. It forwards /api, /graphql and
+#                   /mcp to the server, so the browser stays on one origin.
+#
+# Two commands:
+#
+#   kubectl create namespace orknux
+#   kubectl -n orknux create secret generic orknux-secret-key \
+#     --from-literal=secret-key="$(openssl rand -base64 32)"
+#   kubectl apply -f orknux.yaml
+#
+# Three, then. The middle one is the compose file's one required variable, and
+# it is a separate step here for the same reason it has no default there: a key
+# written into a file people copy is a key every installation shares. Nothing
+# below creates it, and the server's pods stay in CreateContainerConfigError
+# until it exists - which is this file's version of compose refusing to start.
+#
+# Then:
+#
+#   kubectl -n orknux port-forward svc/orknux-ui 8080:8080
+#
+# and http://localhost:8080, signing in as `alice` / `password`. README.md in
+# this directory says how to put an Ingress in front of it instead, and what to
+# change before this is anything other than a demonstration.
+#
+# Read that file alongside this one. Read deploy/README.md too: what each
+# service is for, the trade between Postgres and SQLite, how to point the server
+# at a directory you already run or at an OIDC provider, and the full list of
+# settings are all there and are not repeated here. This file covers what is
+# different because it is Kubernetes and not compose.
+#
+# -----------------------------------------------------------------------------
+# Every pod below sets `enableServiceLinks: false`, and it is not tidiness.
+#
+# By default kubelet injects a Docker-link-style variable into every container
+# for every Service in the namespace: a Service named `ldap` becomes LDAP_PORT,
+# LDAP_SERVICE_HOST and the rest, in every pod, whether or not it asked. The
+# names are derived from the Service, so what gets injected is decided by what
+# things are called here rather than by what any image expects - and where a
+# name collides, the injected value wins over the image's own default.
+#
+# `ldap` collides outright. osixia/openldap reads LDAP_PORT to decide what to
+# listen on, is handed `tcp://10.43.x.x:389` instead of `389`, builds
+# `ldap://<pod>:tcp://10.43.x.x:389`, and exits with `parse error=5` on every
+# start. Nothing in the manifest is wrong and nothing in the image is wrong;
+# they are wrong together, and only because a Service happens to be called
+# `ldap`.
+#
+# `orknux-server` is the one to keep an eye on. It injects ORKNUX_SERVER_PORT
+# and friends into every pod including the server's own, and every setting this
+# product has is an ORKNUX_ variable. Nothing collides today. A setting named
+# ORKNUX_SERVER_ANYTHING would, and would do it silently.
+#
+# Nothing here needs these variables. Every address in this file is a DNS name.
+# -----------------------------------------------------------------------------
+
+---
+# The namespace everything below is in. Created here as well as in the command
+# above so that `kubectl apply -f orknux.yaml` on its own is not one step short;
+# applying it twice is harmless.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: orknux
+
+---
+# -----------------------------------------------------------------------------
+# The passwords that are not the encryption key.
+#
+# These two have working defaults in compose and keep them here, which makes
+# this file runnable on sight and is exactly why README.md lists changing them
+# among the things to do before this holds anything. A Secret is base64, not
+# encryption: anyone who can read this object can read these.
+#
+# The encryption key is deliberately not here. It is `orknux-secret-key`,
+# created by hand, and the reason is at the top of this file.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orknux
+  namespace: orknux
+type: Opaque
+stringData:
+  # Read by Postgres when its volume is first created, and by the server and
+  # Temporal on every start. Changing it later means changing it in the database
+  # too, which this file cannot do for you.
+  db-password: orknux
+  # The directory's admin password, which is also what the server binds with.
+  ldap-admin-password: admin
+
+---
+# -----------------------------------------------------------------------------
+# Development fixtures, and they read like it.
+#
+# `alice` is in `admins`, which maps to ROLE_ADMINS and is what sees the Admin
+# section and every workspace; `bob` is an ordinary member. A group named after
+# a workspace grants access to that workspace, which is what `backend`
+# demonstrates.
+#
+# Both passwords are the word `password`, in a file published on the internet.
+# Delete these two entries before this cluster holds anything you mind somebody
+# reading. It is read once, when the data volume is empty; editing it later
+# changes nothing until that PersistentVolumeClaim goes.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldap-bootstrap
+  namespace: orknux
+data:
+  50-bootstrap.ldif: |
+    dn: ou=people,dc=orknux,dc=io
+    objectClass: organizationalUnit
+    ou: people
+
+    dn: ou=groups,dc=orknux,dc=io
+    objectClass: organizationalUnit
+    ou: groups
+
+    dn: uid=alice,ou=people,dc=orknux,dc=io
+    objectClass: inetOrgPerson
+    uid: alice
+    cn: Alice Example
+    sn: Example
+    mail: alice@orknux.io
+    userPassword: password
+
+    dn: uid=bob,ou=people,dc=orknux,dc=io
+    objectClass: inetOrgPerson
+    uid: bob
+    cn: Bob Example
+    sn: Example
+    mail: bob@orknux.io
+    userPassword: password
+
+    dn: cn=admins,ou=groups,dc=orknux,dc=io
+    objectClass: groupOfNames
+    cn: admins
+    member: uid=alice,ou=people,dc=orknux,dc=io
+
+    dn: cn=users,ou=groups,dc=orknux,dc=io
+    objectClass: groupOfNames
+    cn: users
+    member: uid=alice,ou=people,dc=orknux,dc=io
+    member: uid=bob,ou=people,dc=orknux,dc=io
+
+    dn: cn=backend,ou=groups,dc=orknux,dc=io
+    objectClass: groupOfNames
+    cn: backend
+    member: uid=bob,ou=people,dc=orknux,dc=io
+
+---
+# -----------------------------------------------------------------------------
+# The database.
+#
+# One Postgres, not two: Temporal keeps its own `temporal` and
+# `temporal_visibility` databases in this same server and creates them itself on
+# first start. Orknux's schema is Flyway's, applied by the server as it boots,
+# and JPA runs with `ddl-auto: validate` so the migrations are the only thing
+# that ever changes it. That is why nothing here initialises a schema.
+#
+# A ClusterIP rather than the headless Service a StatefulSet usually governs.
+# Nothing here addresses an individual Postgres pod - there is one - and a
+# stable virtual IP is one fewer thing that has to be re-resolved when the pod
+# is replaced.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: orknux
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: orknux
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      # See the note in this file's header: kubelet would otherwise inject a
+      # variable per Service into every container, and the names are decided by
+      # what things are called here rather than by what this image expects.
+      enableServiceLinks: false
+      securityContext:
+        # The image runs the server as uid 999. A freshly provisioned volume
+        # belongs to root, so without this the first start cannot create PGDATA
+        # inside it. The image's entrypoint starts as root and would chown its
+        # way out of this on most drivers; saying it here means it does not
+        # depend on that.
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:18
+          env:
+            - name: POSTGRES_DB
+              value: orknux
+            - name: POSTGRES_USER
+              value: orknux
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orknux
+                  key: db-password
+          ports:
+            - name: postgres
+              containerPort: 5432
+          volumeMounts:
+            # Postgres 18 puts PGDATA at /var/lib/postgresql/18/docker and
+            # declares its volume one level up, so this is the path that
+            # survives. Mounting .../data instead silently keeps nothing: the
+            # claim fills with an empty directory and every restart re-initialises
+            # the database somewhere that is not on it.
+            - name: data
+              mountPath: /var/lib/postgresql
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "orknux", "-d", "orknux"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "orknux", "-d", "orknux"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+
+---
+# -----------------------------------------------------------------------------
+# Somewhere to sign in against.
+#
+# Orknux authenticates against a directory or against an OIDC provider - one or
+# the other, never both, because both would mean an LDAP password for every
+# account the OIDC provider governs. The default is LDAP, so a directory has to
+# exist or the sign-in screen has nothing to ask.
+#
+# This one is a fixture, seeded from the ConfigMap above. deploy/README.md says
+# how to point the server at your own directory, or at an OIDC provider instead,
+# and README.md here says which parts of this file then go.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldap
+  namespace: orknux
+spec:
+  selector:
+    app: ldap
+  ports:
+    - name: ldap
+      port: 389
+      targetPort: 389
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ldap-data
+  namespace: orknux
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ldap-config
+  namespace: orknux
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldap
+  namespace: orknux
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ldap
+  strategy:
+    # Both claims are ReadWriteOnce, so a second pod could not mount them while
+    # the first still holds them. A rolling update would wait for a pod that can
+    # never start; Recreate stops the old one first. Every Deployment in this
+    # file that owns a claim says the same thing for the same reason.
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: ldap
+    spec:
+      # See the note in this file's header: kubelet would otherwise inject a
+      # variable per Service into every container, and the names are decided by
+      # what things are called here rather than by what this image expects.
+      enableServiceLinks: false
+      containers:
+        - name: ldap
+          image: osixia/openldap:1.5.0
+          # Without --copy-service the image ignores anything mounted into its
+          # bootstrap directory, and the fixtures above are silently skipped.
+          args: ["--copy-service"]
+          env:
+            - name: LDAP_ORGANISATION
+              value: Orknux
+            - name: LDAP_DOMAIN
+              value: orknux.io
+            - name: LDAP_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orknux
+                  key: ldap-admin-password
+          ports:
+            - name: ldap
+              containerPort: 389
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ldap
+            - name: config
+              mountPath: /etc/ldap/slapd.d
+            - name: bootstrap
+              # subPath, so this lands as one file in a directory the image
+              # already fills. Mounting the ConfigMap at the directory itself
+              # would hide everything the image ships there.
+              mountPath: /container/service/slapd/assets/config/bootstrap/ldif/custom/50-bootstrap.ldif
+              subPath: 50-bootstrap.ldif
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 389
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ldap-data
+        - name: config
+          persistentVolumeClaim:
+            claimName: ldap-config
+        - name: bootstrap
+          configMap:
+            name: ldap-bootstrap
+
+---
+# -----------------------------------------------------------------------------
+# Durable execution.
+#
+# This is what makes a run survive a restart, retry a step and be worth looking
+# at afterwards. The server is configured to use it, so it is on the required
+# path here rather than an extra - and the server *exits* when it cannot reach
+# it, rather than starting and accepting work it has no way to run.
+#
+# `auto-setup` applies the Temporal schema on every start and creates the
+# `default` namespace, which is what makes it a one-line dependency and also
+# what makes it wrong for a serious deployment: there, run `temporalio/server`
+# and apply the schema yourself with `temporal-sql-tool`, so a restart is never
+# a migration. On Kubernetes that is a Job that runs once, and README.md says so
+# among the things to change.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: temporal
+  namespace: orknux
+spec:
+  selector:
+    app: temporal
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: temporal
+  namespace: orknux
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: temporal
+  template:
+    metadata:
+      labels:
+        app: temporal
+    spec:
+      # See the note in this file's header: kubelet would otherwise inject a
+      # variable per Service into every container, and the names are decided by
+      # what things are called here rather than by what this image expects.
+      enableServiceLinks: false
+      initContainers:
+        # auto-setup retries the database itself, but it does so noisily and for
+        # a while. Waiting here means a first start reads as Init:0/1 - waiting
+        # for something named - rather than as a service logging failures at
+        # whoever is watching.
+        - name: wait-for-postgres
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - until nc -z postgres 5432; do echo "waiting for postgres"; sleep 2; done
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:1.29.0
+          env:
+            - name: DB
+              value: postgres12
+            - name: DB_PORT
+              value: "5432"
+            - name: POSTGRES_SEEDS
+              value: postgres
+            - name: POSTGRES_USER
+              value: orknux
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: orknux
+                  key: db-password
+            - name: DBNAME
+              value: temporal
+            - name: VISIBILITY_DBNAME
+              value: temporal_visibility
+          ports:
+            - name: grpc
+              containerPort: 7233
+          readinessProbe:
+            exec:
+              # The address has to be the pod's own IP, and neither of the two
+              # obvious spellings works.
+              #
+              # This image binds to `hostname -i` rather than to 0.0.0.0 - it
+              # defaults BIND_ON_IP to the container's own address - so 7233 is
+              # open on 10.42.x.y and on nothing else. `localhost:7233` is
+              # refused, and so is 127.0.0.1.
+              #
+              # `temporal:7233`, which is what the compose file's health check
+              # says, is worse than refused: there the name resolves to the
+              # container and is correct, but here it resolves to the Service's
+              # ClusterIP, and a ClusterIP routes only to endpoints that are
+              # ready. The pod is not ready until this probe passes and this
+              # probe cannot pass until the pod is ready. It is a deadlock that
+              # never resolves and never says anything - Temporal logs happily
+              # throughout, because Temporal is fine.
+              command:
+                - sh
+                - -c
+                - exec temporal operator cluster health --address $(hostname -i):7233
+            # The schema is applied on every start, so the first one is slow and
+            # every one after it is not. This waits rather than restarting.
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+
+---
+# -----------------------------------------------------------------------------
+# The API and the engine.
+#
+# No Service of any type that reaches outside the cluster. Everything a browser
+# or a script needs is reachable through orknux-ui below, on one origin, which
+# is what keeps the session cookie first-party. Exposing 8080 as well would give
+# you two addresses for the same server and one of them would set a cookie the
+# other cannot use.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: orknux-server
+  namespace: orknux
+spec:
+  selector:
+    app: orknux-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orknux-data
+  namespace: orknux
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orknux-server
+  namespace: orknux
+spec:
+  # One, and not only because the claim below is ReadWriteOnce.
+  #
+  # Most of the server is happy with more: sessions are rows in the database, so
+  # signing in survives whichever pod answers next; db-scheduler keeps its state
+  # there too, so one instance fires a schedule however many are running; and
+  # more Temporal workers is how Temporal is meant to be scaled.
+  #
+  # Slack is what stops it. SlackListener opens one websocket per workspace
+  # connection *per process*, so a second pod is a second delivery of every
+  # mention - two runs from one message, not one run twice as fast. Raise this
+  # only where no workspace has a Slack connection, and see README.md for the
+  # other two things to move first.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orknux-server
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: orknux-server
+    spec:
+      # See the note in this file's header: kubelet would otherwise inject a
+      # variable per Service into every container, and the names are decided by
+      # what things are called here rather than by what this image expects.
+      enableServiceLinks: false
+      securityContext:
+        # The image runs as uid 999 and this claim is mounted at that user's home
+        # directory. Without an fsGroup the volume belongs to root and the server
+        # cannot write a single attachment - and it fails when somebody attaches
+        # a file, not at startup, which is a poor time to find out.
+        fsGroup: 999
+      initContainers:
+        # The server refuses to start when Temporal is unreachable, and a
+        # deployment brought up in one apply reaches this before Temporal has
+        # applied its schema. Left alone it recovers - restartPolicy is Always,
+        # which is what `restart: unless-stopped` does in the compose file - but
+        # it recovers through CrashLoopBackOff, which reads like a broken
+        # installation and backs off up to five minutes on a first start. This
+        # waits instead.
+        - name: wait-for-dependencies
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgres 5432; do echo "waiting for postgres"; sleep 2; done
+              until nc -z ldap 389; do echo "waiting for ldap"; sleep 2; done
+              until nc -z temporal 7233; do echo "waiting for temporal"; sleep 2; done
+      containers:
+        - name: orknux-server
+          # Pinned, so what you bring up today is what you bring up next week.
+          # A release (`0.9`, `0.9.2`), `sha-<commit>` which never moves, or
+          # `latest` to follow main and accept that an upgrade can happen to
+          # you. The interface below is pinned to the same number on purpose -
+          # the two halves are released together.
+          image: orknux/orknux-server:0.9
+          env:
+            # -----------------------------------------------------------------
+            # The one that matters most, and the one this file does not carry.
+            #
+            # It encrypts every credential the server is trusted with - model
+            # provider keys, Slack tokens, MCP secrets - so that a copy of the
+            # database on its own is not enough to use them. 32 bytes, base64:
+            #
+            #     kubectl -n orknux create secret generic orknux-secret-key \
+            #       --from-literal=secret-key="$(openssl rand -base64 32)"
+            #
+            # Until that exists these pods do not start, and say why. That is
+            # the point: the server reads the key on first use, so a missing one
+            # would otherwise boot, report itself healthy, and fail the first
+            # time anybody pressed Save on a provider key.
+            #
+            # Keep it. Back it up somewhere other than the database it protects.
+            # Changing it or losing it makes every secret already stored
+            # unreadable - nothing recovers them, they have to be typed in again
+            # - so treat it as permanent from the moment you save the first
+            # credential. Admin -> Doctor says whether the key is set, the right
+            # length, and whether every stored secret can still be read with it.
+            # -----------------------------------------------------------------
+            - name: ORKNUX_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: orknux-secret-key
+                  key: secret-key
+
+            - name: ORKNUX_DB_URL
+              value: jdbc:postgresql://postgres:5432/orknux
+            - name: ORKNUX_DB_USERNAME
+              value: orknux
+            - name: ORKNUX_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orknux
+                  key: db-password
+
+            - name: ORKNUX_AUTH_METHOD
+              value: LDAP
+
+            - name: ORKNUX_LDAP_URLS
+              value: ldap://ldap:389
+            - name: ORKNUX_LDAP_BASE
+              value: dc=orknux,dc=io
+            - name: ORKNUX_LDAP_BIND_DN
+              value: cn=admin,dc=orknux,dc=io
+            - name: ORKNUX_LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orknux
+                  key: ldap-admin-password
+
+            - name: ORKNUX_TEMPORAL_TARGET
+              value: temporal:7233
+
+            # Temporal's own web interface, which this file does not run - it is
+            # the one service in the compose file left out here, because it is
+            # a second, unauthenticated web interface onto the same data. This
+            # is only used to link out to a run's history, and the default is a
+            # localhost address that is right in development and wrong in a
+            # cluster, so it is emptied rather than left alone: empty offers no
+            # links, which is the honest answer while there is nothing to link
+            # to. Point it at a Temporal UI if you deploy one.
+            - name: ORKNUX_TEMPORAL_UI_URL
+              value: ""
+
+            # Where this installation is reached from, as somebody's browser
+            # spells it, and what a mailed password reset link points at. Empty
+            # means no link can be written and none is sent - which is why this
+            # stays empty until somebody knows the address, rather than guessing
+            # at a port-forward. Set it to the Ingress host when there is one.
+            - name: ORKNUX_BASE_URL
+              value: ""
+
+            # Empty allows no cross-origin callers, which is correct here: the
+            # browser only ever talks to orknux-ui, and orknux-ui forwards.
+            - name: ORKNUX_ALLOWED_ORIGINS
+              value: ""
+
+            # Where attached files land. It must be an absolute path on the
+            # claim below - the default is relative to the working directory,
+            # which in a container means attachments written into a layer that
+            # goes when the pod does.
+            - name: ORKNUX_ATTACHMENTS_LOCATION
+              value: /home/orknux/attachments
+
+            # Everything else the server understands is one more ORKNUX_
+            # variable here; DOCKERHUB.md lists every one of them with what it
+            # does and what happens if you say nothing.
+          ports:
+            - name: http
+              containerPort: 8080
+          volumeMounts:
+            # Mounted at the server user's home, not at /app/data, and that is
+            # not a style choice. /home/orknux exists in the image and belongs to
+            # uid 999; a claim mounted where the image has nothing is a directory
+            # the server may not write, whatever the fsGroup above says about the
+            # volume itself.
+            - name: data
+              mountPath: /home/orknux
+          # /api/auth/method is what the container's own health check reads: it
+          # is open by design and needs no credential, and actuator's health
+          # endpoint is deliberately not exposed. The compose file has to spell
+          # this as a bash /dev/tcp connect because the image carries neither
+          # curl nor wget; kubelet makes the request itself, from outside the
+          # container, so here it can ask the question that actually matters.
+          startupProbe:
+            httpGet:
+              path: /api/auth/method
+              port: http
+            # A first start is a hundred and twenty-odd Flyway migrations, and
+            # until this succeeds the liveness probe below is not running - which
+            # is the whole reason it exists. Ten minutes, then give up.
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/auth/method
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/auth/method
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            # A workflow run can keep the server busy; three misses in a row is
+            # a minute of it not answering at all, which is a restart worth
+            # doing. One slow response is not.
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              # This is the number the JVM sizes its heap from. The image sets
+              # -XX:MaxRAMPercentage=75, and a container sees the cgroup limit
+              # rather than the machine, so the heap here is about 1.5Gi.
+              # Removing this limit does not give the JVM more room - it gives it
+              # the node's memory to size itself against, on a pod the kubelet
+              # will evict first.
+              memory: 2Gi
+      # CI stops this image with a 30 second budget and asserts it was not
+      # killed, so the default grace period is known to be enough rather than
+      # assumed to be. The JVM is PID 1 and shuts down gracefully; what would
+      # cut requests in flight is a period shorter than this.
+      terminationGracePeriodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: orknux-data
+
+---
+# -----------------------------------------------------------------------------
+# What you open.
+#
+# Static files served by nginx, with /api, /graphql and /mcp forwarded to the
+# server. The manual is part of the bundle and is served at /docs, so an
+# installation with no way out to the internet still has it.
+#
+# This is the half that scales. It holds nothing, and nginx resolves
+# `orknux-server` once when it starts - which on Kubernetes is a ClusterIP that
+# does not change for the life of the Service, so a replica started now and one
+# started next month agree about where the server is. Pointing it at a headless
+# Service instead would hand nginx a pod IP it would then cache past that pod's
+# death, which is the failure this note exists to prevent.
+#
+# It is also why nothing here waits for the server: the Service's address exists
+# from the moment the Service does, whether or not a pod is behind it yet. In
+# compose this needed depends_on, because there the name resolved to a container
+# that had to exist first.
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: orknux-ui
+  namespace: orknux
+spec:
+  # ClusterIP: this file publishes nothing outside the cluster. Reach it with
+  # `kubectl port-forward svc/orknux-ui 8080:8080` to look at it, and put an
+  # Ingress in front of it to keep it - README.md has one to copy.
+  type: ClusterIP
+  selector:
+    app: orknux-ui
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orknux-ui
+  namespace: orknux
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: orknux-ui
+  template:
+    metadata:
+      labels:
+        app: orknux-ui
+    spec:
+      # See the note in this file's header: kubelet would otherwise inject a
+      # variable per Service into every container, and the names are decided by
+      # what things are called here rather than by what this image expects.
+      enableServiceLinks: false
+      containers:
+        - name: orknux-ui
+          # Pinned to the same number as the server above. The interface and the
+          # server are one product released under one version; pinning them apart
+          # is how a bundle ends up calling an API that has moved.
+          image: orknux/orknux-ui:0.9
+          env:
+            - name: ORKNUX_SERVER_URL
+              value: http://orknux-server:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

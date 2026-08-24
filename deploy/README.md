@@ -488,6 +488,32 @@ query. Take the Postgres volume first if you would mind going back.
 - **Everything works until you save a provider key** - the secret key is wrong
   rather than missing. Admin -> Doctor says which.
 
+## On Kubernetes instead
+
+The same deployment — the same five services, the same images, the same
+arrangement — is written as Kubernetes objects in
+[`kubernetes/orknux.yaml`](kubernetes/orknux.yaml).
+
+```
+kubectl create namespace orknux
+kubectl -n orknux create secret generic orknux-secret-key \
+  --from-literal=secret-key="$(openssl rand -base64 32)"
+kubectl apply -f kubernetes/orknux.yaml
+kubectl -n orknux port-forward svc/orknux-ui 8080:8080
+```
+
+**This page is the other half of that one and is not repeated there.**
+Everything above about what each service is for, whether it is genuinely
+required, Postgres or SQLite, pointing the server at your own directory or at an
+OIDC provider, signing in without either, and the table of settings is true
+whatever runs the containers. [`kubernetes/README.md`](kubernetes/README.md) is
+what is different because it is Kubernetes: the secret key as an object the
+manifest deliberately does not carry, an init container in place of
+`depends_on`, probes that ask for a URL because kubelet is the one asking rather
+than something inside an image that has no curl in it, why the server is one
+replica and what Slack has to do with that, and what an ingress controller has
+to be told before a 25MB attachment can be uploaded through it.
+
 ## This is not the development stack
 
 The [`compose.yaml` at the repository root](../compose.yaml) is a different

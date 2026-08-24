@@ -1,9 +1,6 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
-import io.mszymanski.orknux.server.plugin.PluginParameters
-import io.mszymanski.orknux.server.plugin.PluginPermissions
-import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
 import io.mszymanski.orknux.connector.connection.MailDelivery
@@ -11,7 +8,6 @@ import io.mszymanski.orknux.connector.connection.MailMessage
 import io.mszymanski.orknux.connector.connection.OutgoingHttp
 import io.mszymanski.orknux.connector.connection.OutgoingMail
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
-import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.server.condition.ConditionNotDecidableException
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
@@ -23,7 +19,6 @@ import io.mszymanski.orknux.workflow.execution.PermanentFailure
 import io.mszymanski.orknux.workflow.execution.StepResult
 import io.mszymanski.orknux.workflow.execution.StepStatus
 import io.mszymanski.orknux.workflow.script.ScriptResult
-import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
 import org.springframework.core.Ordered
@@ -58,17 +53,12 @@ class ActionNodeRunner(
     private val headers: ActionHeaders,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
-    private val scriptImports: ScriptImports,
-    private val pluginRunner: PluginRunner,
-    private val plugins: PluginRepository,
-    private val pluginParameters: PluginParameters,
-    private val pluginPermissions: PluginPermissions,
+    private val caller: FunctionCaller,
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val mapper: ObjectMapper,
     private val expressions: NodeExpressions,
     private val messages: OutgoingMessages,
-    private val externals: VariableArguments,
     private val http: OutgoingHttp,
     private val mail: OutgoingMail,
 ) : NodeRunner {
@@ -348,41 +338,15 @@ class ActionNodeRunner(
         // action's own are only ever a seed for a node, so reading them here
         // would run a binding nobody chose.
         val byName = expressions.mappingsOf(step).mapValues { (_, binding) -> expressions.jsonOf(binding, given, started) }
-        // The order the function takes them, not the order they were mapped.
-        // What the node passes, then what the workspace does: an external
-        // parameter is not the caller's to fill, so it is appended rather than
-        // looked for among the mappings.
-        val arguments = function.params.map { byName[it.name] ?: "null" } + externals.of(function)
+        // The order the function takes them, not the order they were mapped. Only
+        // the declared ones: an external parameter is not the caller's to fill, so
+        // [FunctionCaller] appends the workspace's rather than looking for them
+        // among the mappings.
+        val arguments = function.params.map { byName[it.name] ?: "null" }
 
-        /*
-         * A plugin's function is not this workspace's JavaScript, and its source
-         * column holds a note saying so rather than code. It runs in the plugin's
-         * own sandbox, out of the plugin's own text, and it is handed what this
-         * workspace answered the plugin's parameters with.
-         */
-        val result = if (function.scope == FunctionScope.PLUGIN) {
-            runPlugin(function, action, arguments)
-        } else {
-            /*
-             * What it imports is assembled before it runs, because the sandbox
-             * resolves nothing itself. An import that no longer resolves is
-             * permanent: nothing about running the step again would find the
-             * function somebody deleted.
-             */
-            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
-                is ScriptImportsResult.Broken ->
-                    throw ActionFailedException("${function.name} ${resolved.reason}", permanent = true)
-
-                is ScriptImportsResult.Resolved -> scripts.call(
-                    function.source,
-                    function.name,
-                    arguments,
-                    contextFor(action),
-                    resolved.modules,
-                    resolved.imports,
-                )
-            }
-        }
+        // The same call the editor's Run makes, through the same class, because a
+        // test run that took another path would be testing another thing.
+        val result = caller.call(function, arguments, contextFor(action), action.workspaceId)
 
         return when (result) {
             is ScriptResult.Returned -> StepResult(
@@ -399,53 +363,17 @@ class ActionNodeRunner(
              * script that threw will throw again - it can reach nothing that
              * might have changed in between - so retrying it only reaches the
              * same conclusion three times and writes the same line in the run's
-             * history three times. A script stopped by its clock or refused the
-             * memory it asked for is the other case: that was about how busy
-             * the machine was, and a quieter one may answer.
+             * history three times. The same is true of the two failures that
+             * happen before any script runs: an import that no longer resolves,
+             * and a plugin nobody has configured. A script stopped by its clock
+             * or refused the memory it asked for is the other case: that was
+             * about how busy the machine was, and a quieter one may answer.
              */
             is ScriptResult.Failed -> throw ActionFailedException(
                 "${function.name} ${result.reason}",
                 permanent = result.settled,
             )
         }
-    }
-
-    /**
-     * Runs a function one of the plugins declared.
-     *
-     * A required parameter nobody answered stops the run before the plugin is
-     * loaded, and stops it permanently: what is missing is a piece of
-     * configuration, and configuration does not appear because something was tried
-     * a second time. The workspace's plugin page marks the same parameters, so the
-     * sentence here and the red mark there are the same fact.
-     */
-    private fun runPlugin(function: WorkflowFunction, action: WorkflowAction, arguments: List<String>): ScriptResult {
-        val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
-            ?: return ScriptResult.Failed("is declared by a plugin that is no longer loaded", 0)
-
-        val missing = pluginParameters.missingFor(plugin, action.workspaceId)
-        if (missing.isNotEmpty()) {
-            throw ActionFailedException(
-                "${function.name} cannot run: the ${plugin.key} plugin has not been told " +
-                    missing.joinToString(", ") + ". Set it on this workspace's plugins page.",
-                permanent = true,
-            )
-        }
-
-        // The name the plugin gave it, not the prefixed one a workspace picks it
-        // by: the prefix exists so two plugins can both declare `send`, and the
-        // plugin never agreed to answer to it.
-        val declared = function.name.removePrefix("${plugin.key}_")
-        return pluginRunner.call(
-            plugin.source,
-            declared,
-            arguments,
-            pluginParameters.settingsFor(plugin, action.workspaceId),
-            // What a person accepted for this plugin, and nothing else. Read
-            // per call from this plugin's row, so one plugin's agreement cannot
-            // reach another's context.
-            pluginPermissions.grantedTo(plugin),
-        )
     }
 
     /** What this step was told to pass, as the planner wrote it down. */

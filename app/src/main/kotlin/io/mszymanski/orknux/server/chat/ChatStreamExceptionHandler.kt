@@ -34,6 +34,7 @@ class ChatStreamExceptionHandler {
         ChatMessageEmptyException::class,
         ChatTitleInvalidException::class,
         ChatDisabledException::class,
+        ChatNothingToRegenerateException::class,
     )
     fun badRequest(exception: RuntimeException): ProblemDetail =
         ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, exception.message ?: "The chat cannot answer that")

@@ -557,6 +557,17 @@ own stream and speaking both delta shapes. It is the one part of the chat that i
 not GraphQL: the browser client here is `fetch`, and a subscription would mean
 adding a websocket transport and the `graphql-ws` protocol to send one string.
 
+**The last answer can be asked for again, and the one it replaces is kept.**
+`POST /api/chats/{id}/regenerate` takes the answer off the end of the thread and
+asks with what is left — a thread holding two answers to one question was never
+said out loud, and the second would be answering the first — so what comes off
+is written to `chat_answer_take` against its place in the thread, and
+`chatMessages` hands it back beside the answer that stands. That table is not
+the messages table the design rules forbid: it holds what was deliberately taken
+*out* of the conversation, it is never put in front of a model, and it goes with
+the chat when the chat goes. Only the answer a conversation ends on can be asked
+again, and a provider that refuses puts the old answer straight back.
+
 **A chat can be with an agent rather than with a bare model.** An agent is a
 configuration — the model that answers, the instructions it works under, and the
 skill catalogs it has been granted — so handing a chat to one makes its model the

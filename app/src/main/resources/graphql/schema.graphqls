@@ -1995,6 +1995,17 @@ type ChatMessage {
     already there when the chat opened, turns without were said in it.
     """
     actor: String
+    """
+    What this answer said the earlier times it was given, oldest first.
+
+    Empty for an answer nobody has asked for again, and for every other kind of
+    line. Asking again takes the model's last turn off the thread before it is
+    asked - a conversation holding two answers to one question was never had -
+    and these are the turns that came off, kept so that the button is not a way
+    of losing the answer somebody was about to keep. They are never put in front
+    of a model.
+    """
+    takes: [String!]!
 }
 
 type ChatAnswer {

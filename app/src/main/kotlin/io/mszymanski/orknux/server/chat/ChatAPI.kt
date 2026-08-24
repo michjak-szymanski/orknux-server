@@ -63,7 +63,7 @@ class ChatAPI(
     fun chatMessages(@Argument id: Long): List<ChatMessageView> {
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
-        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor) }
+        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor, it.takes) }
     }
 
     @MutationMapping
@@ -265,6 +265,12 @@ data class ChatMessageView(
      * to tell the two apart.
      */
     val actor: String? = null,
+    /**
+     * What this answer said the earlier times it was given, oldest first. Empty
+     * for an answer nobody has asked for again, and for every other kind of
+     * line.
+     */
+    val takes: List<String> = emptyList(),
 )
 
 data class ChatAnswerView(

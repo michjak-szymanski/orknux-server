@@ -18,6 +18,13 @@ type Query {
     workspaceIssues(
         workspaceId: ID!,
         status: IssueStatus,
+        """
+        Which type: absent is every issue, an empty string is the untyped ones,
+        an id is that type. One argument with three states, because "nobody has
+        said what this is" is a thing a tracker gets asked for and a null
+        already means "never mind".
+        """
+        typeId: ID,
         search: String,
         page: Int,
         size: Int,
@@ -30,6 +37,15 @@ type Query {
     workspaceIssue(workspaceId: ID!, number: Int!): Issue
     "Every label in use in this workspace, so a filter can offer what exists."
     workspaceIssueLabels(workspaceId: ID!): [String!]!
+    """
+    The kinds of thing this workspace files, alphabetically, with how many
+    issues carry each.
+
+    Not the same shape as the labels beside it, and deliberately: a label exists
+    because an issue holds it, and a type exists because the workspace decided
+    it does. That is why this answers rows with ids and that one answers strings.
+    """
+    workspaceIssueTypes(workspaceId: ID!): [IssueType!]!
     """
     What has happened to one issue, oldest first.
 
@@ -681,11 +697,33 @@ type Mutation {
     "Says the notifications waiting have been seen, and answers how many that was."
     readMyNotifications: Int!
 
+    """
+    Adds a kind of thing this workspace files. Whoever administers it may.
+
+    Case-insensitively unique: `Bug` and `bug` are one type, since two rows a
+    reader cannot tell apart would collect issues between them by accident.
+    """
+    createIssueType(workspaceId: ID!, name: String!): IssueType!
+    """
+    Changes what a type is called. Every issue carrying it reads the new word at
+    once - which is the point of it being a row - while the history keeps what
+    it was called at the time.
+    """
+    renameIssueType(id: ID!, name: String!): IssueType!
+    """
+    Takes a type out of the catalogue.
+
+    Refused while issues carry it, and the refusal says how many. Untyping two
+    hundred issues on the way is a change nobody asked for and nobody can see
+    happen; the way out is to filter for that type, retype what it finds, and
+    delete it then.
+    """
+    deleteIssueType(id: ID!): Boolean!
     createIssue(input: IssueInput!): Issue!
     updateIssue(id: ID!, input: IssueInput!): Issue!
     deleteIssue(id: ID!): Boolean!
     """
-    Moves an issue to another workspace, comments, labels, links, observers and
+    Moves an issue to another workspace, comments, labels, type, links, observers and
     files with it. Needs a role that administers both workspaces, which an
     installation administrator holds everywhere: administering only the source
     would be leave to push an issue into somebody else's tracker, and only the
@@ -4793,6 +4831,29 @@ enum IssueStatus {
     CLOSED
 }
 
+"""
+What kind of thing an issue is: a bug, a feature, or whatever else a workspace
+decides it files.
+
+A catalogue of its own rather than a label with a reserved prefix. A label is a
+set, so nothing could stop an issue being two types at once; a label exists only
+while an issue carries it, so there would be nothing to administer before the
+first issue is filed; and a label cannot be renamed without rewriting every row
+that holds the word. Labels are what a workspace says about an issue; the type
+is what the issue is.
+
+Per workspace, because one team files bugs and features and the next files
+incidents and requests. Whoever administers the workspace changes the list;
+anybody who can see it reads it.
+"""
+type IssueType {
+    id: ID!
+    workspaceId: ID!
+    name: String!
+    "How many issues here carry it. What the settings page shows, and what deleting it is refused with."
+    issues: Int!
+}
+
 "What a list of issues is ordered by."
 enum IssueOrder {
     "By number, which is the order they were filed in."
@@ -4807,6 +4868,11 @@ enum IssueOrder {
     has no answer here and sorts last, whichever way round.
     """
     LAST_COMMENT
+    """
+    By what the issues are, alphabetically by the type's name. An untyped issue
+    sorts last whichever way round: having no kind is not being the first kind.
+    """
+    TYPE
 }
 
 "What kind of thing an issue is assigned to."
@@ -4965,6 +5031,8 @@ type Issue {
     title: String!
     description: String
     status: IssueStatus!
+    "What kind of thing it is, or null for untyped - which is a real state, not a gap."
+    type: IssueType
     reporter: String!
     "Null when nobody is looking at it."
     assignee: Assignee
@@ -5014,6 +5082,14 @@ enum IssueEventKind {
     STATUS
     "A label was put on or taken off - one entry for each."
     LABEL
+    """
+    It was typed, retyped, or untyped.
+
+    Both sides are the name the type had at the time, not its id: a type can be
+    renamed, and a history read live would rewrite March to say what the word
+    became in June. Null on either side is untyped.
+    """
+    TYPE
     "It changed hands, was handed out, or was put back down."
     ASSIGNEE
     "Somebody started or stopped hearing about it."
@@ -5070,6 +5146,8 @@ input IssueInput {
     "Empty clears it; absent leaves it alone."
     description: String
     status: IssueStatus
+    "Which type. Empty means untyped; absent leaves it alone."
+    typeId: ID
     labels: [String!]
     """
     Both together, or neither. Absent leaves the assignee alone; an empty

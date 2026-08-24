@@ -12,6 +12,7 @@ import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.JoinColumn
+import jakarta.persistence.ManyToOne
 import jakarta.persistence.OneToMany
 import jakarta.persistence.OrderBy
 import jakarta.persistence.Table
@@ -125,6 +126,23 @@ class Issue(
     @Column(nullable = false, length = 16)
     var status: IssueStatus = IssueStatus.OPEN,
 
+    /**
+     * What kind of thing it is, or null for untyped.
+     *
+     * Null is a real state and not a gap. Every issue filed before there were
+     * types has none, and giving them a default would be the record claiming
+     * that a year of work was all bugs - so the list can be asked for the
+     * untyped ones and the page says the word rather than showing a blank.
+     *
+     * Eagerly, unlike the comments. A to-one to a table holding a handful of
+     * rows per workspace costs a lookup the session then has cached, and every
+     * issue read outside a transaction - the news desk's, the mail's - would
+     * otherwise be a page that renders or throws depending on who asked for it.
+     */
+    @ManyToOne(fetch = FetchType.EAGER)
+    @JoinColumn(name = "type_id")
+    var type: IssueType? = null,
+
     /** The username that filed it, kept as a name so it survives them. */
     @Column(nullable = false, length = 120)
     val reporter: String,
@@ -228,9 +246,12 @@ interface IssueRepository : JpaRepository<Issue, Long>, JpaSpecificationExecutor
      *
      * The search is never null. Postgres cannot type a null parameter inside
      * `lower()` - it guesses bytea and refuses the function - so "no filter" is
-     * the empty string rather than a null. Status is the same story told the
-     * other way: rather than a nullable parameter, there are two methods, and
-     * the caller picks.
+     * the empty string rather than a null.
+     *
+     * Only the text, and no status: this is what the box offering something to
+     * link to reads, and that box wants every issue. The list's own filters are
+     * [issueFilter]'s, since a JPQL method per combination of three optional
+     * filters is eight methods and the eighth is the one nobody writes.
      */
     @Query(
         """
@@ -262,37 +283,6 @@ interface IssueRepository : JpaRepository<Issue, Long>, JpaSpecificationExecutor
     )
     fun search(workspaceId: Long, search: String, pageable: Pageable): Page<Issue>
 
-    @Query(
-        """
-        select i from Issue i
-        where i.workspaceId = :workspaceId
-          and i.status = :status
-          and (
-            :search = ''
-            or lower(i.title) like lower(concat('%', :search, '%'))
-            or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or exists (
-              select 1 from Issue held join held.labels l
-              where held = i and lower(l) like lower(concat('%', :search, '%'))
-            )
-          )
-        """,
-        countQuery = """
-        select count(i) from Issue i
-        where i.workspaceId = :workspaceId
-          and i.status = :status
-          and (
-            :search = ''
-            or lower(i.title) like lower(concat('%', :search, '%'))
-            or lower(coalesce(i.description, '')) like lower(concat('%', :search, '%'))
-            or exists (
-              select 1 from Issue held join held.labels l
-              where held = i and lower(l) like lower(concat('%', :search, '%'))
-            )
-          )
-        """,
-    )
-    fun searchByStatus(workspaceId: Long, status: IssueStatus, search: String, pageable: Pageable): Page<Issue>
 
     /** Every label in use here, for the filter to offer. */
     @Query("select distinct l from Issue i join i.labels l where i.workspaceId = :workspaceId order by l")
@@ -321,7 +311,46 @@ interface IssueRepository : JpaRepository<Issue, Long>, JpaSpecificationExecutor
         """,
     )
     fun labelCounts(workspaceId: Long): List<LabelCount>
+
+    /**
+     * How many issues carry each type here, counted by the database.
+     *
+     * Untyped is not a row in this: the types are what the catalogue holds, and
+     * a count of what is on none of them belongs to the list rather than to the
+     * settings page.
+     */
+    @Query(
+        """
+        select new io.mszymanski.orknux.server.issue.IssueTypeCount(t.id, count(i))
+        from Issue i join i.type t
+        where i.workspaceId = :workspaceId
+        group by t.id
+        """,
+    )
+    fun typeCounts(workspaceId: Long): List<IssueTypeCount>
+
+    /** What deleting a type has to ask, and what the refusal reports. */
+    fun countByTypeId(typeId: Long): Long
 }
+
+/**
+ * What a caller wants of the type: one of them, none of them, or never mind.
+ *
+ * Spelled out rather than left to a nullable id, because untyped is a state
+ * somebody filters for and a null already means "no filter". Two meanings on
+ * one absent value is how a filter ends up unable to ask the question the
+ * tracker is most often asked - what has nobody classified yet.
+ */
+sealed interface IssueTypeWanted
+
+/** No filter: every issue, typed or not. */
+data object AnyType : IssueTypeWanted
+
+/** Only the issues nobody has said what they are. */
+data object Untyped : IssueTypeWanted
+
+/** Only the issues carrying this one. */
+data class OfType(val id: Long) : IssueTypeWanted
 
 /**
  * The tracker filtered the way somebody asks for it, as one query.
@@ -356,10 +385,25 @@ fun issueFilter(
      * issue.
      */
     assignedTo: Collection<Pair<AssigneeKind, String>>? = null,
+    /**
+     * Which type, or [Untyped], or [AnyType] for no filter at all.
+     *
+     * Three states rather than a nullable id, because untyped is a real state
+     * somebody asks for: a nullable parameter can only say "this one" and
+     * "never mind", and the question a tracker actually gets is "what has
+     * nobody classified yet".
+     */
+    type: IssueTypeWanted = AnyType,
 ): Specification<Issue> = Specification { root, query, builder ->
     val predicates = mutableListOf(builder.equal(root.get<Long>("workspaceId"), workspaceId))
 
     status?.let { predicates += builder.equal(root.get<IssueStatus>("status"), it) }
+
+    when (type) {
+        AnyType -> Unit
+        Untyped -> predicates += builder.isNull(root.get<IssueType>("type"))
+        is OfType -> predicates += builder.equal(root.get<IssueType>("type").get<Long>("id"), type.id)
+    }
 
     search?.trim()?.ifEmpty { null }?.let {
         val pattern = "%${it.lowercase()}%"

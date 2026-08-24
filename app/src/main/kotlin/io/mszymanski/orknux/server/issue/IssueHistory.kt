@@ -15,7 +15,7 @@ import java.time.OffsetDateTime
 /**
  * One line in an issue's history.
  *
- * Eight kinds and only six of them are ever stored. [OPENED] is read off the
+ * Nine kinds and only seven of them are ever stored. [OPENED] is read off the
  * issue itself and [COMMENT] off the comments table, because both are already
  * recorded faithfully and a second copy of a comment is a copy that goes stale
  * the moment somebody edits it. They are in the same enum because the reader
@@ -43,6 +43,17 @@ enum class IssueEventKind {
 
     /** A label was put on or taken off - one row for each, never a set. */
     LABEL,
+
+    /**
+     * Somebody said what kind of thing it is, or took that back.
+     *
+     * Both sides are the name the type had at the time, not its id - the same
+     * choice [ASSIGNEE] makes and for the same reason. A type can be renamed,
+     * and a history that read the row live would rewrite March to say what the
+     * word became in June. Null on either side is untyped, which is a real
+     * state an issue can be put back into.
+     */
+    TYPE,
 
     /** It changed hands, was handed out, or was put back down. */
     ASSIGNEE,
@@ -154,6 +165,23 @@ class IssueHistoryRecorder(private val events: IssueEventRepository) {
     fun statusChanged(issue: Issue, was: IssueStatus, became: IssueStatus, actor: String) {
         if (was == became) return
         write(issue, IssueEventKind.STATUS, actor, was.name, became.name)
+    }
+
+    /**
+     * It was typed, retyped, or untyped. Both sides are names.
+     *
+     * The name and not the type's id, exactly as [assigneeChanged] writes a
+     * name: this is a record of something that happened, and it has to stay
+     * true after the type has been renamed or - once nothing carries it -
+     * deleted. Null on either side is untyped, which is a state an issue can
+     * be put back into and not an absence of information.
+     *
+     * Nothing is written where nothing changed, which is what makes this safe
+     * to call from a save that posts the whole form back unchanged.
+     */
+    fun typeChanged(issue: Issue, was: String?, became: String?, actor: String) {
+        if (was == became) return
+        write(issue, IssueEventKind.TYPE, actor, was, became)
     }
 
     /**

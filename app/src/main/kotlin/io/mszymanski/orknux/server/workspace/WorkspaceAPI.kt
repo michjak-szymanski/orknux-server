@@ -2,6 +2,9 @@ package io.mszymanski.orknux.server.workspace
 
 import io.mszymanski.orknux.connector.connection.WorkspaceLifecycleService
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.issue.IssueType
+import io.mszymanski.orknux.server.issue.IssueTypeAPI
+import io.mszymanski.orknux.server.issue.IssueTypeRepository
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleNotFoundException
@@ -29,6 +32,7 @@ class WorkspaceAPI(
     private val connections: WorkspaceLifecycleService,
     private val models: ModelService,
     private val budgets: SessionMemoryBudgets,
+    private val issueTypes: IssueTypeRepository,
 ) {
 
     /**
@@ -64,6 +68,21 @@ class WorkspaceAPI(
         )
         // The admin default connections come with the workspace.
         provision(requireNotNull(workspace.id), workspace.name)
+        /*
+         * And so do the two kinds of thing every tracker files. Here rather
+         * than only in the migration that added them, because a workspace made
+         * tomorrow never replays the Postgres history and a workspace made on
+         * SQLite never had one - so the migration seeds what already existed
+         * and this seeds everything since, and the two engines agree.
+         *
+         * No audit line for these: they arrive with the workspace, like the
+         * default connections, and a log that announced them would be
+         * announcing the shape of a new workspace rather than a decision
+         * anybody made.
+         */
+        IssueTypeAPI.TO_BEGIN_WITH.forEach {
+            issueTypes.save(IssueType(workspaceId = requireNotNull(workspace.id), name = it))
+        }
         return workspace
     }
 

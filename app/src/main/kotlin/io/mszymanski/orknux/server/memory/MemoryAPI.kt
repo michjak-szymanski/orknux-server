@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.memory
 
-import io.mszymanski.orknux.server.agent.AgentGrants
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -33,7 +35,7 @@ class MemoryAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
-    private val grants: AgentGrants,
+    private val dependants: ComponentDependants,
 ) {
 
     @QueryMapping
@@ -164,8 +166,8 @@ class MemoryAPI(
     fun deleteMemoryCatalog(@Argument id: Long): Boolean {
         val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val granted = grants.toMemoryCatalog(catalog.workspaceId, catalog.name)
-        if (granted.isNotEmpty()) throw MemoryCatalogInUseException(catalog.name, granted)
+        val granted = dependants.of(DependencyKind.MEMORY_CATALOG, id)
+        if (granted.isNotEmpty()) throw MemoryCatalogInUseException(catalog.name, granted.phrases())
 
         val held = memories.countByCatalogId(id)
         memories.deleteByCatalogId(id)

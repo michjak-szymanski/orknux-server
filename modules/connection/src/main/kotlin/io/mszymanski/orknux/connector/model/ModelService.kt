@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.model
 
+import io.mszymanski.orknux.connector.CredentialReader
 import io.mszymanski.orknux.connector.connection.CheckOutcome
 import io.mszymanski.orknux.connector.security.HeldSecret
 import io.mszymanski.orknux.connector.security.SecretCipher
@@ -53,14 +54,18 @@ class ModelService(
         providers.findByIdOrNull(id)?.let(::view)
 
     /**
-     * The providers in this workspace reading [variableId], by name.
+     * The providers in this workspace reading [variableId].
      *
      * What `VariableAPI` asks before it removes a variable or takes its secrecy
-     * away. Names rather than rows: the answer is a sentence somebody reads, and
-     * a provider row is a credential holder this has no business handing out.
+     * away. A [CredentialReader] rather than the row: the answer is read by
+     * somebody, and a provider row is a credential holder this has no business
+     * handing out. The id travels with the name so that whoever is told about it
+     * can open it.
      */
-    fun providersReading(workspaceId: Long, variableId: Long): List<String> =
-        providers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId).map { it.name }.sorted()
+    fun providersReading(workspaceId: Long, variableId: Long): List<CredentialReader> =
+        providers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId)
+            .map { CredentialReader(requireNotNull(it.id), it.name) }
+            .sortedBy { it.name }
 
     /** Every model the workspace may reach, provider first and then name. */
     fun models(workspaceId: Long): List<LlmModelView> {

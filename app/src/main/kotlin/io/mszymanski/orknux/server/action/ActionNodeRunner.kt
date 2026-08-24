@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
@@ -61,6 +62,7 @@ class ActionNodeRunner(
     private val pluginRunner: PluginRunner,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
+    private val pluginPermissions: PluginPermissions,
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val mapper: ObjectMapper,
@@ -439,6 +441,10 @@ class ActionNodeRunner(
             declared,
             arguments,
             pluginParameters.settingsFor(plugin, action.workspaceId),
+            // What a person accepted for this plugin, and nothing else. Read
+            // per call from this plugin's row, so one plugin's agreement cannot
+            // reach another's context.
+            pluginPermissions.grantedTo(plugin),
         )
     }
 

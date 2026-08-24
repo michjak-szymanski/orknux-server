@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.action.ScriptImports
@@ -64,6 +65,7 @@ class WebhookAPI(
     private val scriptImports: ScriptImports,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
+    private val pluginPermissions: PluginPermissions,
     private val externals: VariableArguments,
     private val mapper: ObjectMapper,
 ) {
@@ -252,6 +254,10 @@ class WebhookAPI(
             declared,
             arguments,
             pluginParameters.settingsFor(plugin, trigger.workspaceId),
+            // What a person accepted for this plugin, and nothing else. Read
+            // per call from this plugin's row, so one plugin's agreement cannot
+            // reach another's context.
+            pluginPermissions.grantedTo(plugin),
         )
     }
 

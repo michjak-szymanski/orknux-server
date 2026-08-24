@@ -74,6 +74,48 @@ have failed.
   itself does not travel — importing a function is not a thing that should
   install software.
 
+- **A plugin says which JavaScript it needs, and loading it asks you to agree.** A
+  plugin embeds its libraries — that is what makes it portable, and it is why a
+  plugin cannot import one the way a function can. The cost is that a bundle
+  written for a browser or for Node expects language features the sandbox does not
+  switch on, so a plugin needing `TextDecoder` has simply not worked. It can now
+  declare what it needs, and loading it shows that list and refuses until somebody
+  accepts it by name.
+
+  There are five things it can ask for: writing to the server's log, `Intl`,
+  `TextEncoder` and `TextDecoder`, `performance.now`, and the `Temporal` API. That
+  is the whole vocabulary, and its being closed is the point of it — there is no
+  name for reading a file, opening a socket or reaching a Java class, so a plugin
+  cannot ask for one and nobody can grant one by clicking through a dialog. A
+  plugin naming something that is not on the list is refused with the list.
+
+  What was accepted is turned on for that one plugin, in the sandbox its own call
+  runs in. Nothing is turned on for another plugin, nothing for the engine they
+  share, and nothing at all for a workspace's own functions and tools — those run
+  in a different class with a different configuration, which is why that class has
+  no branch that could turn a capability on.
+
+  **A plugin edited to need more is asked again.** The acceptance names the
+  permissions it was given for rather than being a yes to the plugin, so a new one
+  is not covered by it: the load is refused, with the new list, and the plugin that
+  is already installed goes on running with what it already had. A plugin that
+  stops asking for something stops being granted it.
+
+  And what was accepted stays readable. The Plugins page shows each plugin's
+  permissions beside who accepted them and when — a decision about what code may do
+  that lives only in a dialog somebody clicked through last month is a decision
+  nobody can audit.
+
+### Changed
+
+- **A plugin no longer gets `console` or `Intl` for free.** GraalJS turns both on by
+  default and this sandbox had been leaving them on, which made "nothing is relaxed
+  unless it was accepted" untrue of exactly the two things nobody had thought
+  about. They are now off unless the plugin asks and somebody accepts. A plugin
+  that used `console.log` or `Intl` without declaring them will fail on its next
+  call: add `permissions()` to it, load it again, and accept the list. Nothing else
+  a plugin could reach has changed, because there was nothing else it could reach.
+
 ## 0.9.2
 
 ### Added

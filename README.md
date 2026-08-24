@@ -351,7 +351,8 @@ away, and a real key has no business in a build file.
 | `shell`          | The tool an agent runs commands through, on the machines Admin -> Shell holds; the sessions themselves belong to `modules/connection` |
 | `mail`           | The installation's own relay, and the one thing it sends: a password reset link |
 | `database`       | What SQLite needs and Postgres does not - the dialect, the pragmas, and the SQL the scheduler ships no dialect for |
-| `plugin`         | Plugins loaded into the installation, and the functions they declare |
+| `plugin`         | Plugins loaded into the installation, the functions they declare, and the JavaScript they were granted |
+| `library`        | Libraries loaded into the installation, what each exports, and which functions and tools import it |
 | `monitoring`     | The health of the service and everything it needs to be up             |
 | `admin`          | The Doctor: whether this installation is configured correctly, which is not the same question as whether it is up |
 
@@ -950,6 +951,46 @@ A file that is not a module with a default export is refused on the way in.
 A plugin is the exception and imports no library at all: a plugin **embeds** what
 it needs, because a plugin is meant to be portable between installations and one
 that assumed a library was loaded here would not be.
+
+### Plugin permissions
+
+Embedding a library has a cost, and this is it. A bundle written for a browser or
+for Node expects language features the sandbox does not switch on, so a plugin
+declares which it needs — `permissions()` in the plugin API — and loading it shows
+that list and refuses until somebody accepts it **by name**. "Yes" would be an
+agreement to whatever the file happened to ask for; naming them is an agreement to
+these.
+
+There are five: writing to the server's log, `Intl`, `TextEncoder` and
+`TextDecoder`, `performance.now`, and `Temporal`. **The list being closed is the
+point of it.** Every entry switches on one language builtin and nothing else;
+there is no name for reading a file, opening a socket or reaching a Java class, so
+a plugin cannot ask for one and nobody can grant one. A plugin naming something
+that is not on the list is refused with the list, rather than loaded having been
+granted less than it asked for.
+
+What was accepted is turned on for that one plugin, in the context built for its
+own call. Nothing is turned on for another plugin, nothing for the engine they
+share, and nothing at all for a workspace's own functions and tools — those run
+through `ScriptRunner`, which is a separate class with a flat configuration and no
+branch that could turn a capability on. That separation is why `PluginRunner` is a
+copy rather than a generalisation.
+
+Three more things follow, and each is a test:
+
+- **Nothing is relaxed by default.** `js.console` and `js.intl-402` are on in
+  GraalJS and are now explicitly turned off, because a default that happened to be
+  on is not something anybody accepted.
+- **An escalation asks again.** The acceptance names the permissions it was given
+  for, so a plugin edited to need one more is not covered by it: the load is
+  refused with the new list, and the plugin already installed goes on running with
+  what it already had.
+- **What was accepted stays readable.** It is on the plugin, beside who accepted it
+  and when, so somebody who did not do the accepting can see what a plugin may do.
+
+Loading a plugin runs with nothing relaxed, always, because that is the run that
+finds out what it wants — so a plugin's module body has to evaluate without the
+permissions its `run` needs. `PluginPermissionTest` holds all of it.
 
 Every subtype runs. A send goes out through its connection, a mail leaves through
 its SMTP server, an HTTP request is made, a function is called, a wait parks. What

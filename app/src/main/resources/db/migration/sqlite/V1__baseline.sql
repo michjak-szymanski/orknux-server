@@ -515,7 +515,11 @@ CREATE TABLE plugin
     declared_functions           text not null default '[]',
     plugin_key                   varchar(32) not null,
     typescript                   text,
-    declared_parameters          text not null default '[]'
+    declared_parameters          text not null default '[]',
+    declared_permissions         text not null default '[]',
+    accepted_permissions         text not null default '[]',
+    permissions_accepted_at      timestamp,
+    permissions_accepted_by      varchar(120)
 );
 
 CREATE TABLE plugin_parameter

@@ -64,10 +64,23 @@ class AgentConversation(
      * @param into the LLM session this round is recorded in, or null for a round
      *   nobody is keeping. Null is the ordinary case — a chat keeps its own
      *   history and needs none of this.
+     * @param shed tools the caller is lending the agent for this round only,
+     *   offered alongside its own and asked first. Null is the ordinary case.
+     *   See [ToolShed] for what one is for and why it is a parameter here rather
+     *   than something [AgentTools] knows about.
      * @return what the agent said, or why it could not say anything.
+     * @throws AgentRoundHalted where a [shed] ended the round. The agent's own
+     *   tools never throw — a tool that failed is a fact the model is told — so
+     *   this can only happen to a caller that lent it one.
      */
-    fun answer(modelId: Long, agent: Agent, turns: List<ChatTurn>, into: Long? = null): ChatCompletion {
-        val offered = tools.specsFor(agent)
+    fun answer(
+        modelId: Long,
+        agent: Agent,
+        turns: List<ChatTurn>,
+        into: Long? = null,
+        shed: ToolShed? = null,
+    ): ChatCompletion {
+        val offered = tools.specsFor(agent) + shed?.specs().orEmpty()
         if (offered.isEmpty()) return models.complete(modelId, turns).also { record(into, agent, it) }
 
         val conversation = turns.toMutableList()
@@ -107,7 +120,15 @@ class AgentConversation(
                         // Written before the tool runs, so one that hangs still
                         // leaves the transcript saying what was asked of it.
                         val line = into?.let { sessions.toolCalled(it, call.name, call.arguments) }
-                        val got = tools.run(agent, call)
+                        val got = try {
+                            if (shed != null && shed.handles(call.name)) shed.run(call) else tools.run(agent, call)
+                        } catch (halted: AgentRoundHalted) {
+                            // The lent tool ended the round. What it did is
+                            // still written down, or the transcript would stop
+                            // on a call that never came back.
+                            sessions.toolReturned(line, halted.message.orEmpty())
+                            throw halted
+                        }
                         /*
                          * And what came back, onto that same line.
                          *

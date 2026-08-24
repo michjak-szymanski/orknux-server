@@ -56,6 +56,24 @@ enum class IssueNewsKind {
      * has just been declared unstartable.
      */
     LINKED,
+
+    /**
+     * A task stopped and is waiting for a person.
+     *
+     * The one kind that is not about an issue. A task that has parked for
+     * permission or for an answer does nothing at all until somebody looks at
+     * it, so it is the one thing in this application where a notification is
+     * not a courtesy - it is the mechanism.
+     */
+    TASK_WAITING,
+
+    /**
+     * A task reached an end, whichever end.
+     *
+     * One kind rather than three. What the reader wants to know is that it is
+     * over and how it went, and how it went is in the words beside it.
+     */
+    TASK_FINISHED,
 }
 
 /**
@@ -79,14 +97,32 @@ class IssueNewsItem(
     @Column(name = "workspace_id", nullable = false)
     val workspaceId: Long,
 
-    @Column(name = "issue_id", nullable = false)
-    val issueId: Long,
+    /**
+     * The issue it is about, and null when it is about a task instead.
+     *
+     * The subject of a news item used to be an issue and only an issue. It
+     * widened when a task learnt to stop and ask somebody for permission: that
+     * has to reach the person who started it, and there is one desk where an
+     * event becomes news, so the subject widened rather than a second desk
+     * appearing beside this one. Exactly one of the two is set on every row.
+     */
+    @Column(name = "issue_id")
+    val issueId: Long? = null,
 
-    @Column(name = "issue_number", nullable = false)
-    val issueNumber: Int,
+    @Column(name = "issue_number")
+    val issueNumber: Int? = null,
 
-    @Column(name = "issue_title", nullable = false, length = 200)
-    val issueTitle: String,
+    @Column(name = "issue_title", length = 200)
+    val issueTitle: String? = null,
+
+    /** The task it is about, and null when it is about an issue. */
+    @Column(name = "task_id")
+    val taskId: Long? = null,
+
+    /** Copied for the reason the issue's number is: a bell draws a line of text
+     * and must not need a second query to do it. */
+    @Column(name = "task_title", length = 200)
+    val taskTitle: String? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)

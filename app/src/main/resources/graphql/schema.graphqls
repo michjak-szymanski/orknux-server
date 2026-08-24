@@ -509,6 +509,21 @@ type Query {
         "Ascending when absent, which is the order it happened in."
         ascending: Boolean
     ): LlmSessionEventPage!
+    """
+    A workspace's tasks, newest first.
+
+    What each one has *done* is not here: a task's event log is an LLM session,
+    so it is read with `llmSessionEvents` off the session id the task carries.
+    """
+    workspaceTasks(
+        workspaceId: ID!,
+        "Only tasks in this state. Absent is every state, not none."
+        status: TaskStatus,
+        page: Int = 0,
+        size: Int = 20
+    ): TaskPage!
+    "One task, by its id. Null when it is not one you can see."
+    task(id: ID!): Task
     "Everything that happened inside one workspace, newest first."
     workspaceActivity(
         workspaceId: ID!,
@@ -896,6 +911,35 @@ type Mutation {
     none this caller can see.
     """
     removeLlmSession(id: ID!): Boolean!
+    """
+    Sets an agent to work on a problem, on its own, until it is done.
+
+    The same call anything else that starts a task makes - "Start by AI" on an
+    issue, and whatever a Designer module turns out to be - which is why it takes
+    a link back rather than only a prompt.
+    """
+    startTask(input: StartTaskInput!): Task!
+    """
+    Gives a parked task the one thing it asked for, and lets it carry on.
+
+    The grant is written against the task and not against its agent: it lasts as
+    long as this task does, it is exactly what was asked for, and it records who
+    said yes. There is no way to approve everything.
+    """
+    approveTaskRequest(id: ID!): Task!
+    "Says no. The task carries on without it, or stops and says what it could not do."
+    refuseTaskRequest(id: ID!): Task!
+    "Answers the question a parked task stopped to ask."
+    answerTaskRequest(id: ID!, said: String!): Task!
+    """
+    Stops it where it stands.
+
+    The turn in flight finishes and no other is taken. Nothing a turn already did
+    is undone - a command that has run on a machine has run.
+    """
+    stopTask(id: ID!): Task!
+    "Throws a finished task away, its event log with it. Stop it first."
+    deleteTask(id: ID!): Boolean!
     "Replaces the whole graph and puts the workflow back into draft."
     saveWorkflowGraph(workspaceId: ID!, workflowId: ID!, input: WorkflowGraphInput!): WorkflowGraph!
     publishWorkflow(workspaceId: ID!, workflowId: ID!): WorkflowGraph!
@@ -2117,6 +2161,163 @@ type LlmSessionEventPage {
 }
 
 """
+Where a task has got to.
+
+Six, and the interesting one is WAITING. A workflow run has three states because
+a graph either walks or it does not; a task has a fourth thing it can be doing,
+which is standing still because it asked somebody a question.
+"""
+enum TaskStatus {
+    "Recorded and not yet picked up."
+    QUEUED
+    "An agent is working at it."
+    RUNNING
+    "Stopped, and waiting for a person. Exactly one request is open."
+    WAITING
+    "The agent said it had finished, and what it said is the outcome."
+    DONE
+    "Out of turns, out of time, nobody answered, or the model could not go on."
+    FAILED
+    "Somebody stopped it."
+    STOPPED
+}
+
+"""
+Something a task may be given that its agent was not.
+
+The same six things an agent's own page grants, named the same way, because
+approving one here is the same decision taken for one task instead of for ever.
+There is deliberately no seventh meaning \"everything\".
+"""
+enum TaskCapability {
+    "Asking orknux about orknux, and starting workflows, in this workspace."
+    ORKNUX
+    "Opening a shell on one of the installation's machines and running commands."
+    SHELLS
+    "One of the workspace's own tools, named in `subject`."
+    TOOL
+    MCP_SERVER
+    SKILL_CATALOG
+    MEMORY_CATALOG
+}
+
+"What the agent stopped for."
+enum TaskRequestKind {
+    "It wants something it was not granted."
+    PERMISSION
+    """
+    It wants to be told something - most often how what it is producing should
+    be delivered. The same parking and resuming as a permission, because it is
+    the same mechanism.
+    """
+    QUESTION
+}
+
+"What a person decided about a request."
+enum TaskDecision {
+    GRANTED
+    REFUSED
+    ANSWERED
+}
+
+"""
+A problem given to an agent, and the agent working at it until it is done.
+
+What it did is not on this type. `sessionId` names an LLM session, and every
+tool the agent called, everything it was told and everything it said is in that
+session's events - the same transcript the Sessions screen draws.
+"""
+type Task {
+    id: ID!
+    workspaceId: ID!
+    "A line to find it by: the first line of the prompt, unless one was given."
+    title: String!
+    "What was asked, in full."
+    prompt: String!
+    "The agent doing it, or null for a task given to a bare model."
+    agentId: ID
+    "Its name now, so a list need not look one up per row."
+    agentName: String
+    modelId: ID
+    status: TaskStatus!
+    "Where the event log is. Read it with `llmSessionEvents`."
+    sessionId: ID
+    "The issue it was started from, where something started it from one."
+    issueId: ID
+    createdBy: String!
+    "ISO-8601 offset date-time."
+    createdAt: String!
+    startedAt: String
+    finishedAt: String
+    "How many times the model has been asked, and how many it may be."
+    turnsSpent: Int!
+    turnsAllowed: Int!
+    """
+    Seconds actually worked, and what it may work for.
+
+    Not wall clock: a task parked for two days waiting to be approved has spent
+    none of this.
+    """
+    workedSeconds: Int!
+    secondsAllowed: Int!
+    "When a parked task gives up on being answered. Null unless it is waiting."
+    waitingUntil: String
+    "What the agent finally said, on a task that finished."
+    outcome: String
+    "Why it stopped, in the words the page shows. Null while it is still going."
+    endedBecause: String
+    "Everything it has stopped to ask, oldest first. An undecided one is what it is waiting for."
+    requests: [TaskRequest!]!
+    "What has been approved for it, and by whom."
+    grants: [TaskGrant!]!
+}
+
+type TaskRequest {
+    id: ID!
+    kind: TaskRequestKind!
+    "Set on a permission, null on a question."
+    capability: TaskCapability
+    "Which one, for the capabilities that name something."
+    subject: String
+    "The question, or why the agent says it needs the thing. What a person reads before deciding."
+    asks: String!
+    askedAt: String!
+    "Null while it is still waiting."
+    decision: TaskDecision
+    "What the person said, on a question."
+    answer: String
+    decidedBy: String
+    decidedAt: String
+}
+
+type TaskGrant {
+    id: ID!
+    capability: TaskCapability!
+    subject: String
+    grantedBy: String!
+    grantedAt: String!
+}
+
+type TaskPage {
+    totalElements: Int!
+    content: [Task!]!
+}
+
+"What starting a task needs."
+input StartTaskInput {
+    workspaceId: ID!
+    "The problem, in words. The first line of it names the task unless `title` says otherwise."
+    prompt: String!
+    title: String
+    "The agent to do it. Absent means a bare model, which starts with no grants at all."
+    agentId: ID
+    "Absent takes the agent's own model."
+    modelId: ID
+    "What it came from. It is the link back, and it decides who else hears about it."
+    issueId: ID
+}
+
+"""
 A named piece of JavaScript an agent may call while it runs.
 
 Not a workflow function: a function is called by an action node at a point the
@@ -2506,6 +2707,14 @@ enum WorkspaceAuditCategory {
     bargain if they can afterwards read every command that was run on it.
     """
     SHELL
+    """
+    Tasks: one started, one stopped, and what a person let one of them do.
+
+    Its own category for the reason SHELL is. Granting a capability to a task is
+    the one decision that widens what an agent may reach without changing the
+    agent, and somebody auditing that must be able to find those rows.
+    """
+    TASK
 }
 
 type WorkspaceAuditEntry {
@@ -5136,14 +5345,40 @@ enum NotificationKind {
     bell that rings for corrections is a bell people learn to ignore.
     """
     LINKED
+    """
+    A task stopped and is waiting for a person - `says` holds what it asked for.
+
+    The one kind that is not about an issue, and the one where a notification is
+    the mechanism rather than a courtesy: a parked task does nothing at all until
+    somebody looks at it.
+    """
+    TASK_WAITING
+    """
+    A task reached an end, and `says` holds which one and what came of it.
+
+    One kind rather than three. What the reader wants to know is that it is over
+    and how it went.
+    """
+    TASK_FINISHED
 }
 
-"One thing that happened, as the bell shows it."
+"""
+One thing that happened, as the bell shows it.
+
+The subject is an issue or a task, and exactly one of the two pairs below is
+filled in. It widened when a task learnt to stop and ask for permission: there is
+one desk where an event becomes news for somebody, so the subject widened rather
+than a second desk appearing beside it.
+"""
 type Notification {
     id: ID!
     workspaceId: ID!
-    issueNumber: Int!
-    issueTitle: String!
+    "The issue it is about, and null when it is about a task."
+    issueNumber: Int
+    issueTitle: String
+    "The task it is about, and null when it is about an issue."
+    taskId: ID
+    taskTitle: String
     kind: NotificationKind!
     "Whoever did it."
     actor: String!

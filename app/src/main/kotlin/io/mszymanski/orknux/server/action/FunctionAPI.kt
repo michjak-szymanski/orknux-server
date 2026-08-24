@@ -19,6 +19,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
 import io.mszymanski.orknux.workflow.script.ScriptArity
+import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
@@ -29,6 +30,8 @@ import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
+import tools.jackson.core.JacksonException
+import tools.jackson.databind.ObjectMapper
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 
@@ -57,6 +60,9 @@ class FunctionAPI(
     private val scriptImports: ScriptImports,
     private val libraryImports: LibraryImports,
     private val tools: AgentToolRepository,
+    /** The one path a function is called down, shared with the workflow's own runner. */
+    private val caller: FunctionCaller,
+    private val mapper: ObjectMapper,
 ) {
 
     /**
@@ -227,6 +233,143 @@ class FunctionAPI(
         val checked = scripts.validate(source)
         return FunctionValidationView(checked.valid, checked.message, checked.line, checked.column)
     }
+
+    /**
+     * Runs the function, with the arguments somebody typed, and says what came back.
+     *
+     * The editor's Run. It exists because Validate answers a question nobody was
+     * really asking — whether the parser accepts the text — and the question
+     * somebody has is whether the function does what they meant.
+     *
+     * Four things about it are deliberate.
+     *
+     * **It runs the stored function, named by id.** No source travels in this
+     * mutation, so it is not a way to have the server execute something that was
+     * never saved: whatever runs is a function that is already in the workspace,
+     * already parsed and already signature-checked, and it is the same bytes an
+     * action node would call. Running a draft would also be the wrong answer to
+     * "does this work" — the thing a workflow calls is what is stored.
+     *
+     * **It goes through [FunctionCaller], which is what a workflow node goes
+     * through.** Same sandbox, same host-resolved imports, same libraries, and the
+     * workspace's variables appended by the same code — the fix #142 made on the
+     * import path holds here for free, because there is no second path for it to
+     * miss. A test run that resolved a grant differently would be a test of
+     * something nobody ships.
+     *
+     * **Whoever may run it here could already run it.** The check is [readable],
+     * the same one `updateFunction` makes: anybody who passes it may rewrite this
+     * function's body and run it from a manual workflow run, so a Run button hands
+     * out nothing that was being withheld. The arguments are the caller's; the
+     * grants are not, and are never accepted from the caller.
+     *
+     * **It is recorded.** A run reads the workspace's variables, secrets included,
+     * and this is the one execution that leaves no `workflow_execution` row behind
+     * it — so without an audit entry it would be the only way to make a function
+     * run that nobody could see afterwards. It is written whether the function
+     * answered or threw, because it ran either way.
+     */
+    @MutationMapping
+    fun runFunction(@Argument input: RunFunctionInput): FunctionRunView {
+        access.requireVisible(input.workspaceId)
+        val function = functions.findByIdOrNull(input.functionId)?.takeIf(::readable)
+            ?: throw FunctionNotFoundException(input.functionId)
+        /*
+         * A workspace's function is run from its own workspace and nowhere else.
+         * A plugin's belongs to none, and is run from whichever one is asking -
+         * which is what decides the plugin settings and the permissions it is
+         * given, so the workspace is asked for rather than derived.
+         */
+        val owner = function.workspaceId
+        if (owner != null && owner != input.workspaceId) throw FunctionNotFoundException(input.functionId)
+
+        val byName = input.arguments.orEmpty().associate { it.name to jsonOf(it) }
+        // Positional, in the order the function declares them, exactly as a node
+        // binds them. A parameter nobody filled in is the JSON `null`, which is
+        // what a node passes for a mapping it does not have.
+        val arguments = function.params.map { byName[it.name] ?: "null" }
+
+        val result = caller.call(function, arguments, contextOf(input.workspaceId, function), input.workspaceId)
+
+        auditRecorder.record(
+            input.workspaceId,
+            WorkspaceAuditCategory.WORKFLOW,
+            "Function ${function.name} run from the editor",
+        )
+
+        return when (result) {
+            is ScriptResult.Returned -> FunctionRunView(
+                ok = true,
+                returned = result.json,
+                error = null,
+                durationMillis = result.durationMillis.toInt(),
+                settled = true,
+                grants = caller.grantsOf(function),
+            )
+
+            is ScriptResult.Failed -> FunctionRunView(
+                ok = false,
+                returned = null,
+                /*
+                 * The reason is a verb phrase - "threw", "took longer than 5000 ms
+                 * and was stopped" - because every other caller puts the function's
+                 * own name in front of it. So does this one, since the panel showing
+                 * it has room for a sentence and a bare verb reads as a fragment.
+                 */
+                error = "${function.name} ${result.reason}",
+                durationMillis = result.durationMillis.toInt(),
+                settled = result.settled,
+                grants = caller.grantsOf(function),
+            )
+        }
+    }
+
+    /**
+     * One argument as JSON, or a refusal naming the parameter.
+     *
+     * Two things happen here and both matter.
+     *
+     * It is parsed, so a value that is not JSON is refused while it still has a
+     * parameter's name on it. The sandbox parses the whole argument list in one
+     * go, so unchecked it would fail as a syntax error about a list the caller
+     * never wrote, at a position that means nothing to them.
+     *
+     * And it is written back out from what was parsed, rather than passed through.
+     * The arguments are joined with commas into one array, so a value carrying a
+     * second one at the top level - `2, 40` - would arrive as *two* arguments and
+     * push everything after it along, and what comes after the declared arguments
+     * is the workspace's variables. Jackson refuses a second root-level value on
+     * its own; printing the parsed tree rather than forwarding the text is what
+     * makes that a property of this method instead of a property of a parser
+     * setting somebody could change. Nothing reaches that list except one value
+     * Jackson itself printed.
+     */
+    private fun jsonOf(argument: FunctionArgumentInput): String {
+        val written = argument.json.trim().ifEmpty { "null" }
+        val read = try {
+            mapper.readTree(written)
+        } catch (invalid: JacksonException) {
+            throw FunctionArgumentInvalidException(argument.name, invalid.originalMessage)
+        }
+        return mapper.writeValueAsString(read)
+    }
+
+    /**
+     * What a test run tells the script about where it is.
+     *
+     * The same shape a node builds, with the function's own name where a node
+     * would put the action's: a script that reads `context.action` to say what
+     * called it should get an honest answer rather than a blank or a lie about a
+     * node that does not exist.
+     */
+    private fun contextOf(workspaceId: Long, function: WorkflowFunction): String = mapper.writeValueAsString(
+        mapOf(
+            "now" to OffsetDateTime.now().toString(),
+            "timestamp" to System.currentTimeMillis(),
+            "workspaceId" to workspaceId,
+            "action" to function.name,
+        ),
+    )
 
     @MutationMapping
     @Transactional
@@ -818,6 +961,68 @@ data class FunctionValidationView(
     val message: String?,
     val line: Int?,
     val column: Int?,
+)
+
+/**
+ * One argument for a test run: which parameter, and the value as JSON.
+ *
+ * JSON rather than text, because that is what crosses into the sandbox and
+ * because a parameter's type is not always a scalar - a map or an array has no
+ * spelling as a plain string. The editor writes it from the control it drew, so
+ * a string field sends `"kraków"` and a number field sends `3`.
+ */
+data class FunctionArgumentInput(val name: String, val json: String)
+
+data class RunFunctionInput(
+    /**
+     * Which workspace is asking.
+     *
+     * Not derived from the function, because a plugin's function belongs to none
+     * and its settings and permissions are per workspace. For a workspace's own it
+     * has to be the workspace that owns it.
+     */
+    val workspaceId: Long,
+    val functionId: Long,
+    /**
+     * What to pass, by parameter name. A name the function does not declare is
+     * ignored and a parameter nobody filled in arrives as `null`, which is what a
+     * node passes for a mapping it does not have.
+     */
+    val arguments: List<FunctionArgumentInput>? = null,
+)
+
+/**
+ * What one test run came to.
+ *
+ * Deliberately not two shapes. Whether a run answered or failed is a field on one
+ * answer rather than a union, because the panel showing it has the same job either
+ * way: say how long it took, and show what came back.
+ */
+data class FunctionRunView(
+    val ok: Boolean,
+    /** The JSON it returned. Null when it failed, and also when it returned nothing. */
+    val returned: String?,
+    /** What went wrong, with the function's name in front of it. Null when it answered. */
+    val error: String?,
+    val durationMillis: Int,
+    /**
+     * Whether asking again could ever answer differently.
+     *
+     * False is the interesting one: it means the run was stopped by the clock or by
+     * how busy the machine was rather than by anything about the code, so the panel
+     * can say to try again instead of sending somebody to read a function that is
+     * fine.
+     */
+    val settled: Boolean,
+    /**
+     * The workspace variables it was handed, by name.
+     *
+     * Names only, and never values - the variables page does not show them either.
+     * They are here so that a run can be seen to have resolved them: a function
+     * that reads a secret and answers wrongly looks the same as one that was handed
+     * nothing, and this is the difference.
+     */
+    val grants: List<String>,
 )
 
 data class FunctionPage(

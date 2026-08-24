@@ -376,6 +376,19 @@ class FunctionObjectRequiredException(name: String) : RuntimeException(
 class FunctionSourceInvalidException(reason: String) : RuntimeException(reason)
 
 /**
+ * A test run was handed something that is not JSON.
+ *
+ * Everything crossing into the sandbox is JSON text, and the harness parses the
+ * whole argument list at once — so an unparseable value fails as a syntax error
+ * about a list the caller never wrote, at a position that means nothing to them.
+ * Refused here instead, while the value still has a parameter's name on it.
+ */
+class FunctionArgumentInvalidException(name: String, reason: String?) : RuntimeException(
+    "\"$name\" was not given a value this can pass to the function" +
+        (if (reason.isNullOrBlank()) "" else ": $reason"),
+)
+
+/**
  * One half of a function's code arrived without the other.
  *
  * A function is written in TypeScript and runs as the JavaScript compiled from it,

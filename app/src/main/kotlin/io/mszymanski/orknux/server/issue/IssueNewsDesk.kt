@@ -225,25 +225,72 @@ class IssueNewsDesk(
         to: List<NewsReader>,
     ) {
         val issueId = issue.id ?: return
+        record(actor, to) { reader ->
+            IssueNewsItem(
+                workspaceId = issue.workspaceId,
+                issueId = issueId,
+                issueNumber = issue.number,
+                issueTitle = issue.title,
+                kind = kind,
+                actor = actor,
+                says = says,
+                audienceKind = reader.kind,
+                audienceName = reader.name,
+                audienceId = reader.id,
+            )
+        }
+    }
+
+    /**
+     * Something that happened to a task, addressed the same way.
+     *
+     * Here rather than on a desk of its own, because there is one place where an
+     * event becomes news for somebody and the bell and `orknux_news` read what
+     * it wrote. A second desk would have been a second record of what happened,
+     * and the one nobody was looking at would have been the one that was right.
+     *
+     * What a task's news carries instead of an issue is the task's id and its
+     * title; everything after this - the audience rule, the actor being dropped,
+     * the read cursor, the mail - is the same machinery, because none of it ever
+     * cared what the subject was.
+     */
+    @Transactional
+    fun aboutTask(
+        workspaceId: Long,
+        taskId: Long,
+        taskTitle: String,
+        kind: IssueNewsKind,
+        actor: String,
+        says: String?,
+        to: List<NewsReader>,
+    ) {
+        record(actor, to) { reader ->
+            IssueNewsItem(
+                workspaceId = workspaceId,
+                taskId = taskId,
+                taskTitle = taskTitle,
+                kind = kind,
+                actor = actor,
+                says = says,
+                audienceKind = reader.kind,
+                audienceName = reader.name,
+                audienceId = reader.id,
+            )
+        }
+    }
+
+    /**
+     * The half both subjects share: who is actually told, and what happens next.
+     *
+     * The actor is dropped and the audience de-duplicated here rather than in
+     * each caller, because "you are not told about your own doing" is a rule of
+     * the desk and not of the thing that happened.
+     */
+    private fun record(actor: String, to: List<NewsReader>, row: (NewsReader) -> IssueNewsItem) {
         val told = to.filter { !it.name.equals(actor, ignoreCase = true) }.distinctBy { it.kind to it.name.lowercase() }
         if (told.isEmpty()) return
 
-        val written = news.saveAll(
-            told.map { reader ->
-                IssueNewsItem(
-                    workspaceId = issue.workspaceId,
-                    issueId = issueId,
-                    issueNumber = issue.number,
-                    issueTitle = issue.title,
-                    kind = kind,
-                    actor = actor,
-                    says = says,
-                    audienceKind = reader.kind,
-                    audienceName = reader.name,
-                    audienceId = reader.id,
-                )
-            },
-        )
+        val written = news.saveAll(told.map(row))
         wake()
         queueForPosting(written)
     }
@@ -343,6 +390,11 @@ class IssueNewsDesk(
      * Everybody an issue concerns: whoever has it, whoever filed it, and
      * whoever asked to hear.
      *
+     * Public because a task started from an issue tells the same room. Who
+     * should hear about an issue is this desk's answer, and a task working one
+     * asking it again in its own words would be a second answer to drift from
+     * this one.
+     *
      * The three are unioned rather than kept apart, and [write] drops the
      * duplicates - so somebody who filed an issue and then observed it, or was
      * observing before it was handed to them, is told once. Nothing here reads
@@ -351,7 +403,7 @@ class IssueNewsDesk(
      * lapsed the moment the work looked finished would go quiet just before the
      * one event worth having it for.
      */
-    private fun watchers(issue: Issue): List<NewsReader> =
+    fun watchers(issue: Issue): List<NewsReader> =
         listOfNotNull(audienceOf(issue), NewsReader(AssigneeKind.USER, issue.reporter)) + observersOf(issue)
 
     /**

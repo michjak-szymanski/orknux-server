@@ -58,12 +58,18 @@ class TemporalConfig {
      * One worker, polling one queue, running both the interpreter and the
      * activities. They are split when a step becomes something worth scaling on
      * its own — a model call and a graph walk want different machines.
+     *
+     * Anything else in this process with a durable loop of its own registers
+     * through [TemporalRegistrar] rather than building a worker: a second
+     * `newWorker` on this queue is an error, and a second queue would be a
+     * second thing to configure and to watch.
      */
     @Bean(destroyMethod = "shutdown")
     fun workerFactory(
         client: WorkflowClient,
         activities: ExecutionActivities,
         properties: TemporalProperties,
+        registrars: List<TemporalRegistrar>,
     ): WorkerFactory {
         val factory = WorkerFactory.newInstance(client)
         val worker = factory.newWorker(properties.taskQueue)
@@ -75,6 +81,7 @@ class TemporalConfig {
             ExecutionWorkflowImpl::class.java,
         )
         worker.registerActivitiesImplementations(activities)
+        registrars.forEach { it.register(worker) }
         return factory
     }
 

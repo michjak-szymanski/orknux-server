@@ -198,15 +198,26 @@ class NewsTools(
             // assistant deciding what to pick up next is told the thing that
             // decides it: this one is blocked, this one is a duplicate.
             IssueNewsKind.LINKED -> IssueRelations.reading(item.says) ?: "linked"
+            // Not about an issue at all. An agent observing an issue that a
+            // task is working on is told the task stopped, which is the one
+            // piece of news in this feed that somebody has to act on before
+            // anything else happens.
+            IssueNewsKind.TASK_WAITING -> "a task is waiting for an answer"
+            IssueNewsKind.TASK_FINISHED -> "a task finished"
         },
         "issue" to item.issueNumber,
-        "title" to item.issueTitle,
+        "task" to item.taskId,
+        "title" to (item.issueTitle ?: item.taskTitle),
         "by" to item.actor,
         "at" to item.at.toString(),
-        // The comment itself, so the answer to "what happened" does not need a
-        // second call to be worth reading.
-        "said" to item.says.takeIf { item.kind == IssueNewsKind.COMMENT || item.kind == IssueNewsKind.MENTIONED },
-        "url" to link(item.workspaceId, item.issueNumber),
+        // The comment itself, or what a parked task is asking for, so the answer
+        // to "what happened" does not need a second call to be worth reading.
+        "said" to item.says.takeIf {
+            item.kind == IssueNewsKind.COMMENT ||
+                item.kind == IssueNewsKind.MENTIONED ||
+                item.kind == IssueNewsKind.TASK_WAITING
+        },
+        "url" to link(item),
     )
 
     /** A number however it was sent: models write "60" as often as 60. */
@@ -216,9 +227,12 @@ class NewsTools(
         else -> 0
     }
 
-    private fun link(workspaceId: Long, number: Int): String {
+    /** Where to look, which depends on which of the two subjects this is about. */
+    private fun link(item: IssueNewsItem): String {
         val base = web.allowedOrigins.firstOrNull()?.trimEnd('/').orEmpty()
-        return "$base/workspace/$workspaceId/issues/$number"
+        return item.taskId
+            ?.let { "$base/workspace/${item.workspaceId}/tasks/$it" }
+            ?: "$base/workspace/${item.workspaceId}/issues/${item.issueNumber}"
     }
 
     override fun destroy() {

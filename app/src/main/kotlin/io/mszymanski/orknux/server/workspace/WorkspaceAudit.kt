@@ -39,6 +39,16 @@ enum class WorkspaceAuditCategory {
      * one place.
      */
     SHELL,
+
+    /**
+     * Tasks: one started, one stopped, and what a person let one of them do.
+     *
+     * Its own category for the reason SHELL is. A capability granted to a task
+     * is the one decision in this application that widens what an agent may
+     * reach without changing the agent, and somebody auditing that has to be
+     * able to find those rows without reading every save of every agent.
+     */
+    TASK,
 }
 
 @Entity

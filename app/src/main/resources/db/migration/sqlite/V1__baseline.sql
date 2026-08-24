@@ -329,9 +329,11 @@ CREATE TABLE issue_news
 (
     id                           integer not null primary key autoincrement,
     workspace_id                 integer not null,
-    issue_id                     integer not null,
-    issue_number                 integer not null,
-    issue_title                  varchar(200) not null,
+    issue_id                     integer,
+    issue_number                 integer,
+    issue_title                  varchar(200),
+    task_id                      integer,
+    task_title                   varchar(200),
     kind                         varchar(16) not null,
     actor                        varchar(120) not null,
     says                         text,
@@ -340,6 +342,7 @@ CREATE TABLE issue_news
     audience_name                varchar(120) not null,
     at                           timestamp not null default CURRENT_TIMESTAMP,
     constraint issue_news_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE,
+    constraint issue_news_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE,
     constraint issue_news_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
@@ -695,6 +698,64 @@ CREATE TABLE spring_session_attributes
     attribute_bytes              blob not null,
     primary key (session_primary_id, attribute_name),
     constraint spring_session_attributes_fk FOREIGN KEY (session_primary_id) REFERENCES spring_session(primary_id) ON DELETE CASCADE
+);
+
+CREATE TABLE task
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    title                        varchar(200) not null,
+    prompt                       text not null,
+    agent_id                     integer,
+    model_id                     integer,
+    status                       varchar(16) not null,
+    session_id                   integer,
+    issue_id                     integer,
+    created_by                   varchar(120) not null,
+    created_at                   timestamp not null default CURRENT_TIMESTAMP,
+    started_at                   timestamp,
+    finished_at                  timestamp,
+    turns_spent                  integer not null default 0,
+    worked_seconds               integer not null default 0,
+    turns_allowed                integer not null,
+    seconds_allowed              integer not null,
+    waiting_until                timestamp,
+    outcome                      text,
+    ended_because                varchar(200),
+    constraint task_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
+    constraint task_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE SET NULL,
+    constraint task_model_id_fkey FOREIGN KEY (model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
+    constraint task_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE SET NULL,
+    constraint task_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE task_grant
+(
+    id                           integer not null primary key autoincrement,
+    task_id                      integer not null,
+    request_id                   integer,
+    capability                   varchar(20) not null,
+    subject                      varchar(200),
+    granted_by                   varchar(120) not null,
+    granted_at                   timestamp not null default CURRENT_TIMESTAMP,
+    constraint task_grant_request_id_fkey FOREIGN KEY (request_id) REFERENCES task_request(id) ON DELETE SET NULL,
+    constraint task_grant_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
+);
+
+CREATE TABLE task_request
+(
+    id                           integer not null primary key autoincrement,
+    task_id                      integer not null,
+    kind                         varchar(16) not null,
+    capability                   varchar(20),
+    subject                      varchar(200),
+    asks                         text not null,
+    asked_at                     timestamp not null default CURRENT_TIMESTAMP,
+    decision                     varchar(16),
+    answer                       text,
+    decided_by                   varchar(120),
+    decided_at                   timestamp,
+    constraint task_request_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
 );
 
 CREATE TABLE trigger_firing
@@ -1056,7 +1117,7 @@ CREATE TABLE workspace_audit
     user_id                      varchar(255) not null,
     category                     varchar(16) not null,
     message                      varchar(500) not null,
-    constraint ck_workspace_audit_category CHECK (((category) IN ('WORKSPACE', 'WORKFLOW', 'AGENT', 'INTEGRATION', 'MODEL', 'MEMORY', 'OBJECT', 'CHAT', 'SHELL'))),
+    constraint ck_workspace_audit_category CHECK (((category) IN ('WORKSPACE', 'WORKFLOW', 'AGENT', 'INTEGRATION', 'MODEL', 'MEMORY', 'OBJECT', 'CHAT', 'SHELL', 'TASK'))),
     constraint ck_workspace_audit_operation_type CHECK (((operation_type) IN ('ADD', 'REMOVE', 'RENAME')))
 );
 

@@ -15,6 +15,7 @@ import io.mszymanski.orknux.connector.connection.WorkspaceConnectionRepository
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRule
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
+import io.mszymanski.orknux.server.security.plainCredentials
 import org.assertj.core.api.Assertions.assertThat
 import org.awaitility.Awaitility.await
 import org.junit.jupiter.api.AfterEach
@@ -214,6 +215,7 @@ class SlackProxyRoutingTest {
             connections(),
             ApplicationEventPublisher { },
             SlackProperties(),
+            plainCredentials(),
             SlackClients(router(tunnelRule(name = "Slack", pattern = """slack\.com"""))),
         )
 
@@ -240,7 +242,7 @@ class SlackProxyRoutingTest {
         val clients = SlackClients(router(*rules))
         clients.webApi.config.methodsEndpointUrlPrefix = "${slackUrl()}/api/"
         val rows = connections()
-        return OutgoingMessages(rows, SlackDirectory(rows, clients), clients)
+        return OutgoingMessages(rows, SlackDirectory(rows, plainCredentials(), clients), plainCredentials(), clients)
     }
 
     private fun router(vararg rules: ProxyRule) = ProxyRouter(ProxyRuleSource { rules.toList() })

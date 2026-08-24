@@ -6,8 +6,9 @@ import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import io.mszymanski.orknux.connector.connection.HttpHeader
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.security.HeldCredential
 import io.mszymanski.orknux.connector.security.SecretCipher
-import io.mszymanski.orknux.connector.security.SecretVariables
+import io.mszymanski.orknux.connector.security.SecretReferences
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
 import java.net.URLEncoder
@@ -34,10 +35,8 @@ class ModelProviderProbe(
     private val probe: ConnectionProbe,
     private val properties: ConnectionProperties,
     private val mapper: ObjectMapper,
-    /** Only to recognise a credential that never came out of its envelope. */
-    private val cipher: SecretCipher,
-    /** Where a provider reading a workspace secret gets its credential from. */
-    private val variables: SecretVariables,
+    /** Reads the key, whether the provider keeps its own or points at a variable. */
+    private val references: SecretReferences,
     private val proxies: ProxyRouter,
 ) {
 
@@ -242,44 +241,30 @@ class ModelProviderProbe(
      * becomes the sentence on the provider's card.
      */
     private fun key(provider: ModelProvider): Key {
-        val variableId = provider.secretVariableId
-        if (variableId != null) {
-            val held = variables.find(provider.workspaceId, variableId)
-                ?: return Key.Failed(
-                    "This provider reads its credential from a workspace secret that no longer exists " +
-                        "(variable $variableId). Point it at another one, or give it a key of its own.",
-                )
-            val value = held.value?.ifBlank { null }
-                ?: return Key.Failed(
-                    "The workspace secret \"${held.name}\" has no value yet, so there is nothing to call " +
-                        "this provider with.",
-                )
-            if (cipher.isEncrypted(value)) {
-                return Key.Failed(
-                    "The workspace secret \"${held.name}\" cannot be read with the current secret key. " +
-                        "Enter it again, or restore the key it was saved with.",
-                )
-            }
-            return Key.Held(value)
-        }
+        val read = references.read(provider.workspaceId, provider.secret, provider.secretVariableId)
+        return when (read) {
+            is HeldCredential.Held -> Key.Held(read.value)
+            HeldCredential.Absent -> Key.Failed("There are no credentials to call this provider with")
+            is HeldCredential.Missing -> Key.Failed(
+                "This provider reads its credential from a workspace secret that no longer exists " +
+                    "(variable ${read.variableId}). Point it at another one, or give it a key of its own.",
+            )
 
-        val own = provider.secret?.ifBlank { null }
-            ?: return Key.Failed("There are no credentials to call this provider with")
+            is HeldCredential.Empty -> Key.Failed(
+                "The workspace secret \"${read.name}\" has no value yet, so there is nothing to call " +
+                    "this provider with.",
+            )
 
-        /*
-         * Stored, but not with the key this installation has now.
-         *
-         * Sending it as it stands would put the envelope in the header and come
-         * back a 401, which reads as a wrong credential rather than an
-         * unreadable one — and those two want opposite things done about them.
-         */
-        if (cipher.isEncrypted(own)) {
-            return Key.Failed(
-                "This provider's credential cannot be read with the current secret key. " +
-                    "Enter it again, or restore the key it was saved with.",
+            is HeldCredential.Sealed -> Key.Failed(
+                if (read.variable == null) {
+                    "This provider's credential cannot be read with the current secret key. " +
+                        "Enter it again, or restore the key it was saved with."
+                } else {
+                    "The workspace secret \"${read.variable}\" cannot be read with the current secret key. " +
+                        "Enter it again, or restore the key it was saved with."
+                },
             )
         }
-        return Key.Held(own)
     }
 
     /** The credential, or why there is not one to send. */

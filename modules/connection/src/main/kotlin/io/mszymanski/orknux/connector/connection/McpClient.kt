@@ -62,6 +62,8 @@ class McpClient(
     private val mapper: ObjectMapper,
     private val properties: McpProperties,
     private val probe: ConnectionProbe,
+    /** The one place a stored credential is read; see [ConnectionCredentials]. */
+    private val credentials: ConnectionCredentials,
     private val proxies: ProxyRouter,
 ) {
 
@@ -181,7 +183,7 @@ class McpClient(
     }
 
     private fun post(server: McpServer, session: String?, body: String): HttpResponse<String>? = try {
-        val target = server.target()
+        val target = credentials.target(server)
         val builder = HttpRequest.newBuilder(URI(server.address))
             .timeout(properties.timeout)
             .header("Content-Type", "application/json")

@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.security.HeldSecret
+import io.mszymanski.orknux.connector.security.SecretReferences
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Sort
@@ -25,13 +27,35 @@ class WorkspaceConnectionService(
     private val probe: ConnectionProbe,
     private val mail: OutgoingMail,
     private val events: ApplicationEventPublisher,
+    /** The one place a stored credential is read; see [ConnectionCredentials]. */
+    private val credentials: ConnectionCredentials,
+    /**
+     * The rule a secret field follows when it may keep its own value or read a
+     * workspace one. Shared, because a connection has two such fields and they
+     * answer separately - see [SecretReferences].
+     */
+    private val references: SecretReferences,
 ) {
 
     fun workspaceConnections(workspaceId: Long): List<WorkspaceConnectionView> =
-        workspaceConnections.findByWorkspaceId(workspaceId, Sort.by("name")).map(::WorkspaceConnectionView)
+        workspaceConnections.findByWorkspaceId(workspaceId, Sort.by("name")).map(::view)
 
     fun workspaceConnection(id: Long): WorkspaceConnectionView? =
-        workspaceConnections.findByIdOrNull(id)?.let(::WorkspaceConnectionView)
+        workspaceConnections.findByIdOrNull(id)?.let(::view)
+
+    /**
+     * The connections in this workspace reading [variableId], by name.
+     *
+     * What `VariableAPI` asks before it removes a variable or takes its secrecy
+     * away. Names rather than rows: the answer is a sentence somebody reads, and
+     * a connection row is a credential holder this has no business handing out.
+     * Either credential counts, and a connection reading it with both is named
+     * once.
+     */
+    fun connectionsReading(workspaceId: Long, variableId: Long): List<String> = (
+        workspaceConnections.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId) +
+            workspaceConnections.findByWorkspaceIdAndAppTokenVariableId(workspaceId, variableId)
+        ).map { it.name }.distinct().sorted()
 
     @Transactional
     fun createWorkspaceConnection(input: CreateWorkspaceConnectionInput): WorkspaceConnectionView {
@@ -48,6 +72,12 @@ class WorkspaceConnectionService(
             throw ConnectionNameTakenException(name)
         }
 
+        // Each credential asks its own question, so each is bound on its own.
+        val ownSecret = input.secret?.trim()?.ifEmpty { null }
+        val secretVariable = references.bind(input.workspaceId, input.secretVariableId, ownSecret)
+        val ownAppToken = input.appToken?.trim()?.ifEmpty { null }
+        val appTokenVariable = references.bind(input.workspaceId, input.appTokenVariableId, ownAppToken)
+
         val connection = workspaceConnections.save(
             WorkspaceConnection(
                 workspaceId = input.workspaceId,
@@ -55,8 +85,10 @@ class WorkspaceConnectionService(
                 type = input.type,
                 url = url,
                 authType = if (slack) AuthType.BEARER_TOKEN else input.authType ?: AuthType.NONE,
-                secret = input.secret?.trim()?.ifEmpty { null },
-                appToken = input.appToken?.trim()?.ifEmpty { null },
+                secret = if (secretVariable == null) ownSecret else null,
+                secretVariableId = secretVariable,
+                appToken = if (appTokenVariable == null) ownAppToken else null,
+                appTokenVariableId = appTokenVariable,
                 smtpPort = input.smtpPort,
                 smtpUsername = input.smtpUsername?.trim()?.ifEmpty { null },
                 smtpFrom = input.smtpFrom?.trim()?.ifEmpty { null },
@@ -67,7 +99,7 @@ class WorkspaceConnectionService(
         // Checked as soon as the transaction lands, so a connection that was
         // just given a credential does not sit on "Not checked".
         events.publishEvent(WorkspaceConnectionSaved(requireNotNull(connection.id)))
-        return WorkspaceConnectionView(connection)
+        return view(connection)
     }
 
     /**
@@ -96,8 +128,50 @@ class WorkspaceConnectionService(
 
         input.authType?.let { connection.authType = it }
         input.urlOverride?.let { connection.urlOverride = it.trim().ifEmpty { null } }
-        input.secret?.let { connection.secret = it.trim().ifEmpty { null } }
-        input.appToken?.let { connection.appToken = it.trim().ifEmpty { null } }
+
+        /*
+         * The two credentials, each answering for itself.
+         *
+         * A value given keeps a copy here and drops any reference that field
+         * held; a variable given reads it and drops any copy; nothing given
+         * leaves that field exactly as it was, which is what a masked box sends.
+         * An emptied box clears the field whichever kind it was, and is the only
+         * way back to a connection with nothing configured.
+         *
+         * One switch for the whole card cannot say this. A Slack connection
+         * keeps a bot token and an app-level token, and "this connection reads a
+         * workspace secret" cannot mean one of them without meaning the other -
+         * which is #244 in a sentence.
+         */
+        val ownSecret = input.secret?.trim()
+        val secretVariable =
+            references.bind(connection.workspaceId, input.secretVariableId, ownSecret?.ifEmpty { null })
+        when {
+            secretVariable != null -> {
+                connection.secretVariableId = secretVariable
+                connection.secret = null
+            }
+
+            ownSecret != null -> {
+                connection.secret = ownSecret.ifEmpty { null }
+                connection.secretVariableId = null
+            }
+        }
+
+        val ownAppToken = input.appToken?.trim()
+        val appTokenVariable =
+            references.bind(connection.workspaceId, input.appTokenVariableId, ownAppToken?.ifEmpty { null })
+        when {
+            appTokenVariable != null -> {
+                connection.appTokenVariableId = appTokenVariable
+                connection.appToken = null
+            }
+
+            ownAppToken != null -> {
+                connection.appToken = ownAppToken.ifEmpty { null }
+                connection.appTokenVariableId = null
+            }
+        }
         input.smtpPort?.let { connection.smtpPort = it.takeIf { port -> port > 0 } }
         input.smtpUsername?.let { connection.smtpUsername = it.trim().ifEmpty { null } }
         input.smtpFrom?.let { connection.smtpFrom = it.trim().ifEmpty { null } }
@@ -114,7 +188,7 @@ class WorkspaceConnectionService(
         connection.forgetLastCheck()
 
         events.publishEvent(WorkspaceConnectionSaved(id))
-        return WorkspaceConnectionView(connection)
+        return view(connection)
     }
 
     /**
@@ -128,7 +202,9 @@ class WorkspaceConnectionService(
 
         if (connection.inherited) {
             connection.secret = null
+            connection.secretVariableId = null
             connection.appToken = null
+            connection.appTokenVariableId = null
             // Who the workspace logged in as and sent from is as much its own as
             // the password was, so disconnecting leaves none of it behind.
             connection.smtpUsername = null
@@ -157,12 +233,12 @@ class WorkspaceConnectionService(
         val result = if (connection.type == ConnectionType.SMTP) {
             mail.check(connection)
         } else {
-            probe.check(connection.target(), connection.type)
+            probe.check(credentials.target(connection), connection.type)
         }
         connection.lastCheckStatus = result.outcome
         connection.lastCheckMessage = result.message
         connection.lastCheckedAt = OffsetDateTime.now()
-        return WorkspaceConnectionView(connection)
+        return view(connection)
     }
 
     /**
@@ -175,6 +251,12 @@ class WorkspaceConnectionService(
     @Transactional
     fun revealWorkspaceConnectionSecret(id: Long): String? {
         val connection = workspaceConnections.findByIdOrNull(id) ?: throw ConnectionNotFoundException(id)
+        // A field reading a variable reveals nothing here. Revealing a secret is
+        // a deliberate act recorded against the secret - `revealVariable` writes
+        // "Variable X revealed" into the audit log - and a second door onto the
+        // same value through the connection would be that value read with the
+        // wrong thing's name on the record.
+        if (connection.secretVariableId != null) return null
         log.info("Credentials for connection {} (workspace {}) revealed", connection.name, connection.workspaceId)
         return connection.secret
     }
@@ -192,9 +274,24 @@ class WorkspaceConnectionService(
     @Transactional
     fun revealWorkspaceConnectionAppToken(id: Long): String? {
         val connection = workspaceConnections.findByIdOrNull(id) ?: throw ConnectionNotFoundException(id)
+        if (connection.appTokenVariableId != null) return null
         log.info("App-level token for connection {} (workspace {}) revealed", connection.name, connection.workspaceId)
         return connection.appToken
     }
+
+    /**
+     * A connection as a screen sees it, with the variables its two credentials
+     * read named.
+     *
+     * The names are read here rather than left to the caller so that a broken
+     * reference has somewhere to be reported from. Two lookups per connection at
+     * worst, and a workspace has a handful of them.
+     */
+    private fun view(connection: WorkspaceConnection) = WorkspaceConnectionView(
+        connection,
+        references.describe(connection.workspaceId, connection.secretVariableId),
+        references.describe(connection.workspaceId, connection.appTokenVariableId),
+    )
 
     private companion object {
         val log = LoggerFactory.getLogger(WorkspaceConnectionService::class.java)
@@ -218,8 +315,12 @@ data class CreateWorkspaceConnectionInput(
     /** Ignored for Slack, which is always a bearer token. */
     val authType: AuthType? = null,
     val secret: String? = null,
+    /** A workspace secret to read the bot token, credential or password from. */
+    val secretVariableId: Long? = null,
     /** Slack's app-level token. Optional: with one the connection also listens. */
     val appToken: String? = null,
+    /** A workspace secret to read the app-level token from; its own choice. */
+    val appTokenVariableId: Long? = null,
     /** Where the mail server listens; null takes the port [smtpSecurity] implies. */
     val smtpPort: Int? = null,
     /** Null sends without authenticating; the password arrives as [secret]. */
@@ -236,10 +337,21 @@ data class UpdateWorkspaceConnectionInput(
     val url: String? = null,
     val urlOverride: String? = null,
     val authType: AuthType? = null,
-    /** Null leaves the stored credentials alone; empty clears them. */
+    /**
+     * Null leaves the stored credential alone; empty clears it, reference and
+     * all. A value stores a copy here and drops any reference.
+     */
     val secret: String? = null,
+    /**
+     * Points the bot token, credential or password at a workspace secret,
+     * dropping any copy it held. Null leaves it as it is; sending it with
+     * [secret] is refused.
+     */
+    val secretVariableId: Long? = null,
     /** The Slack app-level token, with the same null and empty meaning. */
     val appToken: String? = null,
+    /** And the app-level token's own reference, chosen separately from [secretVariableId]. */
+    val appTokenVariableId: Long? = null,
     val smtpPort: Int? = null,
     val smtpUsername: String? = null,
     val smtpFrom: String? = null,
@@ -263,9 +375,29 @@ data class WorkspaceConnectionView(
     val headers: List<HttpHeaderView>,
     /** True while the workspace follows an admin default. */
     val inherited: Boolean,
+    /** Whether the connection holds a credential of its own. False for one reading a variable. */
     val secretSet: Boolean,
+    /** The workspace secret the credential is read from, or null when it keeps its own copy. */
+    val secretVariableId: Long?,
+    /** What that variable is called, and which catalog holds it. */
+    val secretVariableName: String?,
+    val secretVariableCatalog: String?,
+    /**
+     * A reference pointing at nothing.
+     *
+     * Should not happen - a variable a connection reads cannot be deleted - but
+     * a restore, a workspace removed out from under it or a hand-edited database
+     * can each produce one, and a connection that cannot say why it has no token
+     * is precisely the failure this design exists to avoid.
+     */
+    val secretVariableMissing: Boolean,
     /** Whether an app-level token is stored, which is what makes Slack listen as well as send. */
     val appTokenSet: Boolean,
+    /** The app-level token's own answers to the same four questions. */
+    val appTokenVariableId: Long?,
+    val appTokenVariableName: String?,
+    val appTokenVariableCatalog: String?,
+    val appTokenVariableMissing: Boolean,
     /** Where a mail connection sends: the port it uses, whoever it logs in as, and who it is from. */
     val smtpPort: Int?,
     val smtpUsername: String?,
@@ -277,7 +409,17 @@ data class WorkspaceConnectionView(
     /** ISO-8601 offset date-time, or null when no probe has run. */
     val lastCheckedAt: String?,
 ) {
-    constructor(connection: WorkspaceConnection) : this(
+    /**
+     * @param secretHeld the variable the credential reads, when it reads one and
+     *   that variable is still there.
+     * @param appTokenHeld the same for the app-level token, asked separately
+     *   because the two fields choose separately.
+     */
+    constructor(
+        connection: WorkspaceConnection,
+        secretHeld: HeldSecret? = null,
+        appTokenHeld: HeldSecret? = null,
+    ) : this(
         id = requireNotNull(connection.id),
         workspaceId = connection.workspaceId,
         name = connection.name,
@@ -289,7 +431,15 @@ data class WorkspaceConnectionView(
         headers = connection.headers.map { HttpHeaderView(it.name, it.value) },
         inherited = connection.inherited,
         secretSet = !connection.secret.isNullOrBlank(),
+        secretVariableId = connection.secretVariableId,
+        secretVariableName = secretHeld?.name,
+        secretVariableCatalog = secretHeld?.catalog,
+        secretVariableMissing = connection.secretVariableId != null && secretHeld == null,
         appTokenSet = !connection.appToken.isNullOrBlank(),
+        appTokenVariableId = connection.appTokenVariableId,
+        appTokenVariableName = appTokenHeld?.name,
+        appTokenVariableCatalog = appTokenHeld?.catalog,
+        appTokenVariableMissing = connection.appTokenVariableId != null && appTokenHeld == null,
         // The port as it will be used, so the form shows what sending will do
         // rather than an empty field meaning a default nobody wrote down.
         smtpPort = connection.smtpPort ?: connection.smtpSecurity.defaultPort,

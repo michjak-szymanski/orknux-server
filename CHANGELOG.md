@@ -13,6 +13,47 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **Every stored credential can be a reference to a workspace secret, and the
+  choice belongs to the field.** 0.9.2 gave this to one field, a model
+  provider's key, and a provider has exactly one secret column — so a control
+  that read as being about the whole card was unambiguous by accident. It says
+  nothing at all on a card with two. A Slack connection keeps a bot token *and*
+  an app-level token, and "this connection uses a workspace secret" cannot mean
+  one of them without meaning the other.
+
+  So **Value** and **Reference** now stand beside each secret field's own name,
+  on every one of them: a connection's bot token, its app-level token, an
+  endpoint's token or key, a mail server's password, and an MCP server's
+  credential — in the settings page and in the dialog that adds one alike. Each
+  field answers for itself, so a bot token read from a workspace secret can sit
+  beside an app-level token this connection keeps its own copy of.
+
+  The rules are the ones the provider's key already followed. The reference is
+  held by id, so renaming the variable or moving it to another catalog disturbs
+  nothing. Deleting a variable something reads is refused, and the refusal names
+  what reads it — "the connection Support Slack", "the MCP server brave-search"
+  — rather than saying it is in use and leaving you to find out where. Turning
+  such a variable from a secret into a plain value is refused for the same
+  reason: a plain value is returned with the listing, and that would put the
+  credential on every member's screen. And a field that reads a variable reveals
+  nothing through the connection: revealing a secret is recorded against the
+  secret, and a second door onto the same value under another name would be a
+  reveal nobody could find in the log.
+
+  Nothing about an existing connection changes. A credential typed in stays
+  where it is, kept encrypted and belonging to that connection alone; reading
+  one from a workspace secret is something to move to, one field at a time.
+
+  Not every encrypted column takes a reference. A shell's private key and
+  passphrase and a proxy rule's password are installation-wide, and a variable
+  belongs to a workspace — pointing an administrator's SSH key at one team's
+  secret would put an installation credential in that team's hands. Those wait
+  on a decision about where an installation keeps a secret of its own.
+
 ## 0.9.2
 
 ### Added

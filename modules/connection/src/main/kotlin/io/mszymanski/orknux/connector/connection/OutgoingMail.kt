@@ -76,32 +76,6 @@ interface MailTransport {
     fun check(server: SmtpServer): CheckResult
 }
 
-/**
- * The mail server one connection points at, or null when it does not point at
- * one yet.
- *
- * The counterpart of [target] for the type that is not an HTTP endpoint: the
- * stored credential is read here and nowhere else, so nothing above this module
- * handles a mail password.
- */
-fun WorkspaceConnection.smtpServer(): SmtpServer? {
-    if (type != ConnectionType.SMTP) return null
-    val host = effectiveUrl.trim().ifEmpty { return null }
-    val from = smtpFrom?.trim()?.ifEmpty { null } ?: return null
-    val user = smtpUsername?.trim()?.ifEmpty { null }
-
-    return SmtpServer(
-        host = host,
-        port = smtpPort ?: smtpSecurity.defaultPort,
-        username = user,
-        // Only meaningful with a user to go with it; a password on its own is
-        // something left behind by an earlier configuration.
-        password = user?.let { secret?.trim()?.ifEmpty { null } },
-        from = from,
-        security = smtpSecurity,
-    )
-}
-
 /** What a server listening for this kind of session is nearly always on. */
 val MailSecurity.defaultPort: Int
     get() = when (this) {
@@ -126,6 +100,8 @@ class OutgoingMail(
     private val connections: WorkspaceConnectionRepository,
     private val transport: MailTransport,
     private val probe: ConnectionProbe,
+    /** Where the password comes from: the connection's own copy, or a workspace secret. */
+    private val credentials: ConnectionCredentials,
     /** Only to know whether this process resolves the mail server's name, or the proxy does. */
     private val proxies: ProxyRouter,
 ) {
@@ -140,7 +116,7 @@ class OutgoingMail(
             return MailDelivery.NotPossible("${connection.name} is a ${connection.type} connection, not a mail server")
         }
 
-        val server = connection.smtpServer()
+        val server = credentials.smtpServer(connection)
             ?: return MailDelivery.NotPossible("${connection.name} has no mail server and from-address stored")
 
         // A host that must not be reached is not a transient failure, and the
@@ -162,7 +138,7 @@ class OutgoingMail(
 
     /** Whether the server answers and accepts the credentials, for the check button. */
     fun check(connection: WorkspaceConnection): CheckResult {
-        val server = connection.smtpServer()
+        val server = credentials.smtpServer(connection)
             ?: return CheckResult(CheckOutcome.FAILED, "No mail server and from-address are configured")
         probe.vetHost(server.host, viaProxy = routed(server))?.let { return CheckResult(CheckOutcome.FAILED, it) }
 

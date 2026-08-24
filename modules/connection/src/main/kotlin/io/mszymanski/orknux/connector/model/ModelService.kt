@@ -3,7 +3,7 @@ package io.mszymanski.orknux.connector.model
 import io.mszymanski.orknux.connector.connection.CheckOutcome
 import io.mszymanski.orknux.connector.security.HeldSecret
 import io.mszymanski.orknux.connector.security.SecretCipher
-import io.mszymanski.orknux.connector.security.SecretVariables
+import io.mszymanski.orknux.connector.security.SecretReferences
 import org.slf4j.LoggerFactory
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.data.domain.Sort
@@ -36,8 +36,12 @@ class ModelService(
     private val events: ApplicationEventPublisher,
     /** Only to recognise a credential that never came out of its envelope. */
     private val cipher: SecretCipher,
-    /** What a provider reading its credential from a workspace variable is pointed at. */
-    private val secretVariables: SecretVariables,
+    /**
+     * The rule about a field that may keep its own value or read a workspace
+     * one. Shared, because it is every secret field in the product and not this
+     * one - see [SecretReferences].
+     */
+    private val references: SecretReferences,
     /** Defaulted rather than a bean, the way `ConditionEvaluator` takes one. */
     private val clock: Clock = Clock.systemDefaultZone(),
 ) {
@@ -85,7 +89,7 @@ class ModelService(
         }
 
         val own = input.secret?.trim()?.ifEmpty { null }
-        val reference = bindable(input.workspaceId, input.secretVariableId, own)
+        val reference = references.bind(input.workspaceId, input.secretVariableId, own)
 
         val provider = ModelProvider(
             workspaceId = input.workspaceId,
@@ -138,7 +142,7 @@ class ModelService(
         }
 
         val own = input.secret?.trim()
-        val reference = bindable(provider.workspaceId, input.secretVariableId, own?.ifEmpty { null })
+        val reference = references.bind(provider.workspaceId, input.secretVariableId, own?.ifEmpty { null })
 
         provider.name = name
         provider.endpoint = endpoint
@@ -168,25 +172,6 @@ class ModelService(
     }
 
     /**
-     * The variable a save asked to be bound to, checked, or null for a provider
-     * keeping its own copy.
-     *
-     * Three refusals, all of them at the moment somebody can still fix it rather
-     * than at the moment a chat needs the key: a caller that sent both kinds of
-     * credential, an id this workspace does not hold, and a variable that is not
-     * one of the ones kept out of sight.
-     */
-    private fun bindable(workspaceId: Long, variableId: Long?, own: String?): Long? {
-        if (variableId == null) return null
-        if (own != null) throw ModelProviderCredentialAmbiguousException()
-
-        val held = secretVariables.find(workspaceId, variableId)
-            ?: throw ModelProviderVariableNotFoundException(variableId)
-        if (!held.secret) throw ModelProviderVariableNotSecretException(held.name)
-        return held.id
-    }
-
-    /**
      * A provider as a screen sees it, with the variable it reads named.
      *
      * The name is read here rather than left to the caller so that a broken
@@ -195,7 +180,7 @@ class ModelService(
      * budget worth complicating this for.
      */
     private fun view(provider: ModelProvider): ModelProviderView {
-        val held = provider.secretVariableId?.let { secretVariables.find(provider.workspaceId, it) }
+        val held = references.describe(provider.workspaceId, provider.secretVariableId)
         return ModelProviderView(provider, held)
     }
 

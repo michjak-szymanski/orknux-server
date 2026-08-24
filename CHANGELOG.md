@@ -13,6 +13,26 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **A trigger can be switched on and off from the two screens that define one.**
+  The switch was only ever in the trigger list, so the dialog that creates a
+  trigger could not create one that was switched off, and the trigger's own
+  settings page — the screen somebody opens to change that trigger — had no
+  opinion on whether it fired at all. Both now carry the same Enabled switch the
+  list has, saved with the rest of the form. Nothing changes about what a
+  switched-off trigger does: it has always stayed in the catalogue and fired at
+  nothing, on every one of the three firing paths.
+
+### Fixed
+
+- **The trigger settings page can be saved more than once per visit.** Its Save
+  Changes button stayed on "Saving…" and disabled after the first save, so a
+  second change needed a reload. Nothing was lost; there was simply no way to
+  send it.
+
 ## 0.9.2
 
 ### Added

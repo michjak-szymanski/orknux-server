@@ -3525,6 +3525,8 @@ input CreateTriggerInput {
     conditionId: ID
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
+    "Whether it fires at all. Omitted makes one that does."
+    enabled: Boolean
 }
 
 input UpdateTriggerInput {
@@ -3546,6 +3548,8 @@ input UpdateTriggerInput {
     conditionId: ID
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
+    "Whether it fires at all; omitted leaves it as it stands."
+    enabled: Boolean
 }
 
 "The shape of a value crossing between a workflow and a script."

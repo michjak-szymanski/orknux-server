@@ -1,12 +1,16 @@
 package io.mszymanski.orknux.server.trigger
 
+import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
+import jakarta.persistence.ElementCollection
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
+import jakarta.persistence.FetchType
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
+import jakarta.persistence.JoinColumn
 import jakarta.persistence.Table
 import java.time.OffsetDateTime
 import org.springframework.data.domain.Page
@@ -78,6 +82,27 @@ class WorkflowTrigger(
     @Enumerated(EnumType.STRING)
     @Column(length = 32)
     var action: TriggerAction? = null,
+
+    /**
+     * The outbound connections whose own messages a [TriggerAction.REPLY] watches
+     * for replies to.
+     *
+     * **Not the connection it listens on.** [connectionId] is the socket — the
+     * app-level token this installation receives Slack events over. These are
+     * the bot tokens whose *messages* are the ones a reply has to hang under,
+     * and they are a different row: one workspace's Slack app hears everything,
+     * and the bots people want answered may be several other apps entirely.
+     *
+     * A set and not one id because one workflow watching two bots is a good deal
+     * more plausible than a reason to forbid it, and because a set of two
+     * connections holding the same bot token is the same Slack user twice —
+     * which is why `SlackBotUsers` says so rather than the picker pretending
+     * otherwise.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "workflow_trigger_watch", joinColumns = [JoinColumn(name = "trigger_id")])
+    @Column(name = "connection_id", nullable = false)
+    var watchedConnectionIds: MutableSet<Long> = mutableSetOf(),
 
     @Column(length = 120)
     var cron: String? = null,
@@ -212,6 +237,28 @@ class TriggerInUseException(name: String, users: List<String>) : RuntimeExceptio
 
 class TriggerConnectionRequiredException :
     RuntimeException("An incoming connection trigger needs a connection and an event")
+
+/**
+ * A reply trigger with nobody to watch.
+ *
+ * Every thread reply in every channel the bot reads would match it, which is not
+ * what anybody means by "replies to our bot" and is a great many workflow runs.
+ */
+class TriggerReplyWatchRequiredException : RuntimeException(
+    "A reply trigger needs at least one connection whose messages it watches for replies",
+)
+
+/**
+ * A connection chosen to be watched that cannot say which Slack user it posts as.
+ *
+ * Refused when it is chosen rather than when a reply arrives. A reply is matched
+ * by comparing `parent_user_id` against the bot user behind each watched token,
+ * so a token that will not authenticate produces a trigger that is enabled,
+ * instanced and deaf — and the only way to find that out is to wait for a reply
+ * that never fires.
+ */
+class TriggerReplyWatchUnusableException(name: String, why: String) :
+    RuntimeException("$name cannot say which Slack user it posts as: $why")
 
 class TriggerScheduleRequiredException :
     RuntimeException("A scheduled trigger needs a cron expression")

@@ -18,6 +18,11 @@ data class IncomingEvent(
     /**
      * Everything else worth handing to a workflow: for Slack, the channel, the
      * user, and the message timestamps that a reply has to quote.
+     *
+     * A thread reply carries `parentUserId` as well — Slack's own id for whoever
+     * wrote the message the thread hangs under. It is what "a reply to something
+     * *we* wrote" is decided by, because a bot token is a Slack user; see
+     * `SlackBotUsers`.
      */
     val context: Map<String, String> = emptyMap(),
 )
@@ -40,9 +45,9 @@ enum class IncomingAction {
 /**
  * Which of those a listener actually raises today.
  *
- * The enum is the vocabulary; this is the part of it that is wired. Only Slack
- * mentions are listened for — there is no publisher for a plain message, a
- * thread reply, or anything from an issue tracker — and a trigger offered on one
+ * The enum is the vocabulary; this is the part of it that is wired. Slack raises
+ * three — a mention, a message in a channel it can read, and a thread reply —
+ * and nothing raises anything from an issue tracker, so a trigger offered on one
  * of those could never fire. Nothing is more confusing than a configuration
  * screen that accepts a setting the system cannot honour, so what is deliverable
  * is stated here and the trigger catalogue offers exactly this.
@@ -51,5 +56,6 @@ enum class IncomingAction {
  * remind you: the test beside `IncomingTriggerListener` is what does.
  */
 object DeliverableActions {
-    val published: Set<IncomingAction> = setOf(IncomingAction.MENTION)
+    val published: Set<IncomingAction> =
+        setOf(IncomingAction.MENTION, IncomingAction.MESSAGE, IncomingAction.REPLY)
 }

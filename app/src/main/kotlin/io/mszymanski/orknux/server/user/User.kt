@@ -128,6 +128,20 @@ class AppUser(
     @Column(name = "email_notifications", nullable = false)
     var emailNotifications: Boolean = true,
 
+    /**
+     * Whether a chat says what an answer cost as well as how long it took.
+     *
+     * Here rather than on the workspace because a chat is one person's - see
+     * `ChatOwnership` - so this decides only what the person who owns it reads.
+     * Here rather than in the browser's storage because it follows somebody to
+     * the next machine, which is the line the interface draws between the two.
+     *
+     * Off by default. The number is for somebody who has gone looking for it;
+     * printed under every answer unasked it is a running total nobody wanted.
+     */
+    @Column(name = "chat_cost_shown", nullable = false)
+    var chatCostShown: Boolean = false,
+
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
 

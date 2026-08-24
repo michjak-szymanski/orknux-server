@@ -42,6 +42,11 @@ import java.time.OffsetDateTime
  * move outright: that link is drawn as a number, and a number means one thing
  * per workspace.
  *
+ * The type is the third kind of thing: it does not travel, but its *name* can.
+ * A type is a row in one workspace's catalogue, so the issue is pointed at the
+ * destination's row of the same name - and refused where the destination has no
+ * such row, which is the same rule the assignee follows.
+ *
  * Administrators of both workspaces, and seeing them is not enough - a move
  * takes an issue out of one team's tracker and puts it in another's, and the
  * number it had is immediately free for the next issue filed there, so it is
@@ -56,6 +61,7 @@ import java.time.OffsetDateTime
 @Controller
 class IssueMoveAPI(
     private val issues: IssueRepository,
+    private val types: IssueTypeRepository,
     private val agents: AgentRepository,
     private val models: ModelService,
     private val attachments: IssueAttachmentRepository,
@@ -98,6 +104,15 @@ class IssueMoveAPI(
         }
 
         refuseWhatCannotFollow(held, destination)
+
+        /*
+         * The type is re-pointed rather than carried. A type is a row in one
+         * workspace's catalogue, so the row this issue holds cannot go with it;
+         * what goes with it is the word, onto the destination's own row of the
+         * same name. That the destination has one was settled above - a
+         * workspace that does not is where the move is refused.
+         */
+        held.type = held.type?.let { types.named(requireNotNull(destination.id), it.name) }
 
         val was = held.number
         val files = attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(held.id))
@@ -179,6 +194,28 @@ class IssueMoveAPI(
      */
     private fun refuseWhatCannotFollow(issue: Issue, destination: Workspace) {
         val there = requireNotNull(destination.id)
+
+        /*
+         * A type belongs to one workspace's catalogue, so an issue typed `bug`
+         * can only stay typed where `bug` also exists. Matched by name and not
+         * by id, because the name is what the type means to a reader and the id
+         * is a row number that means nothing over there.
+         *
+         * Refused rather than untyped on the way, like the assignee above it:
+         * an issue that quietly lost what it was arrives in the other tracker
+         * looking unclassified, and whoever sorted it there finds out by it
+         * never turning up in the filter again. Both workspaces begin with
+         * `bug` and `feature`, so this is the case where somebody has taken one
+         * out - which is a decision they made, and worth being asked about.
+         */
+        issue.type?.let { held ->
+            if (types.named(there, held.name) == null) {
+                throw IssueMoveRefusedException(
+                    "This issue is a ${held.name}, and ${destination.name} does not file those. " +
+                        "Add ${held.name} to its issue types or change this issue's type, then move it.",
+                )
+            }
+        }
 
         issue.assignee?.let { held ->
             val kind = held.kind

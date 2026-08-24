@@ -15,6 +15,12 @@ import io.mszymanski.orknux.server.issue.IssueRelationRepository
 import io.mszymanski.orknux.server.issue.IssueRelations
 import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.issue.IssueStatus
+import io.mszymanski.orknux.server.issue.IssueType
+import io.mszymanski.orknux.server.issue.IssueTypeRepository
+import io.mszymanski.orknux.server.issue.IssueTypeUnknownException
+import io.mszymanski.orknux.server.issue.AnyType
+import io.mszymanski.orknux.server.issue.OfType
+import io.mszymanski.orknux.server.issue.Untyped
 import io.mszymanski.orknux.server.issue.NewsReader
 import io.mszymanski.orknux.server.issue.issueFilter
 import io.mszymanski.orknux.server.security.WebProperties
@@ -62,6 +68,7 @@ import java.time.OffsetDateTime
 @Service
 class IssueTools(
     private val issues: IssueRepository,
+    private val types: IssueTypeRepository,
     private val users: AppUserRepository,
     private val agents: AgentRepository,
     private val newsDesk: IssueNewsDesk,
@@ -162,6 +169,22 @@ class IssueTools(
                 ?: return refuse("There is no issue status called $asked")
         }
         val assignee = text(arguments, "assignee")?.lowercase()
+        /*
+         * By name, because a name is what a model has: `bug`, not row 12. The
+         * word `untyped` asks for the issues nobody has classified, which is
+         * the one question the id-shaped filter in the browser can ask and a
+         * name alone cannot - and it is reserved rather than ambiguous, since a
+         * workspace that named a type "untyped" would have named it after the
+         * absence of one.
+         */
+        val type = text(arguments, "type")?.trim()?.takeIf { it.isNotEmpty() }?.let { asked ->
+            if (asked.equals("untyped", ignoreCase = true)) {
+                Untyped
+            } else {
+                val found = typeNamed(scope, asked) ?: return refuse(unknownType(scope, asked))
+                OfType(requireNotNull(found.id))
+            }
+        } ?: AnyType
         val search = text(arguments, "search").orEmpty()
         /*
          * Every one of them, not any: "p1, slack" asks for the urgent Slack
@@ -181,6 +204,7 @@ class IssueTools(
                 search = search,
                 labels = wantedLabels,
                 assignedTo = assignee?.let { assignedTo(scope, it) },
+                type = type,
             ),
             newestFirst,
         )
@@ -192,6 +216,7 @@ class IssueTools(
                     "number" to it.number,
                     "title" to it.title,
                     "status" to it.status,
+                    "type" to it.type?.name,
                     "reporter" to it.reporter,
                     "assignee" to nameOf(it),
                     "labels" to it.labels.sorted(),
@@ -202,7 +227,7 @@ class IssueTools(
         )
         if (page.totalElements > found.size) {
             answer["note"] = "These are the newest ${found.size} of ${page.totalElements} matching issues. " +
-                "Narrow it with status, labels, assignee or search to see the rest."
+                "Narrow it with status, type, labels, assignee or search to see the rest."
         }
         return mapper.writeValueAsString(answer)
     }
@@ -251,6 +276,44 @@ class IssueTools(
             ),
         )
 
+    /**
+     * The kinds of thing this workspace files, with how many issues carry each.
+     *
+     * Its own tool for the reason `orknux_issue_labels` is one, and rather more
+     * so: a label can be invented on the spot, and a type cannot. An assistant
+     * that wants to file a bug has to know that this workspace calls it `bug`
+     * and not `defect`, and the only alternative to telling it is a refusal
+     * after the fact - which costs a round trip and, more often, an issue filed
+     * untyped because the model gave up on the field.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
+    fun types(scope: OrknuxScope): String {
+        val carried = issues.typeCounts(scope.workspaceId).associate { it.typeId to it.issues }
+        return mapper.writeValueAsString(
+            mapOf(
+                "types" to types.findByWorkspaceIdOrderByNameAsc(scope.workspaceId)
+                    .map { mapOf("type" to it.name, "issues" to (carried[it.id] ?: 0L)) },
+            ),
+        )
+    }
+
+    /** The type this workspace calls that, however it was capitalised. */
+    private fun typeNamed(scope: OrknuxScope, name: String): IssueType? =
+        types.named(scope.workspaceId, name)
+
+    /**
+     * What to say about a type nothing here is called.
+     *
+     * The known ones are in the sentence, because whoever reads it wrote a word
+     * and can write another - a refusal that only says no costs a call to
+     * `orknux_issue_types` that the refusal could have saved.
+     */
+    private fun unknownType(scope: OrknuxScope, asked: String): String =
+        IssueTypeUnknownException(
+            asked,
+            types.findByWorkspaceIdOrderByNameAsc(scope.workspaceId).map { it.name },
+        ).message.orEmpty()
+
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     fun one(scope: OrknuxScope, arguments: String): String {
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
@@ -260,6 +323,7 @@ class IssueTools(
                 "title" to held.title,
                 "description" to held.description,
                 "status" to held.status,
+                "type" to held.type?.name,
                 "reporter" to held.reporter,
                 "assignee" to nameOf(held),
                 // Worth reading before writing a comment: it says who the next
@@ -315,6 +379,16 @@ class IssueTools(
             ?: mutableSetOf()
         labelsTooLong(labels)?.let { return refuse(it) }
 
+        /*
+         * The whole of what #241 asked for on this side: an assistant filing a
+         * bug should be able to say it is one. Absent is untyped, which stays a
+         * real state - a tool that guessed would be filing something as a bug
+         * because the model said nothing.
+         */
+        val type = text(arguments, "type")?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            typeNamed(scope, it) ?: return refuse(unknownType(scope, it))
+        }
+
         val named = text(arguments, "observers")
             ?.split(',')
             ?.map { it.trim() }
@@ -338,6 +412,7 @@ class IssueTools(
                 number = issues.lastNumber(scope.workspaceId) + 1,
                 title = title,
                 description = text(arguments, "description")?.trim(),
+                type = type,
                 reporter = currentUser(),
                 labels = labels,
                 lastModifiedBy = currentUser(),
@@ -513,7 +588,7 @@ class IssueTools(
     }
 
     /**
-     * Title, description, labels and who is on it, each left alone unless
+     * Title, description, type, labels and who is on it, each left alone unless
      * given.
      *
      * Labels arrive as one comma-separated string rather than an array,
@@ -557,6 +632,22 @@ class IssueTools(
          * failure that is never noticed, because the call answered as though it
          * had worked.
          */
+        /*
+         * The type, resolved before anything is written, like the assignee.
+         * Absent leaves it alone; `none` or `untyped` puts it back to untyped,
+         * which is a state somebody chooses and not a field they forgot; a name
+         * nothing here is called is refused with the list of names that work.
+         */
+        val typing = text(arguments, "type")?.trim()
+        val typedAs = if (typing == null || typing.isEmpty() || nobody(typing) ||
+            typing.equals("untyped", ignoreCase = true)
+        ) {
+            null
+        } else {
+            typeNamed(scope, typing) ?: return refuse(unknownType(scope, typing))
+        }
+        val typeWas = held.type?.name
+
         val handing = text(arguments, "assignee")?.trim()
         val handedTo = if (handing == null || nobody(handing)) {
             null
@@ -568,6 +659,7 @@ class IssueTools(
         val was = held.assignee?.let { it.kind to it.id }
 
         handing?.let { held.assignee = handedTo }
+        typing?.let { held.type = typedAs }
         text(arguments, "title")?.let { held.title = it.trim() }
         text(arguments, "description")?.let { given ->
             held.description = given.trim().takeIf { it.isNotEmpty() }
@@ -597,6 +689,10 @@ class IssueTools(
         held.lastModifiedBy = currentUser()
         issues.save(held)
         history.labelsChanged(held, labelsWere, held.labels.toSet(), currentUser())
+        // The other door writes the same line, for the reason the status does:
+        // a history whose gaps line up with the work nobody watched is worse
+        // than none.
+        history.typeChanged(held, typeWas, held.type?.name, currentUser())
 
         /*
          * And only if it actually moved.
@@ -621,6 +717,7 @@ class IssueTools(
             mapOf(
                 "issue" to held.number,
                 "title" to held.title,
+                "type" to held.type?.name,
                 "labels" to held.labels.sorted(),
                 "assignee" to nameOf(held),
                 "url" to issueLink(scope.workspaceId, held.number),

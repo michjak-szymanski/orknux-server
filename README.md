@@ -969,11 +969,34 @@ local name and reaches it through the same `imports` object an imported function
 arrives in.
 
 **It is a stored artefact rather than a name from a registry**, and it has to be.
-The only two ways to honour a registry name are both shut: fetching one at run
-time would mean giving the sandbox a network, and fetching it at upload would
-mean this server reaching out to a registry — which makes an offline installation
-unusable and makes what a workspace runs depend on what a registry served that
-afternoon.
+The only two ways to honour a registry *name* are both shut: fetching one at run
+time would mean giving the sandbox a network, and resolving one at every load
+would make what a workspace runs depend on what a registry served that afternoon.
+
+**A package can still be the way the file arrives.** Type `random@4.1.0` beside
+the upload and the server fetches it once — here, into this database — and stores
+the module it found. Nothing changes about what runs: the row is the same row an
+upload makes, the sandbox has no network, and no registry is consulted again.
+What the row gains is provenance, which is the price of fetching anything: the
+package, the exact version, the file inside it, and the hash the registry said it
+would be, checked against what arrived.
+
+Four rules make that honest, and each of them is a refusal you will meet:
+
+- **The version is pinned by you.** `latest` and a range are refused. A
+  specification that resolves differently tomorrow is not an answer to what code
+  is running here.
+- **One self-contained ES module, or nothing.** A package that imports anything —
+  another package, or a second file of its own — is refused by name. **This
+  installation does not bundle**: assembling a dependency graph here would produce
+  an artefact no registry published and nobody can compare against anything, which
+  is the opposite of what the provenance is for. Build a bundle where bundles are
+  built, and upload it. A package shipping only a CommonJS build is refused the
+  same way rather than stored to fail at first call.
+- **The fetch follows the proxy rules**, like every other outbound call.
+- **`ORKNUX_LIBRARY_REGISTRY_URL` decides where from, and whether at all.** Point
+  it at your own mirror; set it empty on an installation with no way out, and the
+  page offers the upload alone rather than a field that fails on being used.
 
 **And it is the installation's rather than a workspace's**, because the question
 an installation has to be able to answer is what code is running inside it. The

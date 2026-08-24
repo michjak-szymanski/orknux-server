@@ -40,6 +40,7 @@ import java.util.UUID
 class ChatService(
     private val sessions: ChatSessionRepository,
     private val history: ChatMemoryRepository,
+    private val takes: ChatAnswerTakeRepository,
     private val models: ModelChatClient,
     private val catalogue: ModelService,
     private val agents: AgentRepository,
@@ -143,7 +144,17 @@ class ChatService(
      * of.
      */
     fun messages(session: ChatSession): List<ChatMessage> {
-        val thread = history.findByConversationId(session.conversationId).map(::ChatMessage)
+        /*
+         * What each answer said the times it was asked again, put back beside
+         * the one that stands. Keyed by place in the thread, which is what the
+         * take was written against - so this reads the thread once, with its
+         * own index, before anything below reorders or interleaves it.
+         */
+        val earlier = takes
+            .findByChatSessionIdOrderByIdAsc(requireNotNull(session.id))
+            .groupBy { it.messageIndex }
+        val thread = history.findByConversationId(session.conversationId)
+            .mapIndexed { at, message -> ChatMessage(message).copy(takes = earlier[at]?.map { it.content }.orEmpty()) }
         val llmSessionId = session.llmSessionId ?: return thread
         // The same budget the copy was taken under, so the page shows the
         // stretch that was actually carried rather than one merely like it.
@@ -462,6 +473,99 @@ class ChatService(
     }
 
     /**
+     * The first half of asking the last answer again.
+     *
+     * [beginSend] with the question already asked. What the chat said last is
+     * taken off the thread and kept as a take, and the model is handed the
+     * conversation as it stood the moment before it answered — so it is
+     * answering the same question rather than answering itself.
+     *
+     * Nothing is written into the LLM session on the way in, because nobody
+     * said anything: [beginSend] records the person's turn there, and a
+     * regenerate has no turn of its own to record. The answer is recorded as
+     * usual by [finishSend], which is right — it was said, and a transcript
+     * that hides the second attempt is a transcript that cannot explain the
+     * session's own shape.
+     *
+     * **Whatever answers now is whatever the chat says answers now.** That is
+     * the model or agent the answer was produced with, unless the picker has
+     * been moved since — which is the point of moving it, and the reason
+     * "regenerate on a different model" needs no second control.
+     *
+     * What does not come again is a picture. Images are handed to the model as
+     * part of the turn and are deliberately never written to the thread — a
+     * base64 image in a conversation log is a log nobody can read — and nothing
+     * records which message a file arrived with, so there is nothing here to
+     * put back. A regenerate asks the words again.
+     */
+    @Transactional
+    fun beginRegenerate(id: Long): ChatSendStart {
+        val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
+        val modelId = session.modelId ?: throw ChatModelNotChosenException()
+
+        val thread = history.findByConversationId(session.conversationId)
+        val last = thread.lastOrNull()
+            ?: throw ChatNothingToRegenerateException("Nothing has been said in this chat yet")
+        if (last.messageType != MessageType.ASSISTANT) {
+            throw ChatNothingToRegenerateException("The last thing in this chat is not an answer")
+        }
+
+        val asked = thread.dropLast(1)
+        if (asked.none { it.messageType == MessageType.USER }) {
+            throw ChatNothingToRegenerateException("There is no question here to ask again")
+        }
+
+        // Kept before it comes off, so a press that turns out to have been a
+        // mistake has left the answer somewhere it can be read.
+        takes.save(
+            ChatAnswerTake(
+                chatSessionId = requireNotNull(session.id),
+                messageIndex = thread.size - 1,
+                content = last.text.orEmpty(),
+            ),
+        )
+        history.saveAll(session.conversationId, asked)
+
+        val into = recording(session)
+        return ChatSendStart(
+            modelId = modelId,
+            agentId = session.agentId,
+            llmSessionId = into,
+            conversationId = session.conversationId,
+            turns = briefed(session) +
+                asked.map { ChatTurn(role(it), it.text.orEmpty()) } +
+                recalled(session, into),
+        )
+    }
+
+    /**
+     * Puts the answer back where asking again came to nothing.
+     *
+     * [beginRegenerate] takes the answer off the thread before the model is
+     * called, because that is the only way to ask the same question twice. A
+     * provider that then refuses would leave the conversation ending on the
+     * question, with the answer readable only as a take of a turn that is no
+     * longer there — which is a worse outcome than the answer somebody did not
+     * like, and one they did not ask for.
+     *
+     * Found by where it would have sat: the take was written against the index
+     * the missing answer had, and that index is now the length of the thread.
+     * The newest such take is the one this call took off, and it is deleted as
+     * it goes back — nothing was displaced, so there is no earlier take to
+     * remember.
+     */
+    @Transactional
+    fun abandonRegenerate(id: Long) {
+        val session = sessions.findByIdOrNull(id) ?: return
+        val thread = history.findByConversationId(session.conversationId)
+        val put = takes.findByChatSessionIdOrderByIdAsc(requireNotNull(session.id))
+            .lastOrNull { it.messageIndex == thread.size }
+            ?: return
+        history.saveAll(session.conversationId, thread + AssistantMessage(put.content))
+        takes.delete(put)
+    }
+
+    /**
      * The second half: what the model finally said goes into the history.
      *
      * Read back rather than appended to what [beginSend] had, because the model
@@ -609,7 +713,20 @@ class ChatService(
  * for everything the chat said itself. Null is therefore also the boundary: the
  * turns that were already there when the chat opened, and the ones said since.
  */
-data class ChatMessage(val role: String, val content: String, val actor: String? = null) {
+data class ChatMessage(
+    val role: String,
+    val content: String,
+    val actor: String? = null,
+    /**
+     * What this answer said the earlier times it was given, oldest first, for
+     * an answer that has been asked for again. Empty for every other line.
+     *
+     * The one that stands is [content] and is not in here: this is what a
+     * regenerate displaced, kept so that pressing the button is not a way of
+     * losing the answer somebody was about to keep.
+     */
+    val takes: List<String> = emptyList(),
+) {
     constructor(message: Message) : this(message.messageType.name.lowercase(), message.text.orEmpty())
 }
 

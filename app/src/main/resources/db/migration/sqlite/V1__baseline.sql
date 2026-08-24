@@ -160,6 +160,16 @@ CREATE TABLE app_user_token
     constraint app_user_token_user_id_fkey FOREIGN KEY (user_id) REFERENCES app_user(id) ON DELETE CASCADE
 );
 
+CREATE TABLE chat_answer_take
+(
+    id                           integer not null primary key autoincrement,
+    chat_session_id              integer not null,
+    message_index                integer not null,
+    content                      text not null,
+    taken_at                     timestamp not null default CURRENT_TIMESTAMP,
+    constraint chat_answer_take_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE
+);
+
 CREATE TABLE chat_attachment
 (
     id                           integer not null primary key autoincrement,
@@ -1179,6 +1189,7 @@ CREATE INDEX idx_agent_tool_workspace ON agent_tool (workspace_id);
 CREATE UNIQUE INDEX app_user_username_key ON app_user (lower((username)));
 CREATE UNIQUE INDEX app_user_token_hash_key ON app_user_token (token_hash);
 CREATE INDEX app_user_token_user_idx ON app_user_token (user_id);
+CREATE INDEX chat_answer_take_session_idx ON chat_answer_take (chat_session_id, message_index, id);
 CREATE INDEX idx_chat_attachment_session ON chat_attachment (chat_session_id);
 CREATE INDEX idx_chat_attachment_workspace ON chat_attachment (workspace_id);
 CREATE INDEX idx_chat_session_owner ON chat_session (workspace_id, user_id, last_message_at DESC);

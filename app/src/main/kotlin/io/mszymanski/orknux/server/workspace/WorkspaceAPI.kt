@@ -445,6 +445,46 @@ class WorkspaceAPI(
         return workspace
     }
 
+    /**
+     * Where an answer is cut for the speech provider, for this workspace.
+     *
+     * Its own call rather than a fourth argument on the one above, although the
+     * form draws both on one card and saves them with one press. Turn-taking is
+     * three numbers that are one decision - a pause a sensitivity never lets the
+     * microphone reach is not a setting anybody meant to make - and this is not
+     * part of that decision: it is about the half of a turn the model is
+     * talking, and nothing about it can contradict any of those three.
+     *
+     * Nothing to check and nothing to refuse. The three values are the whole of
+     * what may be asked for, and the schema is what says so - an enum arriving
+     * off the wire has already been one of them or the request never reached
+     * here. Whoever can see the workspace may set it, like the settings above.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceVoiceSpeechChunking(
+        @Argument workspaceId: Long,
+        @Argument chunking: SpeechChunking,
+    ): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        workspace.voiceSpeechChunking = chunking
+
+        auditRecorder.record(
+            workspaceId,
+            // The same category as turn-taking: what a chat does, not what a
+            // model is.
+            WorkspaceAuditCategory.CHAT,
+            when (chunking) {
+                SpeechChunking.NONE -> "Answers are read aloud in one piece"
+                SpeechChunking.SENTENCE -> "Answers are read aloud a sentence at a time"
+                SpeechChunking.PARAGRAPH -> "Answers are read aloud a paragraph at a time"
+            },
+        )
+        return workspace
+    }
+
     @MutationMapping
     @Transactional
     fun deleteWorkspace(@Argument id: Long): Boolean {

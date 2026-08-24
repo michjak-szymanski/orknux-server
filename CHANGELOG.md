@@ -262,6 +262,18 @@ have failed.
   straight back: a chat left ending on the question is worse than the answer
   somebody did not like, and it is not what they asked for.
 
+- **Where an answer is cut for the speech model is a workspace setting.** The
+  Voice card in a workspace's settings has a fourth field, **Speech chunking**,
+  with three values. **Sentence** is what every installation is already doing and
+  what it stays on: whole sentences, gathered to about a breath each, which gets
+  the first word out at roughly the speed a person would start talking.
+  **Paragraph** cuts only at paragraph ends - fewer and longer requests, so fewer
+  joins between clips to hear and less traffic to a metered provider, at the cost
+  of a later first word. **None** is one request for the finished answer, spoken
+  when it is ready, which is what reading aloud did before 0.9.2 and is worth
+  having back for a short answer or a provider charged by the request. Nothing
+  changes for an installation that leaves it alone.
+
 ### Changed
 
 - **An answer read aloud is the answer as it is drawn, not the markdown behind

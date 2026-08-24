@@ -1033,11 +1033,13 @@ CREATE TABLE workspace
     voice_pause_ends_turn_ms     integer,
     voice_speech_over_room_percent integer,
     voice_unattended_microphone_ms integer,
+    voice_speech_chunking        varchar(16) not null default 'SENTENCE',
     constraint uk_workspace_name UNIQUE (name),
     constraint ck_workspace_default_memory_share CHECK (default_memory_share IS NULL OR (default_memory_share >= 1 AND default_memory_share <= 50)),
     constraint ck_workspace_voice_pause_ends_turn CHECK (voice_pause_ends_turn_ms IS NULL OR (voice_pause_ends_turn_ms BETWEEN 1500 AND 10000)),
     constraint ck_workspace_voice_speech_over_room CHECK (voice_speech_over_room_percent IS NULL OR (voice_speech_over_room_percent BETWEEN 120 AND 600)),
     constraint ck_workspace_voice_unattended_microphone CHECK (voice_unattended_microphone_ms IS NULL OR (voice_unattended_microphone_ms BETWEEN 300000 AND 3600000)),
+    constraint ck_workspace_voice_speech_chunking CHECK ((voice_speech_chunking) IN ('NONE', 'SENTENCE', 'PARAGRAPH')),
     constraint workspace_quick_chat_model_id_fkey FOREIGN KEY (quick_chat_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_speech_model_id_fkey FOREIGN KEY (speech_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_transcription_model_id_fkey FOREIGN KEY (transcription_model_id) REFERENCES llm_model(id) ON DELETE SET NULL

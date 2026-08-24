@@ -451,6 +451,19 @@ orknux:
     # files, no network and no threads. These bound what it can spend.
     timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:5000}
     statement-limit: ${ORKNUX_SCRIPT_STATEMENT_LIMIT:5000000}
+  library:
+    registry:
+      # Where an administrator's "install random@4.1.0" fetches from. The fetch
+      # happens once, on the server, into the database: the file it brings back
+      # is what is stored and what runs, the sandbox gains no network, and the
+      # registry is never consulted again.
+      #
+      # Point it at a mirror to install from one. Set it empty for an
+      # installation with no way out - the Libraries screen then offers the
+      # upload alone rather than a field that fails on being used.
+      url: ${ORKNUX_LIBRARY_REGISTRY_URL:https://registry.npmjs.org}
+      # How long the registry has to answer, for the metadata and for the file.
+      timeout: ${ORKNUX_LIBRARY_REGISTRY_TIMEOUT:30s}
   plugin:
     # A plugin runs in its own sandbox, configured separately from a workspace's
     # functions on purpose. Its budget is the larger of the two: a plugin is a

@@ -190,6 +190,31 @@ class UserAPI(
     }
 
     /**
+     * Whether a chat prints what an answer cost beside how long it took.
+     *
+     * Mine only, and deliberately without the `id` the two above take. Those set
+     * an address and where mail goes, which an administrator has a reason to
+     * reach: somebody who has left is still receiving it until they can. This
+     * settles what is drawn on one person's own screen, on a chat nobody else can
+     * open, and nothing about it needs arranging on their behalf. The narrower
+     * door is the honest one - an argument nobody should pass is better not
+     * offered.
+     *
+     * Allowed for an external user for the same reason the two above are: the
+     * column is this installation's record of a preference, and no sign-in has
+     * anything to overwrite it with.
+     */
+    @MutationMapping
+    @Transactional
+    fun setChatCostShown(@Argument shown: Boolean): UserView {
+        val held = users.findByUsername(editor()) ?: throw UserNotFoundException(-1)
+        held.chatCostShown = shown
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = editor()
+        return describe(users.save(held))
+    }
+
+    /**
      * The account this call is allowed to change: mine when no id was given,
      * anybody's for an administrator.
      *
@@ -287,6 +312,7 @@ class UserAPI(
         email = user.email,
         emailChosen = user.emailChosen,
         emailNotifications = user.emailNotifications,
+        chatCostShown = user.chatCostShown,
         type = user.type,
         roles = user.roles.map { RoleRef(requireNotNull(it.id), it.name) }.sortedBy { it.name.lowercase() },
         editable = user.editable,
@@ -306,6 +332,8 @@ data class UserView(
     val emailChosen: Boolean,
     /** Whether the news that rings their bell is posted to them as well. */
     val emailNotifications: Boolean,
+    /** Whether their chats say what an answer cost as well as how long it took. */
+    val chatCostShown: Boolean,
     val type: UserType,
     val roles: List<RoleRef>,
     /** False for anybody the identity provider defines. */

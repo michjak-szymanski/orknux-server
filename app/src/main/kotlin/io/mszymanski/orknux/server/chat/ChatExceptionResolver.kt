@@ -22,6 +22,7 @@ class ChatExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ChatAgentUnusableException,
             is ChatLlmSessionUnusableException,
             is ChatDisabledException,
+            is ChatNothingToRegenerateException,
             -> ErrorType.BAD_REQUEST
 
             is ChatSessionNotFoundException -> ErrorType.NOT_FOUND

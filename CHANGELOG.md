@@ -244,6 +244,24 @@ have failed.
   that lives only in a dialog somebody clicked through last month is a decision
   nobody can audit.
 
+- **A chat's last answer can be asked for again, and the one it replaces is
+  kept.** A circling arrow under the answer the conversation ends on asks the
+  same question a second time. Only that one: anything earlier has been answered
+  on top of, and a different answer three turns back would rewrite what those
+  turns were replying to. Whatever the dropdown says answers this chat is what
+  answers, which is the model or agent that gave the answer in the first place
+  unless somebody has moved it since — so "again, on something else" is picking
+  something else and then pressing this, rather than a second control.
+
+  Asking again has to take the old answer off the thread — a conversation
+  holding two answers to one question was never had, and the second would be
+  answering the first — so the one that comes off is kept and the row underneath
+  says which take you are reading, **1 of 2** with a chevron either side. It is
+  kept on the server rather than in the tab, so it is still there after a reload,
+  and it is deleted with the chat. A provider that refuses puts the old answer
+  straight back: a chat left ending on the question is worse than the answer
+  somebody did not like, and it is not what they asked for.
+
 ### Changed
 
 - **An answer read aloud is the answer as it is drawn, not the markdown behind
@@ -269,6 +287,21 @@ have failed.
   that used `console.log` or `Intl` without declaring them will fail on its next
   call: add `permissions()` to it, load it again, and accept the list. Nothing else
   a plugin could reach has changed, because there was nothing else it could reach.
+
+- **The picker above a chat offers agents before models.** Agents is the first
+  tab and the one it opens on, because an agent brings the conversation its
+  instructions, its skills and its tools and supplies a model of its own — the
+  bare models are the raw material it is made out of. A chat already pointed at
+  a bare model opens on Models instead, so the entry that is ticked is the one
+  under the pointer rather than a tab away.
+
+- **Switching workspace while in a chat leaves you in the chat.** It sent you to
+  the new workspace's workflows, which meant anybody comparing two workspaces'
+  conversations was thrown out of the conversation on every switch. The chat now
+  stays where it is and changes what it is about: the list on the left becomes
+  the workspace's own chats and the most recent of them opens. Every other screen
+  that belongs to no workspace — the manual, the admin section, Preferences — is
+  unchanged, because choosing a workspace there still means "take me to it".
 
 ### Fixed
 

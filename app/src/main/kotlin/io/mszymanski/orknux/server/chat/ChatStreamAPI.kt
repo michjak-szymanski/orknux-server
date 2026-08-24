@@ -77,8 +77,47 @@ class ChatStreamAPI(
 
         // Tied to the chat here, and read for anything the model can look at.
         val sent = attachments.attach(session, request.attachmentIds)
-        val start = chats.beginSend(id, request.text, attachments.imagesOf(sent))
+        return answering(id, chats.beginSend(id, request.text, attachments.imagesOf(sent)), request.text)
+    }
 
+    /**
+     * Asks the last answer again, and streams the new one back the same way.
+     *
+     * A door of its own rather than a flag on [stream], because nothing is
+     * being said: there is no text, nothing is attached, and the turn that goes
+     * to the model is the conversation with its own last answer taken off.
+     * Everything after that is identical, which is why both end in [answering].
+     *
+     * The chat is not renamed off a regenerate. A name is taken from the first
+     * exchange, and this is not one - it is the same exchange, answered again,
+     * and letting the second attempt rename a chat somebody has already found
+     * in the sidebar would move it out from under them.
+     */
+    @PostMapping("/api/chats/{id}/regenerate", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
+    fun regenerate(@PathVariable id: Long): StreamingResponseBody {
+        if (!settings.chatEnabled()) throw ChatDisabledException()
+        val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
+        requireOwn(session)
+
+        return answering(id, chats.beginRegenerate(id), said = null) { chats.abandonRegenerate(id) }
+    }
+
+    /**
+     * The asking itself, once what to ask has been settled.
+     *
+     * @param said what the person typed, for naming a chat that has no name
+     *   yet, or null where nothing was said - a regenerate.
+     * @param giveUp what to undo where no answer arrives. A regenerate has
+     *   already taken the old answer off the thread by this point, so a
+     *   provider that refuses would otherwise leave the chat ending on the
+     *   question - the one outcome worse than the answer somebody did not like.
+     */
+    private fun answering(
+        id: Long,
+        start: ChatSendStart,
+        said: String?,
+        giveUp: () -> Unit = {},
+    ): StreamingResponseBody {
         return StreamingResponseBody { out ->
             fun send(event: String, payload: Any) {
                 // One frame: the event name, the JSON, and the blank line that
@@ -87,6 +126,10 @@ class ChatStreamAPI(
                 out.write("event: $event\ndata: ${mapper.writeValueAsString(payload)}\n\n".toByteArray())
                 out.flush()
             }
+
+            // Set the moment the answer is safely in the history, so the
+            // rescue below cannot run on top of one that did arrive.
+            var kept = false
 
             try {
                 /*
@@ -104,17 +147,25 @@ class ChatStreamAPI(
                     }
                 }
                 when (answer) {
-                    is ChatCompletion.Failed -> send("error", mapOf("reason" to answer.reason))
+                    is ChatCompletion.Failed -> {
+                        giveUp()
+                        send("error", mapOf("reason" to answer.reason))
+                    }
                     // The loop runs tools to a conclusion, so nothing here is
                     // still asking for one.
-                    is ChatCompletion.CalledTools ->
+                    is ChatCompletion.CalledTools -> {
+                        giveUp()
                         send("error", mapOf("reason" to "The model asked for a tool that could not be run"))
+                    }
                     is ChatCompletion.Answered -> {
                         chats.finishSend(id, answer.content)
+                        kept = true
                         // Naming it is not part of the answer, so a companion
                         // model that will not answer costs the chat nothing.
-                        runCatching { titles.nameFrom(id, request.text, answer.content) }
-                            .onFailure { log.warn("Could not name chat {}", id, it) }
+                        if (said != null) {
+                            runCatching { titles.nameFrom(id, said, answer.content) }
+                                .onFailure { log.warn("Could not name chat {}", id, it) }
+                        }
                         send("done", mapOf("millis" to answer.millis))
                     }
                 }
@@ -122,6 +173,7 @@ class ChatStreamAPI(
                 // The reader went away, or the write failed. Nothing to report
                 // to: the only thing left is not to lose it in silence.
                 log.warn("Chat {} stream ended early", id, closed)
+                if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
             }
         }
     }

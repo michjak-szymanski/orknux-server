@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.variable
 
+import io.mszymanski.orknux.connector.connection.McpServerService
+import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.action.ActionHeaders
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -35,8 +37,17 @@ class VariableAPI(
     private val functions: WorkflowFunctionRepository,
     private val actions: WorkflowActionRepository,
     private val actionHeaders: ActionHeaders,
-    /** Asked what still reads a variable before one is removed or made readable. */
+    /**
+     * Asked what still reads a variable before one is removed or made readable.
+     *
+     * Three of them, because a credential is not one card's any more: since #244
+     * every secret field in the product may read a workspace secret, and a guard
+     * that only knows about model providers is a guard that lets somebody delete
+     * the variable a Slack connection posts with.
+     */
     private val models: ModelService,
+    private val connections: WorkspaceConnectionService,
+    private val mcpServers: McpServerService,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -213,7 +224,7 @@ class VariableAPI(
             // one is a credential on a screen. The other end of the rule that
             // refuses to bind a provider to anything but a SECRET.
             if (kind != VariableKind.SECRET && variable.kind == VariableKind.SECRET) {
-                val credentialOf = models.providersReading(variable.workspaceId, requireNotNull(variable.id))
+                val credentialOf = credentialOf(variable)
                 if (credentialOf.isNotEmpty()) throw VariableSecrecyHeldException(variable.name, credentialOf)
             }
             variable.kind = kind
@@ -283,14 +294,14 @@ class VariableAPI(
         if (usedBy.isNotEmpty()) throw VariableInUseException(variable.name, usedBy)
 
         /*
-         * And a model provider reading it for its credential holds it in place
-         * too - see [VariableHeldByProviderException] for why that is a refusal
-         * rather than a warning. Asked of the connection module, which owns
-         * providers, rather than joined to: there is no foreign key across that
-         * boundary and there is not meant to be one.
+         * And anything reading it for a credential holds it in place too - see
+         * [VariableHeldAsCredentialException] for why that is a refusal rather
+         * than a warning. Asked of the connection module, which owns all three
+         * kinds of holder, rather than joined to: there is no foreign key across
+         * that boundary and there is not meant to be one.
          */
-        val credentialOf = models.providersReading(variable.workspaceId, requireNotNull(variable.id))
-        if (credentialOf.isNotEmpty()) throw VariableHeldByProviderException(variable.name, credentialOf)
+        val credentialOf = credentialOf(variable)
+        if (credentialOf.isNotEmpty()) throw VariableHeldAsCredentialException(variable.name, credentialOf)
 
         variables.delete(variable)
         auditRecorder.record(
@@ -299,6 +310,24 @@ class VariableAPI(
             "Variable ${variable.name} removed",
         )
         return true
+    }
+
+    /**
+     * Everything reading this variable for a credential, each named the way a
+     * sentence would name it.
+     *
+     * One list rather than three, and the noun is carried by the entry rather
+     * than by the sentence around it: "the connection Slack, the MCP server
+     * brave-search" reads, and a bare "Slack, brave-search" leaves whoever hit
+     * the refusal to go and find out what those are. The order is by kind and
+     * then by name, so two runs say the same thing.
+     */
+    private fun credentialOf(variable: WorkspaceVariable): List<String> {
+        val workspaceId = variable.workspaceId
+        val id = requireNotNull(variable.id)
+        return models.providersReading(workspaceId, id).map { "the model provider $it" } +
+            connections.connectionsReading(workspaceId, id).map { "the connection $it" } +
+            mcpServers.serversReading(workspaceId, id).map { "the MCP server $it" }
     }
 
     /**

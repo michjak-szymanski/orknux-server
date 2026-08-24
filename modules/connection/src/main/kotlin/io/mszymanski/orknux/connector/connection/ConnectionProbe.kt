@@ -89,11 +89,6 @@ data class ConnectionTarget(
     }
 }
 
-fun WorkspaceConnection.target(): ConnectionTarget =
-    ConnectionTarget(effectiveUrl, authType, secret, headers.toList())
-
-fun McpServer.target(): ConnectionTarget = ConnectionTarget(address, authType, secret, headers.toList())
-
 /**
  * Checks that a connection actually answers, so the workspace screen reports what was
  * observed rather than merely that credentials were typed in.

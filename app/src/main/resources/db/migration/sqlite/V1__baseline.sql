@@ -375,8 +375,10 @@ CREATE TABLE mcp_server
     address                      varchar(1000) not null,
     auth_type                    varchar(16) not null default 'NONE',
     secret                       varchar(4000),
+    secret_variable_id           integer,
     constraint uk_mcp_server_workspace_name UNIQUE (workspace_id, name),
-    constraint ck_mcp_server_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC')))
+    constraint ck_mcp_server_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
+    constraint ck_mcp_server_secret CHECK (secret_variable_id IS NULL OR secret IS NULL)
 );
 
 CREATE TABLE mcp_server_header
@@ -992,16 +994,20 @@ CREATE TABLE workspace_connection
     url_override                 varchar(1000),
     auth_type                    varchar(16) not null default 'NONE',
     secret                       varchar(4000),
+    secret_variable_id           integer,
     last_check_status            varchar(16),
     last_check_message           varchar(500),
     last_checked_at              timestamp,
     app_token                    varchar(4000),
+    app_token_variable_id        integer,
     smtp_port                    integer,
     smtp_username                varchar(320),
     smtp_from                    varchar(320),
     smtp_security                varchar(16) not null default 'STARTTLS',
     constraint uk_workspace_connection_name UNIQUE (workspace_id, name),
+    constraint ck_workspace_connection_app_token CHECK (app_token_variable_id IS NULL OR app_token IS NULL),
     constraint ck_workspace_connection_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
+    constraint ck_workspace_connection_secret CHECK (secret_variable_id IS NULL OR secret IS NULL),
     constraint ck_workspace_connection_check CHECK (((last_check_status IS NULL) OR ((last_check_status) IN ('CONNECTED', 'FAILED')))),
     constraint ck_workspace_connection_smtp_security CHECK (((smtp_security) IN ('NONE', 'STARTTLS', 'TLS'))),
     constraint ck_workspace_connection_type CHECK (((type) IN ('SLACK', 'SMTP', 'HTTP'))),

@@ -10,6 +10,7 @@ import io.mszymanski.orknux.connector.model.ProviderType
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.connector.security.SecretReferences
 import io.mszymanski.orknux.connector.security.SecretVariables
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -109,10 +110,9 @@ class EntraAuthorityGuardTest {
             properties,
             ObjectMapper(),
             // Never asked to decrypt anything: the secret here is plain text,
-            // which is what the cipher recognises it as.
-            SecretCipher(""),
-            // No provider here reads a workspace secret; each holds its own.
-            SecretVariables { _, _ -> null },
+            // which is what the cipher recognises it as. And no provider here
+            // reads a workspace secret; each holds its own.
+            SecretReferences(SecretVariables { _, _ -> null }, SecretCipher("")),
             proxies,
         )
     }

@@ -23,6 +23,12 @@ interface WorkspaceConnectionRepository : JpaRepository<WorkspaceConnection, Lon
     /** Every workspace's connection to one kind of service, for the listeners. */
     fun findByType(type: ConnectionType): List<WorkspaceConnection>
 
+    /** What is asked before a variable is deleted: which connections read it. */
+    fun findByWorkspaceIdAndSecretVariableId(workspaceId: Long, secretVariableId: Long): List<WorkspaceConnection>
+
+    /** And the same for the second credential, which chooses for itself. */
+    fun findByWorkspaceIdAndAppTokenVariableId(workspaceId: Long, appTokenVariableId: Long): List<WorkspaceConnection>
+
     fun deleteByWorkspaceId(workspaceId: Long): Long
 }
 
@@ -31,6 +37,9 @@ interface McpServerRepository : JpaRepository<McpServer, Long> {
     fun findByWorkspaceId(workspaceId: Long, sort: Sort): List<McpServer>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): McpServer?
+
+    /** What is asked before a variable is deleted: which servers read it. */
+    fun findByWorkspaceIdAndSecretVariableId(workspaceId: Long, secretVariableId: Long): List<McpServer>
 
     fun deleteByWorkspaceId(workspaceId: Long): Long
 }

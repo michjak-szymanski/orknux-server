@@ -2495,10 +2495,38 @@ type WorkspaceConnection {
     headers: [HttpHeader!]!
     "True while the workspace follows an admin default, which locks name, type and URL."
     inherited: Boolean!
-    "Whether credentials are stored; the credentials themselves are never listed."
+    "Whether the connection holds a credential of its own; it is never listed."
     secretSet: Boolean!
-    "Whether an app-level token is stored, which is what lets orknux listen for events."
+    """
+    The workspace variable secret this credential is read from, or null when the
+    connection keeps its own copy. Those are the two, and they are exclusive.
+
+    Per field, not per connection: `appTokenVariableId` answers the same
+    question separately, because a Slack connection's bot token and app-level
+    token are two credentials and one switch above both could not say which.
+    """
+    secretVariableId: ID
+    """
+    What that variable is called and which catalog holds it, for showing the
+    reference without a second round trip. Null when there is no reference, and
+    also when there is one pointing at nothing — see `secretVariableMissing`.
+    """
+    secretVariableName: String
+    secretVariableCatalog: String
+    """
+    A reference pointing at nothing. A variable a connection reads cannot be
+    deleted, so this should not happen — but a restore or a database edited by
+    hand can produce one, and a connection that cannot say why it has no token
+    is the failure worth reporting rather than assuming away.
+    """
+    secretVariableMissing: Boolean!
+    "Whether an app-level token of the connection's own is stored, which is what lets orknux listen for events."
     appTokenSet: Boolean!
+    "The app-level token's own answers to the same four questions."
+    appTokenVariableId: ID
+    appTokenVariableName: String
+    appTokenVariableCatalog: String
+    appTokenVariableMissing: Boolean!
     "Where a mail connection sends: the port it will use, which is the default when none was chosen."
     smtpPort: Int
     "Who a mail connection logs in as; null sends without authenticating."
@@ -2672,8 +2700,22 @@ input CreateWorkspaceConnectionInput {
     "Ignored for Slack, which is always a bearer token."
     authType: AuthType
     secret: String
+    """
+    A workspace variable secret to read the credential from, instead of keeping
+    a copy here. Sending this and `secret` together is refused rather than
+    resolved by precedence.
+
+    The variable has to be this workspace's and has to be of kind SECRET — a
+    VALUE is returned with the variable listing, and a key on a listing is a key
+    on a screen. It is referenced by id, so renaming it or moving it to another
+    catalog does not disturb the connection, and deleting it is refused while
+    anything reads it.
+    """
+    secretVariableId: ID
     "Slack's app-level token. Optional: with one the connection also listens."
     appToken: String
+    "The app-level token's own reference, chosen separately from `secretVariableId`."
+    appTokenVariableId: ID
     "Where the mail server listens; null takes the port the security implies."
     smtpPort: Int
     "Who to log in as; null sends without authenticating, and the password arrives as secret."
@@ -2690,10 +2732,21 @@ input UpdateWorkspaceConnectionInput {
     url: String
     urlOverride: String
     authType: AuthType
-    "Null leaves the stored credentials alone; empty clears them."
+    """
+    Null leaves the stored credential alone; empty clears it, reference and all.
+    A value stores a copy on the connection and drops any reference it held.
+    """
     secret: String
+    """
+    Points the credential at a workspace variable secret, dropping any copy it
+    held. Null leaves it as it is. Sending it together with `secret` is refused:
+    that is a caller who has not chosen between the two.
+    """
+    secretVariableId: ID
     "Slack's app-level token, with the same null and empty meaning."
     appToken: String
+    "And the app-level token's own reference, chosen separately from `secretVariableId`."
+    appTokenVariableId: ID
     smtpPort: Int
     smtpUsername: String
     smtpFrom: String
@@ -2709,7 +2762,18 @@ type McpServer {
     address: String!
     authType: AuthType!
     headers: [HttpHeader!]!
+    "Whether the server holds a credential of its own. False for one reading a variable."
     secretSet: Boolean!
+    """
+    The workspace variable secret the credential is read from, or null when the
+    server keeps its own copy. Those are the two, and they are exclusive.
+    """
+    secretVariableId: ID
+    "What that variable is called and which catalog holds it, for drawing the reference."
+    secretVariableName: String
+    secretVariableCatalog: String
+    "A reference pointing at nothing, reported rather than assumed away."
+    secretVariableMissing: Boolean!
 }
 
 input CreateMcpServerInput {
@@ -2718,6 +2782,12 @@ input CreateMcpServerInput {
     address: String!
     authType: AuthType
     secret: String
+    """
+    A workspace variable secret to read the credential from, instead of keeping
+    a copy here. This workspace's, kind SECRET, by id — and not together with
+    `secret`, which is refused rather than resolved by precedence.
+    """
+    secretVariableId: ID
     headers: [HttpHeaderInput!]
 }
 
@@ -2725,8 +2795,13 @@ input UpdateMcpServerInput {
     name: String!
     address: String!
     authType: AuthType
-    "Null leaves the stored credentials alone; empty clears them."
+    "Null leaves the stored credential alone; empty clears it, reference and all."
     secret: String
+    """
+    Points the credential at a workspace variable secret, dropping any copy it
+    held. Null leaves it as it is; sending it with `secret` is refused.
+    """
+    secretVariableId: ID
     headers: [HttpHeaderInput!]
 }
 

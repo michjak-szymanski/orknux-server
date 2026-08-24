@@ -12,6 +12,7 @@ import io.mszymanski.orknux.connector.connection.McpServer
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.security.SecretCipher
+import io.mszymanski.orknux.server.security.plainCredentials
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -52,6 +53,8 @@ class McpAddressGuardTest {
         ObjectMapper(),
         McpProperties(),
         ConnectionProbe(ConnectionProperties(), proxies, SecretCipher("")),
+        // No server here reads a workspace secret; each holds its own.
+        plainCredentials(),
         proxies,
     )
 

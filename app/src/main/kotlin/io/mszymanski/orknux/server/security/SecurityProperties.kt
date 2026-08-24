@@ -35,19 +35,46 @@ enum class AuthMethod {
      * request. Both are the same provider, the same claims and the same roles.
      */
     OIDC,
+
+    /**
+     * Nobody signs in. There is no door, because there is no wall.
+     *
+     * For an installation somebody is trying out, and for one already behind a
+     * gate of its own — a VPN, an authenticating proxy, a network nothing else can
+     * reach. Everything downstream still has an identity to work with, because
+     * there still is one: [io.mszymanski.orknux.server.security.OpenAccess] holds
+     * the identity this installation acts as and says why it administers.
+     *
+     * **Not a degraded LDAP, and never a fallback.** It is reached by writing
+     * `ORKNUX_AUTH_METHOD=NONE` and by nothing else: an unset variable is [LDAP],
+     * an empty one is [LDAP], and a value that is none of these four names fails
+     * the binding and stops the application before it answers a request. There is
+     * no spelling of "off" that opens this by accident, which is why it is a value
+     * of this enum rather than a second switch beside it — a boolean has a false
+     * that something else could compute.
+     *
+     * Everything that can say so, says so: the log at startup, the Doctor screen,
+     * `/api/auth/method`, and a strip across the top of every page. Somebody who
+     * inherits this installation must not have to read the environment to find out
+     * that it is open.
+     */
+    NONE,
 }
 
 @ConfigurationProperties(prefix = "orknux.security")
 data class SecurityProperties(
     /**
-     * Which of the three is in use. One at a time, deliberately.
+     * Which one is in use. One at a time, deliberately.
      *
      * Two at once would mean an installation with an LDAP password for every
      * account its OIDC provider governs — a second way in, that the provider's
      * policies do not reach and its administrators do not know about.
      *
      * The default is LDAP and stays LDAP: this names what an installation *has*,
-     * and every installation that had a directory yesterday still has one.
+     * and every installation that had a directory yesterday still has one. It is
+     * also the direction to fail in, now that one of the four is [AuthMethod.NONE]
+     * — the default of a security switch has to be the closed position, and a
+     * misspelt value does not reach a default at all, it stops the application.
      */
     val authMethod: AuthMethod = AuthMethod.LDAP,
 

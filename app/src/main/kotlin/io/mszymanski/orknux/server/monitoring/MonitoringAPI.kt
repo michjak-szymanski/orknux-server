@@ -100,8 +100,13 @@ class MonitoringAPI(
              * untouched: OIDC has kept a directory alongside its provider since
              * before this existed, and nothing here is going to decide for it that
              * it has not.
+             *
+             * NONE is here for the same reason INTERNAL is, and more plainly: an
+             * installation that asks nobody to sign in does not consult a directory
+             * to decide anything, so a card reporting on one would be reporting on
+             * a dependency it does not have.
              */
-            if (security.authMethod == AuthMethod.INTERNAL) {
+            if (security.authMethod == AuthMethod.INTERNAL || security.authMethod == AuthMethod.NONE) {
                 null
             } else {
                 check("Directory", "LDAP, for who may sign in and what they may see") { ldap.list("") }

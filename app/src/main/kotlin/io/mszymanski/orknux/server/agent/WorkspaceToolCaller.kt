@@ -65,7 +65,7 @@ class WorkspaceToolCaller(
          * agent can say so, try another way, or answer without it, all of which beat
          * the conversation ending because a tool could not be put together.
          */
-        val resolved = when (val found = scriptImports.resolve(tool.imports)) {
+        val resolved = when (val found = scriptImports.resolve(tool.imports, tool.libraries)) {
             is ScriptImportsResult.Resolved -> found
             is ScriptImportsResult.Broken -> {
                 log.warn("Tool {} could not be assembled for agent {}: {}", tool.name, agent.name, found.reason)

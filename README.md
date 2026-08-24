@@ -920,6 +920,37 @@ refused when it is saved, with the loop named; a function that is imported canno
 be deleted, with the importers named; and a function a plugin declared cannot be
 imported at all, because it does not run in this sandbox.
 
+### Libraries
+
+A **library** is JavaScript an installation loads once and its scripts import. An
+administrator uploads a bundle on the Libraries page; the key is the filename, so
+`date-fns.js` loads as `date-fns`. A function or a tool then imports it under a
+local name and reaches it through the same `imports` object an imported function
+arrives in.
+
+**It is a stored artefact rather than a name from a registry**, and it has to be.
+The only two ways to honour a registry name are both shut: fetching one at run
+time would mean giving the sandbox a network, and fetching it at upload would
+mean this server reaching out to a registry — which makes an offline installation
+unusable and makes what a workspace runs depend on what a registry served that
+afternoon.
+
+**And it is the installation's rather than a workspace's**, because the question
+an installation has to be able to answer is what code is running inside it. The
+Libraries page answers the other half of that: every function and every tool that
+imports a given library, named with the workspace it lives in. That list is also
+what stops a library being removed while something still uses it.
+
+The file is evaluated once, in the sandbox it will run in, and what its default
+export turned out to hold is stored — which is what the editor annotates
+`imports` from. Nothing more is claimed about it: a member is something to call
+or something to read, because nothing in a bundle says what its arguments are.
+A file that is not a module with a default export is refused on the way in.
+
+A plugin is the exception and imports no library at all: a plugin **embeds** what
+it needs, because a plugin is meant to be portable between installations and one
+that assumed a library was loaded here would not be.
+
 Every subtype runs. A send goes out through its connection, a mail leaves through
 its SMTP server, an HTTP request is made, a function is called, a wait parks. What
 is missing is reported rather than invented: a node with nobody to send to, or a

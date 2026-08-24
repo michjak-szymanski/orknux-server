@@ -195,6 +195,56 @@ class ScriptImportTest {
         assertThat((result as ScriptResult.Failed).reason).contains("not allowed")
     }
 
+    /**
+     * A library is read for what it exports, not asked what it is.
+     *
+     * It is somebody else's code, very often a bundle nobody here wrote, so it is
+     * never made to answer a question about itself the way a plugin is. What its
+     * default export turned out to hold is read off the value, and a member is
+     * either something to call or something to read — which is the whole of what
+     * anything can honestly say about a bundle.
+     */
+    @Test
+    fun `a library is read for the members its export holds`() {
+        val read = runner.library("export default { tag: 'arith', add: (a, b) => a + b };")
+
+        assertThat(read).isInstanceOf(LibraryInspection.Read::class.java)
+        with(read as LibraryInspection.Read) {
+            assertThat(callable).isFalse()
+            assertThat(members.map { it.name }).containsExactly("add", "tag")
+            assertThat(members.single { it.name == "add" }.callable).isTrue()
+            assertThat(members.single { it.name == "tag" }.callable).isFalse()
+        }
+    }
+
+    /** A bundle that exports one function is the other spelling, and says so. */
+    @Test
+    fun `a library whose export is a function is callable`() {
+        val read = runner.library("export default function shout(t) { return t.toUpperCase(); }")
+
+        assertThat((read as LibraryInspection.Read).callable).isTrue()
+    }
+
+    @Test
+    fun `a file with no default export is not a library`() {
+        val read = runner.library("const x = 1;")
+
+        assertThat(read).isInstanceOf(LibraryInspection.Unreadable::class.java)
+        assertThat((read as LibraryInspection.Unreadable).reason).contains("no default export")
+    }
+
+    /**
+     * Reading a library runs its module body, and that body gets no more than a
+     * function's does. A bundle that reached the host while being inspected would
+     * be a way in taken by uploading a file.
+     */
+    @Test
+    fun `a library that reaches for the host while loading is refused`() {
+        val read = runner.library("""const f = Java.type("java.lang.System"); export default { f };""")
+
+        assertThat(read).isInstanceOf(LibraryInspection.Unreadable::class.java)
+    }
+
     /** A script that imports nothing is handed no prelude and is exactly as it was. */
     @Test
     fun `a script with no imports has no imports object`() {

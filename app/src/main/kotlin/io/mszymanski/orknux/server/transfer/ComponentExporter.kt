@@ -4,6 +4,7 @@ import io.mszymanski.orknux.server.action.WorkflowAction
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.library.ScriptLibraryRepository
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.agent.AgentSkill
@@ -61,6 +62,7 @@ class ComponentExporter(
     private val skills: AgentSkillRepository,
     private val catalogs: SkillCatalogRepository,
     private val variables: WorkspaceVariableRepository,
+    private val scriptLibraries: ScriptLibraryRepository,
     private val actions: WorkflowActionRepository,
     private val triggers: WorkflowTriggerRepository,
     private val agents: AgentRepository,
@@ -344,6 +346,25 @@ class ComponentExporter(
                         }
                     }
             }
+            /*
+             * The libraries it uses, by key and local name.
+             *
+             * The library itself does not travel. It is the installation's — loaded
+             * once, vouched for once, and shared by every workspace — so an
+             * envelope that carried a copy would be an envelope that installs
+             * software, which is not a thing importing a function should do. The
+             * key is the reference, and an installation that has not loaded it says
+             * so on the way in.
+             */
+            val used = putArray("libraries")
+            held.libraries.forEach { one ->
+                scriptLibraries.findById(one.importedId).orElse(null)?.let { library ->
+                    used.addObject().apply {
+                        put("libraryRef", library.key)
+                        put("name", one.importName)
+                    }
+                }
+            }
         }
 
     private fun describeCondition(workspaceId: Long, held: WorkflowCondition): ObjectNode =
@@ -388,6 +409,25 @@ class ComponentExporter(
                             put("name", one.importName)
                         }
                     }
+            }
+            /*
+             * The libraries it uses, by key and local name.
+             *
+             * The library itself does not travel. It is the installation's — loaded
+             * once, vouched for once, and shared by every workspace — so an
+             * envelope that carried a copy would be an envelope that installs
+             * software, which is not a thing importing a function should do. The
+             * key is the reference, and an installation that has not loaded it says
+             * so on the way in.
+             */
+            val used = putArray("libraries")
+            held.libraries.forEach { one ->
+                scriptLibraries.findById(one.importedId).orElse(null)?.let { library ->
+                    used.addObject().apply {
+                        put("libraryRef", library.key)
+                        put("name", one.importName)
+                    }
+                }
             }
         }
 

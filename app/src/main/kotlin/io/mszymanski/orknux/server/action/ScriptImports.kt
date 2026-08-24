@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.library.ScriptLibraryRepository
 import io.mszymanski.orknux.workflow.script.ScriptModule
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -23,25 +24,45 @@ import org.springframework.stereotype.Service
  * not hold its name, and the code that calls it does not hold its id.
  */
 @Service
-class ScriptImports(private val functions: WorkflowFunctionRepository) {
+class ScriptImports(
+    private val functions: WorkflowFunctionRepository,
+    private val libraries: ScriptLibraryRepository,
+) {
 
     /**
-     * Everything [imports] reaches, deepest first.
+     * Everything [imports] and [libraries] reach, deepest first.
      *
-     * Answers rather than throws, because two of its three callers are runners: a
-     * step that cannot assemble its imports has failed, and a failed step is a
-     * sentence in a run's history rather than an exception out of a node.
+     * The two lists arrive apart and leave together. They are stored apart because
+     * they point at two different tables, and they leave together because from
+     * inside a script there is no difference worth spelling: both arrive in the one
+     * `imports` object, under whatever names the importer chose.
+     *
+     * Libraries are leaves. A library is one self-contained module — that is what
+     * being uploadable means — so nothing is walked underneath it.
+     *
+     * Answers rather than throws, because most of its callers are runners: a step
+     * that cannot assemble its imports has failed, and a failed step is a sentence
+     * in a run's history rather than an exception out of a node.
      */
-    fun resolve(imports: List<ScriptImport>): ScriptImportsResult {
-        if (imports.isEmpty()) return ScriptImportsResult.Resolved(emptyList(), emptyMap())
+    fun resolve(
+        imports: List<ScriptImport>,
+        libraryImports: List<ScriptImport> = emptyList(),
+    ): ScriptImportsResult {
+        if (imports.isEmpty() && libraryImports.isEmpty()) {
+            return ScriptImportsResult.Resolved(emptyList(), emptyMap())
+        }
 
         val modules = LinkedHashMap<String, ScriptModule>()
         try {
+            libraryImports.forEach { held -> library(held.importedId, modules) }
             imports.forEach { walk(it.importedId, modules, ArrayDeque()) }
         } catch (broken: ImportUnresolvableException) {
             return ScriptImportsResult.Broken(broken.message ?: "could not be assembled")
         }
-        return ScriptImportsResult.Resolved(modules.values.toList(), named(imports))
+        return ScriptImportsResult.Resolved(
+            modules.values.toList(),
+            named(imports) + libraryNames(libraryImports),
+        )
     }
 
     /**
@@ -106,6 +127,10 @@ class ScriptImports(private val functions: WorkflowFunctionRepository) {
 
         path.addLast(id)
         try {
+            // Its own libraries as well as its own imports. A function reached
+            // through another still needs whatever it calls, and a module written
+            // down without them would run as far as its first library call.
+            function.libraries.forEach { library(it.importedId, modules) }
             function.imports.forEach { walk(it.importedId, modules, path) }
         } finally {
             path.removeLast()
@@ -115,14 +140,37 @@ class ScriptImports(private val functions: WorkflowFunctionRepository) {
             key = key,
             name = function.name,
             source = function.source,
-            imports = named(function.imports),
+            imports = named(function.imports) + libraryNames(function.libraries),
         )
+    }
+
+    /** Adds one library. A leaf: a library is one module and imports nothing. */
+    private fun library(id: Long, modules: MutableMap<String, ScriptModule>) {
+        val key = libraryKeyOf(id)
+        if (modules.containsKey(key)) return
+        if (modules.size >= MAX_MODULES) throw ImportUnresolvableException("reaches more than $MAX_MODULES scripts")
+
+        val held = libraries.findById(id).orElse(null)
+            ?: throw ImportUnresolvableException("imports a library that is no longer loaded")
+        modules[key] = ScriptModule(key = key, name = held.key, source = held.source)
     }
 
     private fun named(imports: List<ScriptImport>): Map<String, String> =
         imports.associate { it.importName to keyOf(it.importedId) }
 
+    private fun libraryNames(imports: List<ScriptImport>): Map<String, String> =
+        imports.associate { it.importName to libraryKeyOf(it.importedId) }
+
+    /**
+     * Two prefixes, because the two ids are counted separately.
+     *
+     * Function 3 and library 3 are different things, and a registry keyed by the
+     * bare number would have one of them standing in for the other — which is a
+     * call into somebody else's code, silently.
+     */
     private fun keyOf(id: Long): String = "f$id"
+
+    private fun libraryKeyOf(id: Long): String = "l$id"
 
     /** Only ever caught in [resolve], which turns it into an answer. */
     private class ImportUnresolvableException(message: String) : RuntimeException(message)

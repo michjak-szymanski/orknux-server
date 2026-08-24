@@ -132,6 +132,21 @@ class AgentTool(
     @OrderColumn(name = "position")
     var imports: MutableList<ScriptImport> = mutableListOf(),
 
+    /**
+     * The installation's libraries this tool imports, under the names it uses.
+     *
+     * A separate list from the functions it imports, pointing at a separate table.
+     * They arrive in the same `imports` object and are written the same way in the
+     * code, because from inside a script there is no difference worth spelling —
+     * but a single column that could hold either kind of id is a column that will
+     * one day hold the wrong one, and for an import that is a call into whatever
+     * happened to have that number.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "agent_tool_library", joinColumns = [JoinColumn(name = "tool_id")])
+    @OrderColumn(name = "position")
+    var libraries: MutableList<ScriptImport> = mutableListOf(),
+
     /** Off leaves it defined but out of reach, which a delete would not. */
     @Column(nullable = false)
     var enabled: Boolean = true,
@@ -157,6 +172,10 @@ interface AgentToolRepository : JpaRepository<AgentTool, Long> {
     /** Every tool that imports the function with this id, asked before a delete. */
     @Query("select t from AgentTool t join t.imports i where i.importedId = :functionId")
     fun findByImportedFunctionId(functionId: Long): List<AgentTool>
+
+    /** Every tool that imports the library with this id. */
+    @Query("select t from AgentTool t join t.libraries l where l.importedId = :libraryId")
+    fun findByImportedLibraryId(libraryId: Long): List<AgentTool>
 }
 
 class ToolNotFoundException(id: Long) : RuntimeException("No tool with id $id")

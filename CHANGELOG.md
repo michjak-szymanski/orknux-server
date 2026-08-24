@@ -13,6 +13,36 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **A function or a tool can call another function.** The editors gained an
+  *Imports* section: pick one of the workspace's own functions, give it a name,
+  and the code reaches it as `imports.thatName(…)`. A function may import a
+  function, and so may a tool; nothing imports a tool, because a tool is what an
+  agent decides to call rather than a piece anybody builds out of. What was
+  copied between three functions can now be written once.
+
+  The reference is stored as an id and the name is stored as your own word for
+  it, and holding those two apart is the whole point. Renaming the imported
+  function changes nothing in the code that calls it — the row still points at
+  the same function, and the call still says the name you chose. This is the
+  lesson of the grants that were held by name and stranded the first time
+  somebody renamed what they pointed at.
+
+  What cannot be done is refused while you are looking at it rather than at the
+  moment a workflow runs: a loop, however many functions round, is named in the
+  refusal; a function another function or a tool imports cannot be deleted, and
+  the message says which; and a function a plugin declared cannot be imported at
+  all, because it does not run in this sandbox — point an action at it instead.
+
+  Exported components carry their imports, and the function they name travels
+  with them. So does a tool's parameter list, which the export had been
+  dropping — a tool imported from an envelope written before this arrived with
+  no signature at all, which is a tool the receiving model is told the wrong
+  thing about.
+
 ## 0.9.2
 
 ### Added

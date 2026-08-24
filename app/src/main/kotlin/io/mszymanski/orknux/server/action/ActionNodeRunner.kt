@@ -57,6 +57,7 @@ class ActionNodeRunner(
     private val headers: ActionHeaders,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val scriptImports: ScriptImports,
     private val pluginRunner: PluginRunner,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
@@ -360,7 +361,25 @@ class ActionNodeRunner(
         val result = if (function.scope == FunctionScope.PLUGIN) {
             runPlugin(function, action, arguments)
         } else {
-            scripts.call(function.source, function.name, arguments, contextFor(action))
+            /*
+             * What it imports is assembled before it runs, because the sandbox
+             * resolves nothing itself. An import that no longer resolves is
+             * permanent: nothing about running the step again would find the
+             * function somebody deleted.
+             */
+            when (val resolved = scriptImports.resolve(function.imports)) {
+                is ScriptImportsResult.Broken ->
+                    throw ActionFailedException("${function.name} ${resolved.reason}", permanent = true)
+
+                is ScriptImportsResult.Resolved -> scripts.call(
+                    function.source,
+                    function.name,
+                    arguments,
+                    contextFor(action),
+                    resolved.modules,
+                    resolved.imports,
+                )
+            }
         }
 
         return when (result) {

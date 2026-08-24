@@ -151,7 +151,12 @@ class ComponentExporter(
         ComponentKind.FUNCTION -> function(workspaceId, held.id).let { function ->
             (function.params.mapNotNull { it.objectId } + listOfNotNull(function.returnObjectId))
                 .distinct()
-                .map { Held(ComponentKind.OBJECT, it, nameOf(workspaceId, ComponentKind.OBJECT, it)) }
+                .map { Held(ComponentKind.OBJECT, it, nameOf(workspaceId, ComponentKind.OBJECT, it)) } +
+                // And what it imports, which is a function that has to travel with
+                // it: a function exported without the ones it calls imports as code
+                // whose `imports` object is empty.
+                function.imports.map { it.importedId }.distinct()
+                    .map { Held(ComponentKind.FUNCTION, it, nameOf(workspaceId, ComponentKind.FUNCTION, it)) }
         }
 
         ComponentKind.CONDITION -> condition(workspaceId, held.id).let { condition ->
@@ -161,8 +166,12 @@ class ComponentExporter(
                     .map { Held(ComponentKind.FUNCTION, it, nameOf(workspaceId, ComponentKind.FUNCTION, it)) }
         }
 
-        // Neither reaches anything: a tool is code and a skill is markdown.
-        ComponentKind.TOOL, ComponentKind.SKILL -> emptyList()
+        // A tool reaches the functions it imports. A skill is markdown and
+        // reaches nothing at all.
+        ComponentKind.TOOL -> tool(workspaceId, held.id).imports.map { it.importedId }.distinct()
+            .map { Held(ComponentKind.FUNCTION, it, nameOf(workspaceId, ComponentKind.FUNCTION, it)) }
+
+        ComponentKind.SKILL -> emptyList()
 
         ComponentKind.ACTION -> action(workspaceId, held.id).let { action ->
             held(workspaceId, ComponentKind.FUNCTION, action.functionId) +
@@ -267,7 +276,7 @@ class ComponentExporter(
         ComponentKind.OBJECT -> describeObject(object_(workspaceId, held.id))
         ComponentKind.FUNCTION -> describeFunction(workspaceId, function(workspaceId, held.id))
         ComponentKind.CONDITION -> describeCondition(workspaceId, condition(workspaceId, held.id))
-        ComponentKind.TOOL -> describeTool(tool(workspaceId, held.id))
+        ComponentKind.TOOL -> describeTool(workspaceId, tool(workspaceId, held.id))
         ComponentKind.SKILL -> describeSkill(skill(workspaceId, held.id))
         ComponentKind.ACTION -> describeAction(workspaceId, action(workspaceId, held.id))
         ComponentKind.TRIGGER -> describeTrigger(workspaceId, trigger(workspaceId, held.id))
@@ -316,6 +325,25 @@ class ComponentExporter(
                     ?.takeIf { it.workspaceId == workspaceId }
                     ?.let { handed.add(it.name) }
             }
+            /*
+             * What it imports, as a reference and a local name.
+             *
+             * The reference is the imported function's name, like every other
+             * reference in this format - an envelope crosses installations, where
+             * an id means nothing. The local name is not a reference at all: it is
+             * the word the source uses, and it travels with the source.
+             */
+            val imported = putArray("imports")
+            held.imports.forEach { one ->
+                functions.findByIdOrNull(one.importedId)
+                    ?.takeIf { it.workspaceId == workspaceId }
+                    ?.let { target ->
+                        imported.addObject().apply {
+                            put("functionRef", target.name)
+                            put("name", one.importName)
+                        }
+                    }
+            }
         }
 
     private fun describeCondition(workspaceId: Long, held: WorkflowCondition): ObjectNode =
@@ -334,12 +362,34 @@ class ComponentExporter(
             }
         }
 
-    private fun describeTool(held: AgentTool): ObjectNode = start(ComponentKind.TOOL, held.name).apply {
-        put("description", held.description)
-        put("source", held.source)
-        put("typescript", held.typescript)
-        put("enabled", held.enabled)
-    }
+    private fun describeTool(workspaceId: Long, held: AgentTool): ObjectNode =
+        start(ComponentKind.TOOL, held.name).apply {
+            put("description", held.description)
+            put("source", held.source)
+            put("typescript", held.typescript)
+            put("enabled", held.enabled)
+            // What it takes. Left out until now, which made every exported tool
+            // one the receiving model is told the wrong signature for.
+            val params = putArray("params")
+            held.params.forEach { param ->
+                params.addObject().apply {
+                    put("name", param.name)
+                    put("type", param.type.name)
+                    put("objectRef", param.objectId?.let { objects.findByIdOrNull(it)?.name })
+                }
+            }
+            val imported = putArray("imports")
+            held.imports.forEach { one ->
+                functions.findByIdOrNull(one.importedId)
+                    ?.takeIf { it.workspaceId == workspaceId }
+                    ?.let { target ->
+                        imported.addObject().apply {
+                            put("functionRef", target.name)
+                            put("name", one.importName)
+                        }
+                    }
+            }
+        }
 
     private fun describeSkill(held: AgentSkill): ObjectNode = start(ComponentKind.SKILL, held.name).apply {
         put("description", held.description)

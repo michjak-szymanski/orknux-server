@@ -112,6 +112,17 @@ CREATE TABLE agent_tool
     constraint agent_tool_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE agent_tool_import
+(
+    tool_id                      integer not null,
+    position                     integer not null,
+    imported_id                  integer not null,
+    import_name                  varchar(64) not null,
+    primary key (tool_id, position),
+    constraint uq_agent_tool_import_name UNIQUE (tool_id, import_name),
+    constraint agent_tool_import_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE
+);
+
 CREATE TABLE agent_tool_param
 (
     tool_id                      integer not null,
@@ -821,6 +832,17 @@ CREATE TABLE workflow_function_external
     constraint workflow_function_external_variable_id_fkey FOREIGN KEY (variable_id) REFERENCES workspace_variable(id) ON DELETE RESTRICT
 );
 
+CREATE TABLE workflow_function_import
+(
+    function_id                  integer not null,
+    position                     integer not null,
+    imported_id                  integer not null,
+    import_name                  varchar(64) not null,
+    primary key (function_id, position),
+    constraint uq_workflow_function_import_name UNIQUE (function_id, import_name),
+    constraint workflow_function_import_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workflow_function_param
 (
     function_id                  integer not null,
@@ -1254,6 +1276,8 @@ CREATE INDEX workspace_issue_link_issue_idx ON workspace_issue_link (issue_id, a
 CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (issue_id, observer_kind, observer_id);
 CREATE UNIQUE INDEX workspace_issue_relation_pair_key ON workspace_issue_relation (issue_id, other_issue_id);
 CREATE INDEX workspace_issue_relation_other_idx ON workspace_issue_relation (other_issue_id, linked_at);
+CREATE INDEX ix_agent_tool_import_imported ON agent_tool_import (imported_id);
+CREATE INDEX ix_workflow_function_import_imported ON workflow_function_import (imported_id);
 CREATE INDEX idx_workspace_variable_catalog ON workspace_variable (catalog_id);
 CREATE INDEX idx_workspace_variable_workspace ON workspace_variable (workspace_id);
 CREATE INDEX idx_workspace_workflow_workspace_id ON workspace_workflow (workspace_id);

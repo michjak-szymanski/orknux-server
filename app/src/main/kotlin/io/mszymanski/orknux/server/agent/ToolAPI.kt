@@ -1,6 +1,15 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ImportNameInvalidException
+import io.mszymanski.orknux.server.action.ImportNameTakenException
+import io.mszymanski.orknux.server.action.ImportNotFoundException
+import io.mszymanski.orknux.server.action.ImportedFunctionView
+import io.mszymanski.orknux.server.action.ScriptImport
+import io.mszymanski.orknux.server.action.ScriptImportInput
+import io.mszymanski.orknux.server.action.ScriptImportView
+import io.mszymanski.orknux.server.action.ScriptImports
 import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.action.typeScriptType
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
@@ -41,6 +50,8 @@ class ToolAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
     private val grants: AgentGrants,
+    private val functions: WorkflowFunctionRepository,
+    private val scriptImports: ScriptImports,
 ) {
 
     @QueryMapping
@@ -81,6 +92,7 @@ class ToolAPI(
                 source = code.javascript,
                 typescript = code.typescript,
                 params = params,
+                imports = input.imports.orEmpty().toImports(input.workspaceId),
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -124,6 +136,7 @@ class ToolAPI(
          * meant to rename a tool does not have to resend its signature to keep it.
          */
         input.params?.let { tool.params = it.toParams(tool.workspaceId) }
+        input.imports?.let { tool.imports = it.toImports(tool.workspaceId) }
         tool.lastModifiedAt = OffsetDateTime.now()
         tool.lastModifiedBy = currentUser()
 
@@ -203,6 +216,21 @@ class ToolAPI(
                 objectName = param.objectId?.let { objects.findByIdOrNull(it)?.name },
             )
         },
+        imports = tool.imports.map { imported ->
+            ScriptImportView(
+                functionId = imported.importedId,
+                name = imported.importName,
+                function = functions.findByIdOrNull(imported.importedId)?.let { target ->
+                    ImportedFunctionView(
+                        name = target.name,
+                        description = target.description,
+                        signature = target.signature,
+                        returnType = target.returnType,
+                        returnObjectName = target.returnObjectId?.let { objects.findByIdOrNull(it)?.name },
+                    )
+                },
+            )
+        },
         signature = tool.signature,
         enabled = tool.enabled,
         lastModifiedAt = tool.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -250,6 +278,27 @@ class ToolAPI(
      * nothing addresses them by name. A tool's are addressed by name, by the
      * model, so two alike is a hole rather than a curiosity.
      */
+    /**
+     * The functions this tool is to import, checked before they are stored.
+     *
+     * The same four questions a function's imports are asked, and asked by the same
+     * class - a tool importing a function is the same arrangement, and a second copy
+     * of the rules here would be a second copy to keep in step. There is no loop to
+     * look for: nothing imports a tool, so a tool cannot be in one.
+     */
+    private fun List<ScriptImportInput>.toImports(workspaceId: Long): MutableList<ScriptImport> {
+        val taken = mutableSetOf<String>()
+        return map { asked ->
+            val name = asked.name.trim()
+            if (!IDENTIFIER.matches(name)) throw ImportNameInvalidException(name)
+            if (!taken.add(name)) throw ImportNameTakenException(name)
+
+            val imported = functions.findByIdOrNull(asked.functionId) ?: throw ImportNotFoundException(asked.functionId)
+            scriptImports.requireImportable(imported, workspaceId, importer = null)
+            ScriptImport(importedId = asked.functionId, importName = name)
+        }.toMutableList()
+    }
+
     private fun List<ToolParamInput>.toParams(workspaceId: Long): MutableList<AgentToolParam> {
         val seen = mutableSetOf<String>()
         return map { param ->
@@ -339,6 +388,8 @@ data class CreateToolInput(
     val typescript: String? = null,
     /** Left out means the one every tool used to take: an object called `input`. */
     val params: List<ToolParamInput>? = null,
+    /** The workspace's functions it calls, under the names it calls them. */
+    val imports: List<ScriptImportInput>? = null,
 )
 
 data class UpdateToolInput(
@@ -348,6 +399,8 @@ data class UpdateToolInput(
     val typescript: String? = null,
     /** Null leaves them alone; an empty list takes them all off. */
     val params: List<ToolParamInput>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val imports: List<ScriptImportInput>? = null,
 )
 
 data class ToolParamView(
@@ -370,6 +423,8 @@ data class ToolView(
     val source: String,
     val typescript: String,
     val params: List<ToolParamView>,
+    /** What it imports, and what it calls each of them. */
+    val imports: List<ScriptImportView>,
     /** "(city: string, days: number)", ready for the list. */
     val signature: String,
     val enabled: Boolean,

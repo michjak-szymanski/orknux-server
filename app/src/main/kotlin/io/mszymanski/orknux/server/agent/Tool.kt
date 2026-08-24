@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ScriptImport
 import io.mszymanski.orknux.server.action.ValueType
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
@@ -18,6 +19,7 @@ import jakarta.persistence.Table
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
 import java.time.OffsetDateTime
 
 /**
@@ -113,6 +115,23 @@ class AgentTool(
     @OrderColumn(name = "position")
     var params: MutableList<AgentToolParam> = mutableListOf(),
 
+    /**
+     * The workspace's functions this tool calls, under the names it calls them.
+     *
+     * The same [ScriptImport] a function's list holds, and pointing at the same
+     * table: a tool and a function are the same JavaScript in the same sandbox, and
+     * a workspace that has worked out how importing goes in one editor should not
+     * have to work it out again in the other.
+     *
+     * One direction only. A tool may import a function; nothing imports a tool,
+     * because a tool is what an agent decides to call and not a piece anybody
+     * builds out of.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "agent_tool_import", joinColumns = [JoinColumn(name = "tool_id")])
+    @OrderColumn(name = "position")
+    var imports: MutableList<ScriptImport> = mutableListOf(),
+
     /** Off leaves it defined but out of reach, which a delete would not. */
     @Column(nullable = false)
     var enabled: Boolean = true,
@@ -134,6 +153,10 @@ interface AgentToolRepository : JpaRepository<AgentTool, Long> {
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<AgentTool>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): AgentTool?
+
+    /** Every tool that imports the function with this id, asked before a delete. */
+    @Query("select t from AgentTool t join t.imports i where i.importedId = :functionId")
+    fun findByImportedFunctionId(functionId: Long): List<AgentTool>
 }
 
 class ToolNotFoundException(id: Long) : RuntimeException("No tool with id $id")

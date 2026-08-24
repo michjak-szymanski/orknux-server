@@ -15,7 +15,13 @@ import io.mszymanski.orknux.server.action.ActionSettingMissingException
 import io.mszymanski.orknux.server.action.ActionSubtypeMismatchException
 import io.mszymanski.orknux.server.action.FunctionExternallyManagedException
 import io.mszymanski.orknux.server.action.FunctionSignatureMismatchException
+import io.mszymanski.orknux.server.action.FunctionImportedException
 import io.mszymanski.orknux.server.action.FunctionInUseException
+import io.mszymanski.orknux.server.action.ImportCycleException
+import io.mszymanski.orknux.server.action.ImportNameInvalidException
+import io.mszymanski.orknux.server.action.ImportNameTakenException
+import io.mszymanski.orknux.server.action.ImportNotEditableException
+import io.mszymanski.orknux.server.action.ImportNotFoundException
 import io.mszymanski.orknux.server.action.FunctionNameInvalidException
 import io.mszymanski.orknux.server.action.FunctionNameTakenException
 import io.mszymanski.orknux.server.action.FunctionNotFoundException
@@ -191,6 +197,11 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is WorkflowNotPublishedException,
             is RoleInUseException,
             is FunctionInUseException,
+            is FunctionImportedException,
+            is ImportNameInvalidException,
+            is ImportNameTakenException,
+            is ImportNotEditableException,
+            is ImportCycleException,
             is ConditionNotInCatalogueException,
             is GraphInvalidException,
             is ConditionNameTakenException,
@@ -213,6 +224,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is VariableNotFoundException, is VariableCatalogNotFoundException -> ErrorType.NOT_FOUND
             is TriggerNotFoundException -> ErrorType.NOT_FOUND
             is ActionNotFoundException, is FunctionNotFoundException -> ErrorType.NOT_FOUND
+            is ImportNotFoundException -> ErrorType.NOT_FOUND
             is RoleNotFoundException -> ErrorType.NOT_FOUND
             is UserNotFoundException, is TokenNotFoundException -> ErrorType.NOT_FOUND
             is IssueNotFoundException, is IssueCommentNotFoundException -> ErrorType.NOT_FOUND

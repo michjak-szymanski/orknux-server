@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ScriptImports
+import io.mszymanski.orknux.server.action.ScriptImportsResult
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -23,6 +25,7 @@ import tools.jackson.databind.ObjectMapper
 class WorkspaceToolCaller(
     private val tools: AgentToolRepository,
     private val scripts: ScriptRunner,
+    private val scriptImports: ScriptImports,
     private val mapper: ObjectMapper,
 ) {
 
@@ -56,11 +59,27 @@ class WorkspaceToolCaller(
      * beat the conversation dying because a tool threw.
      */
     fun call(agent: Agent, tool: AgentTool, arguments: String): String {
+        /*
+         * What it imports, assembled before it runs. An import that no longer
+         * resolves comes back to the model as an error like any other failure: the
+         * agent can say so, try another way, or answer without it, all of which beat
+         * the conversation ending because a tool could not be put together.
+         */
+        val resolved = when (val found = scriptImports.resolve(tool.imports)) {
+            is ScriptImportsResult.Resolved -> found
+            is ScriptImportsResult.Broken -> {
+                log.warn("Tool {} could not be assembled for agent {}: {}", tool.name, agent.name, found.reason)
+                return mapper.writeValueAsString(mapOf("error" to "${tool.name} ${found.reason}"))
+            }
+        }
+
         val result = scripts.call(
             source = tool.source,
             functionName = tool.name,
             arguments = argumentsFor(tool, arguments),
             context = context(agent, tool),
+            modules = resolved.modules,
+            imports = resolved.imports,
         )
         return when (result) {
             is ScriptResult.Returned -> result.json ?: mapper.writeValueAsString(mapOf("result" to null))

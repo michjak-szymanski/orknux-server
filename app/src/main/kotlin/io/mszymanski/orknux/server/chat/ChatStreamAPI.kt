@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ModelChatClient
+import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.attachment.ChatAttachments
 import io.mszymanski.orknux.server.attachment.InstallationSettings
 import org.slf4j.LoggerFactory
@@ -51,6 +52,8 @@ data class ChatStreamRequest @JsonCreator constructor(
 class ChatStreamAPI(
     private val chats: ChatService,
     private val client: ModelChatClient,
+    /** Only to cost an answer: the prices are the model's. */
+    private val models: ModelService,
     private val titles: ChatTitles,
     private val ownership: ChatOwnership,
     private val attachments: ChatAttachments,
@@ -61,10 +64,10 @@ class ChatStreamAPI(
     /**
      * Says something, and streams the answer back.
      *
-     * Three events are sent: `chunk` for each piece as it lands, `done` with how
-     * long the model took, and `error` when it could not answer. The whole
-     * answer is written to the history when the stream ends, so a chat reloaded
-     * afterwards reads exactly as it did live.
+     * Three events are sent: `chunk` for each piece as it lands, `done` with
+     * what the turn took and what it cost, and `error` when it could not answer.
+     * The whole answer is written to the history when the stream ends, so a chat
+     * reloaded afterwards reads exactly as it did live.
      *
      * Access is checked before anything is written, because after the first byte
      * the status code has already been sent and there is no way to say no.
@@ -166,7 +169,25 @@ class ChatStreamAPI(
                             runCatching { titles.nameFrom(id, said, answer.content) }
                                 .onFailure { log.warn("Could not name chat {}", id, it) }
                         }
-                        send("done", mapOf("millis" to answer.millis))
+                        /*
+                         * What the turn took and what it cost, in one frame.
+                         *
+                         * Costed here rather than on the screen because the
+                         * prices are the model's and the model is the server's
+                         * - a browser working it out would need them sent, and
+                         * then two places would round money. Null where the
+                         * model carries no prices, which the screen shows as
+                         * nothing rather than as nought.
+                         */
+                        send(
+                            "done",
+                            mapOf(
+                                "millis" to answer.millis,
+                                "inputTokens" to answer.inputTokens,
+                                "outputTokens" to answer.outputTokens,
+                                "cost" to models.costOf(start.modelId, answer.inputTokens, answer.outputTokens),
+                            ),
+                        )
                     }
                 }
             } catch (closed: Exception) {

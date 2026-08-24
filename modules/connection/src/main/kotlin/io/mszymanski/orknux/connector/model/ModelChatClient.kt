@@ -418,7 +418,24 @@ class ModelChatClient(
     ): String {
         val root = mapper.createObjectNode()
         root.put("model", model.modelId)
-        if (streaming) root.put("stream", true)
+        if (streaming) {
+            root.put("stream", true)
+            /*
+             * And ask for the counts, which a stream does not send otherwise.
+             *
+             * A blocking call comes back with a `usage` object; a stream sends
+             * one only when this is set, so every OpenAI-shape answer given in
+             * the chat window - which always streams - was recorded as nought
+             * tokens while the same model answered with a count anywhere else.
+             * The metrics under-reported for exactly the traffic there is most
+             * of, and nothing on the screen could say what an answer cost.
+             *
+             * Part of the shape since 2024-05 and ignored by a server that has
+             * not implemented it, which is the ordinary fate of a field an
+             * OpenAI-compatible endpoint does not know.
+             */
+            root.putObject("stream_options").put("include_usage", true)
+        }
         model.maxOutput?.let { root.put("max_tokens", it) }
         val messages = root.putArray("messages")
         turns.forEach { turn ->

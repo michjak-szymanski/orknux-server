@@ -143,7 +143,8 @@ class ChatAPI(
     }
 
     /**
-     * Sends, and answers. What comes back is the answer and what it cost in time.
+     * Sends, and answers. What comes back is the answer, what it cost in time,
+     * and what it cost in tokens and money.
      *
      * Composed of the same three calls the streaming path is composed of, and
      * for the reason [ChatService.ask] gives: the model is asked outside any
@@ -174,6 +175,9 @@ class ChatAPI(
             session = describe(named),
             answer = ChatMessageView("assistant", answer.content),
             millis = answer.millis,
+            inputTokens = answer.inputTokens,
+            outputTokens = answer.outputTokens,
+            cost = models.costOf(start.modelId, answer.inputTokens, answer.outputTokens)?.toDouble(),
         )
     }
 
@@ -278,4 +282,23 @@ data class ChatAnswerView(
     val answer: ChatMessageView,
     /** How long the model took, which the screen shows as what it thought for. */
     val millis: Long,
+    /**
+     * What the provider said it charged for, over the whole turn.
+     *
+     * The whole turn and not the last call: an agent that looked something up
+     * paid for two rounds, and the last one's counts are a fraction of the bill
+     * - the same fraction its stopwatch is of [millis], which has been the turn's
+     * total since agents could call tools at all.
+     *
+     * Zero means the provider reported nothing rather than that nothing was
+     * spent, so the screen draws nothing rather than a nought.
+     */
+    val inputTokens: Long,
+    val outputTokens: Long,
+    /**
+     * What those tokens cost at the prices recorded on the model, or null when
+     * it carries none. Null rather than zero for the reason `ModelPricing` gives:
+     * no price recorded is not a price of nothing.
+     */
+    val cost: Double?,
 )

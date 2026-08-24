@@ -314,6 +314,26 @@ CI does the rest: `.github/workflows/ci.yml` builds, runs the suite, runs
 `latest` follows `main`; a `v*` tag also publishes `X.Y.Z` and `X.Y`; every build
 is tagged `sha-<commit>`, which is the only tag that never moves.
 
+**The manual's pictures are retaken at a minor release, in one command.**
+`scripts/screenshots.ps1`, and from PowerShell — under Git Bash, MSYS rewrites
+the paths it hands out and the damage turns up inside an image rather than as an
+error. Bump `orknux-ui/package.json` before running it: the footer prints that
+version on every signed-in screen, and the script refuses to start while it
+disagrees with the pom.
+
+It photographs an installation it builds, never this machine's. `seed-demo.mjs`
+deletes and rebuilds the workspace it wants, so aimed at a development database
+it is a documentation script editing somebody's work. What it aims at instead is
+the jar the reactor has just produced, run on the host against a SQLite file in
+a temporary directory, beside the containers in `scripts/screens-compose.yaml`
+that could not be a jar: a directory, so alice signs in through one and the users
+page has the External row the manual's paragraph about the two kinds of account
+needs, and a Temporal with a Postgres of its own, so Monitoring draws the row
+that chapter describes. Five minutes end to end, or seven on the first run, when
+the interface container is still fetching its dependencies and a browser - it
+was forty when the installation being photographed was `Dockerfile.one` built
+inside Docker, and thirty-five of those were the build.
+
 **This repository publishes two images.** `orknux-server` from `Dockerfile`, and
 the all-in-one `orknux-one` from `Dockerfile.one` - the interface, the server and
 a SQLite file in one container, verified by `scripts/verify-one-image.sh` and

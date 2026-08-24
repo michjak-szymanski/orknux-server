@@ -524,6 +524,16 @@ type Query {
     ): TaskPage!
     "One task, by its id. Null when it is not one you can see."
     task(id: ID!): Task
+    """
+    Everything one issue has started, newest first.
+
+    The link back from an issue to the work being done on it. A field on `Issue`
+    instead would be read for every row of a list of twenty in order to draw one
+    control on the page showing one. Empty where the issue is not one you can
+    see, which reads the same as an issue nothing has been started on - the
+    tracker answers that way everywhere.
+    """
+    issueTasks(issueId: ID!): [Task!]!
     "Everything that happened inside one workspace, newest first."
     workspaceActivity(
         workspaceId: ID!,
@@ -919,6 +929,25 @@ type Mutation {
     a link back rather than only a prompt.
     """
     startTask(input: StartTaskInput!): Task!
+    """
+    "Start by AI": sets the agent an issue is assigned to work on that issue.
+
+    `startTask` underneath, with a prompt composed from the issue - its number,
+    title, kind, labels, description and thread - and the issue's id carried
+    along, so the task links back and the issue's observers hear what becomes of
+    it.
+
+    The issue moves to IN_PROGRESS if it was OPEN, which is written to its
+    history and to the workspace's audit log. Nothing moves it back afterwards: a
+    task that fails or is stopped leaves the issue where the person who pressed
+    this put it, because a machine quietly reopening somebody's issue hours later
+    is worse than leaving it.
+
+    Refused where the issue is assigned to a person, a model or nobody, where it
+    is closed, and where it already has a task that has not finished - pressing
+    it twice must not set two agents on one issue.
+    """
+    startIssueTask(issueId: ID!): Task!
     """
     Gives a parked task the one thing it asked for, and lets it carry on.
 

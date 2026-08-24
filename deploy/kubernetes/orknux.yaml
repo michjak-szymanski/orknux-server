@@ -673,6 +673,17 @@ spec:
             - name: ORKNUX_TEMPORAL_TARGET
               value: temporal:7233
 
+            # Temporal's own web interface, which this file does not run - it is
+            # the one service in the compose file left out here, because it is
+            # a second, unauthenticated web interface onto the same data. This
+            # is only used to link out to a run's history, and the default is a
+            # localhost address that is right in development and wrong in a
+            # cluster, so it is emptied rather than left alone: empty offers no
+            # links, which is the honest answer while there is nothing to link
+            # to. Point it at a Temporal UI if you deploy one.
+            - name: ORKNUX_TEMPORAL_UI_URL
+              value: ""
+
             # Where this installation is reached from, as somebody's browser
             # spells it, and what a mailed password reset link points at. Empty
             # means no link can be written and none is sent - which is why this
@@ -717,7 +728,7 @@ spec:
             httpGet:
               path: /api/auth/method
               port: http
-            # A first start is a hundred and eighty-odd Flyway migrations, and
+            # A first start is a hundred and twenty-odd Flyway migrations, and
             # until this succeeds the liveness probe below is not running - which
             # is the whole reason it exists. Ten minutes, then give up.
             periodSeconds: 10

@@ -55,8 +55,7 @@ import java.time.OffsetDateTime
 class ScriptLibraryUploadAPI(
     private val libraries: ScriptLibraryRepository,
     private val access: WorkspaceAccess,
-    private val scripts: ScriptRunner,
-    private val mapper: ObjectMapper,
+    private val store: LibraryStore,
 ) {
 
     @PostMapping("/api/libraries")
@@ -75,48 +74,22 @@ class ScriptLibraryUploadAPI(
         access.requireAdmin()
 
         if (file.isEmpty) throw LibraryEmptyException()
-        if (file.size > MAX_SIZE) throw LibraryTooLargeException(MAX_SIZE / 1024)
 
         val filename = file.originalFilename?.trim()?.ifEmpty { null } ?: "library.js"
         if (!filename.endsWith(".js") && !filename.endsWith(".mjs")) throw LibraryNotJavaScriptException(filename)
 
         val source = text(file.bytes)
         val key = filename.removeSuffix(".mjs").removeSuffix(".js")
-        if (!KEY.matches(key)) throw LibraryKeyInvalidException(key)
 
-        val read = when (val answered = scripts.library(source)) {
-            is LibraryInspection.Read -> answered
-            is LibraryInspection.Unreadable -> throw LibraryUnreadableException(answered.reason)
-        }
-
-        val members = mapper.writeValueAsString(read.members.map { mapOf("name" to it.name, "callable" to it.callable) })
-        val existing = libraries.findByKey(key)
-        val library = existing?.apply {
-            this.name = key
-            this.filename = filename.takeLast(MAX_NAME)
-            this.source = source
-            this.typescript = typescript?.ifBlank { null }
-            this.sizeBytes = file.size
-            this.sha256 = digest(source)
-            this.declaredMembers = members
-            this.callable = read.callable
-            this.uploadedAt = OffsetDateTime.now()
-            this.uploadedBy = currentUser()
-        } ?: ScriptLibrary(
+        val replaced = libraries.findByKey(key) != null
+        val saved = store.store(
             key = key,
-            name = key,
-            filename = filename.takeLast(MAX_NAME),
+            filename = filename,
             source = source,
             typescript = typescript?.ifBlank { null },
             sizeBytes = file.size,
-            sha256 = digest(source),
-            declaredMembers = members,
-            callable = read.callable,
-            uploadedBy = currentUser(),
         )
-
-        val saved = libraries.save(library)
-        return ResponseEntity.ok(mapOf("id" to requireNotNull(saved.id), "key" to saved.key, "replaced" to (existing != null)))
+        return ResponseEntity.ok(mapOf("id" to requireNotNull(saved.id), "key" to saved.key, "replaced" to replaced))
     }
 
     /** The library as it was written, for downloading. TypeScript where there is any. */
@@ -155,6 +128,88 @@ class ScriptLibraryUploadAPI(
         throw LibraryNotTextException()
     }
 
+}
+
+/**
+ * The one place a library becomes a row.
+ *
+ * Two doors reach it — a file somebody uploaded and a package somebody named —
+ * and they must not disagree about what a stored library is. What this decides is
+ * everything that is true of a library however it arrived: it is evaluated in the
+ * sandbox it will run in before anything is stored, what its export turned out to
+ * hold is read off the value, and a key that is already loaded is replaced in
+ * place rather than duplicated, so nothing importing it is repointed.
+ *
+ * The provenance is the only thing that differs, and it is passed in rather than
+ * worked out here: [Fetched] where a registry served the file, null where somebody
+ * chose it, and null is what makes the row say `UPLOAD`.
+ *
+ * The size limit and the shape of a key live here for the same reason. They are
+ * properties of a library rather than of an upload, and a copy in each door is two
+ * copies to keep level — the door that fetches a package would otherwise be free
+ * to store one twice the size of anything anybody could upload.
+ */
+@Component
+class LibraryStore(
+    private val libraries: ScriptLibraryRepository,
+    private val scripts: ScriptRunner,
+    private val mapper: ObjectMapper,
+) {
+
+    @Transactional
+    fun store(
+        key: String,
+        filename: String,
+        source: String,
+        typescript: String? = null,
+        sizeBytes: Long,
+        fetched: Fetched? = null,
+    ): ScriptLibrary {
+        if (!KEY.matches(key)) throw LibraryKeyInvalidException(key)
+        if (sizeBytes > MAX_SIZE) throw LibraryTooLargeException(MAX_SIZE / 1024)
+
+        val read = when (val answered = scripts.library(source)) {
+            is LibraryInspection.Read -> answered
+            is LibraryInspection.Unreadable -> throw LibraryUnreadableException(answered.reason)
+        }
+
+        val members = mapper.writeValueAsString(read.members.map { mapOf("name" to it.name, "callable" to it.callable) })
+        val library = libraries.findByKey(key) ?: ScriptLibrary(
+            key = key,
+            name = key,
+            filename = filename.takeLast(MAX_NAME),
+            source = source,
+            sizeBytes = sizeBytes,
+            sha256 = digest(source),
+        )
+
+        return libraries.save(
+            library.apply {
+                this.name = key
+                this.filename = filename.takeLast(MAX_NAME)
+                this.source = source
+                this.typescript = typescript
+                this.sizeBytes = sizeBytes
+                this.sha256 = digest(source)
+                this.declaredMembers = members
+                this.callable = read.callable
+                this.uploadedAt = OffsetDateTime.now()
+                this.uploadedBy = currentUser()
+                // Rewritten in full both ways round. A registry install over an
+                // upload has a provenance to record, and an upload over a
+                // registry install has none - and a row still claiming a package
+                // whose file was replaced by hand is worse than one claiming
+                // nothing, because it would be believed.
+                this.origin = if (fetched == null) ScriptLibrary.ORIGIN_UPLOAD else ScriptLibrary.ORIGIN_REGISTRY
+                this.originPackage = fetched?.packageName
+                this.originVersion = fetched?.version
+                this.originUrl = fetched?.url
+                this.originIntegrity = fetched?.integrity
+                this.originEntry = fetched?.entry
+            },
+        )
+    }
+
     private fun digest(source: String): String = MessageDigest.getInstance("SHA-256")
         .digest(source.toByteArray(StandardCharsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
@@ -162,10 +217,10 @@ class ScriptLibraryUploadAPI(
     private fun currentUser(): String = SecurityContextHolder.getContext().authentication?.name ?: "system"
 
     private companion object {
+        const val MAX_NAME = 200
+
         /** A bundle, and bundles are large. Small enough that the row stays a row. */
         const val MAX_SIZE = 4L * 1024 * 1024
-
-        const val MAX_NAME = 200
 
         /**
          * What a library may be called: what a package is usually called.
@@ -187,7 +242,56 @@ class ScriptLibraryAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val mapper: ObjectMapper,
+    private val registry: NpmRegistry,
+    private val store: LibraryStore,
 ) {
+
+    /**
+     * Whether a package can be named here, and where one would come from.
+     *
+     * Asked by the screen so that an installation with no registry shows the
+     * upload alone. A field offering to fetch from a registry that is not
+     * configured is a field that fails on being used, which is the one thing an
+     * offline installation should never be shown.
+     */
+    @QueryMapping
+    fun libraryRegistry(): LibraryRegistryStatus {
+        access.requireAdmin()
+        val url = registry.registry
+        return LibraryRegistryStatus(configured = url != null, url = url.orEmpty())
+    }
+
+    /**
+     * Fetches one package and loads what is inside it as a library.
+     *
+     * **Once, here, into the database.** The file is what is stored and what
+     * runs, exactly as an uploaded one is; the registry is consulted at this
+     * moment and never again, and nothing in the sandbox gains a network. See
+     * [NpmRegistry] for the three rules that make that honest — a pinned
+     * version, a verified hash, and the proxy rules — and [LibraryDependsException]
+     * for what happens to a package that is not one file.
+     *
+     * `spec` is `random@4.1.0`. The key is the package's name with the scope
+     * folded into it, so `@scope/thing` loads as `scope-thing`, and loading a key
+     * that is already there replaces it in place the way a re-upload does.
+     */
+    @MutationMapping
+    @Transactional
+    fun installScriptLibrary(@Argument spec: String): ScriptLibraryView {
+        access.requireAdmin()
+
+        val fetched = registry.fetch(spec)
+        val stored = store.store(
+            // The key and the size are the store's rules, not this one's: a
+            // library is a library however it arrived here.
+            key = keyOf(fetched.packageName),
+            filename = "${fetched.packageName}@${fetched.version}/${fetched.entry}",
+            source = fetched.source,
+            sizeBytes = fetched.source.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+            fetched = fetched,
+        )
+        return describe(stored, usersOf(requireNotNull(stored.id), workspaceNames()))
+    }
 
     /** Everything loaded, with what imports it. Administrators. */
     @QueryMapping
@@ -252,7 +356,38 @@ class ScriptLibraryAPI(
         usedBy = usedBy,
         uploadedAt = library.uploadedAt.toString(),
         uploadedBy = library.uploadedBy,
+        registry = registryOf(library),
     )
+
+    /**
+     * Where it came from, or null for a file somebody chose.
+     *
+     * Built only where every part of it is there. A half-filled provenance is
+     * one nobody can check, and a row that says which package without saying
+     * what it hashed to would still be shown as though it had been vouched for.
+     */
+    private fun registryOf(library: ScriptLibrary): LibraryRegistryView? {
+        if (library.origin != ScriptLibrary.ORIGIN_REGISTRY) return null
+        return LibraryRegistryView(
+            packageName = library.originPackage ?: return null,
+            version = library.originVersion ?: return null,
+            url = library.originUrl.orEmpty(),
+            integrity = library.originIntegrity.orEmpty(),
+            entry = library.originEntry.orEmpty(),
+        )
+    }
+
+    /**
+     * A package's name as a library key.
+     *
+     * `random` is `random`, and a scoped package folds its scope in with a dash:
+     * `@scope/thing` is `scope-thing`. A key holds no `@` and no slash, since it
+     * is what an administrator matches a re-load against and one nobody can say
+     * out loud is no use for that — and it is not what anybody's code types,
+     * which is a local name of the importer's own.
+     */
+    private fun keyOf(packageName: String): String =
+        packageName.removePrefix("@").replace('/', '-').takeLast(64)
 
     private fun workspaceNames(): Map<Long?, String> = workspaces.findAll().associate { it.id to it.name }
 
@@ -285,9 +420,24 @@ class ScriptLibraryExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is LibraryInUseException,
             is LibraryUnreadableException,
             is LibraryKeyInvalidException,
+            is LibraryTooLargeException,
+            // Every way an install can be refused. Each of them carries a sentence
+            // meant for whoever typed the package name, so all of them are
+            // BAD_REQUEST and none is turned into a shorter one on the way out -
+            // "it could not be fetched" would leave somebody guessing between a
+            // typo, a proxy and a package that ships no module.
+            is LibraryRegistryOffException,
+            is LibraryPackageInvalidException,
+            is LibraryRegistryUnreachableException,
+            is LibraryRegistrySilentException,
+            is LibraryIntegrityException,
+            is LibraryNotAModuleException,
+            is LibraryDependsException,
             -> ErrorType.BAD_REQUEST
 
-            is LibraryNotFoundException -> ErrorType.NOT_FOUND
+            is LibraryNotFoundException,
+            is LibraryPackageMissingException,
+            -> ErrorType.NOT_FOUND
 
             else -> return null
         }

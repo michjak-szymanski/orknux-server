@@ -328,6 +328,7 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_MAIL_USERNAME`, `ORKNUX_MAIL_PASSWORD` | *empty* | Empty sends without authenticating, which is what an internal relay usually wants. |
 | `ORKNUX_MAIL_SECURITY` | `STARTTLS` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than merely offered. |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `lax` | `strict` once nothing links into Orknux from elsewhere. |
+| `ORKNUX_LIBRARY_REGISTRY_URL` | `https://registry.npmjs.org` | Where an administrator installing a library by name fetches from - once, into the database, through the proxy rules. Point it at your own mirror, or set it empty on an installation with no way out: the Libraries page then offers the upload alone. |
 
 **Resetting a forgotten password needs three of those.** A reset is a link mailed
 to the address on the account, good once and for an hour, and it only exists for

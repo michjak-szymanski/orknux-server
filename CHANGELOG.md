@@ -13,6 +13,45 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **Orknux runs on Kubernetes from a manifest kept in this repository.**
+  `deploy/kubernetes/orknux.yaml` is the deployment `deploy/compose.yaml`
+  already described — the same five services, the same published images, the
+  same arrangement — written as Kubernetes objects, and
+  `deploy/kubernetes/README.md` is what is different because it is Kubernetes
+  rather than compose. Nothing about the server changed to make this work and no
+  new setting was added; an installation running under compose has nothing to
+  do.
+
+  Worth knowing before you apply it. The encryption key is a Secret the manifest
+  deliberately does not contain, so the server's pods wait in
+  `CreateContainerConfigError` until you create it — the same guard the compose
+  file spells as a variable with no default, and for the same reason. The server
+  is one replica because `SlackListener` opens one websocket per workspace
+  connection per process, so a second pod would deliver every Slack mention
+  twice; sessions, schedules and Temporal workers are all happy with more, and
+  the interface is already two.
+
+  Every pod sets `enableServiceLinks: false`, and the directory does not start
+  without it. Kubernetes injects a variable per Service into every container, so
+  a Service named `ldap` hands `osixia/openldap` an `LDAP_PORT` of
+  `tcp://10.43.x.x:389` where it expected `389`, and it exits on every start
+  with a listen URL it cannot parse. The same mechanism injects
+  `ORKNUX_SERVER_PORT` into every pod including the server's own, which collides
+  with nothing today and would collide silently with any setting later named
+  `ORKNUX_SERVER_*`.
+
+  Writing it down turned up something that is not about Kubernetes at all:
+  **`orknux/orknux-ui` sets no `client_max_body_size`**, so the nginx inside it
+  holds to nginx's 1MB default while the settings screen offers 25MB, and every
+  attachment above about a megabyte is refused by the interface with a 413 the
+  server never sees. That is true under compose today and is not new here.
+  `orknux-one` sets 30m and does not have it. The Kubernetes README says how to
+  add the limit from outside until the image sets its own.
+
 ## 0.9.2
 
 ### Added

@@ -21,7 +21,7 @@ kubectl -n orknux port-forward svc/orknux-ui 8080:8080
 and open **http://localhost:8080**, signing in as `alice` / `password`.
 
 The first start takes a few minutes: Temporal applies its own schema, and the
-server runs its way through a hundred and eighty-odd Flyway migrations before it
+server runs its way through a hundred and twenty-odd Flyway migrations before it
 answers anything. `kubectl -n orknux logs -f deploy/orknux-server` is where it
 says so, and the server's startup probe allows ten minutes before it gives up.
 
@@ -94,7 +94,7 @@ by design and needing no credential. Actuator's health endpoint is deliberately
 not exposed and is not what to point these at.
 
 **There is a startup probe, and it is doing the work.** A first start is a
-hundred and eighty-odd migrations long. The liveness probe does not run until
+hundred and twenty-odd migrations long. The liveness probe does not run until
 the startup probe has succeeded once, which is what stops a slow first start
 from being read as a hung server and restarted into another slow first start.
 

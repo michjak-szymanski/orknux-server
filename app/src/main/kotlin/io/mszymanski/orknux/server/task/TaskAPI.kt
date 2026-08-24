@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.task
 
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.issue.IssueNotFoundException
+import io.mszymanski.orknux.server.issue.IssueRepository
 import io.mszymanski.orknux.server.llm.LlmSessionEventRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -37,6 +39,8 @@ class TaskAPI(
     private val sessions: LlmSessionRepository,
     private val events: LlmSessionEventRepository,
     private val service: TaskService,
+    private val issues: IssueRepository,
+    private val fromIssues: IssueTaskStarter,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
@@ -99,6 +103,42 @@ class TaskAPI(
             "Task ${task.title} started",
         )
         return describe(task)
+    }
+
+    /**
+     * "Start by AI" on an issue: its agent, set to work on it.
+     *
+     * The same door [startTask] uses, reached with a prompt composed from the
+     * issue rather than typed - see [IssueTaskPrompt] for exactly what the agent
+     * is handed and why. Nothing about the issue is decided here: the check is
+     * the issue's workspace, and everything the press changes, including both
+     * audit lines, is [IssueTaskStarter]'s, because that is the one place that
+     * knows whether the status actually moved.
+     *
+     * Whoever may start a task in the workspace and may see the issue, which in
+     * this application is the same check asked once.
+     */
+    @MutationMapping
+    @Transactional
+    fun startIssueTask(@Argument issueId: Long): TaskView {
+        val issue = issues.findByIdOrNull(issueId) ?: throw IssueNotFoundException(issueId)
+        access.requireVisible(issue.workspaceId)
+        return describe(fromIssues.start(issue, whoever()))
+    }
+
+    /**
+     * Everything one issue has started, newest first.
+     *
+     * The link back, and the reason the button on an issue can be a link once
+     * there is something to link to. A field on `Issue` instead would be read on
+     * every row of a list of twenty to draw one control on a page showing one.
+     */
+    @QueryMapping
+    @Transactional(readOnly = true)
+    fun issueTasks(@Argument issueId: Long): List<TaskView> {
+        val issue = issues.findByIdOrNull(issueId) ?: return emptyList()
+        if (!access.canSee(issue.workspaceId)) return emptyList()
+        return fromIssues.startedBy(issue).map(::describe)
     }
 
     /**

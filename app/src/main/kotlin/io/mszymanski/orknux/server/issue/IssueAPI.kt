@@ -38,19 +38,31 @@ import java.time.format.DateTimeFormatter
 /**
  * What a list of issues is ordered by.
  *
- * Three, because they are the three questions somebody actually asks of a
- * tracker: what is newest, what is this thing called, and what is moving.
+ * The questions somebody actually asks of a tracker, and no more than those:
+ * what is newest, what is this thing called, what is moving, where is the
+ * talking, and what kind of thing are these.
  */
 enum class IssueOrder {
     NUMBER,
     TITLE,
     UPDATED,
     LAST_COMMENT,
+
+    /**
+     * By what the issues are, which is how a tracker is read when somebody is
+     * deciding what to do next rather than looking for one thing.
+     *
+     * Untyped last either way round, like an absent last comment: an issue
+     * nobody has classified is not the first kind of thing, it is the absence
+     * of a kind.
+     */
+    TYPE,
 }
 
 @Controller
 class IssueAPI(
     private val issues: IssueRepository,
+    private val types: IssueTypeRepository,
     private val workspaces: WorkspaceRepository,
     private val users: AppUserRepository,
     private val agents: AgentRepository,
@@ -77,6 +89,14 @@ class IssueAPI(
     fun workspaceIssues(
         @Argument workspaceId: Long,
         @Argument status: IssueStatus?,
+        /**
+         * Which type, spelled the way the assignee is: absent is every issue,
+         * an empty string is the untyped ones, an id is that type. One argument
+         * with three states rather than two arguments that can contradict each
+         * other, and it is the convention already in [IssueInput.assigneeId] -
+         * absent leaves it alone, empty means nobody.
+         */
+        @Argument typeId: String?,
         @Argument search: String?,
         @Argument page: Int?,
         @Argument size: Int?,
@@ -97,6 +117,7 @@ class IssueAPI(
             IssueOrder.TITLE -> "title"
             IssueOrder.UPDATED -> "lastModifiedAt"
             IssueOrder.LAST_COMMENT -> "lastCommentAt"
+            IssueOrder.TYPE -> "type.name"
         }
         val direction = if (ascending == true) Sort.Direction.ASC else Sort.Direction.DESC
         /*
@@ -108,24 +129,54 @@ class IssueAPI(
          */
         val sorted = Sort.by(
             Sort.Order(direction, by)
-                .let { if (by == "title") it.ignoreCase() else it }
+                .let { if (by == "title" || by == "type.name") it.ignoreCase() else it }
                 /*
                  * An issue nobody has replied to has no last comment, and
                  * Postgres sorts nulls first when the order is descending -
                  * which would open a list sorted by conversation with every
                  * issue that has none. Last, either way round: an absent answer
-                 * is not the newest one.
+                 * is not the newest one. An untyped issue is the same story:
+                 * having no kind is not being the first kind.
                  */
-                .let { if (by == "lastCommentAt") it.nullsLast() else it },
+                .let { if (by == "lastCommentAt" || by == "type.name") it.nullsLast() else it },
         )
         val asked = PageRequest.of(page ?: 0, (size ?: 20).coerceIn(1, 100), sorted)
-        val wanted = search?.trim().orEmpty()
-        val found = if (status == null) {
-            issues.search(workspaceId, wanted, asked)
-        } else {
-            issues.searchByStatus(workspaceId, status, wanted, asked)
-        }
+        /*
+         * Filtered in the query, through the specification the tools already
+         * use, rather than through the two JPQL methods this had one of for
+         * each state of the status filter. A third optional filter would have
+         * been four of them, and the fourth would have been the one nobody
+         * wrote - which is the argument the specification exists to settle.
+         */
+        val found = issues.findAll(
+            issueFilter(
+                workspaceId = workspaceId,
+                status = status,
+                search = search,
+                type = typeWanted(workspaceId, typeId),
+            ),
+            asked,
+        )
         return IssuePageView(found.totalElements.toInt(), found.content.map(::describe))
+    }
+
+    /**
+     * The type argument as the filter reads it.
+     *
+     * An id naming no type here is refused rather than answered with nothing.
+     * A filter that silently matches no issue looks exactly like a tracker that
+     * has none, and the one thing worse than an error is an empty list somebody
+     * believes.
+     */
+    private fun typeWanted(workspaceId: Long, typeId: String?): IssueTypeWanted = when {
+        typeId == null -> AnyType
+        typeId.isBlank() -> Untyped
+        else -> {
+            val id = typeId.toLongOrNull() ?: throw IssueTypeNotFoundException(-1)
+            val held = types.findByIdOrNull(id)?.takeIf { it.workspaceId == workspaceId }
+                ?: throw IssueTypeNotFoundException(id)
+            OfType(requireNotNull(held.id))
+        }
     }
 
     /**
@@ -193,6 +244,7 @@ class IssueAPI(
                 title = title,
                 description = input.description?.trim()?.takeIf { it.isNotEmpty() },
                 status = input.status ?: IssueStatus.OPEN,
+                type = typeFrom(workspaceId, input.typeId),
                 reporter = currentUser(),
                 assignee = assigneeFrom(workspaceId, input),
                 labels = cleanLabels(input.labels),
@@ -226,6 +278,15 @@ class IssueAPI(
          */
         val labelsWere = held.labels.toSet()
         input.labels?.let { held.labels = cleanLabels(it) }
+        /*
+         * Read the way the assignee is: absent leaves it alone, and an empty
+         * string is somebody choosing "Untyped" rather than a client that
+         * forgot the field. The name is kept before the row is replaced,
+         * because the history stores what it was called and not which row it
+         * was - see `IssueHistoryRecorder.typeChanged`.
+         */
+        val typeWas = held.type?.name
+        input.typeId?.let { held.type = typeFrom(held.workspaceId, it) }
         val statusWas = held.status
         var statusChanged = false
         input.status?.let { wanted ->
@@ -272,6 +333,7 @@ class IssueAPI(
          * writes nothing where the two sides match.
          */
         history.statusChanged(saved, statusWas, saved.status, currentUser())
+        history.typeChanged(saved, typeWas, saved.type?.name, currentUser())
         history.labelsChanged(saved, labelsWere, saved.labels.toSet(), currentUser())
         if (handedOver) history.assigneeChanged(saved, heldBy, nameFor(saved)?.name, currentUser())
         return describe(saved)
@@ -385,6 +447,21 @@ class IssueAPI(
         return Assignee(kind = kind, id = id)
     }
 
+    /**
+     * The type an input names, checked against this workspace.
+     *
+     * Empty is untyped, the way an empty assignee is nobody: it is a state
+     * somebody chooses from the picker and not an omission. An id that names a
+     * type of another workspace is refused rather than read as untyped, because
+     * a browser that sent one has a bug and quietly clearing the field is how a
+     * bug becomes an issue somebody has to reclassify.
+     */
+    private fun typeFrom(workspaceId: Long, typeId: String?): IssueType? {
+        val id = typeId?.takeIf { it.isNotBlank() } ?: return null
+        val row = id.toLongOrNull()?.let { types.findByIdOrNull(it) }
+        return row?.takeIf { it.workspaceId == workspaceId } ?: throw IssueTypeNotFoundException(id.toLongOrNull() ?: -1)
+    }
+
     /** Trimmed, deduplicated, and never empty strings: a label is a word. */
     private fun cleanLabels(labels: List<String>?): MutableSet<String> =
         labels.orEmpty().map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
@@ -419,6 +496,7 @@ class IssueAPI(
         title = issue.title,
         description = issue.description,
         status = issue.status,
+        type = issue.type?.let { IssueTypeView(requireNotNull(it.id), it.workspaceId, it.name, 0) },
         reporter = issue.reporter,
         assignee = nameFor(issue),
         labels = issue.labels.sorted(),
@@ -1034,6 +1112,15 @@ data class IssueView(
     val title: String,
     val description: String?,
     val status: IssueStatus,
+    /**
+     * What kind of thing it is, or null for untyped.
+     *
+     * The count on it is not filled in here and is always zero: how many issues
+     * carry a type is a fact about the workspace's catalogue that the settings
+     * page asks for, and answering it on every issue in a page of twenty would
+     * be twenty group-bys to draw one chip.
+     */
+    val type: IssueTypeView?,
     val reporter: String,
     val assignee: AssigneeView?,
     val labels: List<String>,
@@ -1165,6 +1252,15 @@ data class IssueInput(
     val title: String?,
     val description: String?,
     val status: IssueStatus?,
+    /**
+     * Which type, or empty for untyped, or absent to leave it alone.
+     *
+     * The same three states [assigneeId] has and for the same reason: the page
+     * posts the whole form on every save, so "the field was not sent" and "the
+     * field was cleared" have to be different values or every save would untype
+     * the issue.
+     */
+    val typeId: String?,
     val labels: List<String>?,
     val assigneeKind: AssigneeKind?,
     val assigneeId: String?,

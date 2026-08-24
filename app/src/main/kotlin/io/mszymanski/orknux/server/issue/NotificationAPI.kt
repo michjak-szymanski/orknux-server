@@ -98,12 +98,19 @@ class NotificationAPI(
     }
 }
 
-/** One thing that happened, as the bell shows it. */
+/**
+ * One thing that happened, as the bell shows it.
+ *
+ * The subject is an issue or a task, and exactly one of the two pairs is filled
+ * in. The bell reads whichever is there and links accordingly.
+ */
 class NotificationView(item: IssueNewsItem, val unread: Boolean) {
     val id: Long = item.id ?: 0
     val workspaceId: Long = item.workspaceId
-    val issueNumber: Int = item.issueNumber
-    val issueTitle: String = item.issueTitle
+    val issueNumber: Int? = item.issueNumber
+    val issueTitle: String? = item.issueTitle
+    val taskId: Long? = item.taskId
+    val taskTitle: String? = item.taskTitle
     val kind: IssueNewsKind = item.kind
     val actor: String = item.actor
     val says: String? = item.says

@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.library.ScriptLibraryRepository
+import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.workflow.script.ScriptModule
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -27,6 +28,7 @@ import org.springframework.stereotype.Service
 class ScriptImports(
     private val functions: WorkflowFunctionRepository,
     private val libraries: ScriptLibraryRepository,
+    private val externals: VariableArguments,
 ) {
 
     /**
@@ -141,6 +143,15 @@ class ScriptImports(
             name = function.name,
             source = function.source,
             imports = named(function.imports) + libraryNames(function.libraries),
+            // Its own grants as well as its own imports. A function's externals
+            // belong to the function, and an importer is not told they exist —
+            // it writes the arguments it was shown and the sandbox appends the
+            // rest, exactly as a node's runner does for the function it calls.
+            // Without this a function reached through `imports` reads its own
+            // variables as `undefined`, which is a wrong answer rather than a
+            // failure.
+            declared = function.params.size,
+            externals = externals.of(function),
         )
     }
 

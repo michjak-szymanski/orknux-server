@@ -1,6 +1,12 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.variable.VariableCatalog
+import io.mszymanski.orknux.server.variable.VariableCatalogRepository
+import io.mszymanski.orknux.server.variable.VariableKind
+import io.mszymanski.orknux.server.variable.VariableType
+import io.mszymanski.orknux.server.variable.WorkspaceVariable
+import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -44,6 +50,8 @@ class ActionNodeRunnerTest(
     @Autowired val edges: WorkflowEdgeRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val catalogs: VariableCatalogRepository,
+    @Autowired val variables: WorkspaceVariableRepository,
 ) {
 
     private var workspaceId: Long = 0
@@ -59,6 +67,8 @@ class ActionNodeRunnerTest(
         actions.deleteAll()
         conditions.deleteAll()
         functions.deleteAll()
+        variables.deleteAll()
+        catalogs.deleteAll()
         assignments.deleteAll()
         workflows.deleteAll()
         audit.deleteAll()
@@ -89,6 +99,41 @@ class ActionNodeRunnerTest(
         assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
         assertThat(step.output).isEqualTo("""{"id":7,"format":"compact","processed":true}""")
         assertThat(executions.findAll().single { it.id == runId }.status).isEqualTo(ExecutionStatus.COMPLETED)
+    }
+
+    /**
+     * A grant belongs to the function that declared it, however it is reached.
+     *
+     * The importer supplies what it declared and nothing else — an external is
+     * not the caller's to fill, and an importer is not told it exists. So the
+     * only side that can hand it over is the one assembling the modules, and a
+     * function reached through `imports` that saw `undefined` where its variable
+     * should be would be a function whose grants meant one thing when a node
+     * called it and another when its neighbour did.
+     */
+    @Test
+    fun `a function reached through an import is handed its own externals`() {
+        val token = variable("apiToken", "s3cret")
+        val readerId = function(
+            "readToken",
+            "export default function readToken(word, apiToken) { return { token: apiToken, word: word }; }",
+            params = """[{ name: "word", type: STRING }]""",
+            extra = ", externalVariableIds: [$token]",
+        )
+        val callerId = function(
+            "useToken",
+            "export default async function useToken(input, format) { return await imports.read(format); }",
+            extra = """, imports: [{ functionId: $readerId, name: "read" }]""",
+        )
+        val actionId = functionAction(callerId, "Use Token")
+        graph(actionId)
+
+        start()
+
+        val step = steps.findAll().single { it.actionId == actionId }
+        assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
+        // The word is what the importer passed; the token is what nobody passed.
+        assertThat(step.output).isEqualTo("""{"token":"s3cret","word":"compact"}""")
     }
 
     @Test
@@ -315,21 +360,40 @@ class ActionNodeRunnerTest(
             .containsExactly("format" to "compact")
     }
 
+    /** [extra] is whatever else the input carries: externals, imports. */
     private fun function(
         name: String,
         source: String,
         params: String = """[{ name: "input", type: MAP }, { name: "format", type: STRING }]""",
+        extra: String = "",
     ): Long = graphQlTester.document(
         """
         mutation {
           createFunction(input: {
             workspaceId: $workspaceId, name: "$name", returnType: MAP,
             source: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'}, typescript: ${'"'}${'"'}${'"'}$source${'"'}${'"'}${'"'},
-            params: $params
+            params: $params$extra
           }) { id }
         }
         """,
     ).execute().path("createFunction.id").entity(Long::class.java).get()
+
+    /** One of the workspace's variables, for a function to be granted. */
+    private fun variable(name: String, held: String): Long {
+        val catalogId = requireNotNull(catalogs.save(VariableCatalog(workspaceId = workspaceId, name = name)).id)
+        return requireNotNull(
+            variables.save(
+                WorkspaceVariable(
+                    workspaceId = workspaceId,
+                    catalogId = catalogId,
+                    name = name,
+                    type = VariableType.STRING,
+                    kind = VariableKind.SECRET,
+                    value = held,
+                ),
+            ).id,
+        )
+    }
 
     /** A wait action; [settings] is the rest of the input, which differs by subtype. */
     private fun waitAction(settings: String): Long = graphQlTester.document(

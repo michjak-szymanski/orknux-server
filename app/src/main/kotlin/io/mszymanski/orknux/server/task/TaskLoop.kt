@@ -215,12 +215,12 @@ class TaskLoop(
      * week of history for a fact that has not changed.
      */
     private fun pollFor(task: Task): Duration {
-        val since = task.waitingUntil?.minus(properties.patience) ?: return properties.pollWhileWaiting
+        val since = task.waitingUntil?.minus(properties.patience) ?: return TaskProperties.POLL_WHILE_WAITING
         val waited = Duration.between(since, OffsetDateTime.now())
-        return if (waited < properties.pollWhileWaiting.multipliedBy(CLOSE_POLLS)) {
-            properties.pollWhileWaiting
+        return if (waited < TaskProperties.POLL_WHILE_WAITING.multipliedBy(CLOSE_POLLS)) {
+            TaskProperties.POLL_WHILE_WAITING
         } else {
-            properties.pollWhileWaiting.multipliedBy(CLOSE_POLLS)
+            TaskProperties.POLL_WHILE_WAITING.multipliedBy(CLOSE_POLLS)
         }
     }
 
@@ -243,7 +243,7 @@ class TaskLoop(
 
         task.sessionId?.let { sessions.note(it, parked.message.orEmpty()) }
         news.waiting(task, written)
-        return TaskTurn.Parked(properties.pollWhileWaiting)
+        return TaskTurn.Parked(TaskProperties.POLL_WHILE_WAITING)
     }
 
     /** Adds what this turn cost, whether or not it produced anything. */

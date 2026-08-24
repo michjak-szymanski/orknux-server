@@ -3265,6 +3265,19 @@ type Plugin {
     because the answers belong to a workspace and the question does not.
     """
     declaredParameters: [PluginParameterDeclaration!]!
+    """
+    The JavaScript this plugin was granted: what it declared, and what a person
+    accepted. The two are the same for a loaded plugin — it is refused otherwise.
+
+    Shown to whoever reads the list rather than only to whoever accepted it. A
+    decision about what somebody else's code may do that lives in a dialog
+    somebody clicked through last month is a decision nobody can audit.
+    """
+    permissions: [PluginPermission!]!
+    "ISO-8601 offset date-time. Null when the plugin asked for nothing."
+    permissionsAcceptedAt: String
+    "Null when the plugin asked for nothing, so nobody accepted anything."
+    permissionsAcceptedBy: String
     "Of the source text, so an unchanged re-upload is recognisable."
     sha256: String!
     "ISO-8601 offset date-time."
@@ -3290,6 +3303,20 @@ type PluginFunctionDeclaration {
 type PluginFunctionParam {
     name: String!
     type: String!
+}
+
+"""
+One piece of JavaScript a plugin may be granted.
+
+The list this server can grant is closed, and its being closed is the point of
+it: there is no name for reading a file, opening a socket or reaching a Java
+class, so a plugin cannot ask for one and nobody can grant one. Every entry only
+switches on a language builtin, for the one plugin it was accepted for.
+"""
+type PluginPermission {
+    name: String!
+    "What it gives, in the words the person accepting it was shown."
+    summary: String!
 }
 
 """

@@ -73,7 +73,18 @@ class PluginRunner(private val properties: PluginProperties) {
     fun inspect(source: String): PluginInspection {
         val stopped = AtomicReference<Overrun?>(null)
         return try {
-            guard.bounded(stopped, ::newContext) { read(it, source) }
+            /*
+             * Read with nothing relaxed, always, and there is no parameter to say
+             * otherwise. This is the call that finds out what the plugin is asking
+             * for, and running it under permissions would mean granting something
+             * in order to discover whether it should be granted.
+             *
+             * What it costs a plugin author is that the module body has to load
+             * without the permissions the plugin needs - a bundle that touches
+             * Intl at the top level cannot be loaded here. That is the safe
+             * direction to be wrong in, and the template says so.
+             */
+            guard.bounded(stopped, { newContext(emptySet()) }) { read(it, source) }
         } catch (failure: PolyglotException) {
             PluginInspection.Unreadable(describe(failure, stopped = stopped.get()))
         } catch (failure: ScriptBusyException) {
@@ -93,6 +104,10 @@ class PluginRunner(private val properties: PluginProperties) {
      * @param settings what this workspace set the plugin's parameters to, as a JSON
      *   object of name to value. It arrives frozen as `this.settings`, and it is
      *   the only thing a plugin is told about the workspace it is running for.
+     * @param permissions what a person accepted for **this** plugin. Nothing else
+     *   is relaxed, and nothing is relaxed for any other plugin: the context is
+     *   built here, per call, from this set. Empty is the default and the answer
+     *   for every plugin nobody has accepted anything for.
      *
      * The plugin is constructed for the call and thrown away with the context, so
      * one run cannot leave anything behind for the next — including the settings,
@@ -103,11 +118,12 @@ class PluginRunner(private val properties: PluginProperties) {
         functionName: String,
         arguments: List<String>,
         settings: String = "{}",
+        permissions: Set<PluginPermission> = emptySet(),
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
-            guard.bounded(stopped, ::newContext) {
+            guard.bounded(stopped, { newContext(permissions) }) {
                 ScriptResult.Returned(invoke(it, source, functionName, arguments, settings), millis(started))
             }
         } catch (failure: PolyglotException) {
@@ -239,11 +255,31 @@ class PluginRunner(private val properties: PluginProperties) {
             )
         }
 
+        /*
+         * What JavaScript it says it needs. Read here, before anything is stored
+         * and before anything is granted, because the whole arrangement is that a
+         * person is shown this list and agrees to it — and a list discovered on the
+         * first call would be a list nobody was ever shown.
+         */
+        val asked = plugin.invokeMember("permissions")
+        if (!asked.hasArrayElements()) {
+            return PluginInspection.Unreadable("permissions() did not answer with an array")
+        }
+        if (asked.arraySize > MAX_PERMISSIONS) {
+            return PluginInspection.Unreadable("permissions() asked for more than $MAX_PERMISSIONS things")
+        }
+        val permissions = (0 until asked.arraySize).map { at ->
+            val one = asked.getArrayElement(at)
+            if (!one.isString) return PluginInspection.Unreadable("permissions() answered with something that is not a name")
+            one.asString().trim()
+        }.filter { it.isNotEmpty() }.distinct()
+
         return PluginInspection.Read(
             id = id.asString().trim(),
             apiVersion = version.asInt(),
             functions = functions,
             parameters = parameters,
+            permissions = permissions,
         )
     }
 
@@ -327,7 +363,24 @@ class PluginRunner(private val properties: PluginProperties) {
      * the builder would have denied it anyway — so the day a plugin is given a
      * capability, it is a visible line in this file and not a default that moved.
      */
-    private fun newContext(): Context = Context.newBuilder("js")
+    /**
+     * The sandbox, built for one plugin and one call.
+     *
+     * Every `allow…` is a decision to say no, written out even where the builder
+     * would have denied it anyway — so the day a plugin is given a capability, it
+     * is a visible line in this file and not a default that moved.
+     *
+     * [permissions] is the only thing that varies, it varies per plugin, and it can
+     * only ever add a language builtin: see [PluginPermission] for why the
+     * vocabulary cannot express anything else. Two options are turned *off* here
+     * that GraalJS has on by default — `js.console` and `js.intl-402` — because
+     * "nothing is relaxed unless it was accepted" is not true of a default that
+     * happened to be on, and a plugin that wants either now has to say so.
+     *
+     * The options are applied last and only from the enumeration, so nothing a
+     * plugin wrote reaches this builder as text.
+     */
+    private fun newContext(permissions: Set<PluginPermission>): Context = Context.newBuilder("js")
         .engine(engine)
         .allowExperimentalOptions(true)
         .allowHostAccess(hostAccess)
@@ -352,7 +405,20 @@ class PluginRunner(private val properties: PluginProperties) {
         .option("js.graal-builtin", "false")
         .option("js.ecmascript-version", "2023")
         .option("js.esm-eval-returns-exports", "true")
+        // Denied unless accepted, though GraalJS gives both away by default.
+        .option("js.console", "false")
+        .option("js.intl-402", "false")
+        .granting(permissions)
         .build()
+
+    /**
+     * Turns on exactly what was accepted, and can turn on nothing else.
+     *
+     * The option name comes off the enumeration rather than out of anything the
+     * plugin wrote, so no string a plugin controls reaches the builder.
+     */
+    private fun Context.Builder.granting(permissions: Set<PluginPermission>): Context.Builder =
+        permissions.fold(this) { builder, granted -> builder.option(granted.option, "true") }
 
     private fun module(source: String): Source = Source.newBuilder("js", source, "plugin.mjs")
         .mimeType("application/javascript+module")
@@ -382,6 +448,15 @@ class PluginRunner(private val properties: PluginProperties) {
          * of configuration is asking the wrong question.
          */
         const val MAX_PARAMETERS = 50
+
+        /**
+         * More than there are permissions to ask for.
+         *
+         * A bound on the answer rather than a rule about plugins: what is actually
+         * allowed is decided against [PluginPermission], and a plugin naming
+         * something that is not on it is refused whatever the length of the list.
+         */
+        const val MAX_PERMISSIONS = 32
 
         /**
          * Runs one of the plugin's declared functions and leaves JSON behind.
@@ -467,6 +542,10 @@ class PluginRunner(private val properties: PluginProperties) {
               }
 
               parameters() {
+                return [];
+              }
+
+              permissions() {
                 return [];
               }
             };
@@ -564,6 +643,16 @@ sealed interface PluginInspection {
         val apiVersion: Int,
         val functions: List<DeclaredFunction>,
         val parameters: List<DeclaredParameter> = emptyList(),
+        /**
+         * What it says it needs, exactly as it wrote it.
+         *
+         * Names, not [PluginPermission]s, because a name this server does not have
+         * is a refusal with a sentence in it rather than something to drop
+         * quietly — and dropping it would load a plugin having granted it less
+         * than it asked for, which is a plugin that fails later for no stated
+         * reason.
+         */
+        val permissions: List<String> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */

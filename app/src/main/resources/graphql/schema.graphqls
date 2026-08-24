@@ -1056,6 +1056,19 @@ type Mutation {
     updateFunction(id: ID!, input: UpdateFunctionInput!): Function!
     "Parses the source and says where it broke; the editor's Validate."
     validateFunctionSource(workspaceId: ID!, source: String!): FunctionValidation!
+    """
+    Runs the stored function with the arguments given, and says what came back.
+
+    The editor's Run, and the same call an action node makes: the same sandbox,
+    the same host-resolved imports and libraries, and the workspace's variables
+    appended by the same code. There is no source in this input — what runs is a
+    function already saved in the workspace, so this cannot execute anything that
+    was not, and whoever may call it could already run it from a workflow.
+
+    Recorded in the workspace's audit, because it is the one execution that
+    leaves no run behind it and it reads the workspace's variables.
+    """
+    runFunction(input: RunFunctionInput!): FunctionRun!
     "Refused while an action still calls it."
     deleteFunction(id: ID!): Boolean!
     createCondition(input: CreateConditionInput!): Condition!
@@ -3863,6 +3876,71 @@ type FunctionValidation {
     message: String
     line: Int
     column: Int
+}
+
+"""
+One argument for a test run: which parameter, and the value as JSON.
+
+JSON rather than text, because that is what crosses into the sandbox and because
+not every parameter is a scalar — a map or an array has no spelling as a plain
+string. The editor writes it from the control it drew, so a string field sends
+`"kraków"` and a number field sends `3`.
+"""
+input FunctionArgumentInput {
+    name: String!
+    "The value, as a JSON document. Anything that is not one is refused by name."
+    json: String!
+}
+
+input RunFunctionInput {
+    """
+    Which workspace is asking.
+
+    Not derived from the function: a plugin's function belongs to none, and its
+    settings and the permissions somebody agreed to are per workspace. For a
+    workspace's own function this has to be the workspace that owns it.
+    """
+    workspaceId: ID!
+    functionId: ID!
+    """
+    What to pass, by parameter name.
+
+    A name the function does not declare is ignored, and a parameter nobody
+    filled in arrives as `null` — which is what a node passes for a mapping it
+    does not have. The workspace's variables are not here and cannot be: a grant
+    belongs to the function that declared it, and is resolved on the server.
+    """
+    arguments: [FunctionArgumentInput!]
+}
+
+"""
+What one test run came to.
+
+One shape rather than two, because the panel showing it has the same job either
+way: say how long it took, and show what came back.
+"""
+type FunctionRun {
+    ok: Boolean!
+    "The JSON it returned. Null when it failed, and also when it returned nothing."
+    returned: String
+    "What went wrong, with the function's name in front of it. Null when it answered."
+    error: String
+    durationMillis: Int!
+    """
+    Whether asking again could ever answer differently.
+
+    False is the interesting one: the run was stopped by the clock or by how busy
+    the machine was rather than by anything about the code.
+    """
+    settled: Boolean!
+    """
+    The workspace variables it was handed, by name.
+
+    Names only, never values. They are here so a run can be seen to have resolved
+    them: a function that reads a secret and answers wrongly looks exactly like
+    one that was handed nothing, and this is the difference.
+    """
+    grants: [String!]!
 }
 
 input FunctionParamInput {

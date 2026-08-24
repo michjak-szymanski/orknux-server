@@ -55,6 +55,7 @@ import io.mszymanski.orknux.server.user.UserExternallyManagedException
 import io.mszymanski.orknux.server.user.UserNameInvalidException
 import io.mszymanski.orknux.server.user.UserNameTakenException
 import io.mszymanski.orknux.server.user.UserNotFoundException
+import io.mszymanski.orknux.server.action.FunctionArgumentInvalidException
 import io.mszymanski.orknux.server.action.FunctionSourceInvalidException
 import io.mszymanski.orknux.server.condition.ConditionCheckMismatchException
 import io.mszymanski.orknux.server.condition.ConditionCycleException
@@ -176,6 +177,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is FunctionNameInvalidException,
             is FunctionParamInvalidException,
             is FunctionSourceInvalidException,
+            is FunctionArgumentInvalidException,
             is FunctionCodeIncompleteException,
             is FunctionObjectRequiredException,
             is RoleNameTakenException,

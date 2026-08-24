@@ -42,10 +42,22 @@ class IssueExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is IssueRelationToItselfException,
             is IssueRelationElsewhereException,
             is IssueRelationAlreadyException,
+            /*
+             * The catalogue's four refusals are each the caller's to fix and
+             * each names the word that is wrong: a blank name, one already
+             * taken, one nothing here is called, and one that cannot go because
+             * issues are on it - which says how many, so an administrator can
+             * decide whether they meant it.
+             */
+            is IssueTypeNameInvalidException,
+            is IssueTypeNameTakenException,
+            is IssueTypeUnknownException,
+            is IssueTypeInUseException,
             -> ErrorType.BAD_REQUEST
 
             is IssueLinkNotFoundException,
             is IssueRelationNotFoundException,
+            is IssueTypeNotFoundException,
             -> ErrorType.NOT_FOUND
 
             else -> return null

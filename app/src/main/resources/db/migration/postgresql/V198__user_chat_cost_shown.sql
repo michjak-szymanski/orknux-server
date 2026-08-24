@@ -1,0 +1,28 @@
+-- Whether somebody wants to be told what a chat answer cost.
+--
+-- The counts have been recorded since there was a chat - `model_usage_day` has
+-- had them all along - and the screen threw them away on the way out, so the one
+-- number a chat printed about an answer was how long it took. This is the switch
+-- that puts the other one beside it.
+--
+-- Per person and not per workspace, because a chat is one person's: `chat_session`
+-- carries a user_id and every door checks it, so nobody else ever reads the line
+-- this decides about. A workspace switch would be one person settling what
+-- another person's private screen shows, and there is nothing being protected by
+-- it either - the prices are on the model, where anybody who can see the
+-- workspace can already read them, and the thirty-day total is on the metrics
+-- card. What is being decided here is clutter, and clutter is personal.
+--
+-- On the server and not in the browser, which is the other half of the same
+-- question. The interface keeps a theme, a sidebar and nine keystrokes in local
+-- storage, and the rule those follow is that they belong to the machine somebody
+-- is sitting at - a theme is read before first paint and a binding collides with
+-- this browser's. Watching what you spend is not about the machine. It follows a
+-- person to the next one, the same way email_notifications does.
+--
+-- Off by default, which the issue asked for. What an answer cost is a thing to
+-- go and turn on, not a thing to have to turn off: most conversations are had
+-- without wondering, and a number printed under every one of them is noise until
+-- somebody has a reason to want it.
+ALTER TABLE app_user
+    ADD COLUMN chat_cost_shown BOOLEAN NOT NULL DEFAULT FALSE;

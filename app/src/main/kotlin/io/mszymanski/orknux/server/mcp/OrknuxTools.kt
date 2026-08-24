@@ -262,6 +262,13 @@ class OrknuxTools(
                 parameters = listOf(
                     ToolParameterSpec("assignee", "Only issues assigned to this name - a person, agent or model.", required = false),
                     ToolParameterSpec("status", "OPEN or CLOSED; both when absent.", required = false),
+                    ToolParameterSpec(
+                        "type",
+                        "Only issues of this type, by name - `bug`, `feature`, or whatever else this " +
+                            "workspace files; `untyped` for the ones nobody has classified. " +
+                            "`orknux_issue_types` lists them.",
+                        required = false,
+                    ),
                     ToolParameterSpec("search", "Words to look for in the title, the description or the labels.", required = false),
                     ToolParameterSpec(
                         "labels",
@@ -277,6 +284,16 @@ class OrknuxTools(
                 description =
                     "The labels this workspace uses and how many issues carry each. A label only works as a " +
                         "filter if you know it is there.",
+                parameters = emptyList(),
+            ),
+        )
+        add(
+            ToolSpec(
+                name = "orknux_issue_types",
+                description =
+                    "The kinds of thing this workspace files - bug, feature, or whatever else it decided - " +
+                        "and how many issues carry each. Read it before filing: a type is chosen from this " +
+                        "list and cannot be invented, unlike a label.",
                 parameters = emptyList(),
             ),
         )
@@ -307,6 +324,13 @@ class OrknuxTools(
                             required = true,
                         ),
                         ToolParameterSpec("description", "The detail; markdown is rendered.", required = false),
+                        ToolParameterSpec(
+                            "type",
+                            "What kind of thing it is, by name - `bug` if something is broken, `feature` if " +
+                                "something is missing. One of what `orknux_issue_types` lists; left out, it " +
+                                "is filed untyped rather than guessed at.",
+                            required = false,
+                        ),
                         ToolParameterSpec(
                             "labels",
                             "Labels to file it under, comma separated; 60 characters each at most.",
@@ -355,12 +379,18 @@ class OrknuxTools(
                 ToolSpec(
                     name = "orknux_update_issue",
                     description =
-                        "Changes an issue's title, description, labels or who is on it. " +
+                        "Changes an issue's title, description, type, labels or who is on it. " +
                             "What is left out is left alone.",
                     parameters = listOf(
                         ToolParameterSpec("issue", "Its number in this workspace.", required = true),
                         ToolParameterSpec("title", "A new title, 200 characters at most.", required = false),
                         ToolParameterSpec("description", "A new description; markdown is rendered.", required = false),
+                        ToolParameterSpec(
+                            "type",
+                            "What kind of thing it is, by name, from what `orknux_issue_types` lists. " +
+                                "\"untyped\" puts it back to none.",
+                            required = false,
+                        ),
                         ToolParameterSpec(
                             "labels",
                             "The labels it should have, comma separated; 60 characters each at most. Replaces them all.",
@@ -625,6 +655,7 @@ class OrknuxTools(
             "orknux_issues" -> issueTools.list(scope, arguments)
             "orknux_issue" -> issueTools.one(scope, arguments)
             "orknux_issue_labels" -> issueTools.labels(scope)
+            "orknux_issue_types" -> issueTools.types(scope)
             "orknux_open_issue" -> issueTools.open(scope, arguments)
             "orknux_comment_on_issue" -> issueTools.comment(scope, arguments)
             "orknux_set_issue_status" -> issueTools.setStatus(scope, arguments)

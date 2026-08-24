@@ -278,6 +278,17 @@ services:
       # container means attachments written into a layer that goes when the
       # container does.
       ORKNUX_ATTACHMENTS_LOCATION: /home/orknux/attachments
+
+      # Where an administrator installing a library by name fetches from. The
+      # fetch happens once, here on the server, into the database: the file it
+      # brings back is what is stored and what runs, the sandbox gains no
+      # network, and nothing reaches a registry afterwards. It goes out through
+      # the proxy rules like every other outbound call.
+      #
+      # Point it at a mirror to install from one. Set it empty on an
+      # installation with no way out - the Libraries screen then offers the
+      # upload alone, rather than a field that fails on being used.
+      ORKNUX_LIBRARY_REGISTRY_URL: ${ORKNUX_LIBRARY_REGISTRY_URL:-https://registry.npmjs.org}
     volumes:
       # Mounted at the server user's home, not at /app/data, and that is not a
       # style choice. The image runs as `orknux` (uid 999); a named volume on a

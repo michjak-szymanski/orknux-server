@@ -159,7 +159,8 @@ CREATE TABLE app_user
     password_hash                varchar(100),
     email                        varchar(320),
     email_chosen                 boolean not null default false,
-    email_notifications          boolean not null default true
+    email_notifications          boolean not null default true,
+    chat_cost_shown              boolean not null default false
 );
 
 CREATE TABLE app_user_role
@@ -596,7 +597,14 @@ CREATE TABLE script_library
     callable                     boolean not null default 0,
     uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
     uploaded_by                  varchar(120) not null default '',
-    constraint uq_script_library_key UNIQUE (library_key)
+    origin                       varchar(16) not null default 'UPLOAD',
+    origin_package               varchar(214),
+    origin_version               varchar(64),
+    origin_url                   varchar(500),
+    origin_integrity             varchar(160),
+    origin_entry                 varchar(255),
+    constraint uq_script_library_key UNIQUE (library_key),
+    constraint ck_script_library_origin CHECK ((origin) IN ('UPLOAD', 'REGISTRY'))
 );
 
 CREATE TABLE security_role
@@ -1116,7 +1124,17 @@ CREATE TABLE workspace_issue
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default 'system',
     last_comment_at              timestamp,
-    constraint workspace_issue_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+
+    -- What the issue is, or null for untyped - which is a real state and what
+    -- every issue filed before types existed still says. See V197 in the
+    -- Postgres history for why this is a row rather than a reserved label, and
+    -- why the clause below is SET NULL rather than the RESTRICT the product
+    -- behaves like: deleting a type that issues carry is refused in words, and
+    -- the one deletion left for the database is the whole workspace going, on
+    -- which SQLite would otherwise refuse depending on which cascade ran first.
+    type_id                      integer,
+    constraint workspace_issue_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+    constraint workspace_issue_type_id_fkey FOREIGN KEY (type_id) REFERENCES workspace_issue_type(id) ON DELETE SET NULL
 );
 
 CREATE TABLE workspace_issue_attachment
@@ -1199,6 +1217,18 @@ CREATE TABLE workspace_issue_relation
     linked_by                    varchar(120) not null default '',
     constraint workspace_issue_relation_issue_id_fkey FOREIGN KEY (issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE,
     constraint workspace_issue_relation_other_issue_id_fkey FOREIGN KEY (other_issue_id) REFERENCES workspace_issue(id) ON DELETE CASCADE
+);
+
+-- The kinds of thing a workspace files: bug, feature, and whatever else it
+-- decides. A catalogue rather than a reserved label prefix, for the three
+-- reasons written out in the Postgres V197 - one type per issue, a type that
+-- exists while nothing carries it, and a name that can be changed in one place.
+CREATE TABLE workspace_issue_type
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(60) not null,
+    constraint workspace_issue_type_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
 CREATE TABLE workspace_role
@@ -1338,6 +1368,8 @@ CREATE INDEX workspace_issue_link_issue_idx ON workspace_issue_link (issue_id, a
 CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (issue_id, observer_kind, observer_id);
 CREATE UNIQUE INDEX workspace_issue_relation_pair_key ON workspace_issue_relation (issue_id, other_issue_id);
 CREATE INDEX workspace_issue_relation_other_idx ON workspace_issue_relation (other_issue_id, linked_at);
+CREATE UNIQUE INDEX workspace_issue_type_name_key ON workspace_issue_type (workspace_id, lower(name));
+CREATE INDEX workspace_issue_type_idx ON workspace_issue (workspace_id, type_id);
 CREATE INDEX ix_agent_tool_import_imported ON agent_tool_import (imported_id);
 CREATE INDEX ix_agent_tool_library_imported ON agent_tool_library (imported_id);
 CREATE INDEX ix_workflow_function_library_imported ON workflow_function_library (imported_id);

@@ -13,6 +13,37 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### Added
+
+- **Authentication can be turned off, for an installation that already has a gate
+  of its own.** `ORKNUX_AUTH_METHOD=NONE` is a fourth value beside `LDAP`,
+  `INTERNAL` and `OIDC`: nobody signs in, no sign-in screen appears, and every
+  request acts as one identity — an ordinary internal user called `everyone`,
+  created on the first start under this method and holding the built-in
+  `Administrators` role. So **anyone who can reach the port administers the
+  installation**, sees every workspace and can use every stored credential, which
+  is what makes it a setting for a laptop somebody is trying the product on, or
+  for a server already behind a VPN or an authenticating proxy — and nothing else.
+  That the identity administers is deliberate rather than an oversight: there is
+  nobody to grant it anything later, so an open installation whose one identity
+  administered nothing would be one nobody could ever configure. The cost is
+  written down where the code is: every audit entry on such an installation reads
+  `everyone`, which is the truth, because the installation was never told which
+  visitor it was.
+
+  It cannot be arrived at by accident. Unset is `LDAP`, empty is `LDAP`, and a
+  value that is none of the four names fails to bind and stops the server before
+  it answers a request — there is no fall back to a default and none to open. And
+  it is never quiet about itself: the startup log says so, **Admin -> Doctor**
+  warns rather than reporting a clean bill, `/api/auth/method` carries the
+  sentence, and the interface draws it across the top of every page, with no
+  Logout offered where there is nothing to log out of. Turning it back off is the
+  variable and a restart — the `everyone` row holds no password hash, so it is
+  refused at the sign-in door under every method and does not become a way in left
+  behind by having once run open.
+
 ## 0.9.2
 
 ### Added

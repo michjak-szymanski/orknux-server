@@ -112,7 +112,7 @@ is why.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_AUTH_METHOD` | `LDAP`, `INTERNAL` or `OIDC`. | `LDAP` | No |
+| `ORKNUX_AUTH_METHOD` | `LDAP`, `INTERNAL`, `OIDC`, or `NONE` to turn authentication off. | `LDAP` | No |
 | `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
 **How hard somebody may try.** A wrong password costs nothing until the
@@ -131,9 +131,13 @@ Counted in memory, so a restart forgets.
 **INTERNAL** - nothing to configure, which is the point. Username and password
 against the accounts this installation holds itself, with no directory and no
 provider contacted. It is what `orknux/orknux-one` runs on, and what to set here
-when the bootstrap administrator below is the whole of the way in. That image
-also runs on **SQLite** - one writer, one process, one machine: a way to try
-this product, not a second way to deploy it.
+when the bootstrap administrator below is the whole of the way in.
+
+**NONE** - authentication off. Nobody signs in and every request acts as one
+identity that administers, so anyone who reaches the port administers this
+installation: run it only behind a gate of your own. Never the default, never a
+fallback - an unrecognised value stops the server. Said at startup, on the
+Doctor screen and across every page.
 
 **LDAP** - read only when `ORKNUX_AUTH_METHOD=LDAP`.
 
@@ -223,12 +227,10 @@ can be looked at afterwards.
 
 What a trigger, a schedule or the API runs is the workflow **as it was
 published**, not as it is being edited - Run in the editor is the one thing that
-uses the draft. A workflow nobody has published has nothing to run and says so.
-Every publish is kept, and an older one can be put back into service. What is
-published is the **graph**: of the function, action, agent or condition its nodes
-call it holds an id, read live when the step runs - so editing a function changes
-what a published workflow does, with no republish. The README's **Publishing**
-section is why.
+uses the draft. What is published is the **graph**: of the function, action,
+agent or condition its nodes call it holds an id, read live when the step runs,
+so editing a function changes what a published workflow does with no republish.
+The README's **Publishing** section is the rest.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |

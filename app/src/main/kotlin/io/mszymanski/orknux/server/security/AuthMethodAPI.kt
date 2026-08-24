@@ -36,15 +36,29 @@ class AuthMethodAPI(private val properties: SecurityProperties) {
          * INTERNAL says something else, because "single sign-on" is the one thing an
          * installation with no directory and no provider must not be described as.
          */
-        displayName = if (properties.authMethod == AuthMethod.INTERNAL) {
-            INTERNAL_DISPLAY_NAME
-        } else {
-            properties.oidc.displayName
+        displayName = when (properties.authMethod) {
+            AuthMethod.INTERNAL -> INTERNAL_DISPLAY_NAME
+            AuthMethod.NONE -> NONE_DISPLAY_NAME
+            else -> properties.oidc.displayName
         },
         // Where the browser flow starts. Spring registers this path for the
         // registration id; naming it here keeps the interface from having to know
         // Spring's URL conventions.
         authorizeUrl = if (properties.authMethod == AuthMethod.OIDC) OIDC_AUTHORIZE_PATH else null,
+        /*
+         * The one thing this endpoint exists to shout rather than to answer.
+         *
+         * Null on every installation that asks people to sign in, and the sentence
+         * on the one that does not - which is what the interface draws across the
+         * top of every page. Sent from here rather than worked out in the browser
+         * because the server is what knows, and because the Doctor, the startup log
+         * and this all read the same constant and so cannot disagree.
+         *
+         * Open, like the rest of this view, and there is nothing to protect: on an
+         * installation where this is set, the caller reading it may already do
+         * everything. Saying so is strictly better than letting them find out.
+         */
+        notice = if (properties.authMethod == AuthMethod.NONE) AUTHENTICATION_OFF else null,
     )
 }
 
@@ -54,6 +68,12 @@ data class AuthMethodView @JsonCreator constructor(
     @JsonProperty("displayName") val displayName: String,
     /** Where to send the browser, or null when there is a password box instead. */
     @JsonProperty("authorizeUrl") val authorizeUrl: String?,
+    /**
+     * What the interface has to say out loud about this installation, wherever
+     * somebody is standing in it. Null when there is nothing to say, which is every
+     * installation that asks people to sign in.
+     */
+    @JsonProperty("notice") val notice: String? = null,
 )
 
 /**
@@ -64,6 +84,16 @@ data class AuthMethodView @JsonCreator constructor(
  * two places the sign-in card puts it.
  */
 const val INTERNAL_DISPLAY_NAME = "an account on this installation"
+
+/**
+ * What an installation with no sign-in at all calls it.
+ *
+ * The screen that would draw a button is unreachable here — the session exists
+ * before anybody asks for one — so this is what a caller reading the endpoint
+ * directly is told, and it says the thing rather than naming a provider that is
+ * not there. [AuthMethodView.notice] carries the warning; this is only the name.
+ */
+const val NONE_DISPLAY_NAME = "no sign-in at all"
 
 /** Spring's authorization endpoint for the registration this application configures. */
 const val OIDC_REGISTRATION_ID = "orknux"

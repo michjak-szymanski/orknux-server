@@ -111,6 +111,16 @@ OIDC settings at something real if you need that - set `ORKNUX_AUTH_METHOD`
 alongside them, which overrides the default above - and you are then running a
 two-container installation with extra steps.
 
+**`ORKNUX_AUTH_METHOD=NONE` turns authentication off**, which is worth knowing
+about here because trying the product out is what this image is for. Nobody
+signs in, no sign-in screen appears, and every request acts as one identity -
+`everyone` - holding the built-in `Administrators` role. So anybody who can
+reach the published port administers the container and can use every credential
+stored in it: fine on a laptop, not fine on anything else without a gate of your
+own in front. It is never the default and never a fallback - an unrecognised
+value stops the container rather than opening it - and it says so in the startup
+log, on the Doctor screen and across the top of every page.
+
 **SQLite, so: one writer at a time, one process, one machine.** Writes are
 serialised rather than concurrent; two containers on one file over a network
 share will corrupt it. Timestamps have no time zone — a moment is stored as a

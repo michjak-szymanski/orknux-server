@@ -87,6 +87,14 @@ type Query {
     """
     scriptLibraries: [ScriptLibrary!]!
     """
+    Whether a package can be installed here, and where one would come from.
+
+    Administrators only. Asked by the Libraries screen so that an installation
+    configured without a registry offers the upload alone: a field offering to
+    fetch from a registry that is not there is a field that fails on being used.
+    """
+    libraryRegistry: LibraryRegistryStatus!
+    """
     The libraries a workspace may import, for the editors' picker.
 
     The same rows without `usedBy`. Not an administrator's query, unlike
@@ -631,6 +639,24 @@ type Mutation {
     a library arrives as a file, so it is uploaded to `POST /api/libraries`.
     """
     deleteScriptLibrary(id: ID!): Boolean!
+    """
+    Fetches an npm package and loads what is inside it. Administrators only.
+
+    `spec` is a package and an exact version — `random@4.1.0`. A range and
+    `latest` are refused, because a specification that resolves differently
+    tomorrow is not an answer to what code is running here.
+
+    The fetch happens once, on the server, into the database, and the file it
+    brought back is what is stored and what runs — exactly as an uploaded one is.
+    The sandbox gains no network, and an installation configured without a
+    registry refuses this and keeps the upload.
+
+    Refused, with a sentence saying why, when: the package ships no ES module;
+    the module it ships imports anything at all, because a library has to be one
+    self-contained file and this installation does not bundle; the file does not
+    hash to what the registry said it would; or the registry cannot be reached.
+    """
+    installScriptLibrary(spec: String!): ScriptLibrary!
     """
     Answers one of a plugin's parameters, for one workspace.
 
@@ -4000,6 +4026,42 @@ type ScriptLibrary {
     "ISO-8601 offset date-time."
     uploadedAt: String!
     uploadedBy: String!
+    """
+    Where it was fetched from, or null when somebody uploaded the file.
+
+    Null is the honest answer for an upload rather than an awkward one: an
+    uploaded file has no provenance this installation can vouch for, and a row of
+    blanks would read as though it had.
+    """
+    registry: LibraryRegistry
+}
+
+"""
+What a registry served, and what it claimed about it.
+
+The point of recording a fetch is that somebody can check it: the same package at
+the same version fetched anywhere else carries the same integrity string, and a
+row that disagrees is worth knowing about.
+"""
+type LibraryRegistry {
+    "The npm package, scope and all."
+    packageName: String!
+    "Exactly one version. Never a range and never a tag."
+    version: String!
+    "The file that was downloaded, so the fetch can be repeated and compared."
+    url: String!
+    "The registry's own hash of the file it served, verified on arrival."
+    integrity: String!
+    "Which file inside the package is the one that runs."
+    entry: String!
+}
+
+"Whether this installation can fetch a package, and from where."
+type LibraryRegistryStatus {
+    "False where no registry is configured: the screen offers the upload alone."
+    configured: Boolean!
+    "Where packages would come from. Empty when there is none."
+    url: String!
 }
 
 type LibraryMember {

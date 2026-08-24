@@ -596,7 +596,14 @@ CREATE TABLE script_library
     callable                     boolean not null default 0,
     uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
     uploaded_by                  varchar(120) not null default '',
-    constraint uq_script_library_key UNIQUE (library_key)
+    origin                       varchar(16) not null default 'UPLOAD',
+    origin_package               varchar(214),
+    origin_version               varchar(64),
+    origin_url                   varchar(500),
+    origin_integrity             varchar(160),
+    origin_entry                 varchar(255),
+    constraint uq_script_library_key UNIQUE (library_key),
+    constraint ck_script_library_origin CHECK ((origin) IN ('UPLOAD', 'REGISTRY'))
 );
 
 CREATE TABLE security_role

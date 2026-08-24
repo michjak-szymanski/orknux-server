@@ -6,6 +6,7 @@ import org.graalvm.polyglot.HostAccess
 import org.graalvm.polyglot.PolyglotException
 import org.graalvm.polyglot.ResourceLimits
 import org.graalvm.polyglot.Source
+import org.graalvm.polyglot.Value
 import org.graalvm.polyglot.io.IOAccess
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
@@ -240,6 +241,12 @@ class ScriptRunner(private val properties: ScriptProperties) {
      * a default export" is an answer worth having while somebody is looking at the
      * file they chose. It runs in the ordinary sandbox, bounded like everything
      * else — a library is given exactly what a function is given, which is nothing.
+     *
+     * What counts as a member is [MEMBERS], and it is asked in the guest rather
+     * than off the value. `Value.memberKeys` answers with the export's own
+     * enumerable properties, and a bundle whose default export is an instance
+     * keeps its whole API on a prototype: `random` listed `_cache` and `_rng` and
+     * not one of the methods anybody imports it for.
      */
     fun library(source: String): LibraryInspection = try {
         guard.bounded(AtomicReference(), ::newContext) { polyglot ->
@@ -249,14 +256,16 @@ class ScriptRunner(private val properties: ScriptProperties) {
                 return@bounded LibraryInspection.Unreadable("its default export is null")
             }
 
-            val keys = runCatching { exported.memberKeys }.getOrDefault(emptySet())
-            if (keys.size > MAX_MEMBERS) {
+            val read = polyglot.eval("js", MEMBERS).execute(exported, MAX_MEMBERS)
+            if (read.getMember("over").asBoolean()) {
                 return@bounded LibraryInspection.Unreadable("its default export has more than $MAX_MEMBERS members")
             }
+            val listed = read.getMember("members")
             LibraryInspection.Read(
                 callable = exported.canExecute(),
-                members = keys.sorted().map { key ->
-                    LibraryMember(key, callable = runCatching { exported.getMember(key).canExecute() }.getOrDefault(false))
+                members = (0 until listed.arraySize).map { at ->
+                    val member = listed.getArrayElement(at)
+                    LibraryMember(member.getMember("name").asString(), member.getMember("callable").asBoolean())
                 },
             )
         }
@@ -397,13 +406,38 @@ class ScriptRunner(private val properties: ScriptProperties) {
     private fun load(polyglot: Context, modules: List<ScriptModule>) {
         if (modules.isEmpty()) return
         polyglot.eval("js", REGISTRY)
+        /*
+         * Held here rather than left on `globalThis`, and that is the whole
+         * reason it is an expression: the modules below are somebody's code and
+         * they are evaluated one after another, so a global that hands functions
+         * their grants would be a global one module could replace before the next
+         * one was wrapped in it.
+         */
+        val granting = if (modules.any { it.externals.isNotEmpty() }) polyglot.eval("js", GRANTS) else null
         val registry = polyglot.getBindings("js").getMember(MODULES)
         for (imported in modules) {
             val exported = polyglot.eval(module(prelude(imported.imports) + imported.source, imported.key))
                 .getMember("default")
                 ?: throw ScriptContractException("${imported.name} has nothing to import: it has no default export")
-            registry.putMember(imported.key, exported)
+            registry.putMember(imported.key, granted(granting, exported, imported))
         }
+    }
+
+    /**
+     * The module as its importer will call it: its own arguments, then its grants.
+     *
+     * A function's externals are appended by whoever calls it, because the code
+     * takes them as ordinary parameters after the ones it declares. That is done
+     * for the function a node runs, and it has to be done here too — the importer
+     * writes `imports.f(word)` and does not know a grant exists, so nothing else
+     * in the chain is in a position to supply one.
+     *
+     * A module with no grants is registered exactly as it was, so nothing that
+     * imports anything today goes through a wrapper.
+     */
+    private fun granted(granting: Value?, exported: Value, imported: ScriptModule): Value {
+        if (imported.externals.isEmpty() || granting == null) return exported
+        return granting.execute(exported, imported.declared, imported.externals.joinToString(",", "[", "]"))
     }
 
     /**
@@ -443,6 +477,75 @@ class ScriptRunner(private val properties: ScriptProperties) {
         const val SUBJECT = "__orknuxSubject"
         const val ARITY_RESULT = "__orknuxArity"
 
+        /**
+         * What a library's default export offers, prototypes included.
+         *
+         * Three decisions, and each one is a name that would otherwise be offered
+         * to somebody writing a call.
+         *
+         * The chain is walked, because a bundle whose export is an instance keeps
+         * its methods on a prototype and none of them are own properties. It stops
+         * at `Object.prototype` and `Function.prototype`: `hasOwnProperty`,
+         * `toString` and `bind` belong to the language and are on everything, so
+         * offering them would be offering the same six names for every library
+         * ever loaded. For the same reason a function's own `length`, `name` and
+         * `prototype` are left out — they are what being a function is, not what
+         * this bundle exports.
+         *
+         * An underscore is left out too. It is the only convention JavaScript has
+         * for "not for you", and this list is an offer: `random`'s `_rng` is the
+         * thing somebody would call by mistake, not the thing they came for. It is
+         * only the offer that drops them — the module a script imports is the real
+         * evaluated one, so code that already reaches an internal keeps working.
+         *
+         * Every read is guarded. A member is callable if reading it gives a
+         * function, and reading it can run somebody's getter — one that throws
+         * makes that one member unreadable rather than the library.
+         */
+        val MEMBERS = """
+            (function (subject, limit) {
+              var language = Object.create(null);
+              ['length', 'name', 'prototype', 'constructor', 'caller', 'arguments'].forEach(function (word) {
+                language[word] = true;
+              });
+
+              var seen = Object.create(null);
+              var names = [];
+              var over = false;
+              var target = subject;
+
+              while (target !== null && target !== undefined &&
+                     target !== Object.prototype && target !== Function.prototype) {
+                var own;
+                try { own = Object.getOwnPropertyNames(target); } catch (unreadable) { own = []; }
+
+                for (var at = 0; at < own.length; at++) {
+                  var name = own[at];
+                  if (language[name] === true) continue;
+                  if (name.charAt(0) === '_') continue;
+                  // An index is a position, not the name of anything to call.
+                  if (/^\d+${'$'}/.test(name)) continue;
+                  if (seen[name] === true) continue;
+                  seen[name] = true;
+                  names.push(name);
+                  if (names.length > limit) { over = true; break; }
+                }
+
+                if (over) break;
+                try { target = Object.getPrototypeOf(target); } catch (unreadable) { break; }
+              }
+
+              names.sort();
+              var members = [];
+              for (var each = 0; each < names.length; each++) {
+                var callable = false;
+                try { callable = typeof subject[names[each]] === 'function'; } catch (threw) { callable = false; }
+                members.push({ name: names[each], callable: callable });
+              }
+              return { over: over, members: members };
+            })
+        """.trimIndent()
+
         /** Where an imported module's default export is left for the prelude to find. */
         const val MODULES = "__orknuxModules"
 
@@ -451,6 +554,30 @@ class ScriptRunner(private val properties: ScriptProperties) {
          * `constructor` is the module and not something Object brought with it.
          */
         val REGISTRY = "globalThis.$MODULES = Object.create(null);"
+
+        /**
+         * Wraps an imported module so it is handed its own externals.
+         *
+         * The arguments are taken positionally and exactly: as many as the module
+         * declares, padded when the importer passed fewer, and the grants after
+         * them. Trimming what is over is the same decision as padding what is
+         * short — a grant has a position in the parameter list, and an extra
+         * argument that pushed it along would be a variable read as something
+         * else. The save-time signature check makes that position exact.
+         *
+         * The values cross as one JSON document, like everything else that
+         * crosses, and are parsed once here rather than on every call.
+         */
+        val GRANTS = """
+            (function (fn, declared, granted) {
+              var extras = JSON.parse(granted);
+              return function () {
+                var passed = [];
+                for (var at = 0; at < declared; at++) passed.push(arguments[at]);
+                return fn.apply(undefined, passed.concat(extras));
+              };
+            })
+        """.trimIndent()
 
         /**
          * Counts the parameters the subject declares.
@@ -585,6 +712,27 @@ data class ScriptModule(
     val source: String,
     /** What this module imports in turn: the name it uses, and the key it means. */
     val imports: Map<String, String> = emptyMap(),
+
+    /**
+     * How many arguments its own code declares before [externals] begin.
+     *
+     * Named rather than counted off the function, because it is what decides
+     * where a grant lands. An importer that passed one argument to a module
+     * declaring two would otherwise have its argument followed straight by a
+     * variable, and the module would read a secret as its second parameter.
+     */
+    val declared: Int = 0,
+
+    /**
+     * The workspace's variables this module is granted, as JSON, in the order it
+     * receives them — after everything it declares.
+     *
+     * A grant belongs to the module that declared it, and an importer is never
+     * told it exists: it writes `imports.f(word)` and the sandbox appends the
+     * rest. Empty for a library, which is somebody else's bundle and is granted
+     * nothing.
+     */
+    val externals: List<String> = emptyList(),
 )
 
 /** What a run of a script produced. */

@@ -245,6 +245,155 @@ class ScriptImportTest {
         assertThat(read).isInstanceOf(LibraryInspection.Unreadable::class.java)
     }
 
+    /**
+     * A grant is the module's, and the importer never sees it.
+     *
+     * The code takes its externals as ordinary parameters after the ones it
+     * declares, so somebody has to append them. The importer cannot: it is shown
+     * a signature without them and writes a call to match.
+     */
+    @Test
+    fun `an imported module is handed the externals it declares`() {
+        val result = runner.call(
+            "export default function f(word) { return imports.read(word); }",
+            "f",
+            listOf(""""hello""""),
+            modules = listOf(
+                ScriptModule(
+                    key = "f1",
+                    name = "readToken",
+                    source = "export default function readToken(word, token) { return { word, token }; }",
+                    declared = 1,
+                    externals = listOf(""""s3cret""""),
+                ),
+            ),
+            imports = mapOf("read" to "f1"),
+        )
+
+        assertThat((result as ScriptResult.Returned).json).isEqualTo("""{"word":"hello","token":"s3cret"}""")
+    }
+
+    /**
+     * And it lands where the module declared it, not after whatever arrived.
+     *
+     * An importer that passed one argument to a module declaring two would
+     * otherwise have its argument followed straight by a variable, and the module
+     * would read a secret as its second parameter — silently, and with the wrong
+     * value in the answer rather than an error anywhere.
+     */
+    @Test
+    fun `a grant keeps its position when the importer passes fewer arguments`() {
+        val result = runner.call(
+            "export default function f() { return imports.read('one'); }",
+            "f",
+            emptyList(),
+            modules = listOf(
+                ScriptModule(
+                    key = "f1",
+                    name = "readToken",
+                    source = "export default function readToken(a, b, token) { return { a, b: b === undefined, token }; }",
+                    declared = 2,
+                    externals = listOf(""""s3cret""""),
+                ),
+            ),
+            imports = mapOf("read" to "f1"),
+        )
+
+        assertThat((result as ScriptResult.Returned).json).isEqualTo("""{"a":"one","b":true,"token":"s3cret"}""")
+    }
+
+    /**
+     * What a bundle offers is not always its own property.
+     *
+     * The `random` package exports an instance of a class: `_cache` and `_rng`
+     * are fields on it and `int`, `float` and the rest live on the prototype. Read
+     * as own properties it offered the two internals and none of the API, which is
+     * the whole of what anybody imports it for.
+     */
+    @Test
+    fun `a library exporting an instance is read for what its prototype offers`() {
+        val read = runner.library(
+            """
+            class Random {
+              constructor() { this._cache = {}; this.tag = 'random'; }
+              int(low, high) { return low; }
+              float() { return 0.5; }
+              get seed() { return 1; }
+            }
+            export default new Random();
+            """.trimIndent(),
+        )
+
+        with(read as LibraryInspection.Read) {
+            assertThat(callable).isFalse()
+            assertThat(members.map { it.name }).containsExactly("float", "int", "seed", "tag")
+            assertThat(members.single { it.name == "int" }.callable).isTrue()
+            assertThat(members.single { it.name == "float" }.callable).isTrue()
+            // Read, not called: a getter's answer is a value like any other.
+            assertThat(members.single { it.name == "seed" }.callable).isFalse()
+            assertThat(members.single { it.name == "tag" }.callable).isFalse()
+        }
+    }
+
+    /**
+     * The chain stops before the language's own.
+     *
+     * `hasOwnProperty` and `toString` are on everything there is, so offering them
+     * would be offering the same six names for every library ever loaded — and an
+     * underscore is the only way JavaScript has of saying a name is not for you.
+     */
+    @Test
+    fun `a library offers neither the language's members nor its own internals`() {
+        val read = runner.library(
+            """
+            class Bag {
+              constructor() { this._secret = 1; }
+              open() { return 2; }
+            }
+            export default new Bag();
+            """.trimIndent(),
+        )
+
+        assertThat((read as LibraryInspection.Read).members.map { it.name }).containsExactly("open")
+    }
+
+    /** A function's `length` and `name` are what being a function is, not an export. */
+    @Test
+    fun `a callable library offers its statics and not the shape of a function`() {
+        val read = runner.library(
+            """
+            function shout(t) { return t.toUpperCase(); }
+            shout.version = '1.0';
+            export default shout;
+            """.trimIndent(),
+        )
+
+        with(read as LibraryInspection.Read) {
+            assertThat(callable).isTrue()
+            assertThat(members.map { it.name }).containsExactly("version")
+        }
+    }
+
+    /** One member nobody can read is one member, not a library nobody can read. */
+    @Test
+    fun `a member that throws when it is read is listed as something to read`() {
+        val read = runner.library(
+            """
+            class Awkward {
+              get broken() { throw new Error('no'); }
+              fine() { return 1; }
+            }
+            export default new Awkward();
+            """.trimIndent(),
+        )
+
+        with(read as LibraryInspection.Read) {
+            assertThat(members.map { it.name }).containsExactly("broken", "fine")
+            assertThat(members.single { it.name == "broken" }.callable).isFalse()
+            assertThat(members.single { it.name == "fine" }.callable).isTrue()
+        }
+    }
+
     /** A script that imports nothing is handed no prelude and is exactly as it was. */
     @Test
     fun `a script with no imports has no imports object`() {

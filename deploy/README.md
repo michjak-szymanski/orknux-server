@@ -265,6 +265,25 @@ account's own preferences, then unset both variables and bring the server up
 again. Until you do, every start says in the log that the account still has the
 password from the environment.
 
+## Turning authentication off
+
+`ORKNUX_AUTH_METHOD=NONE` is the one value that opens the front door. Nobody
+signs in, no screen asks, and every request that reaches the server acts as one
+identity - an ordinary internal user called `everyone`, holding the built-in
+`Administrators` role. **Anyone who can reach the port then administers this
+installation**, sees every workspace and can use every stored credential, so it
+belongs only where something else is already the gate: a laptop somebody is
+trying the product on, a VPN, an authenticating proxy in front of `orknux-ui`.
+Note that this compose file publishes 8080 on the host, which is not a gate.
+
+Nothing arrives at it by accident. Unset is `LDAP`, empty is `LDAP`, and a value
+that is none of the four names fails to bind and stops the server before it
+answers a request. And nothing about it is quiet: the log says so at startup,
+**Admin -> Doctor** warns, and a strip across the top of every page says it to
+whoever is looking at the screen. Set `ORKNUX_AUTH_METHOD` back to `LDAP`,
+`OIDC` or `INTERNAL` and the door closes again - the `everyone` row has no
+password, so it cannot be signed in as afterwards.
+
 ## Only one port is published
 
 `orknux-ui` on 8080, and that is all. The API is not published separately, and
@@ -290,7 +309,7 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_HTTP_PORT` | `8080` | The port you open in a browser. |
 | `ORKNUX_DB_PASSWORD` | `orknux` | The Postgres password, used by Postgres, the server and Temporal alike. Only read when the database volume is first created. |
 | `ORKNUX_LDAP_ADMIN_PASSWORD` | `admin` | The directory's admin password, which is also what the server binds with. |
-| `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP` or `OIDC`. |
+| `ORKNUX_AUTH_METHOD` | `LDAP` | `LDAP`, `INTERNAL`, `OIDC`, or `NONE` to turn authentication off - see below. |
 | `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | *empty* | The first internal administrator, created at startup if nobody has that name. Empty seeds nobody. See above. |
 | `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | *empty* | What they sign in with the first time. At least 12 characters, and something to change and unset once you are in. |
 | `ORKNUX_SERVER_TAG` | `0.9` | Which `orknux/orknux-server` image. |

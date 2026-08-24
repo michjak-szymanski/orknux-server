@@ -5,7 +5,9 @@ import io.mszymanski.orknux.connector.security.SecretColumns
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
 import io.mszymanski.orknux.server.database.isSqlite
 import io.mszymanski.orknux.server.database.jdbcUrlOf
+import io.mszymanski.orknux.server.security.AUTHENTICATION_OFF
 import io.mszymanski.orknux.server.security.AuthMethod
+import io.mszymanski.orknux.server.security.OPEN_ACCESS_USERNAME
 import io.mszymanski.orknux.server.security.SecurityProperties
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.security.WebProperties
@@ -294,6 +296,24 @@ class DoctorAPI(
             "Authentication",
             "Username and password, against accounts this installation holds itself. " +
                 "No directory and no provider are configured, and none is contacted.",
+        )
+
+        /*
+         * The loudest thing this screen can say about an installation, and it is a
+         * WARN rather than a FAIL on purpose: nothing here is going to break, which
+         * is what FAIL promises. It is configured, it works, and it is almost
+         * certainly not what a second person looking at this installation expects -
+         * which is precisely what WARN is for.
+         *
+         * The Doctor is behind requireAdmin, so under this method everybody reaches
+         * it. That is the point rather than a hole: the one screen an operator opens
+         * to ask whether this installation is set up correctly must answer the
+         * question they did not think to ask.
+         */
+        AuthMethod.NONE -> warn(
+            "Authentication",
+            "$AUTHENTICATION_OFF Everything here acts as \"$OPEN_ACCESS_USERNAME\", which administers. " +
+                "Set ORKNUX_AUTH_METHOD to LDAP, OIDC or INTERNAL to ask people to sign in again.",
         )
 
         AuthMethod.OIDC -> {

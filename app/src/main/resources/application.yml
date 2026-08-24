@@ -280,7 +280,7 @@ orknux:
     password: ${ORKNUX_BOOTSTRAP_ADMIN_PASSWORD:}
   security:
     # Sees the Admin section and every workspace.
-    # LDAP, INTERNAL or OIDC. One at a time, deliberately: two would mean an LDAP
+    # LDAP, INTERNAL, OIDC or NONE. One at a time, deliberately: two would mean an LDAP
     # password for every account the OIDC provider governs — a second way in that
     # its policies do not reach and its administrators do not know about.
     #
@@ -296,8 +296,23 @@ orknux:
     # to reach a localhost:389 nobody had asked for. Under INTERNAL no directory
     # is contacted, and the monitoring screen draws no card for one.
     #
+    # NONE turns authentication off. Nobody signs in, no screen asks, and every
+    # request that reaches this server acts as one identity - "everyone" - which
+    # holds the built-in administrator role. Anyone who can reach the port
+    # administers the installation, reads every workspace and can use every stored
+    # credential, so it belongs only where something else is already the gate: a
+    # laptop somebody is trying the product on, a VPN, an authenticating proxy.
+    #
+    # It cannot be arrived at by accident, which is the point of it being a name
+    # rather than a switch. Unset is LDAP, empty is LDAP, and any other value fails
+    # to bind and stops the application before it answers a request - it does not
+    # fall back to anything. And it is never quiet about itself: the log says so at
+    # startup, the Doctor screen says so, and the interface draws it across the top
+    # of every page.
+    #
     # The default is LDAP and stays LDAP. This says what an installation has, and
-    # changing the default would change what every existing one claims to have.
+    # changing the default would change what every existing one claims to have -
+    # and with NONE among the values, the default has to be the closed one.
     auth-method: ${ORKNUX_AUTH_METHOD:LDAP}
     admin-role: ${ORKNUX_ADMIN_ROLE:ROLE_ADMINS}
     sign-in:

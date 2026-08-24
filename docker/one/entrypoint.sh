@@ -181,6 +181,10 @@ ORKNUX_AUTH_METHOD="${ORKNUX_AUTH_METHOD:-INTERNAL}"
 export ORKNUX_AUTH_METHOD
 if [ "$ORKNUX_AUTH_METHOD" = "INTERNAL" ]; then
     note "Signing in with accounts held by this installation; no directory and no provider."
+elif [ "$ORKNUX_AUTH_METHOD" = "NONE" ]; then
+    # Louder than the others on purpose: this one was chosen in the environment
+    # and it is the only value that opens the container to whoever reaches it.
+    note "AUTHENTICATION IS OFF. Nobody signs in, and anyone who can reach this port administers it."
 else
     note "Signing in with $ORKNUX_AUTH_METHOD, as set in the environment."
 fi

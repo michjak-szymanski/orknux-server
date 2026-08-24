@@ -202,6 +202,17 @@ have failed.
   first. An MCP server the workspace does not have gets no mark, because a grant
   there is a name somebody typed rather than a reference.
 
+- **A run's graph drawn as boxes with nothing between them.** Opening a run
+  sometimes left every step on the canvas with no line joining any of them, and
+  it stayed that way until the page was reloaded. It is the third turn of one
+  defect: the two before it were about a step drawn invisibly, and telling the
+  canvas how big a box is fixed those and left the lines behind, because a line
+  is drawn from where a step's handles are rather than from how big it is. Every
+  re-read of a run threw those positions away — so the lines went out on every
+  Refresh, on every tick of Auto, and for good whenever the frame that would put
+  them back never came. The workflow editor lost its lines the same way on
+  Discard, and no longer does.
+
 ## 0.9.2
 
 ### Added

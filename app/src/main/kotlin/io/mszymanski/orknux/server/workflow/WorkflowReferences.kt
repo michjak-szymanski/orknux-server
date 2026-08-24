@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.dependency.Dependant
+import io.mszymanski.orknux.server.dependency.DependencyKind
 import io.mszymanski.orknux.workflow.execution.GraphNode
 import io.mszymanski.orknux.workflow.execution.GraphVersion
 import org.springframework.stereotype.Component
@@ -39,6 +41,13 @@ import org.springframework.stereotype.Component
  * `agentId`, `actionId` and `conditionId` and nothing else, so those three are
  * the only references a published run resolves. A trigger id is not among them,
  * which is why the trigger question below is a draft question and says so.
+ *
+ * The answer is a [Dependant] rather than a sentence, and that is not a detail.
+ * A refusal joins [Dependant.phrase] and reads exactly as it always did; a screen
+ * showing where a definition is used draws the same rows as links, which is what
+ * #258 asked for. Two audiences, one set — see
+ * [ComponentDependants][io.mszymanski.orknux.server.dependency.ComponentDependants],
+ * which is what everything now asks.
  */
 @Component
 class WorkflowReferences(
@@ -48,15 +57,15 @@ class WorkflowReferences(
 ) {
 
     /** Which of the workspace's workflows run this action. */
-    fun toAction(workspaceId: Long, actionId: Long): List<String> =
+    fun toAction(workspaceId: Long, actionId: Long): List<Dependant> =
         using(workspaceId, { it.actionId == actionId }, { it.actionId == actionId })
 
     /** Which of the workspace's workflows instance this agent. */
-    fun toAgent(workspaceId: Long, agentId: Long): List<String> =
+    fun toAgent(workspaceId: Long, agentId: Long): List<Dependant> =
         using(workspaceId, { it.agentId == agentId }, { it.agentId == agentId })
 
     /** Which of the workspace's workflows ask this condition. */
-    fun toCondition(workspaceId: Long, conditionId: Long): List<String> =
+    fun toCondition(workspaceId: Long, conditionId: Long): List<Dependant> =
         using(workspaceId, { it.conditionId == conditionId }, { it.conditionId == conditionId })
 
     /**
@@ -68,7 +77,7 @@ class WorkflowReferences(
      * does not fail in the middle of a run - it stops being reached at all,
      * which is the quieter half of the same bug.
      */
-    fun toTrigger(workspaceId: Long, triggerId: Long): List<String> =
+    fun toTrigger(workspaceId: Long, triggerId: Long): List<Dependant> =
         using(workspaceId, { it.triggerId == triggerId }, { false })
 
     /**
@@ -77,22 +86,37 @@ class WorkflowReferences(
      * The published copy is reported in preference to the draft where one
      * workflow holds both, because it is the harder of the two to be rid of:
      * redrawing the canvas is not enough, and somebody told only "the workflow
-     * Answer" would do exactly that and be refused again.
+     * Answer" would do exactly that and be refused again. That preference is what
+     * [Dependant.published] carries, so a screen can mark the row the same way the
+     * sentence does.
      */
     private fun using(
         workspaceId: Long,
         inDraft: (WorkflowNode) -> Boolean,
         inPublished: (GraphNode) -> Boolean,
-    ): List<String> = assignments.findByWorkspaceId(workspaceId)
+    ): List<Dependant> = assignments.findByWorkspaceId(workspaceId)
         .map { it.workflow }
         .distinctBy { it.id }
         .mapNotNull { workflow ->
             val workflowId = workflow.id ?: return@mapNotNull null
-            when {
-                published(workspaceId, workflowId).any(inPublished) -> "the published workflow ${workflow.name}"
-                nodes.findByWorkflowId(workflowId).any(inDraft) -> "the workflow ${workflow.name}"
-                else -> null
+            val published = when {
+                published(workspaceId, workflowId).any(inPublished) -> true
+                nodes.findByWorkflowId(workflowId).any(inDraft) -> false
+                else -> return@mapNotNull null
             }
+            Dependant(
+                kind = DependencyKind.WORKFLOW,
+                id = workflowId,
+                name = workflow.name,
+                workspaceId = workspaceId,
+                workspaceName = null,
+                published = published,
+                phrase = if (published) {
+                    "the published workflow ${workflow.name}"
+                } else {
+                    "the workflow ${workflow.name}"
+                },
+            )
         }
 
     /**

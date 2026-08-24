@@ -12,7 +12,9 @@ import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.workflow.ConditionNotInCatalogueException
-import io.mszymanski.orknux.server.workflow.WorkflowReferences
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -49,9 +51,9 @@ class TriggerAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
-    private val references: WorkflowReferences,
     /** Who a Slack connection posts as, which is what a reply is matched against. */
     private val botUsers: SlackBotUsers,
+    private val dependants: ComponentDependants,
 ) {
 
     @QueryMapping
@@ -261,8 +263,8 @@ class TriggerAPI(
     fun deleteTrigger(@Argument id: Long): Boolean {
         val trigger = triggers.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val users = references.toTrigger(trigger.workspaceId, id)
-        if (users.isNotEmpty()) throw TriggerInUseException(trigger.name, users)
+        val users = dependants.of(DependencyKind.TRIGGER, id)
+        if (users.isNotEmpty()) throw TriggerInUseException(trigger.name, users.phrases())
 
         triggers.delete(trigger)
         auditRecorder.record(trigger.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Trigger ${trigger.name} deleted")

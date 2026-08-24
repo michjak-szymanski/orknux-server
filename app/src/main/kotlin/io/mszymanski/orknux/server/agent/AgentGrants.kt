@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.dependency.Dependant
+import io.mszymanski.orknux.server.dependency.DependencyKind
 import org.springframework.stereotype.Component
 
 /**
@@ -49,16 +51,34 @@ import org.springframework.stereotype.Component
 class AgentGrants(private val agents: AgentRepository) {
 
     /** Which of the workspace's agents may call this tool. */
-    fun toTool(workspaceId: Long, name: String): List<String> =
-        agents.findGrantedTool(workspaceId, name).map { "the agent ${it.name}" }
+    fun toTool(workspaceId: Long, name: String): List<Dependant> =
+        agents.findGrantedTool(workspaceId, name).map(::held)
 
     /** Which of the workspace's agents draw on this skill catalog. */
-    fun toSkillCatalog(workspaceId: Long, name: String): List<String> =
-        agents.findGrantedSkillCatalog(workspaceId, name).map { "the agent ${it.name}" }
+    fun toSkillCatalog(workspaceId: Long, name: String): List<Dependant> =
+        agents.findGrantedSkillCatalog(workspaceId, name).map(::held)
 
     /** Which of the workspace's agents may read this memory catalog. */
-    fun toMemoryCatalog(workspaceId: Long, name: String): List<String> =
-        agents.findGrantedMemoryCatalog(workspaceId, name).map { "the agent ${it.name}" }
+    fun toMemoryCatalog(workspaceId: Long, name: String): List<Dependant> =
+        agents.findGrantedMemoryCatalog(workspaceId, name).map(::held)
+
+    /**
+     * The agent as a row, and as the clause a refusal says it in.
+     *
+     * "the agent Reviewer" is the wording all three refusals already used, and it
+     * stays exactly that — [Dependant.phrase] is what they join. What the row adds
+     * is the id, so the screen that lists where a tool is used can open the agent
+     * instead of leaving the reader to go and find it.
+     */
+    private fun held(agent: Agent) = Dependant(
+        kind = DependencyKind.AGENT,
+        id = requireNotNull(agent.id),
+        name = agent.name,
+        workspaceId = agent.workspaceId,
+        workspaceName = null,
+        published = false,
+        phrase = "the agent ${agent.name}",
+    )
 
     /**
      * Which of the workspace's agents may connect to this MCP server.

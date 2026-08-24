@@ -2,10 +2,12 @@ package io.mszymanski.orknux.server.library
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
-import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
-import io.mszymanski.orknux.server.agent.AgentToolRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependantView
+import io.mszymanski.orknux.server.dependency.DependencyAPI
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.script.LibraryInspection
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.springframework.data.repository.findByIdOrNull
@@ -237,9 +239,8 @@ class LibraryStore(
 @Controller
 class ScriptLibraryAPI(
     private val libraries: ScriptLibraryRepository,
-    private val functions: WorkflowFunctionRepository,
-    private val tools: AgentToolRepository,
-    private val workspaces: WorkspaceRepository,
+    private val dependants: ComponentDependants,
+    private val dependencies: DependencyAPI,
     private val access: WorkspaceAccess,
     private val mapper: ObjectMapper,
     private val registry: NpmRegistry,
@@ -290,17 +291,14 @@ class ScriptLibraryAPI(
             sizeBytes = fetched.source.toByteArray(StandardCharsets.UTF_8).size.toLong(),
             fetched = fetched,
         )
-        return describe(stored, usersOf(requireNotNull(stored.id), workspaceNames()))
+        return describe(stored, usersOf(requireNotNull(stored.id)))
     }
 
     /** Everything loaded, with what imports it. Administrators. */
     @QueryMapping
     fun scriptLibraries(): List<ScriptLibraryView> {
         access.requireAdmin()
-        // The workspaces once, not once per library: `usedBy` names the workspace
-        // each user lives in, and this is a list.
-        val named = workspaceNames()
-        return libraries.findAllByOrderByNameAsc().map { describe(it, usersOf(requireNotNull(it.id), named)) }
+        return libraries.findAllByOrderByNameAsc().map { describe(it, usersOf(requireNotNull(it.id))) }
     }
 
     /**
@@ -331,14 +329,14 @@ class ScriptLibraryAPI(
         access.requireAdmin()
         val library = libraries.findByIdOrNull(id) ?: throw LibraryNotFoundException(id)
 
-        val used = usersOf(id, workspaceNames()).map { "${it.name} in ${it.workspaceName}" }
-        if (used.isNotEmpty()) throw LibraryInUseException(used)
+        val used = dependants.of(DependencyKind.LIBRARY, id)
+        if (used.isNotEmpty()) throw LibraryInUseException(used.phrases())
 
         libraries.delete(library)
         return true
     }
 
-    private fun describe(library: ScriptLibrary, usedBy: List<LibraryUsageView>) = ScriptLibraryView(
+    private fun describe(library: ScriptLibrary, usedBy: List<DependantView>) = ScriptLibraryView(
         id = requireNotNull(library.id),
         key = library.key,
         name = library.name,
@@ -389,27 +387,17 @@ class ScriptLibraryAPI(
     private fun keyOf(packageName: String): String =
         packageName.removePrefix("@").replace('/', '-').takeLast(64)
 
-    private fun workspaceNames(): Map<Long?, String> = workspaces.findAll().associate { it.id to it.name }
-
-    /** Every function and tool that imports this library, with the workspace it is in. */
-    private fun usersOf(id: Long, named: Map<Long?, String>): List<LibraryUsageView> =
-        functions.findByImportedLibraryId(id).map { function ->
-            LibraryUsageView(
-                kind = "FUNCTION",
-                id = requireNotNull(function.id),
-                name = function.name,
-                workspaceId = function.workspaceId ?: 0,
-                workspaceName = named[function.workspaceId] ?: "",
-            )
-        } + tools.findByImportedLibraryId(id).map { tool ->
-            LibraryUsageView(
-                kind = "TOOL",
-                id = requireNotNull(tool.id),
-                name = tool.name,
-                workspaceId = tool.workspaceId,
-                workspaceName = named[tool.workspaceId] ?: "",
-            )
-        }
+    /**
+     * Every function and tool that imports this library, with the workspace it is in.
+     *
+     * Through [DependencyAPI.visible] rather than raw, so that the one rule about
+     * naming something in a workspace the reader cannot open lives in one place.
+     * This listing is an administrator's and an administrator sees every
+     * workspace, so nothing is ever dropped here — but the rule is not this
+     * screen's to restate.
+     */
+    private fun usersOf(id: Long): List<DependantView> =
+        dependencies.visible(dependants.of(DependencyKind.LIBRARY, id)).entries
 }
 
 @Component

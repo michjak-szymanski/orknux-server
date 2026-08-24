@@ -7,6 +7,8 @@ import io.mszymanski.orknux.server.action.ConnectionAction
 import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.ScriptImport
+import io.mszymanski.orknux.server.library.ScriptLibraryRepository
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowAction
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -17,6 +19,7 @@ import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.agent.AgentSkill
 import io.mszymanski.orknux.server.agent.AgentSkillRepository
 import io.mszymanski.orknux.server.agent.AgentTool
+import io.mszymanski.orknux.server.agent.AgentToolParam
 import io.mszymanski.orknux.server.agent.AgentToolRepository
 import io.mszymanski.orknux.server.agent.AgentType
 import io.mszymanski.orknux.server.agent.SkillCatalog
@@ -88,6 +91,7 @@ class ComponentImporter(
     private val skills: AgentSkillRepository,
     private val catalogs: SkillCatalogRepository,
     private val variables: WorkspaceVariableRepository,
+    private val scriptLibraries: ScriptLibraryRepository,
     private val actions: WorkflowActionRepository,
     private val triggers: WorkflowTriggerRepository,
     private val agents: AgentRepository,
@@ -199,8 +203,15 @@ class ComponentImporter(
          */
         val objects = held.filter { it.kind == ComponentKind.OBJECT }
         val written = objects +
-            held.filter { it.kind == ComponentKind.FUNCTION } +
-            dependenciesFirst(held.filter { it.kind == ComponentKind.CONDITION }) +
+            // A function may import another, so they go in dependency order too:
+            // the import is written into the row that creates the importer, and
+            // the imported function has to have an id by then.
+            dependenciesFirst(held.filter { it.kind == ComponentKind.FUNCTION }, "function") { node ->
+                node.path("imports").values().mapNotNull { it.text("functionRef") }
+            } +
+            dependenciesFirst(held.filter { it.kind == ComponentKind.CONDITION }, "condition") { node ->
+                node.names("memberRefs")
+            } +
             // Everything after a condition in the catalogue, in the catalogue's
             // order — which is a dependency order, so an action is written after
             // the function it calls, an agent after the tools it was granted and
@@ -502,13 +513,18 @@ class ComponentImporter(
                 (
                     node.path("params").values().mapNotNull { it.text("objectRef") } +
                         listOfNotNull(node.text("returnObjectRef"))
-                    ).map { ComponentKind.OBJECT to it }
+                    ).map { ComponentKind.OBJECT to it } +
+                    node.path("imports").values().mapNotNull { it.text("functionRef") }
+                        .map { ComponentKind.FUNCTION to it }
 
             ComponentKind.CONDITION ->
                 node.names("memberRefs").map { ComponentKind.CONDITION to it } +
                     listOfNotNull(node.text("functionRef")).map { ComponentKind.FUNCTION to it }
 
-            ComponentKind.TOOL, ComponentKind.SKILL -> emptyList()
+            ComponentKind.TOOL -> node.path("imports").values().mapNotNull { it.text("functionRef") }
+                .map { ComponentKind.FUNCTION to it }
+
+            ComponentKind.SKILL -> emptyList()
 
             ComponentKind.ACTION ->
                 listOfNotNull(node.text("functionRef")).map { ComponentKind.FUNCTION to it } +
@@ -536,6 +552,46 @@ class ComponentImporter(
             }
         }
     }
+
+    /**
+     * The imports an envelope carried, resolved against what has just been made.
+     *
+     * The envelope names the imported function and this side turns that back into
+     * an id, which is the reverse of what the export did — a name is the only
+     * reference that means anything between two installations, and an id is the
+     * only one that means anything within one. The local name travels unchanged,
+     * because it is not a reference: it is a word in the source that came with it.
+     *
+     * An entry naming nothing is dropped rather than refused. Nothing can get here
+     * without the walk having pulled the imported function in beside it, so this is
+     * the belt on an envelope somebody edited by hand.
+     */
+    private fun importsIn(node: JsonNode, idOf: (ComponentKind, String) -> Long): MutableList<ScriptImport> =
+        node.path("imports").values().mapNotNull { one ->
+            val target = one.text("functionRef") ?: return@mapNotNull null
+            val called = one.text("name") ?: return@mapNotNull null
+            ScriptImport(importedId = idOf(ComponentKind.FUNCTION, target), importName = called)
+        }.toMutableList()
+
+    /**
+     * The libraries an envelope named, matched against what is loaded here.
+     *
+     * By key, because that is the only reference that means anything between two
+     * installations — and refused outright when this one has not loaded it. A
+     * function imported with its library silently missing would be a function
+     * whose first call into it is a `TypeError`, found at the moment a workflow
+     * needed it rather than while somebody was importing.
+     */
+    private fun librariesIn(node: JsonNode): MutableList<ScriptImport> =
+        node.path("libraries").values().mapNotNull { one ->
+            val key = one.text("libraryRef") ?: return@mapNotNull null
+            val called = one.text("name") ?: return@mapNotNull null
+            val library = scriptLibraries.findByKey(key)
+                ?: throw EnvelopeInvalidException(
+                    "No library called $key is loaded in this installation. Load it first, then import again.",
+                )
+            ScriptImport(importedId = requireNotNull(library.id), importName = called)
+        }.toMutableList()
 
     /** Every reference one component makes that no envelope could have carried. */
     private fun externalsOf(component: ParsedComponent): List<ExternalReference> {
@@ -602,14 +658,23 @@ class ComponentImporter(
     // ----------------------------------------------------------------- writing
 
     /**
-     * The conditions of an envelope, each one after the ones it combines.
+     * One kind's components, each one after the ones it points at.
      *
-     * A composite has to name its members in the INSERT that creates it, so the
-     * members have to exist first. The catalogue refuses a cycle when a condition
-     * is saved, so a well-formed file has none; one that arrives with a cycle is
-     * a hand-edited file, and it is refused rather than looped over.
+     * Two kinds need this and they need it for the same reason: what they point
+     * at has to exist by the time the INSERT that creates them runs. A composite
+     * condition names its members in that INSERT, and a function's imports are
+     * written with it. Both catalogues refuse a cycle when the component is saved,
+     * so a well-formed file has none; one that arrives with a cycle is a
+     * hand-edited file, and it is refused rather than looped over.
+     *
+     * [refs] is what one component points at, by envelope name, and [noun] is what
+     * to call the thing in the sentence somebody reads when it points at itself.
      */
-    private fun dependenciesFirst(held: List<ParsedComponent>): List<ParsedComponent> {
+    private fun dependenciesFirst(
+        held: List<ParsedComponent>,
+        noun: String,
+        refs: (JsonNode) -> List<String>,
+    ): List<ParsedComponent> {
         val byName = held.associateBy { it.name }
         val ordered = LinkedHashSet<ParsedComponent>()
         val placing = mutableSetOf<String>()
@@ -617,9 +682,9 @@ class ComponentImporter(
         fun place(component: ParsedComponent) {
             if (component in ordered) return
             if (!placing.add(component.name)) {
-                throw EnvelopeInvalidException("The condition ${component.name} would contain itself")
+                throw EnvelopeInvalidException("The $noun ${component.name} would contain itself")
             }
-            component.node.names("memberRefs").mapNotNull { byName[it] }.forEach(::place)
+            refs(component.node).mapNotNull { byName[it] }.forEach(::place)
             placing.remove(component.name)
             ordered.add(component)
         }
@@ -714,6 +779,8 @@ class ComponentImporter(
                             ?: throw EnvelopeInvalidException("No variable called $of in this workspace")
                         FunctionExternal(variableId = variable.id!!)
                     }.toMutableList(),
+                    imports = importsIn(node, ::idOf),
+                    libraries = librariesIn(node),
                     lastModifiedAt = now,
                     lastModifiedBy = who,
                 ),
@@ -744,6 +811,17 @@ class ComponentImporter(
                     source = node.required("source", component),
                     typescript = node.required("typescript", component),
                     enabled = node.path("enabled").asBoolean(true),
+                    // An envelope written before tools carried their parameters has
+                    // none, which is what those tools already were on this side.
+                    params = node.path("params").values().map { param ->
+                        AgentToolParam(
+                            name = param.text("name").orEmpty(),
+                            type = param.enumOf<ValueType>("type", null, component),
+                            objectId = param.text("objectRef")?.let { idOf(ComponentKind.OBJECT, it) },
+                        )
+                    }.toMutableList(),
+                    imports = importsIn(node, ::idOf),
+                    libraries = librariesIn(node),
                     lastModifiedAt = now,
                     lastModifiedBy = who,
                 ),

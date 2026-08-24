@@ -93,6 +93,42 @@ class Plugin(
     @Column(name = "declared_parameters", nullable = false, columnDefinition = "text")
     var declaredParameters: String = "[]",
 
+    /**
+     * What JavaScript the plugin says it needs, as JSON, as of this load.
+     *
+     * The plugin's claim, replaced wholesale every time it is loaded — the same
+     * way its functions and its parameters are. It grants nothing on its own.
+     */
+    @Column(name = "declared_permissions", nullable = false, columnDefinition = "text")
+    var declaredPermissions: String = "[]",
+
+    /**
+     * What a person agreed to, as JSON. The only thing that is ever relaxed.
+     *
+     * Kept apart from [declaredPermissions] because they are two different facts,
+     * and the whole design turns on that. A plugin edited to need more declares
+     * more; what was accepted still names only what it was accepted for, so the
+     * new one is not covered and loading is refused until somebody accepts it
+     * afresh. An escalation cannot inherit an acceptance because the acceptance
+     * is a list rather than a yes.
+     */
+    @Column(name = "accepted_permissions", nullable = false, columnDefinition = "text")
+    var acceptedPermissions: String = "[]",
+
+    /** Null for a plugin that asks for nothing: there was nothing to accept. */
+    @Column(name = "permissions_accepted_at")
+    var permissionsAcceptedAt: OffsetDateTime? = null,
+
+    /**
+     * Who accepted it.
+     *
+     * Here rather than only in the audit log, because the question somebody asks
+     * later is "what is this plugin allowed to do, and who said so" — and an
+     * answer that has to be assembled out of a log is an answer nobody assembles.
+     */
+    @Column(name = "permissions_accepted_by", length = 120)
+    var permissionsAcceptedBy: String? = null,
+
     @Column(name = "uploaded_at", nullable = false)
     var uploadedAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -126,6 +162,11 @@ data class PluginView(
     val declaredFunctions: List<PluginFunctionView>,
     /** What it says it has to be told before it can work. */
     val declaredParameters: List<PluginParameterView>,
+    /** What it says it needs, and what was agreed to. Equal, for a loaded plugin. */
+    val permissions: List<PluginPermissionView>,
+    /** ISO-8601. Null for a plugin that asked for nothing; there was nothing to accept. */
+    val permissionsAcceptedAt: String?,
+    val permissionsAcceptedBy: String?,
     val sha256: String,
     val uploadedAt: String,
     val uploadedBy: String,
@@ -164,6 +205,19 @@ data class PluginParameterView(
 )
 
 /**
+ * One piece of JavaScript a plugin was granted, as the screen shows it.
+ *
+ * Shown to whoever looks at the plugin list, not only to whoever accepted it. A
+ * decision about what code may do that lives in a dialog somebody clicked through
+ * last month is a decision nobody can audit.
+ */
+data class PluginPermissionView(
+    val name: String,
+    /** What it gives, in the words the person accepting it was shown. */
+    val summary: String,
+)
+
+/**
  * The plugin API versions this server knows.
  *
  * A plugin says which one it was written against and is refused if that is not on
@@ -192,6 +246,7 @@ object PluginApiVersions {
 fun Plugin.view(
     declared: List<PluginFunctionView>,
     parameters: List<PluginParameterView> = emptyList(),
+    permissions: List<PluginPermissionView> = emptyList(),
 ): PluginView = PluginView(
     id = requireNotNull(id).toString(),
     key = key,
@@ -203,6 +258,9 @@ fun Plugin.view(
     apiVersion = apiVersion,
     declaredFunctions = declared,
     declaredParameters = parameters,
+    permissions = permissions,
+    permissionsAcceptedAt = permissionsAcceptedAt?.toString(),
+    permissionsAcceptedBy = permissionsAcceptedBy,
     sha256 = sha256,
     uploadedAt = uploadedAt.toString(),
     uploadedBy = uploadedBy,

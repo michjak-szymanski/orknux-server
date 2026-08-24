@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.revision
 
 import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.FunctionParam
+import io.mszymanski.orknux.server.action.ScriptImport
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.agent.Agent
@@ -57,6 +58,25 @@ object ComponentSnapshot {
             // same variable, and a function restored against its name would be
             // handed a different one or none.
             "externals" to function.externals.map { mapOf("variableId" to it.variableId) },
+            /*
+             * What it imports: the id it points at, and the name it calls it.
+             *
+             * Both halves, because neither can be worked out from the other. The
+             * id restores against the function that was imported however it has
+             * since been renamed; the name restores against the code being put
+             * back, which is the code that used it.
+             */
+            "imports" to function.imports.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
+            },
+            /*
+             * The libraries it uses. The id, so a library replaced under the same
+             * key restores as the library that is loaded now, and the local name,
+             * because it is a word in the code being put back.
+             */
+            "libraries" to function.libraries.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
+            },
         ),
     )
 
@@ -72,6 +92,25 @@ object ComponentSnapshot {
             // parameters is a tool the model is told the wrong signature for.
             "params" to tool.params.map {
                 mapOf("name" to it.name, "type" to it.type.name, "objectId" to it.objectId)
+            },
+            /*
+             * What it imports: the id it points at, and the name it calls it.
+             *
+             * Both halves, because neither can be worked out from the other. The
+             * id restores against the function that was imported however it has
+             * since been renamed; the name restores against the code being put
+             * back, which is the code that used it.
+             */
+            "imports" to tool.imports.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
+            },
+            /*
+             * The libraries it uses. The id, so a library replaced under the same
+             * key restores as the library that is loaded now, and the local name,
+             * because it is a word in the code being put back.
+             */
+            "libraries" to tool.libraries.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
             },
         ),
     )
@@ -186,6 +225,16 @@ object ComponentSnapshot {
         function.externals = held.path("externals").values().mapNotNull { external ->
             number(external, "variableId")?.let { FunctionExternal(variableId = it) }
         }.toMutableList()
+        function.imports = held.path("imports").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
+        }.toMutableList()
+        function.libraries = held.path("libraries").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
+        }.toMutableList()
     }
 
     fun restore(tool: AgentTool, snapshot: String, mapper: ObjectMapper) {
@@ -201,6 +250,16 @@ object ComponentSnapshot {
                 type = enumOf(param, "type", ValueType.STRING),
                 objectId = number(param, "objectId"),
             )
+        }.toMutableList()
+        tool.imports = held.path("imports").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
+        }.toMutableList()
+        tool.libraries = held.path("libraries").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
         }.toMutableList()
     }
 

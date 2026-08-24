@@ -358,7 +358,8 @@ away, and a real key has no business in a build file.
 | `shell`          | The tool an agent runs commands through, on the machines Admin -> Shell holds; the sessions themselves belong to `modules/connection` |
 | `mail`           | The installation's own relay, and the one thing it sends: a password reset link |
 | `database`       | What SQLite needs and Postgres does not - the dialect, the pragmas, and the SQL the scheduler ships no dialect for |
-| `plugin`         | Plugins loaded into the installation, and the functions they declare |
+| `plugin`         | Plugins loaded into the installation, the functions they declare, and the JavaScript they were granted |
+| `library`        | Libraries loaded into the installation, what each exports, and which functions and tools import it |
 | `monitoring`     | The health of the service and everything it needs to be up             |
 | `admin`          | The Doctor: whether this installation is configured correctly, which is not the same question as whether it is up |
 
@@ -726,6 +727,12 @@ is handed to an agent and has to say what it is without being read in full.
 `SkillFormat` is where that is checked, and it is what the editor's Validate
 reports; the tool editor's Validate is the same parser that would run the code.
 
+A tool may **import** the workspace's functions, under names of its own, and reach
+them as `imports.thatName(…)` — the same arrangement a function has, described
+under **Actions and functions**. It goes one way only: nothing imports a tool,
+because a tool is what an agent decides to call and not a piece anybody builds
+out of.
+
 Both can be turned off without being deleted, and both record who last saved
 them, which the lists and the editors show.
 
@@ -926,6 +933,92 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 
 Everything crossing the boundary is JSON text; nothing the script touches is a
 live Java object. `ScriptRunnerTest` is where those are held.
+
+A function may **import** other functions, and so may a tool. The editor's
+*Imports* section names them, and the code reaches them through one frozen global:
+`imports.thatName(…)`. There is no module resolution in the sandbox and there is
+not going to be — resolving `import` would mean handing the context a filesystem,
+which is the one thing it exists to withhold — so the host does it: the imports
+are flattened and ordered here, evaluated into a registry, and the script is
+handed a one-line prelude that reads them out under the names it chose.
+
+The reference is stored as an id and the name as the importer's own word for it.
+That is what makes a rename cost nothing: the row points at the same function
+however it is called, and the code goes on saying what it always said. A loop is
+refused when it is saved, with the loop named; a function that is imported cannot
+be deleted, with the importers named; and a function a plugin declared cannot be
+imported at all, because it does not run in this sandbox.
+
+### Libraries
+
+A **library** is JavaScript an installation loads once and its scripts import. An
+administrator uploads a bundle on the Libraries page; the key is the filename, so
+`date-fns.js` loads as `date-fns`. A function or a tool then imports it under a
+local name and reaches it through the same `imports` object an imported function
+arrives in.
+
+**It is a stored artefact rather than a name from a registry**, and it has to be.
+The only two ways to honour a registry name are both shut: fetching one at run
+time would mean giving the sandbox a network, and fetching it at upload would
+mean this server reaching out to a registry — which makes an offline installation
+unusable and makes what a workspace runs depend on what a registry served that
+afternoon.
+
+**And it is the installation's rather than a workspace's**, because the question
+an installation has to be able to answer is what code is running inside it. The
+Libraries page answers the other half of that: every function and every tool that
+imports a given library, named with the workspace it lives in. That list is also
+what stops a library being removed while something still uses it.
+
+The file is evaluated once, in the sandbox it will run in, and what its default
+export turned out to hold is stored — which is what the editor annotates
+`imports` from. Nothing more is claimed about it: a member is something to call
+or something to read, because nothing in a bundle says what its arguments are.
+A file that is not a module with a default export is refused on the way in.
+
+A plugin is the exception and imports no library at all: a plugin **embeds** what
+it needs, because a plugin is meant to be portable between installations and one
+that assumed a library was loaded here would not be.
+
+### Plugin permissions
+
+Embedding a library has a cost, and this is it. A bundle written for a browser or
+for Node expects language features the sandbox does not switch on, so a plugin
+declares which it needs — `permissions()` in the plugin API — and loading it shows
+that list and refuses until somebody accepts it **by name**. "Yes" would be an
+agreement to whatever the file happened to ask for; naming them is an agreement to
+these.
+
+There are five: writing to the server's log, `Intl`, `TextEncoder` and
+`TextDecoder`, `performance.now`, and `Temporal`. **The list being closed is the
+point of it.** Every entry switches on one language builtin and nothing else;
+there is no name for reading a file, opening a socket or reaching a Java class, so
+a plugin cannot ask for one and nobody can grant one. A plugin naming something
+that is not on the list is refused with the list, rather than loaded having been
+granted less than it asked for.
+
+What was accepted is turned on for that one plugin, in the context built for its
+own call. Nothing is turned on for another plugin, nothing for the engine they
+share, and nothing at all for a workspace's own functions and tools — those run
+through `ScriptRunner`, which is a separate class with a flat configuration and no
+branch that could turn a capability on. That separation is why `PluginRunner` is a
+copy rather than a generalisation.
+
+Three more things follow, and each is a test:
+
+- **Nothing is relaxed by default.** `js.console` and `js.intl-402` are on in
+  GraalJS and are now explicitly turned off, because a default that happened to be
+  on is not something anybody accepted.
+- **An escalation asks again.** The acceptance names the permissions it was given
+  for, so a plugin edited to need one more is not covered by it: the load is
+  refused with the new list, and the plugin already installed goes on running with
+  what it already had.
+- **What was accepted stays readable.** It is on the plugin, beside who accepted it
+  and when, so somebody who did not do the accepting can see what a plugin may do.
+
+Loading a plugin runs with nothing relaxed, always, because that is the run that
+finds out what it wants — so a plugin's module body has to evaluate without the
+permissions its `run` needs. `PluginPermissionTest` holds all of it.
 
 Every subtype runs. A send goes out through its connection, a mail leaves through
 its SMTP server, an HTTP request is made, a function is called, a wait parks. What

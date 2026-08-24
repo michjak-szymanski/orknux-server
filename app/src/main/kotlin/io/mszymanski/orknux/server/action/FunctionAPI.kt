@@ -1,6 +1,9 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.agent.AgentToolRepository
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.library.ImportedLibraryView
+import io.mszymanski.orknux.server.library.LibraryImports
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.plugin.PluginRepository
@@ -51,6 +54,9 @@ class FunctionAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
     private val plugins: PluginRepository,
     private val revisions: ComponentRevisionRecorder,
+    private val scriptImports: ScriptImports,
+    private val libraryImports: LibraryImports,
+    private val tools: AgentToolRepository,
 ) {
 
     /**
@@ -121,6 +127,10 @@ class FunctionAPI(
                 returnObjectId = returnedObject(input.returnType, input.returnObjectId, input.workspaceId),
                 params = input.params.orEmpty().toParams(input.workspaceId),
                 externals = externals,
+                // Nothing has an id yet, so nothing can import it back: a function
+                // being created is the one case where a loop is not possible.
+                imports = input.imports.orEmpty().toImports(input.workspaceId, importer = null),
+                libraries = input.libraries.orEmpty().toLibraries(),
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -183,6 +193,8 @@ class FunctionAPI(
         }
         input.params?.let { function.params = it.toParams(workspaceId) }
         input.externalVariableIds?.let { function.externals = it.toExternals(workspaceId) }
+        input.imports?.let { function.imports = it.toImports(workspaceId, importer = id) }
+        input.libraries?.let { function.libraries = it.toLibraries() }
 
         /*
          * Checked against what this function will be once saved, not against whichever
@@ -239,6 +251,20 @@ class FunctionAPI(
             conditions.findByWorkspaceId(workspaceId).filter { it.functionId == id }.map { it.name } +
             triggers.findByAuthFunctionId(id).map { "the webhook ${it.name}" }
         if (callers.isNotEmpty()) throw FunctionInUseException(function.name, callers)
+
+        /*
+         * And nothing may import it either. Said separately from the callers above
+         * because the two are fixed in different places: a caller is a node somebody
+         * repoints, an importer is code somebody has to open and edit. Rolling them
+         * into one sentence would send half the readers to the wrong screen.
+         *
+         * Refused rather than left to break at run time. An import that has stopped
+         * resolving is a `TypeError` in the middle of a script, which is the worst
+         * possible moment and the worst possible wording to learn this in.
+         */
+        val importers = functions.findByImportedFunctionId(id).map { it.name } +
+            tools.findByImportedFunctionId(id).map { "the tool ${it.name}" }
+        if (importers.isNotEmpty()) throw FunctionImportedException(function.name, importers)
 
         functions.delete(function)
         // Its history goes with it: the rows point at an id in a table that no
@@ -336,6 +362,34 @@ class FunctionAPI(
         },
     )
 
+    /**
+     * One import, with the imported function named for the editor.
+     *
+     * The name is resolved here rather than left to the client, because the editor
+     * needs it to annotate `imports` and the client holding an id would have to ask
+     * for one function per row of a panel that is already loaded.
+     */
+    private fun describe(imported: ScriptImport) = ScriptImportView(
+        functionId = imported.importedId,
+        name = imported.importName,
+        function = functions.findByIdOrNull(imported.importedId)?.let { target ->
+            ImportedFunctionView(
+                name = target.name,
+                description = target.description,
+                signature = target.signature,
+                returnType = target.returnType,
+                returnObjectName = target.returnObjectId?.let { objects.findByIdOrNull(it)?.name },
+            )
+        },
+    )
+
+    /** One library import, with the library named for the editor's annotations. */
+    private fun describeLibrary(imported: ScriptImport) = ScriptLibraryImportView(
+        libraryId = imported.importedId,
+        name = imported.importName,
+        library = libraryImports.find(imported.importedId)?.let(libraryImports::viewOf),
+    )
+
     private fun describe(
         function: WorkflowFunction,
         params: List<FunctionParamView>,
@@ -357,6 +411,8 @@ class FunctionAPI(
         returnObjectName = function.returnObjectId?.let { objects.findByIdOrNull(it)?.name },
         params = params,
         externals = externals,
+        imports = function.imports.map(::describe),
+        libraries = function.libraries.map(::describeLibrary),
         signature = signatureOf(params, externals),
         lastModifiedAt = function.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = function.lastModifiedBy,
@@ -460,6 +516,50 @@ class FunctionAPI(
             FunctionExternal(variableId = variableId)
         }
         .toMutableList()
+
+    /**
+     * The functions this one is to import, checked before they are stored.
+     *
+     * Four refusals, and they are different questions. A name that is not an
+     * identifier could not be written in the code. Two imports under one name are
+     * one the code can reach and one it cannot. A function in another workspace, or
+     * one a plugin declared, is not a function this one may reach at all. And an
+     * import that closes a loop is a run that never finishes being assembled — so
+     * it is refused here, while somebody is looking at it, rather than found by the
+     * walk at the moment a workflow needed it.
+     */
+    private fun List<ScriptImportInput>.toImports(workspaceId: Long, importer: Long?): MutableList<ScriptImport> {
+        val taken = mutableSetOf<String>()
+        return map { asked ->
+            val name = asked.name.trim()
+            requireIdentifier(name) { ImportNameInvalidException(name) }
+            if (!taken.add(name)) throw ImportNameTakenException(name)
+
+            val imported = functions.findByIdOrNull(asked.functionId) ?: throw ImportNotFoundException(asked.functionId)
+            scriptImports.requireImportable(imported, workspaceId, importer)
+            ScriptImport(importedId = asked.functionId, importName = name)
+        }.toMutableList()
+    }
+
+    /**
+     * The libraries this script is to import, checked before they are stored.
+     *
+     * The same two questions an imported function is asked about its name, and one
+     * fewer about itself: every loaded library is offerable to every workspace, so
+     * there is nothing to compare a workspace against, and a library imports
+     * nothing, so there is no loop to look for.
+     */
+    private fun List<ScriptLibraryImportInput>.toLibraries(): MutableList<ScriptImport> {
+        val taken = mutableSetOf<String>()
+        return map { asked ->
+            val name = asked.name.trim()
+            requireIdentifier(name) { ImportNameInvalidException(name) }
+            if (!taken.add(name)) throw ImportNameTakenException(name)
+
+            libraryImports.require(asked.libraryId)
+            ScriptImport(importedId = asked.libraryId, importName = name)
+        }.toMutableList()
+    }
 
     private fun List<FunctionParamInput>.toParams(workspaceId: Long): MutableList<FunctionParam> = map { param ->
         val name = param.name.trim()
@@ -568,6 +668,10 @@ data class CreateFunctionInput(
     val params: List<FunctionParamInput>? = null,
     /** Which of the workspace's variables it is handed, in order. */
     val externalVariableIds: List<Long>? = null,
+    /** The workspace's other functions it calls, under the names it calls them. */
+    val imports: List<ScriptImportInput>? = null,
+    /** The installation's libraries it uses, under the names it uses them by. */
+    val libraries: List<ScriptLibraryImportInput>? = null,
 )
 
 data class UpdateFunctionInput(
@@ -583,6 +687,10 @@ data class UpdateFunctionInput(
     val params: List<FunctionParamInput>? = null,
     /** Null leaves them alone; an empty list takes them all off. */
     val externalVariableIds: List<Long>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val imports: List<ScriptImportInput>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val libraries: List<ScriptLibraryImportInput>? = null,
 )
 
 data class FunctionParamView(
@@ -635,6 +743,10 @@ data class FunctionView(
     val params: List<FunctionParamView>,
     /** The workspace's variables it is handed, after the parameters it declares. */
     val externals: List<FunctionExternalView>,
+    /** What it imports, and what it calls each of them. */
+    val imports: List<ScriptImportView>,
+    /** The libraries it uses, and what it calls each of them. */
+    val libraries: List<ScriptLibraryImportView>,
     /** "(input: object, format: string)", ready for the list. */
     val signature: String,
     val lastModifiedAt: String,
@@ -649,6 +761,57 @@ data class FunctionView(
  * of the thing that brought it, not everything about what was loaded.
  */
 data class FunctionPluginView(val id: Long, val name: String)
+
+/**
+ * One thing a script imports.
+ *
+ * The id is the reference and the name is the importer's word for it, which is why
+ * both are here and why neither can be derived from the other. Shared between the
+ * function editor and the tool editor: a tool importing a function is the same
+ * arrangement, and two inputs saying the same thing would drift.
+ */
+data class ScriptImportInput(val functionId: Long, val name: String)
+
+/** One import, as the editor draws it: the reference, the local name, and what it is. */
+data class ScriptImportView(
+    val functionId: Long,
+    /** What the code calls it. Unchanged by anything happening to the function. */
+    val name: String,
+    /** Null only if the function went away behind the delete guard's back. */
+    val function: ImportedFunctionView?,
+)
+
+/**
+ * What an imported function is, as far as the importer needs to know.
+ *
+ * Enough to annotate `imports` in the editor and to say in a panel what was
+ * imported. Not the source: whoever is reading this is writing a call, not the
+ * callee, and the callee has its own screen.
+ */
+data class ImportedFunctionView(
+    val name: String,
+    val description: String?,
+    val signature: String,
+    val returnType: ValueType,
+    val returnObjectName: String?,
+)
+
+/**
+ * One library a script imports.
+ *
+ * The same two halves an imported function has, and apart for the same reason:
+ * the id is the reference, the name is the importer's own word for it, and a
+ * library replaced under the same key does not disturb either.
+ */
+data class ScriptLibraryImportInput(val libraryId: Long, val name: String)
+
+/** One library import, as the editor draws it. */
+data class ScriptLibraryImportView(
+    val libraryId: Long,
+    val name: String,
+    /** Null only if the library went away behind the delete guard's back. */
+    val library: ImportedLibraryView?,
+)
 
 data class FunctionValidationView(
     val valid: Boolean,

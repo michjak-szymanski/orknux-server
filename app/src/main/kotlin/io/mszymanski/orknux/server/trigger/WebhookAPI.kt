@@ -7,8 +7,11 @@ import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
+import io.mszymanski.orknux.server.action.ScriptImports
+import io.mszymanski.orknux.server.action.ScriptImportsResult
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -59,8 +62,10 @@ class WebhookAPI(
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
     private val pluginRunner: PluginRunner,
+    private val scriptImports: ScriptImports,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
+    private val pluginPermissions: PluginPermissions,
     private val externals: VariableArguments,
     private val mapper: ObjectMapper,
 ) {
@@ -192,7 +197,16 @@ class WebhookAPI(
         val call = if (function.scope == FunctionScope.PLUGIN) {
             askPlugin(trigger, function, arguments)
         } else {
-            scripts.call(function.source, function.name, arguments)
+            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
+                is ScriptImportsResult.Broken -> ScriptResult.Failed(resolved.reason, 0)
+                is ScriptImportsResult.Resolved -> scripts.call(
+                    source = function.source,
+                    functionName = function.name,
+                    arguments = arguments,
+                    modules = resolved.modules,
+                    imports = resolved.imports,
+                )
+            }
         }
 
         return when (val result = call) {
@@ -240,6 +254,10 @@ class WebhookAPI(
             declared,
             arguments,
             pluginParameters.settingsFor(plugin, trigger.workspaceId),
+            // What a person accepted for this plugin, and nothing else. Read
+            // per call from this plugin's row, so one plugin's agreement cannot
+            // reach another's context.
+            pluginPermissions.grantedTo(plugin),
         )
     }
 

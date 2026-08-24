@@ -79,6 +79,22 @@ type Query {
     "The plugins loaded into this installation, by name. Administrators only."
     plugins: [Plugin!]!
     """
+    The libraries loaded into this installation, by name, with what imports them.
+
+    Administrators only, and `usedBy` is why: it names functions and tools across
+    every workspace, which is exactly what an administrator deciding whether to
+    replace or remove a library needs, and exactly what nobody else should see.
+    """
+    scriptLibraries: [ScriptLibrary!]!
+    """
+    The libraries a workspace may import, for the editors' picker.
+
+    The same rows without `usedBy`. Not an administrator's query, unlike
+    `scriptLibraries`: choosing to import a library belongs to whoever is writing
+    the function, and they should not have to be told who else uses it.
+    """
+    workspaceLibraries(workspaceId: ID!): [ScriptLibrary!]!
+    """
     Every loaded plugin, with what this workspace has told it.
 
     Not an administrator's query, unlike `plugins`: loading a plugin is an
@@ -608,6 +624,13 @@ type Mutation {
     `POST /api/plugins` rather than described as a mutation.
     """
     unloadPlugin(id: ID!): Boolean!
+    """
+    Takes a library out of the installation. Administrators only.
+
+    Refused while anything imports it, naming what does. Loading one is not here:
+    a library arrives as a file, so it is uploaded to `POST /api/libraries`.
+    """
+    deleteScriptLibrary(id: ID!): Boolean!
     """
     Answers one of a plugin's parameters, for one workspace.
 
@@ -1901,6 +1924,15 @@ type Tool {
     so nothing about how they are called moved.
     """
     params: [ToolParam!]!
+    """
+    The workspace's functions it calls, under the names it calls them.
+
+    One direction only: a tool may import a function, and nothing imports a tool.
+    A tool is what an agent decides to call, not a piece anybody builds out of.
+    """
+    imports: [ScriptImport!]!
+    "The installation's libraries it uses, under the names it uses them by."
+    libraries: [ScriptLibraryImport!]!
     "\"(city: string, days: number)\", ready for the list."
     signature: String!
     "Off leaves it defined but out of reach."
@@ -2049,6 +2081,10 @@ input CreateToolInput {
     typescript: String
     "Left out means the one every tool used to take: an object called `input`."
     params: [ToolParamInput!]
+    "The workspace's functions it calls, under the names it calls them."
+    imports: [ScriptImportInput!]
+    "The installation's libraries it uses, under the names it uses them by."
+    libraries: [ScriptLibraryImportInput!]
 }
 
 input UpdateToolInput {
@@ -2060,6 +2096,10 @@ input UpdateToolInput {
     typescript: String
     "Null leaves them alone; an empty list takes them all off."
     params: [ToolParamInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    imports: [ScriptImportInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    libraries: [ScriptLibraryImportInput!]
 }
 
 """
@@ -3300,6 +3340,19 @@ type Plugin {
     because the answers belong to a workspace and the question does not.
     """
     declaredParameters: [PluginParameterDeclaration!]!
+    """
+    The JavaScript this plugin was granted: what it declared, and what a person
+    accepted. The two are the same for a loaded plugin — it is refused otherwise.
+
+    Shown to whoever reads the list rather than only to whoever accepted it. A
+    decision about what somebody else's code may do that lives in a dialog
+    somebody clicked through last month is a decision nobody can audit.
+    """
+    permissions: [PluginPermission!]!
+    "ISO-8601 offset date-time. Null when the plugin asked for nothing."
+    permissionsAcceptedAt: String
+    "Null when the plugin asked for nothing, so nobody accepted anything."
+    permissionsAcceptedBy: String
     "Of the source text, so an unchanged re-upload is recognisable."
     sha256: String!
     "ISO-8601 offset date-time."
@@ -3325,6 +3378,20 @@ type PluginFunctionDeclaration {
 type PluginFunctionParam {
     name: String!
     type: String!
+}
+
+"""
+One piece of JavaScript a plugin may be granted.
+
+The list this server can grant is closed, and its being closed is the point of
+it: there is no name for reading a file, opening a socket or reaching a Java
+class, so a plugin cannot ask for one and nobody can grant one. Every entry only
+switches on a language builtin, for the one plugin it was accepted for.
+"""
+type PluginPermission {
+    name: String!
+    "What it gives, in the words the person accepting it was shown."
+    summary: String!
 }
 
 """
@@ -3697,6 +3764,15 @@ type Function {
     returnObjectId: ID
     returnObjectName: String
     params: [FunctionParam!]!
+    """
+    The workspace's other functions it calls, under the names it calls them.
+
+    Not arguments. An import is reached through `imports` rather than through the
+    signature, so adding one does not change what the code has to accept.
+    """
+    imports: [ScriptImport!]!
+    "The installation's libraries it uses, under the names it uses them by."
+    libraries: [ScriptLibraryImport!]!
     "\"(input: object, format: string)\", ready for the list."
     signature: String!
     "ISO-8601 offset date-time."
@@ -3750,6 +3826,10 @@ input CreateFunctionInput {
     "Required when the return type is OBJECT, and ignored otherwise."
     returnObjectId: ID
     params: [FunctionParamInput!]
+    "The workspace's other functions it calls, under the names it calls them."
+    imports: [ScriptImportInput!]
+    "The installation's libraries it uses, under the names it uses them by."
+    libraries: [ScriptLibraryImportInput!]
 }
 
 input UpdateFunctionInput {
@@ -3765,6 +3845,144 @@ input UpdateFunctionInput {
     "Required when the return type is OBJECT, and ignored otherwise."
     returnObjectId: ID
     params: [FunctionParamInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    imports: [ScriptImportInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    libraries: [ScriptLibraryImportInput!]
+}
+
+"""
+One thing a script imports, and the name it imports it under.
+
+Two halves, and they are not the same fact. `functionId` is the reference, held
+as an id because a reference held by name is one that goes stale the first time
+somebody renames what it points at. `name` is the importer's own word for it,
+written into the importer's own code — so renaming the imported function changes
+nothing about the code that calls it, which is the whole point of storing them
+apart.
+
+Shared by functions and tools. A tool importing a function is the same
+arrangement, and two types saying the same thing would drift.
+"""
+type ScriptImport {
+    functionId: ID!
+    "What the code calls it. Unaffected by anything happening to the function."
+    name: String!
+    "What was imported. Null only if it went away behind the delete guard's back."
+    function: ImportedFunction
+}
+
+"""
+What an imported function is, as far as the importer needs to know.
+
+Enough to annotate `imports` in the editor and to say in a panel what was
+imported. Not the source: whoever is reading this is writing the call, not the
+callee, and the callee has an editor of its own.
+"""
+type ImportedFunction {
+    name: String!
+    description: String
+    "\"(city: string, days: number)\", ready for the list."
+    signature: String!
+    returnType: ValueType!
+    "What its returned object is called, when it returns one."
+    returnObjectName: String
+}
+
+input ScriptImportInput {
+    "Which of the workspace's own functions. A plugin's cannot be imported."
+    functionId: ID!
+    "What the importing code calls it. An identifier, unique within the importer."
+    name: String!
+}
+
+"""
+A library loaded into this installation: JavaScript a script may import.
+
+A stored artefact rather than a name from a registry, and it has to be. The only
+two ways to honour a registry name are both shut: fetching one at run time would
+mean giving the sandbox a network, which is the thing it exists to withhold, and
+fetching it at upload would mean this server reaching out to a registry, which
+makes an offline installation unusable and makes what a workspace runs depend on
+what a registry served that afternoon.
+
+It belongs to the installation rather than to a workspace because the question an
+installation has to be able to answer is what code is running inside it. `usedBy`
+is the other half of that question, and no workspace-level screen could answer it.
+"""
+type ScriptLibrary {
+    id: ID!
+    "Its identity, taken from the filename. Loading this key again replaces it."
+    key: String!
+    name: String!
+    filename: String!
+    sizeBytes: Float!
+    "Of the source text, so an unchanged re-upload is recognisable."
+    sha256: String!
+    "Whether its export is itself something to call, rather than an object."
+    callable: Boolean!
+    """
+    What its default export turned out to hold, read once when it was loaded.
+
+    Not a type declaration. Nothing in a bundle says what its arguments are, so
+    this claims only that a member is something to call or something to read —
+    which is what the editor annotates `imports` from.
+    """
+    members: [LibraryMember!]!
+    """
+    Every function and tool that imports it, across every workspace.
+
+    Empty on the workspace query, which is not a claim that nothing uses it: who
+    else imports a library is an administrator's question, and the people writing
+    functions are not administrators.
+    """
+    usedBy: [LibraryUsage!]!
+    "ISO-8601 offset date-time."
+    uploadedAt: String!
+    uploadedBy: String!
+}
+
+type LibraryMember {
+    name: String!
+    "Whether it is something to call, rather than something to read."
+    callable: Boolean!
+}
+
+"One function or tool that imports a library, and where it lives."
+type LibraryUsage {
+    "FUNCTION or TOOL."
+    kind: String!
+    id: ID!
+    name: String!
+    workspaceId: ID!
+    workspaceName: String!
+}
+
+"""
+One library a script imports, and the name it imports it under.
+
+The same two halves an imported function has, and apart for the same reason: the
+id is the reference and the name is the importer's own word for it, so replacing
+a library under the same key disturbs neither.
+"""
+type ScriptLibraryImport {
+    libraryId: ID!
+    name: String!
+    "What was imported. Null only if it went away behind the delete guard's back."
+    library: ImportedLibrary
+}
+
+"What an imported library is, as far as the importer needs to know."
+type ImportedLibrary {
+    key: String!
+    callable: Boolean!
+    members: [LibraryMember!]!
+}
+
+input ScriptLibraryImportInput {
+    libraryId: ID!
+    "What the importing code calls it. An identifier, unique within the importer."
+    name: String!
 }
 
 "What an action does when a workflow reaches it."

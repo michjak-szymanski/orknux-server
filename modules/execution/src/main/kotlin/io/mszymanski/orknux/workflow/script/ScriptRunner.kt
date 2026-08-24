@@ -38,6 +38,12 @@ import java.util.concurrent.atomic.AtomicReference
  * The engine is shared, so parsed sources are cached across runs, but every run
  * gets a fresh context: two runs of a function must not be able to see each
  * other's globals.
+ *
+ * A script may import others. That is done by the host, not by the guest: the
+ * modules arrive already resolved and already ordered, are evaluated into a
+ * registry, and the importer is given a one-line prelude that reads them out of it
+ * under the names it chose. Nothing here follows a path, and nothing here is given
+ * a filesystem to follow one with.
  */
 @Service
 class ScriptRunner(private val properties: ScriptProperties) {
@@ -68,6 +74,11 @@ class ScriptRunner(private val properties: ScriptProperties) {
      *   them. `null` is a valid JSON document and means the argument is absent.
      * @param context what the script may know about where it is running, as
      *   JSON. It arrives frozen as `context`, and always carries the time.
+     * @param modules what this script imports, and what those import in turn,
+     *   already in the order they have to be evaluated. Empty for a script that
+     *   imports nothing, which is what every script was until now.
+     * @param imports the names this script itself imports things under, and the
+     *   module each name means.
      * @return what the function returned, as JSON, or what went wrong.
      */
     fun call(
@@ -75,12 +86,17 @@ class ScriptRunner(private val properties: ScriptProperties) {
         functionName: String,
         arguments: List<String>,
         context: String = "{}",
+        modules: List<ScriptModule> = emptyList(),
+        imports: Map<String, String> = emptyMap(),
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, ::newContext) {
-                ScriptResult.Returned(evaluate(it, source, functionName, arguments, context), millisSince(started))
+                ScriptResult.Returned(
+                    evaluate(it, source, functionName, arguments, context, modules, imports),
+                    millisSince(started),
+                )
             }
         } catch (failure: PolyglotException) {
             val budget = failure.isCancelled || failure.isResourceExhausted
@@ -211,6 +227,48 @@ class ScriptRunner(private val properties: ScriptProperties) {
     }
 
     /**
+     * Evaluates a library and asks what it exports.
+     *
+     * A library is somebody else's code — very often a bundle nobody here wrote —
+     * so it is never asked to answer a question about itself the way a plugin is.
+     * It is evaluated, and what its default export turned out to hold is read off
+     * the value. That is all this claims: a member is either something to call or
+     * something to read, and nothing in a bundle says what its arguments are.
+     *
+     * Done when the library is loaded rather than when it is first imported, for
+     * the reason a plugin is questioned at upload: "this file is not a module with
+     * a default export" is an answer worth having while somebody is looking at the
+     * file they chose. It runs in the ordinary sandbox, bounded like everything
+     * else — a library is given exactly what a function is given, which is nothing.
+     */
+    fun library(source: String): LibraryInspection = try {
+        guard.bounded(AtomicReference(), ::newContext) { polyglot ->
+            val exported = polyglot.eval(module(source, "library")).getMember("default")
+                ?: return@bounded LibraryInspection.Unreadable("it has no default export to import")
+            if (exported.isNull) {
+                return@bounded LibraryInspection.Unreadable("its default export is null")
+            }
+
+            val keys = runCatching { exported.memberKeys }.getOrDefault(emptySet())
+            if (keys.size > MAX_MEMBERS) {
+                return@bounded LibraryInspection.Unreadable("its default export has more than $MAX_MEMBERS members")
+            }
+            LibraryInspection.Read(
+                callable = exported.canExecute(),
+                members = keys.sorted().map { key ->
+                    LibraryMember(key, callable = runCatching { exported.getMember(key).canExecute() }.getOrDefault(false))
+                },
+            )
+        }
+    } catch (failure: PolyglotException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    } catch (failure: ScriptBusyException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    } catch (failure: IllegalStateException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    }
+
+    /**
      * No host access, and this time none of it.
      *
      * `HostAccess.NONE` reads like the end of the argument and is not: it denies
@@ -290,8 +348,12 @@ class ScriptRunner(private val properties: ScriptProperties) {
         functionName: String,
         arguments: List<String>,
         context: String,
+        modules: List<ScriptModule>,
+        imports: Map<String, String>,
     ): String? {
-        val module = polyglot.eval(module(source))
+        load(polyglot, modules)
+
+        val module = polyglot.eval(module(prelude(imports) + source))
         val function = module.getMember("default")
             ?: throw ScriptContractException("$functionName has no default export to call")
         if (!function.canExecute()) throw ScriptContractException("The default export of $functionName is not a function")
@@ -313,17 +375,82 @@ class ScriptRunner(private val properties: ScriptProperties) {
         return if (result == null || result.isNull) null else result.asString()
     }
 
-    private fun module(source: String): Source = Source.newBuilder("js", source, "function.mjs")
-        .mimeType("application/javascript+module")
-        .buildLiteral()
+    /**
+     * Evaluates what this script imports, into a registry the preludes read.
+     *
+     * There is no module resolution in the sandbox and there is not going to be:
+     * resolving `import` would mean handing the context a filesystem, virtual or
+     * not, and a filesystem is the one thing this class exists to withhold. So the
+     * host does the resolving. It is given the modules already sorted — deepest
+     * first — and evaluates each one against the registry the ones before it filled,
+     * which is why a module's own imports are there by the time its body runs.
+     *
+     * A module's default export is whatever it exports: a function for one of the
+     * workspace's functions, an object for a library. Nothing here decides which,
+     * because the importer is the only side that knows what it asked for.
+     *
+     * They all share one context, and so one set of globals. That is not a gap: a
+     * function, the functions it imports and the libraries they use are all the same
+     * workspace's code at the same trust level, and separating them would be
+     * pretending otherwise.
+     */
+    private fun load(polyglot: Context, modules: List<ScriptModule>) {
+        if (modules.isEmpty()) return
+        polyglot.eval("js", REGISTRY)
+        val registry = polyglot.getBindings("js").getMember(MODULES)
+        for (imported in modules) {
+            val exported = polyglot.eval(module(prelude(imported.imports) + imported.source, imported.key))
+                .getMember("default")
+                ?: throw ScriptContractException("${imported.name} has nothing to import: it has no default export")
+            registry.putMember(imported.key, exported)
+        }
+    }
+
+    /**
+     * What a module reads its imports out of, on one line.
+     *
+     * One line because it is prepended to somebody's source and a line of prelude is
+     * a line every error message afterwards is out by. A script that imports nothing
+     * gets no prelude at all, so nothing that exists today moves.
+     *
+     * The names are `const`, so what a module imports cannot be reassigned partway
+     * through it, and the object is frozen so nothing it imports can be swapped for
+     * something else on the way past. Read once, here — a module that tampered with
+     * the registry afterwards would be tampering with a copy nobody looks at again.
+     */
+    private fun prelude(imports: Map<String, String>): String {
+        if (imports.isEmpty()) return ""
+        val entries = imports.entries.joinToString(", ") { (name, key) -> "$name: globalThis.$MODULES[\"$key\"]" }
+        return "const imports = Object.freeze({ $entries });\n"
+    }
+
+    private fun module(source: String, name: String = "function"): Source =
+        Source.newBuilder("js", source, "$name.mjs")
+            .mimeType("application/javascript+module")
+            .buildLiteral()
 
     private fun millisSince(started: Long): Long = (System.nanoTime() - started) / 1_000_000
 
     private companion object {
         val log = LoggerFactory.getLogger(ScriptRunner::class.java)
 
+        /**
+         * More members than a library's export has any business having, and a
+         * bound on the answer this hands back to be stored.
+         */
+        const val MAX_MEMBERS = 500
+
         const val SUBJECT = "__orknuxSubject"
         const val ARITY_RESULT = "__orknuxArity"
+
+        /** Where an imported module's default export is left for the prelude to find. */
+        const val MODULES = "__orknuxModules"
+
+        /**
+         * A registry with no prototype, so a module named `toString` or
+         * `constructor` is the module and not something Object brought with it.
+         */
+        val REGISTRY = "globalThis.$MODULES = Object.create(null);"
 
         /**
          * Counts the parameters the subject declares.
@@ -425,6 +552,40 @@ class ScriptRunner(private val properties: ScriptProperties) {
         """.trimIndent()
     }
 }
+
+/** What a library turned out to export, or why that could not be read. */
+sealed interface LibraryInspection {
+
+    /**
+     * @param callable whether the export is itself something to call, rather
+     *   than an object with members on it. Both spellings are common in a bundle.
+     */
+    data class Read(val callable: Boolean, val members: List<LibraryMember>) : LibraryInspection
+
+    data class Unreadable(val reason: String) : LibraryInspection
+}
+
+/** One thing a library's default export holds, and whether it is a function. */
+data class LibraryMember(val name: String, val callable: Boolean)
+
+/**
+ * One script that another script imports.
+ *
+ * The sandbox has no module resolution, so an import is not a path the guest
+ * follows — it is a module the host evaluated first and left in a registry. What
+ * the importer writes is `imports.someName`, and this is what `someName` came to.
+ *
+ * [key] is how the registry holds it and is the host's to choose; it never appears
+ * in anybody's code, which is why it can be an id and does not have to survive a
+ * rename. [name] is only for a sentence when something goes wrong.
+ */
+data class ScriptModule(
+    val key: String,
+    val name: String,
+    val source: String,
+    /** What this module imports in turn: the name it uses, and the key it means. */
+    val imports: Map<String, String> = emptyMap(),
+)
 
 /** What a run of a script produced. */
 sealed interface ScriptResult {

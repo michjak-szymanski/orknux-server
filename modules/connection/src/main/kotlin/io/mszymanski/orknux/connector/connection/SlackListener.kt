@@ -41,6 +41,8 @@ class SlackListener(
     private val workspaceConnections: WorkspaceConnectionRepository,
     private val events: ApplicationEventPublisher,
     private val properties: SlackProperties,
+    /** Where the two tokens come from: the connection's own copies, or workspace secrets. */
+    private val credentials: ConnectionCredentials,
     private val slackClients: SlackClients,
 ) {
 
@@ -78,17 +80,22 @@ class SlackListener(
      * would rather not wait for the timer.
      */
     fun reconcile() {
-        // The app-level token is what decides this, not the type: a Slack
-        // connection given one listens, one left without it only sends.
+        /*
+         * The app-level token is what decides this, not the type: a Slack
+         * connection given one listens, one left without it only sends.
+         *
+         * Resolved rather than read off the row, because either token may be a
+         * workspace secret now. It is also what the fingerprint is taken over,
+         * so rotating the variable closes the session that was opened with the
+         * old value - fingerprinting the columns instead would leave a socket
+         * running on a token nobody uses any more, silently, until a restart.
+         */
         val wanted = workspaceConnections.findByType(ConnectionType.SLACK)
-            .filter { !it.appToken.isNullOrBlank() && !it.secret.isNullOrBlank() }
-            .associateBy { requireNotNull(it.id) }
+            .mapNotNull { connection -> listening(connection)?.let { requireNotNull(connection.id) to it } }
+            .toMap()
 
         for ((id, session) in sessions) {
-            val connection = wanted[id]
-            if (connection == null || connection.credentialsFingerprint() != session.fingerprint) {
-                close(id)
-            }
+            if (wanted[id]?.fingerprint != session.fingerprint) close(id)
         }
         failures.keys.removeIf { it !in wanted }
         for ((id, connection) in wanted) {
@@ -97,7 +104,18 @@ class SlackListener(
         }
     }
 
-    private fun open(id: Long, connection: WorkspaceConnection) {
+    /**
+     * One connection with both its tokens in hand, or null when it is not one
+     * that listens - no bot token, no app-level token, or a reference to a
+     * workspace secret that has gone or was never filled in.
+     */
+    private fun listening(connection: WorkspaceConnection): Listening? {
+        val bot = credentials.secretOf(connection).credential ?: return null
+        val app = credentials.appTokenOf(connection).credential ?: return null
+        return Listening(connection, bot, app)
+    }
+
+    private fun open(id: Long, connection: Listening) {
         val workspaceId = connection.workspaceId
         try {
             // The Slack instance the app is built on is the one the whole
@@ -108,7 +126,7 @@ class SlackListener(
             val routed = slackClients.forSocketMode()
             val app = App(
                 AppConfig.builder()
-                    .singleTeamBotToken(connection.secret)
+                    .singleTeamBotToken(connection.botToken)
                     .slack(routed.slack)
                     .build(),
             )
@@ -124,14 +142,14 @@ class SlackListener(
             val socket = SocketModeApp(connection.appToken, SocketModeClient.Backend.Tyrus, app)
             routed.routeAgainst { socket.client?.wssUri?.toString() }
             socket.startAsync()
-            sessions[id] = SlackSession(socket, connection.credentialsFingerprint())
+            sessions[id] = SlackSession(socket, connection.fingerprint)
             failures.remove(id)
             log.info("Listening to Slack on connection {} (workspace {})", connection.name, workspaceId)
         } catch (failure: Exception) {
             // A bad token, or Slack being unreachable. Neither is a failure of
             // the application, and neither is worth asking about every 30
             // seconds, so it waits — until the credentials change.
-            failures[id] = FailedAttempt(connection.credentialsFingerprint(), Instant.now())
+            failures[id] = FailedAttempt(connection.fingerprint, Instant.now())
             log.warn(
                 "Could not listen to Slack on connection {} (workspace {}): {}",
                 connection.name,
@@ -198,18 +216,32 @@ class SlackListener(
 
     private class FailedAttempt(val fingerprint: Int, val at: Instant)
 
-    /** True while the same credentials that just failed are still in their wait. */
-    private fun WorkspaceConnection.waitingAfterFailure(failure: FailedAttempt?): Boolean {
-        if (failure == null) return false
-        if (failure.fingerprint != credentialsFingerprint()) return false
-        return failure.at.plusSeconds(properties.retryFailedSeconds).isAfter(Instant.now())
+    /**
+     * A connection that listens, with the two tokens it listens by.
+     *
+     * Not a data class, and [toString] carries neither token: a generated one
+     * would put both into every log line that ever interpolated the object.
+     */
+    private class Listening(connection: WorkspaceConnection, val botToken: String, val appToken: String) {
+        val name: String = connection.name
+        val workspaceId: Long = connection.workspaceId
+
+        /**
+         * Enough to tell that the credentials changed, without holding onto them
+         * anywhere they outlive the pass: a session opened with the old token
+         * has to be replaced.
+         */
+        val fingerprint: Int = arrayOf(botToken, appToken).contentHashCode()
+
+        override fun toString(): String = "Listening($name)"
     }
 
-    /**
-     * Enough to tell that the credentials changed, without holding onto them:
-     * a session opened with the old token has to be replaced.
-     */
-    private fun WorkspaceConnection.credentialsFingerprint(): Int = arrayOf(appToken, secret).contentHashCode()
+    /** True while the same credentials that just failed are still in their wait. */
+    private fun Listening.waitingAfterFailure(failure: FailedAttempt?): Boolean {
+        if (failure == null) return false
+        if (failure.fingerprint != fingerprint) return false
+        return failure.at.plusSeconds(properties.retryFailedSeconds).isAfter(Instant.now())
+    }
 
     private companion object {
         val log = LoggerFactory.getLogger(SlackListener::class.java)

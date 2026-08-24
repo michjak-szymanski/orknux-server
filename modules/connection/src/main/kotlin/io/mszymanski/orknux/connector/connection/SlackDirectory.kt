@@ -204,6 +204,8 @@ data class SlackSuggestions(
 @Component
 class SlackDirectory(
     private val connections: WorkspaceConnectionRepository,
+    /** Where the bot token comes from: the connection's own copy, or a workspace secret. */
+    private val credentials: ConnectionCredentials,
     slackClients: SlackClients,
 ) {
 
@@ -526,7 +528,7 @@ class SlackDirectory(
 
         if (connection.type != ConnectionType.SLACK) return Opening.Shut("Not a Slack connection.")
 
-        val token = connection.secret?.takeIf { it.isNotBlank() }
+        val token = credentials.secretOf(connection).credential
             ?: return Opening.Shut("Not checked - no bot token stored.")
 
         // The token that opens the socket is not the token that looks anything

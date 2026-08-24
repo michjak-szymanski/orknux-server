@@ -11,6 +11,7 @@ import io.mszymanski.orknux.connector.connection.WorkspaceConnection
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionRepository
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
+import io.mszymanski.orknux.server.security.plainCredentials
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -467,7 +468,7 @@ class SlackSuggestionsTest {
     ): SlackDirectory {
         val clients = SlackClients(ProxyRouter(ProxyRuleSource { emptyList() }))
         clients.webApi.config.methodsEndpointUrlPrefix = "http://${api.address.hostString}:${api.address.port}/api/"
-        return SlackDirectory(connections(secret, type), clients)
+        return SlackDirectory(connections(secret, type), plainCredentials(), clients)
     }
 
     private fun connections(secret: String?, type: ConnectionType): WorkspaceConnectionRepository {

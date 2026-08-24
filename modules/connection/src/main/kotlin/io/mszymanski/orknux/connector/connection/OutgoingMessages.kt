@@ -36,6 +36,8 @@ sealed interface Delivery {
 class OutgoingMessages(
     private val connections: WorkspaceConnectionRepository,
     private val directory: SlackDirectory,
+    /** Where the bot token comes from: the connection's own copy, or a workspace secret. */
+    private val credentials: ConnectionCredentials,
     slackClients: SlackClients,
 ) {
 
@@ -63,7 +65,7 @@ class OutgoingMessages(
             return Delivery.NotPossible("${connection.type} connections cannot send messages yet")
         }
 
-        val token = connection.secret?.takeIf { it.isNotBlank() }
+        val token = credentials.secretOf(connection).credential
             ?: return Delivery.NotPossible("${connection.name} has no bot token stored")
 
         // The token that opens the socket is not the token that posts. Saying so

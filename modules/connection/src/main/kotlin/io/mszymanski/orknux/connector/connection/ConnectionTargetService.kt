@@ -20,6 +20,8 @@ import org.springframework.stereotype.Service
 class ConnectionTargetService(
     private val workspaceConnections: WorkspaceConnectionRepository,
     private val mcpServers: McpServerRepository,
+    /** The one place a stored credential is read; see [ConnectionCredentials]. */
+    private val credentials: ConnectionCredentials,
 ) {
 
     fun connectionTarget(workspaceConnectionId: Long): ConnectionTargetView {
@@ -28,14 +30,14 @@ class ConnectionTargetService(
         if (!connection.configured) throw ConnectionNotConfiguredException(connection.name)
 
         log.info("Resolved target for connection {} (workspace {})", connection.name, connection.workspaceId)
-        return ConnectionTargetView(connection.type, connection.target())
+        return ConnectionTargetView(connection.type, credentials.target(connection))
     }
 
     fun mcpServerTarget(mcpServerId: Long): ConnectionTargetView {
         val server = mcpServers.findByIdOrNull(mcpServerId) ?: throw McpServerNotFoundException(mcpServerId)
 
         log.info("Resolved target for MCP server {} (workspace {})", server.name, server.workspaceId)
-        return ConnectionTargetView(null, server.target())
+        return ConnectionTargetView(null, credentials.target(server))
     }
 
     private companion object {

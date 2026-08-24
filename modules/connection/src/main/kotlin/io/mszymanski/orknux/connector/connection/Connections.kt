@@ -182,10 +182,30 @@ class WorkspaceConnection(
     @Column(name = "auth_type", nullable = false, length = 16)
     var authType: AuthType = AuthType.NONE,
 
-    /** Encrypted in the database; see [SecretCipher]. */
+    /**
+     * The bot token, the API credential or the mail password, depending on the
+     * type. Encrypted in the database; see [SecretCipher].
+     *
+     * Null when this field reads [secretVariableId]'s value instead. The two are
+     * exclusive, in the entity and in a CHECK constraint.
+     */
     @Convert(converter = SecretConverter::class)
     @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
+
+    /**
+     * The workspace variable [secret] reads its value from, if it reads one.
+     *
+     * Beside the field it answers for, rather than one switch for the connection
+     * - which is the whole of #244. A Slack connection holds two credentials and
+     * "this connection uses a workspace secret" cannot mean one of them without
+     * meaning the other, so each has a reference column of its own.
+     *
+     * By id, and not a foreign key: `workspace_variable` is the application's
+     * table and this is the module's. See [io.mszymanski.orknux.connector.security.SecretReferences].
+     */
+    @Column(name = "secret_variable_id")
+    var secretVariableId: Long? = null,
 
     /**
      * A second credential, for services that need one to open a listening
@@ -198,6 +218,10 @@ class WorkspaceConnection(
     @Convert(converter = SecretConverter::class)
     @Column(name = "app_token", length = SECRET_COLUMN_LENGTH)
     var appToken: String? = null,
+
+    /** The workspace variable [appToken] reads its value from; its own choice. */
+    @Column(name = "app_token_variable_id")
+    var appTokenVariableId: Long? = null,
 
     /**
      * Which port the mail server listens on. Null uses the one that goes with
@@ -254,6 +278,24 @@ class WorkspaceConnection(
 
     val effectiveUrl: String get() = urlOverride?.takeIf { it.isNotBlank() } ?: url
 
+    /**
+     * Whether there is a credential to authenticate with - a copy of its own,
+     * or a variable to read one from.
+     *
+     * Named apart from the view's `secretSet`, which is the narrower question a
+     * screen asks: that one is "does this connection hold a copy", and is false
+     * for one reading a variable. Two things called the same and meaning
+     * different halves of this is exactly the trap worth not setting.
+     *
+     * A reference counts without the variable being read. What this decides is
+     * whether the connection is worth checking, and one pointed at a variable
+     * is: if the variable has gone or is still empty, the check is where that
+     * gets said, in words about the variable. Reporting "Not configured" instead
+     * would describe a connection nobody had finished setting up, which is not
+     * what happened.
+     */
+    val credentialSet: Boolean get() = secretVariableId != null || !secret.isNullOrBlank()
+
     /** Whether anything has been configured to authenticate with. */
     val configured: Boolean
         get() = when (type) {
@@ -262,7 +304,7 @@ class WorkspaceConnection(
              * listen, not what makes it work, so a Slack connection that only
              * ever posts is configured and must not be reported otherwise.
              */
-            ConnectionType.SLACK -> !secret.isNullOrBlank()
+            ConnectionType.SLACK -> credentialSet
 
             /*
              * A mail server needs somewhere to send from before it needs a
@@ -270,10 +312,9 @@ class WorkspaceConnection(
              * calling that "not configured" would leave it unchecked forever. A
              * user name without a password is the half-filled form it looks like.
              */
-            ConnectionType.SMTP ->
-                !smtpFrom.isNullOrBlank() && (smtpUsername.isNullOrBlank() || !secret.isNullOrBlank())
+            ConnectionType.SMTP -> !smtpFrom.isNullOrBlank() && (smtpUsername.isNullOrBlank() || credentialSet)
 
-            else -> authType == AuthType.NONE || !secret.isNullOrBlank()
+            else -> authType == AuthType.NONE || credentialSet
         }
 
     /**
@@ -317,10 +358,17 @@ class McpServer(
     @Column(name = "auth_type", nullable = false, length = 16)
     var authType: AuthType = AuthType.NONE,
 
-    /** Encrypted in the database; see [SecretCipher]. */
+    /**
+     * Encrypted in the database; see [SecretCipher]. Null when this field reads
+     * [secretVariableId]'s value instead - the two are exclusive.
+     */
     @Convert(converter = SecretConverter::class)
     @Column(length = SECRET_COLUMN_LENGTH)
     var secret: String? = null,
+
+    /** The workspace variable [secret] reads its value from, if it reads one. */
+    @Column(name = "secret_variable_id")
+    var secretVariableId: Long? = null,
 
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "mcp_server_header", joinColumns = [JoinColumn(name = "mcp_server_id")])

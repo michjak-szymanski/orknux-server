@@ -175,14 +175,25 @@ is reported to the module rather than cascaded.
 - **Wiring is the app's job**: `OrknuxServer` scans, entity-scans and
   repository-scans `io.mszymanski.orknux`, because a module cannot register
   itself into a context it does not own.
-- **Credentials are read in one place.** `ConnectionTarget` resolves them for
-  outbound calls; nothing else should touch a `secret` field. A Slack connection
-  also holds an `appToken`, which is what Socket Mode opens the websocket with,
-  and an SMTP connection's password is that same `secret` column — a second
-  password column would be a second one to remember to encrypt, and a shell's
-  private key and its passphrase are two more of the same. Every one of them
-  goes through `SecretConverter`, so a new credential is a `@Convert` on the
-  entity and nothing else.
+- **Credentials are read in one place.** `ConnectionCredentials` resolves them
+  for outbound calls and builds the `ConnectionTarget`; nothing else should
+  touch a `secret` field. A Slack connection also holds an `appToken`, which is
+  what Socket Mode opens the websocket with, and an SMTP connection's password
+  is that same `secret` column — a second password column would be a second one
+  to remember to encrypt, and a shell's private key and its passphrase are two
+  more of the same. Every one of them goes through `SecretConverter`, so a new
+  credential is a `@Convert` on the entity and nothing else.
+- **A secret field chooses its own source, and the unit is the field.** Since
+  #244 a stored credential is either its own encrypted copy or a reference to a
+  workspace variable secret, held by id in a `*_variable_id` column beside it,
+  with a `CHECK` making the two exclusive. `SecretReferences` is where both
+  halves live — binding one on a save, reading one at the moment of use — so a
+  second field on a card is a second column and a second call, never a second
+  copy of the rule. Per field and not per row: a model provider has one secret
+  column and a Slack connection has two, and one switch for a card cannot say
+  that the bot token is a workspace secret while the app-level token is its own.
+  `shell` and `proxy_rule` are installation-wide and take no reference, because
+  a variable belongs to a workspace.
 - **New configuration is a named `ORKNUX_` variable, and a row in
   `DOCKERHUB.md`.** Spring would let any property be overridden by a name derived
   from its path, but a derived name is one nobody can look up and one that

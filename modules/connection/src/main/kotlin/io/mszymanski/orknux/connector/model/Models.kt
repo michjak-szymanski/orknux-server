@@ -386,34 +386,6 @@ class ModelProviderNameInvalidException : RuntimeException("A provider name is r
 
 class ModelProviderEndpointInvalidException : RuntimeException("A provider API endpoint is required")
 
-/**
- * A save that asked for both kinds of credential at once.
- *
- * Refused rather than resolved by a precedence rule nobody could look up. The
- * two are a choice, and a caller sending both has not made it.
- */
-class ModelProviderCredentialAmbiguousException : RuntimeException(
-    "A provider keeps its own credential or reads one from a workspace variable, not both. " +
-        "Send a key or a variable, not the two together.",
-)
-
-class ModelProviderVariableNotFoundException(id: Long) :
-    RuntimeException("No workspace variable with id $id in this workspace")
-
-/**
- * A credential was bound to a variable anybody can read off the list.
- *
- * A VALUE is returned with the listing on purpose - hiding a channel name or a
- * threshold only makes them awkward to work with - so binding a provider's key
- * to one would put that key on every member's screen. Only a SECRET may be a
- * credential, which is also why `VariableAPI` refuses to turn a bound one back
- * into a value.
- */
-class ModelProviderVariableNotSecretException(name: String) : RuntimeException(
-    "\"$name\" is a workspace value rather than a secret, and a value is read with the list. " +
-        "A provider's credential has to be one of the ones kept out of sight.",
-)
-
 class ModelNotFoundException(id: Long) : RuntimeException("No model with id $id")
 
 class ModelNameTakenException(name: String) :

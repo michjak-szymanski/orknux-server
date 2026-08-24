@@ -6,12 +6,9 @@ import io.mszymanski.orknux.connector.model.ModelDiscoveryFailedException
 import io.mszymanski.orknux.connector.model.ModelIdInvalidException
 import io.mszymanski.orknux.connector.model.ModelNameInvalidException
 import io.mszymanski.orknux.connector.model.ModelNameTakenException
-import io.mszymanski.orknux.connector.model.ModelProviderCredentialAmbiguousException
 import io.mszymanski.orknux.connector.model.ModelProviderEndpointInvalidException
 import io.mszymanski.orknux.connector.model.ModelProviderNameInvalidException
 import io.mszymanski.orknux.connector.model.ModelProviderNameTakenException
-import io.mszymanski.orknux.connector.model.ModelProviderVariableNotFoundException
-import io.mszymanski.orknux.connector.model.ModelProviderVariableNotSecretException
 import org.springframework.graphql.execution.DataFetcherExceptionResolverAdapter
 import org.springframework.graphql.execution.ErrorType
 import org.springframework.stereotype.Component
@@ -30,8 +27,6 @@ class ModelExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ModelProviderNameTakenException,
             is ModelProviderNameInvalidException,
             is ModelProviderEndpointInvalidException,
-            is ModelProviderCredentialAmbiguousException,
-            is ModelProviderVariableNotSecretException,
             is ModelNameTakenException,
             is ModelNameInvalidException,
             is ModelIdInvalidException,
@@ -45,9 +40,6 @@ class ModelExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ModelNotFoundException,
             is ModuleProviderNotFound,
             is ModuleModelNotFound,
-            // A variable in another workspace answers the same as one that is
-            // nothing, so guessing at ids is not a way to learn what is there.
-            is ModelProviderVariableNotFoundException,
             -> ErrorType.NOT_FOUND
 
             else -> return null

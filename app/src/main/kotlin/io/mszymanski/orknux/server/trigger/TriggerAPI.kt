@@ -88,10 +88,16 @@ class TriggerAPI(
                 payload = input.payload?.trim()?.ifEmpty { null }?.also(::requireJsonObject),
                 conditionId = input.conditionId?.also { requireConditionInWorkspace(input.workspaceId, it) },
                 icon = input.icon?.trim()?.ifEmpty { null },
+                enabled = input.enabled,
             ).also(::validate),
         )
 
         auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Trigger $name created")
+        // Said separately, in the words the toggle uses, so a definition that
+        // arrived switched off is findable the same way one switched off later is.
+        if (!trigger.enabled) {
+            auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.WORKFLOW, enabledMessage(name, false))
+        }
         return describe(trigger)
     }
 
@@ -154,6 +160,7 @@ class TriggerAPI(
             throw TriggerNameTakenException(name)
         }
         val previousName = trigger.name
+        val previouslyEnabled = trigger.enabled
         trigger.name = name
         if (trigger.type == TriggerType.INCOMING_CONNECTION) {
             input.connectionId?.let { trigger.connectionId = it }
@@ -181,10 +188,22 @@ class TriggerAPI(
         // Null clears it, the way the condition above clears: the form sends
         // what it holds, and holding nothing is a choice.
         trigger.icon = input.icon?.trim()?.ifEmpty { null }
+        // Left alone when the caller does not mention it: the form carries the
+        // switch, and every other door still saves a trigger without one.
+        input.enabled?.let { trigger.enabled = it }
         validate(trigger)
 
         val message = if (name == previousName) "Trigger $name updated" else "Trigger $previousName renamed to $name"
         auditRecorder.record(trigger.workspaceId, WorkspaceAuditCategory.WORKFLOW, message)
+        // The same line the toggle in the list writes, because it is the same
+        // change: reading the log should not depend on which door it came in by.
+        if (trigger.enabled != previouslyEnabled) {
+            auditRecorder.record(
+                trigger.workspaceId,
+                WorkspaceAuditCategory.WORKFLOW,
+                enabledMessage(name, trigger.enabled),
+            )
+        }
         return describe(trigger)
     }
 
@@ -211,7 +230,7 @@ class TriggerAPI(
         auditRecorder.record(
             trigger.workspaceId,
             WorkspaceAuditCategory.WORKFLOW,
-            "Trigger ${trigger.name} ${if (enabled) "enabled" else "disabled"}",
+            enabledMessage(trigger.name, enabled),
         )
         return describe(trigger)
     }
@@ -417,6 +436,16 @@ class TriggerAPI(
         access.requireVisible(workspaceId)
     }
 
+    /**
+     * How the log says a trigger was switched, whichever switch did it.
+     *
+     * There are three: the toggle in the list, the one on the trigger's own page
+     * and the one in the dialog that makes it. Written once so the three cannot
+     * word it differently, which is what would make the log unsearchable.
+     */
+    private fun enabledMessage(name: String, enabled: Boolean) =
+        "Trigger $name ${if (enabled) "enabled" else "disabled"}"
+
     private companion object {
         /** Letters, digits and the punctuation a URL carries plainly. */
         val WEBHOOK_PATH = Regex("[A-Za-z0-9][A-Za-z0-9._~-]*(/[A-Za-z0-9._~-]+)*")
@@ -456,6 +485,16 @@ data class CreateTriggerInput(
     val authType: WebhookAuthType = WebhookAuthType.NONE,
     /** The function that answers that, when one does. */
     val authFunctionId: Long? = null,
+    /**
+     * Whether it fires at all.
+     *
+     * A trigger is made switched on unless somebody says otherwise, which is
+     * what the form defaults to. Saying otherwise is worth being able to do: a
+     * webhook is often defined before the caller exists, and a definition that
+     * answers nothing until it is wanted is better than one somebody has to
+     * remember to turn off afterwards.
+     */
+    val enabled: Boolean = true,
 )
 
 data class UpdateTriggerInput(
@@ -477,6 +516,14 @@ data class UpdateTriggerInput(
     val authType: WebhookAuthType? = null,
     /** The function that answers that; null when nothing does. */
     val authFunctionId: Long? = null,
+    /**
+     * Whether it fires at all; null leaves it as it stands.
+     *
+     * Not treated the way the condition and the icon are, where null means
+     * "take it off": there is no off to mean here, and a caller that saves a
+     * trigger without mentioning the switch must not be turning it on.
+     */
+    val enabled: Boolean? = null,
 )
 
 data class TriggerView(

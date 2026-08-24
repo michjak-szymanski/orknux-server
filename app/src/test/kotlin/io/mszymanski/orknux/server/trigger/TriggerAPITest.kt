@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
 
@@ -190,6 +191,57 @@ class TriggerAPITest(
 
         assertThat(audit.findAll().map { it.message })
             .contains("Trigger Slack Mention Handler disabled", "Trigger Slack Mention Handler enabled")
+    }
+
+    @Test
+    fun `the form can make one that is switched off`() {
+        val id = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Not Yet",
+                type: INCOMING_CONNECTION, connectionId: $connectionId, action: MENTION, enabled: false
+              }) { id enabled }
+            }
+            """,
+        ).execute().path("createTrigger.enabled").entity(Boolean::class.java).isEqualTo(false)
+            .path("createTrigger.id").entity(Long::class.java).get()
+
+        assertThat(triggers.findByIdOrNull(id)?.enabled).isFalse()
+        // The same words the toggle writes, so the log reads the same either way.
+        assertThat(audit.findAll().map { it.message }).contains("Trigger Not Yet disabled")
+    }
+
+    @Test
+    fun `the form on the trigger's own page switches it, and says so`() {
+        val id = createIncoming("Slack Mention Handler")
+
+        graphQlTester.document(
+            """
+            mutation {
+              updateTrigger(id: $id, input: { name: "Slack Mention Handler", enabled: false }) { enabled }
+            }
+            """,
+        ).execute().path("updateTrigger.enabled").entity(Boolean::class.java).isEqualTo(false)
+
+        assertThat(triggers.findByIdOrNull(id)?.enabled).isFalse()
+        assertThat(audit.findAll().map { it.message })
+            .contains("Trigger Slack Mention Handler updated", "Trigger Slack Mention Handler disabled")
+    }
+
+    @Test
+    fun `a save that does not mention the switch leaves it where it was`() {
+        val id = createIncoming("Slack Mention Handler")
+        graphQlTester.document("""mutation { setTriggerEnabled(id: $id, enabled: false) { enabled } }""").execute()
+
+        // What every other door sends: the settings, and nothing about firing.
+        graphQlTester.document(
+            """mutation { updateTrigger(id: $id, input: { name: "Mentions" }) { enabled } }""",
+        ).execute().path("updateTrigger.enabled").entity(Boolean::class.java).isEqualTo(false)
+
+        assertThat(triggers.findByIdOrNull(id)?.enabled).isFalse()
+        // Nothing changed about it, so nothing is claimed to have.
+        assertThat(audit.findAll().map { it.message }).doesNotContain("Trigger Mentions enabled")
     }
 
     @Test

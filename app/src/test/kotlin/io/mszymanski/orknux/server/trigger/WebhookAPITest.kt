@@ -175,6 +175,32 @@ class WebhookAPITest(
     }
 
     /**
+     * The switch, on the one firing path where it is not a repository query.
+     *
+     * An incoming trigger and a scheduled one are found by a finder that asks
+     * for enabled ones; a webhook is found by its path, which is unique across
+     * the installation, and the switch is read afterwards. So this is the path
+     * where honouring it is a line of code somebody could delete, and it is
+     * covered here rather than assumed.
+     *
+     * Answered exactly as an unknown path is, for the reason the rest of this
+     * class exists: telling a caller "this exists but is switched off" is the
+     * same directory leak by another name.
+     */
+    @Test
+    fun `a switched-off webhook is answered the same as a path nothing listens on`() {
+        graphQlTester.document("""mutation { setTriggerEnabled(id: $triggerId, enabled: false) { enabled } }""")
+            .execute()
+
+        val off = call("zendesk/ticket-created", """{"id":"T-1"}""")
+        val unknown = call("zendesk/does-not-exist", """{"id":"T-1"}""")
+
+        assertThat(off.status).isEqualTo(404)
+        assertThat(off.contentAsString).isEqualTo(unknown.contentAsString)
+        assertThat(executions.findAll()).isEmpty()
+    }
+
+    /**
      * What the caller is told and what the owner is told are different things.
      *
      * The caller gets a 404 that says nothing. The person who owns the trigger

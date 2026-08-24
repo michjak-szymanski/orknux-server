@@ -199,7 +199,11 @@ class IssueNewsMailer(
      * part that is shown without anybody choosing to look at it.
      */
     private fun subject(item: IssueNewsItem): String =
-        oneLine("${happening(item)}: ${shortened(item.issueTitle, LONGEST_TITLE)}")
+        oneLine("${happening(item)}: ${shortened(titleOf(item), LONGEST_TITLE)}")
+
+    /** Whichever of the two subjects this row is about. */
+    private fun titleOf(item: IssueNewsItem): String =
+        item.issueTitle ?: item.taskTitle ?: "(untitled)"
 
     /**
      * A subject is one line, whatever was typed into the title.
@@ -215,6 +219,16 @@ class IssueNewsMailer(
     private fun happening(item: IssueNewsItem): String {
         val issue = "#${item.issueNumber}"
         return when (item.kind) {
+            /*
+             * A task speaks for itself, so the actor is the word "task" rather
+             * than a person - which is why these two read differently from every
+             * other line here. What it is waiting for goes in the body: a subject
+             * line is shown without anybody choosing to look at it, and a request
+             * for shell access is not something to put on a lock screen.
+             */
+            IssueNewsKind.TASK_WAITING -> "A task is waiting for you"
+            IssueNewsKind.TASK_FINISHED -> "A task has finished"
+
             IssueNewsKind.OPENED -> "${item.actor} opened $issue"
             IssueNewsKind.ASSIGNED -> "${item.actor} assigned you $issue"
             IssueNewsKind.STATUS -> "${item.actor} ${statusVerb(item.says)} $issue"
@@ -252,7 +266,12 @@ class IssueNewsMailer(
 
         return buildString {
             append(happening(item)).append(where).append(".\n\n")
-            append("Issue: ").append(item.issueTitle).append('\n')
+            append(if (item.taskId != null) "Task: " else "Issue: ").append(titleOf(item)).append('\n')
+            // What a task is waiting for, in full. A permission nobody reads is
+            // a task nobody unblocks.
+            item.says?.takeIf { item.kind == IssueNewsKind.TASK_WAITING }?.let {
+                append('\n').append(shortened(it, LONGEST_QUOTE)).append('\n')
+            }
             if (said != null) {
                 append('\n')
                 shortened(said, LONGEST_QUOTE).lines().forEach { append("    ").append(it).append('\n') }
@@ -266,6 +285,8 @@ class IssueNewsMailer(
     /** Why this arrived, which is the first thing anybody asks of a notification. */
     private fun reason(kind: IssueNewsKind): String = when (kind) {
         IssueNewsKind.MENTIONED -> "You are hearing about this because your name is in the comment."
+        IssueNewsKind.TASK_WAITING, IssueNewsKind.TASK_FINISHED ->
+            "You are hearing about this because you asked for the task, or you are observing what it works on."
         IssueNewsKind.ASSIGNED -> "You are hearing about this because it was assigned to you."
         IssueNewsKind.OBSERVING -> "You are hearing about this because you were made an observer."
         else ->
@@ -280,8 +301,9 @@ class IssueNewsMailer(
      * whoever is calling, so a link built from one is a link an attacker chooses
      * the address of.
      */
-    private fun link(item: IssueNewsItem): String =
-        "${base()}/workspace/${item.workspaceId}/issues/${item.issueNumber}"
+    private fun link(item: IssueNewsItem): String = item.taskId
+        ?.let { "${base()}/workspace/${item.workspaceId}/tasks/$it" }
+        ?: "${base()}/workspace/${item.workspaceId}/issues/${item.issueNumber}"
 
     private fun base(): String? = web.baseUrl.trim().trimEnd('/').ifEmpty { null }
 

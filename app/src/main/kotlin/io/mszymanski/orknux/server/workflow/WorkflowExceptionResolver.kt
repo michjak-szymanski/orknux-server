@@ -70,6 +70,8 @@ import io.mszymanski.orknux.server.condition.ConditionNotFoundException
 import io.mszymanski.orknux.server.condition.ConditionPropertyMismatchException
 import io.mszymanski.orknux.server.condition.ConditionValuesRequiredException
 import io.mszymanski.orknux.server.trigger.TriggerConnectionRequiredException
+import io.mszymanski.orknux.server.trigger.TriggerReplyWatchRequiredException
+import io.mszymanski.orknux.server.trigger.TriggerReplyWatchUnusableException
 import io.mszymanski.orknux.server.trigger.TriggerActionUnsupportedException
 import io.mszymanski.orknux.server.trigger.TriggerInUseException
 import io.mszymanski.orknux.server.trigger.TriggerNameInvalidException
@@ -138,6 +140,8 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is TriggerNameInvalidException,
             is TriggerActionUnsupportedException,
             is TriggerConnectionRequiredException,
+            is TriggerReplyWatchRequiredException,
+            is TriggerReplyWatchUnusableException,
             is TriggerScheduleRequiredException,
             is TriggerScheduleInvalidException,
             is TriggerScheduleUnreachableException,

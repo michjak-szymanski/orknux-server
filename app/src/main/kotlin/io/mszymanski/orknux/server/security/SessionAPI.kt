@@ -115,8 +115,17 @@ class SessionAPI(
          * on localhost:389 per wrong password and answer with whatever the directory
          * failure happened to look like — so the plain, honest 401 is given here, and
          * it is the same sentence a wrong password gets anywhere else.
+         *
+         * NONE stops here too, and for the same reason rather than a new one: there
+         * is no directory configured under it either. Note what is *not* done — the
+         * endpoint is not refused outright. An internal account with a password is
+         * checked above whatever the method says, which is a rule this product has
+         * held since the first internal user existed, and it is worth something
+         * here: somebody who signs in on an open installation is themselves in the
+         * audit log rather than "everyone". They simply have no way to reach this
+         * form, because the interface never draws it when a session already exists.
          */
-        if (properties.authMethod == AuthMethod.INTERNAL) {
+        if (properties.authMethod == AuthMethod.INTERNAL || properties.authMethod == AuthMethod.NONE) {
             throttle.failed(credentials.username, from)
             throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid username or password")
         }

@@ -197,6 +197,11 @@ services:
       ORKNUX_DB_USERNAME: orknux
       ORKNUX_DB_PASSWORD: ${ORKNUX_DB_PASSWORD:-orknux}
 
+      # LDAP, INTERNAL, OIDC - or NONE, which turns authentication off entirely:
+      # nobody signs in, and every request acts as one identity that administers.
+      # Anyone who can reach the port then administers this installation, so it
+      # belongs only behind a gate of your own. It is never the default and never
+      # a fallback; a value that is none of the four stops the server at startup.
       ORKNUX_AUTH_METHOD: ${ORKNUX_AUTH_METHOD:-LDAP}
 
       # The first administrator, for an installation running with neither a

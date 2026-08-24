@@ -47,6 +47,8 @@ class SecurityConfig {
         properties: SecurityProperties,
         settings: InstallationSettings,
         tokens: TokenAuthenticationFilter,
+        /** Who this installation acts as when nobody signs in; idle under every other method. */
+        open: OpenAccess,
         /**
          * Absent unless this installation signs in with OIDC, which is why it is
          * nullable rather than required: under LDAP there is no provider to
@@ -204,6 +206,26 @@ class SecurityConfig {
          * browser to keep a cookie in.
          */
         http.addFilterBefore(tokens, UsernamePasswordAuthenticationFilter::class.java)
+
+        /*
+         * The one place authentication is turned off, and it is an `if` on a bound
+         * enum rather than a condition on a bean.
+         *
+         * Nothing above this line changes: the chain still ends in `authenticated`,
+         * still answers 401 to a request carrying nobody, and still opens exactly
+         * the paths it opened before. What changes is that under NONE a request
+         * carrying nobody is given somebody on the way in - see [OpenAccess] for
+         * who, and why that identity administers.
+         *
+         * Decided here so that there is a single reading of the switch. A
+         * `@ConditionalOnProperty` matching the raw string would say yes to `NONE`
+         * and no to `none`, both of which bind to the same enum constant, so the
+         * two spellings would behave differently and only one of them would look
+         * like it had worked.
+         */
+        if (properties.authMethod == AuthMethod.NONE) {
+            http.addFilterAfter(OpenAccessFilter(open), TokenAuthenticationFilter::class.java)
+        }
 
         return http.build()
     }

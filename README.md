@@ -376,9 +376,9 @@ written. `orknux.security.admin-role` (default `ROLE_ADMINS`) still administers
 on its own. Group lookup under LDAP needs `orknux.ldap.group-search-base` to
 point at the OU holding the groups.
 
-`orknux.security.auth-method` picks `LDAP`, `OIDC` or `INTERNAL`, one at a time —
-the last being no directory and no provider at all, which is what `orknux-one`
-runs on. Beside any of them there are **internal users**: identities this
+`orknux.security.auth-method` picks `LDAP`, `OIDC`, `INTERNAL` or `NONE`, one at
+a time — `INTERNAL` being no directory and no provider at all, which is what
+`orknux-one` runs on, and `NONE` being no sign-in at all, which is below. Beside any of them there are **internal users**: identities this
 installation made up, which may be given a password and may mint access tokens.
 A token is 32 random bytes
 behind an `orkx_` prefix, kept only as a SHA-256 hash, presented as
@@ -400,6 +400,27 @@ the tenth restart cannot put back a password somebody changed or a role somebody
 deliberately took away. A password in a variable is a way in and not a credential
 to keep: sign in, change it, unset both. With SQLite underneath, that is an
 Orknux with no database server and no directory to run.
+
+**`ORKNUX_AUTH_METHOD=NONE` turns authentication off**, for an installation
+somebody is trying out and for one already behind a gate of its own — a VPN, an
+authenticating proxy, a network nothing else can reach. Nobody signs in, no
+screen asks, and every request acts as one identity: an ordinary internal user
+called `everyone`, holding the built-in `Administrators` role. So **anyone who
+can reach the port administers the installation**, reads every workspace and can
+use every stored credential. That identity administers deliberately rather than
+by oversight — there is nobody to grant it anything later, and a non-administrator
+open installation would be one nobody could ever configure — and it is written
+down in `OpenAccess` along with what it costs: every audit entry on such an
+installation reads `everyone`, which is the truth, because the installation was
+never told which visitor it was.
+
+It cannot be reached by accident. Unset is `LDAP`, empty is `LDAP`, and any value
+that is not one of the four names fails to bind and stops the application before
+it answers a request — there is no fall back to a default and none to `NONE`. Nor
+is it quiet: the log says so at startup, the Doctor screen warns, `/api/auth/method`
+carries the sentence, and the interface draws it across the top of every page.
+The `everyone` row holds no password hash, so it cannot be signed in as, and it
+does not become a way in on the day authentication is turned back on.
 
 `POST /api/session` is throttled per username and per address alike -
 `orknux.security.sign-in` - because a username somebody knows exists could

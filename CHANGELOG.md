@@ -15,7 +15,7 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
-## Unreleased
+## 0.9.3
 
 ### ✨ Added
 
@@ -59,8 +59,24 @@ have failed.
 - 💬 **Switching workspace while in a chat leaves you in the chat**, rather than
   sending you to the Flow section.
 
+- ✂ **The Create Trigger dialog dropped the sentence explaining what a trigger
+  is**, above a form whose first field is called Trigger Name.
+- 🏷 **A trigger of the connection kind is called Connection**, not Incoming
+  Connection; there is no outgoing one to tell it apart from.
+- 🔗 **The node panel opens a definition by the same mark every other form
+  uses**, rather than by the words "Open definition".
+
 ### 🐛 Fixed
 
+- 🔑 **A function reached through `imports` is handed its own workspace
+  variables.** It read them as `undefined` - a wrong answer rather than a
+  failure - while the editor promised the sandbox would supply them.
+- ⏳ **The editor knows `imports.f(...)` gives back a promise.** It was annotated
+  as the bare return type, so a call without `await` type-checked and then
+  handed back a promise at run time.
+- 📚 **A library whose export is a class instance lists what it offers.** Only
+  its own fields were read, so a bundle keeping its API on a prototype showed
+  its internals and none of its methods. Running one was never affected.
 - 🕸 **A run's graph drawn as boxes with nothing between them.** Every rebuild
   threw away the handle positions every line is drawn from.
 - 🎙 **Voice mode no longer says it is speaking before anything has been

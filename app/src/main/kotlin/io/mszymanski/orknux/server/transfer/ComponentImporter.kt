@@ -8,6 +8,7 @@ import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ScriptImport
+import io.mszymanski.orknux.server.library.ScriptLibraryRepository
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowAction
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -90,6 +91,7 @@ class ComponentImporter(
     private val skills: AgentSkillRepository,
     private val catalogs: SkillCatalogRepository,
     private val variables: WorkspaceVariableRepository,
+    private val scriptLibraries: ScriptLibraryRepository,
     private val actions: WorkflowActionRepository,
     private val triggers: WorkflowTriggerRepository,
     private val agents: AgentRepository,
@@ -571,6 +573,26 @@ class ComponentImporter(
             ScriptImport(importedId = idOf(ComponentKind.FUNCTION, target), importName = called)
         }.toMutableList()
 
+    /**
+     * The libraries an envelope named, matched against what is loaded here.
+     *
+     * By key, because that is the only reference that means anything between two
+     * installations — and refused outright when this one has not loaded it. A
+     * function imported with its library silently missing would be a function
+     * whose first call into it is a `TypeError`, found at the moment a workflow
+     * needed it rather than while somebody was importing.
+     */
+    private fun librariesIn(node: JsonNode): MutableList<ScriptImport> =
+        node.path("libraries").values().mapNotNull { one ->
+            val key = one.text("libraryRef") ?: return@mapNotNull null
+            val called = one.text("name") ?: return@mapNotNull null
+            val library = scriptLibraries.findByKey(key)
+                ?: throw EnvelopeInvalidException(
+                    "No library called $key is loaded in this installation. Load it first, then import again.",
+                )
+            ScriptImport(importedId = requireNotNull(library.id), importName = called)
+        }.toMutableList()
+
     /** Every reference one component makes that no envelope could have carried. */
     private fun externalsOf(component: ParsedComponent): List<ExternalReference> {
         val node = component.node
@@ -758,6 +780,7 @@ class ComponentImporter(
                         FunctionExternal(variableId = variable.id!!)
                     }.toMutableList(),
                     imports = importsIn(node, ::idOf),
+                    libraries = librariesIn(node),
                     lastModifiedAt = now,
                     lastModifiedBy = who,
                 ),
@@ -798,6 +821,7 @@ class ComponentImporter(
                         )
                     }.toMutableList(),
                     imports = importsIn(node, ::idOf),
+                    libraries = librariesIn(node),
                     lastModifiedAt = now,
                     lastModifiedBy = who,
                 ),

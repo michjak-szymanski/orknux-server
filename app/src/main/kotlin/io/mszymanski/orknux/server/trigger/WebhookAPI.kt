@@ -195,7 +195,7 @@ class WebhookAPI(
         val call = if (function.scope == FunctionScope.PLUGIN) {
             askPlugin(trigger, function, arguments)
         } else {
-            when (val resolved = scriptImports.resolve(function.imports)) {
+            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
                 is ScriptImportsResult.Broken -> ScriptResult.Failed(resolved.reason, 0)
                 is ScriptImportsResult.Resolved -> scripts.call(
                     source = function.source,

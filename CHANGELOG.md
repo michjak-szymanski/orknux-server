@@ -43,6 +43,37 @@ have failed.
   no signature at all, which is a tool the receiving model is told the wrong
   thing about.
 
+- **Libraries: JavaScript an installation loads once and its scripts import.** An
+  administrator loads a `.js` bundle on a new *Libraries* page, and any
+  workspace's function or tool can then import it under a name of its own —
+  `imports.slugs.of(title)`. The key comes from the filename, so `date-fns.js`
+  loads as `date-fns`, and loading the same key again replaces it in place: the
+  row keeps its id, so nothing that imports it has to be repointed.
+
+  A library here is a stored artefact, not a name from a registry, and it has to
+  be. Fetching one at run time would mean giving the sandbox a network, which is
+  the thing the sandbox exists to withhold; fetching it at upload would mean this
+  server reaching out to a registry, which makes an offline installation unusable
+  and makes what a workspace runs depend on what a registry served that
+  afternoon.
+
+  It belongs to the installation rather than to a workspace because the question
+  an installation has to be able to answer is what code is running inside it. The
+  Libraries page answers the other half — every function and every tool that
+  imports a given library, named with the workspace it lives in — and that is
+  what stops one being removed while something still uses it.
+
+  The file is evaluated once, when it is loaded, and what its export turned out
+  to hold is what the editor annotates `imports` from. Nothing more is claimed
+  about it: a member is something to call or something to read, because nothing
+  in a bundle says what its arguments are. A file that is not a module with a
+  default export is refused there and then.
+
+  An exported function carries the library it uses by name; an installation that
+  has not loaded it refuses the import and says which one to load. The library
+  itself does not travel — importing a function is not a thing that should
+  install software.
+
 ## 0.9.2
 
 ### Added

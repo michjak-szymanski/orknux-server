@@ -367,7 +367,7 @@ class ActionNodeRunner(
              * permanent: nothing about running the step again would find the
              * function somebody deleted.
              */
-            when (val resolved = scriptImports.resolve(function.imports)) {
+            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
                 is ScriptImportsResult.Broken ->
                     throw ActionFailedException("${function.name} ${resolved.reason}", permanent = true)
 

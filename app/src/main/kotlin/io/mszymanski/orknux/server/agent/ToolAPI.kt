@@ -8,9 +8,12 @@ import io.mszymanski.orknux.server.action.ScriptImport
 import io.mszymanski.orknux.server.action.ScriptImportInput
 import io.mszymanski.orknux.server.action.ScriptImportView
 import io.mszymanski.orknux.server.action.ScriptImports
+import io.mszymanski.orknux.server.action.ScriptLibraryImportInput
+import io.mszymanski.orknux.server.action.ScriptLibraryImportView
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.action.typeScriptType
+import io.mszymanski.orknux.server.library.LibraryImports
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
@@ -52,6 +55,7 @@ class ToolAPI(
     private val grants: AgentGrants,
     private val functions: WorkflowFunctionRepository,
     private val scriptImports: ScriptImports,
+    private val libraryImports: LibraryImports,
 ) {
 
     @QueryMapping
@@ -93,6 +97,7 @@ class ToolAPI(
                 typescript = code.typescript,
                 params = params,
                 imports = input.imports.orEmpty().toImports(input.workspaceId),
+                libraries = input.libraries.orEmpty().toLibraries(),
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = currentUser(),
             ),
@@ -137,6 +142,7 @@ class ToolAPI(
          */
         input.params?.let { tool.params = it.toParams(tool.workspaceId) }
         input.imports?.let { tool.imports = it.toImports(tool.workspaceId) }
+        input.libraries?.let { tool.libraries = it.toLibraries() }
         tool.lastModifiedAt = OffsetDateTime.now()
         tool.lastModifiedBy = currentUser()
 
@@ -231,6 +237,13 @@ class ToolAPI(
                 },
             )
         },
+        libraries = tool.libraries.map { imported ->
+            ScriptLibraryImportView(
+                libraryId = imported.importedId,
+                name = imported.importName,
+                library = libraryImports.find(imported.importedId)?.let(libraryImports::viewOf),
+            )
+        },
         signature = tool.signature,
         enabled = tool.enabled,
         lastModifiedAt = tool.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
@@ -296,6 +309,26 @@ class ToolAPI(
             val imported = functions.findByIdOrNull(asked.functionId) ?: throw ImportNotFoundException(asked.functionId)
             scriptImports.requireImportable(imported, workspaceId, importer = null)
             ScriptImport(importedId = asked.functionId, importName = name)
+        }.toMutableList()
+    }
+
+    /**
+     * The libraries this script is to import, checked before they are stored.
+     *
+     * The same two questions an imported function is asked about its name, and one
+     * fewer about itself: every loaded library is offerable to every workspace, so
+     * there is nothing to compare a workspace against, and a library imports
+     * nothing, so there is no loop to look for.
+     */
+    private fun List<ScriptLibraryImportInput>.toLibraries(): MutableList<ScriptImport> {
+        val taken = mutableSetOf<String>()
+        return map { asked ->
+            val name = asked.name.trim()
+            if (!IDENTIFIER.matches(name)) throw ImportNameInvalidException(name)
+            if (!taken.add(name)) throw ImportNameTakenException(name)
+
+            libraryImports.require(asked.libraryId)
+            ScriptImport(importedId = asked.libraryId, importName = name)
         }.toMutableList()
     }
 
@@ -390,6 +423,8 @@ data class CreateToolInput(
     val params: List<ToolParamInput>? = null,
     /** The workspace's functions it calls, under the names it calls them. */
     val imports: List<ScriptImportInput>? = null,
+    /** The installation's libraries it uses, under the names it uses them by. */
+    val libraries: List<ScriptLibraryImportInput>? = null,
 )
 
 data class UpdateToolInput(
@@ -401,6 +436,8 @@ data class UpdateToolInput(
     val params: List<ToolParamInput>? = null,
     /** Null leaves them alone; an empty list takes them all off. */
     val imports: List<ScriptImportInput>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val libraries: List<ScriptLibraryImportInput>? = null,
 )
 
 data class ToolParamView(
@@ -425,6 +462,8 @@ data class ToolView(
     val params: List<ToolParamView>,
     /** What it imports, and what it calls each of them. */
     val imports: List<ScriptImportView>,
+    /** The libraries it uses, and what it calls each of them. */
+    val libraries: List<ScriptLibraryImportView>,
     /** "(city: string, days: number)", ready for the list. */
     val signature: String,
     val enabled: Boolean,

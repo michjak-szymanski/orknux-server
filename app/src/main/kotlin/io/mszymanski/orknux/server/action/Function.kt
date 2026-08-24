@@ -265,6 +265,21 @@ class WorkflowFunction(
     @OrderColumn(name = "position")
     var imports: MutableList<ScriptImport> = mutableListOf(),
 
+    /**
+     * The installation's libraries this function imports, under the names it uses.
+     *
+     * A separate list from the functions it imports, pointing at a separate table.
+     * They arrive in the same `imports` object and are written the same way in the
+     * code, because from inside a script there is no difference worth spelling —
+     * but a single column that could hold either kind of id is a column that will
+     * one day hold the wrong one, and for an import that is a call into whatever
+     * happened to have that number.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "workflow_function_library", joinColumns = [JoinColumn(name = "function_id")])
+    @OrderColumn(name = "position")
+    var libraries: MutableList<ScriptImport> = mutableListOf(),
+
     @Column(name = "last_modified_at", nullable = false)
     var lastModifiedAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -318,6 +333,10 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
      */
     @Query("select f from WorkflowFunction f join f.imports i where i.importedId = :functionId")
     fun findByImportedFunctionId(functionId: Long): List<WorkflowFunction>
+
+    /** Every function that imports the library with this id. */
+    @Query("select f from WorkflowFunction f join f.libraries l where l.importedId = :libraryId")
+    fun findByImportedLibraryId(libraryId: Long): List<WorkflowFunction>
 }
 
 class FunctionNotFoundException(id: Long) : RuntimeException("No function with id $id")

@@ -227,6 +227,48 @@ class ScriptRunner(private val properties: ScriptProperties) {
     }
 
     /**
+     * Evaluates a library and asks what it exports.
+     *
+     * A library is somebody else's code — very often a bundle nobody here wrote —
+     * so it is never asked to answer a question about itself the way a plugin is.
+     * It is evaluated, and what its default export turned out to hold is read off
+     * the value. That is all this claims: a member is either something to call or
+     * something to read, and nothing in a bundle says what its arguments are.
+     *
+     * Done when the library is loaded rather than when it is first imported, for
+     * the reason a plugin is questioned at upload: "this file is not a module with
+     * a default export" is an answer worth having while somebody is looking at the
+     * file they chose. It runs in the ordinary sandbox, bounded like everything
+     * else — a library is given exactly what a function is given, which is nothing.
+     */
+    fun library(source: String): LibraryInspection = try {
+        guard.bounded(AtomicReference(), ::newContext) { polyglot ->
+            val exported = polyglot.eval(module(source, "library")).getMember("default")
+                ?: return@bounded LibraryInspection.Unreadable("it has no default export to import")
+            if (exported.isNull) {
+                return@bounded LibraryInspection.Unreadable("its default export is null")
+            }
+
+            val keys = runCatching { exported.memberKeys }.getOrDefault(emptySet())
+            if (keys.size > MAX_MEMBERS) {
+                return@bounded LibraryInspection.Unreadable("its default export has more than $MAX_MEMBERS members")
+            }
+            LibraryInspection.Read(
+                callable = exported.canExecute(),
+                members = keys.sorted().map { key ->
+                    LibraryMember(key, callable = runCatching { exported.getMember(key).canExecute() }.getOrDefault(false))
+                },
+            )
+        }
+    } catch (failure: PolyglotException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    } catch (failure: ScriptBusyException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    } catch (failure: IllegalStateException) {
+        LibraryInspection.Unreadable(failure.message ?: "it could not be evaluated")
+    }
+
+    /**
      * No host access, and this time none of it.
      *
      * `HostAccess.NONE` reads like the end of the argument and is not: it denies
@@ -392,6 +434,12 @@ class ScriptRunner(private val properties: ScriptProperties) {
     private companion object {
         val log = LoggerFactory.getLogger(ScriptRunner::class.java)
 
+        /**
+         * More members than a library's export has any business having, and a
+         * bound on the answer this hands back to be stored.
+         */
+        const val MAX_MEMBERS = 500
+
         const val SUBJECT = "__orknuxSubject"
         const val ARITY_RESULT = "__orknuxArity"
 
@@ -504,6 +552,21 @@ class ScriptRunner(private val properties: ScriptProperties) {
         """.trimIndent()
     }
 }
+
+/** What a library turned out to export, or why that could not be read. */
+sealed interface LibraryInspection {
+
+    /**
+     * @param callable whether the export is itself something to call, rather
+     *   than an object with members on it. Both spellings are common in a bundle.
+     */
+    data class Read(val callable: Boolean, val members: List<LibraryMember>) : LibraryInspection
+
+    data class Unreadable(val reason: String) : LibraryInspection
+}
+
+/** One thing a library's default export holds, and whether it is a function. */
+data class LibraryMember(val name: String, val callable: Boolean)
 
 /**
  * One script that another script imports.

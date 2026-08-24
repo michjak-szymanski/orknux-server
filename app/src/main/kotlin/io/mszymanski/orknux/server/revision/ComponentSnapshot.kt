@@ -69,6 +69,14 @@ object ComponentSnapshot {
             "imports" to function.imports.map {
                 mapOf("importedId" to it.importedId, "importName" to it.importName)
             },
+            /*
+             * The libraries it uses. The id, so a library replaced under the same
+             * key restores as the library that is loaded now, and the local name,
+             * because it is a word in the code being put back.
+             */
+            "libraries" to function.libraries.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
+            },
         ),
     )
 
@@ -94,6 +102,14 @@ object ComponentSnapshot {
              * back, which is the code that used it.
              */
             "imports" to tool.imports.map {
+                mapOf("importedId" to it.importedId, "importName" to it.importName)
+            },
+            /*
+             * The libraries it uses. The id, so a library replaced under the same
+             * key restores as the library that is loaded now, and the local name,
+             * because it is a word in the code being put back.
+             */
+            "libraries" to tool.libraries.map {
                 mapOf("importedId" to it.importedId, "importName" to it.importName)
             },
         ),
@@ -214,6 +230,11 @@ object ComponentSnapshot {
             val name = text(imported, "importName") ?: return@mapNotNull null
             ScriptImport(importedId = id, importName = name)
         }.toMutableList()
+        function.libraries = held.path("libraries").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
+        }.toMutableList()
     }
 
     fun restore(tool: AgentTool, snapshot: String, mapper: ObjectMapper) {
@@ -231,6 +252,11 @@ object ComponentSnapshot {
             )
         }.toMutableList()
         tool.imports = held.path("imports").values().mapNotNull { imported ->
+            val id = number(imported, "importedId") ?: return@mapNotNull null
+            val name = text(imported, "importName") ?: return@mapNotNull null
+            ScriptImport(importedId = id, importName = name)
+        }.toMutableList()
+        tool.libraries = held.path("libraries").values().mapNotNull { imported ->
             val id = number(imported, "importedId") ?: return@mapNotNull null
             val name = text(imported, "importName") ?: return@mapNotNull null
             ScriptImport(importedId = id, importName = name)

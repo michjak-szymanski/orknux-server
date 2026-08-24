@@ -123,6 +123,17 @@ CREATE TABLE agent_tool_import
     constraint agent_tool_import_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE
 );
 
+CREATE TABLE agent_tool_library
+(
+    tool_id                      integer not null,
+    position                     integer not null,
+    imported_id                  integer not null,
+    import_name                  varchar(64) not null,
+    primary key (tool_id, position),
+    constraint uq_agent_tool_library_name UNIQUE (tool_id, import_name),
+    constraint agent_tool_library_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE
+);
+
 CREATE TABLE agent_tool_param
 (
     tool_id                      integer not null,
@@ -555,6 +566,23 @@ CREATE TABLE scheduled_tasks
     primary key (task_name, task_instance)
 );
 
+CREATE TABLE script_library
+(
+    id                           integer not null primary key autoincrement,
+    library_key                  varchar(64) not null,
+    name                         varchar(200) not null,
+    filename                     varchar(255) not null,
+    source                       text not null,
+    typescript                   text,
+    size_bytes                   integer not null,
+    sha256                       varchar(64) not null,
+    declared_members             text not null default '[]',
+    callable                     boolean not null default 0,
+    uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
+    uploaded_by                  varchar(120) not null default '',
+    constraint uq_script_library_key UNIQUE (library_key)
+);
+
 CREATE TABLE security_role
 (
     id                           integer not null primary key autoincrement,
@@ -841,6 +869,17 @@ CREATE TABLE workflow_function_import
     primary key (function_id, position),
     constraint uq_workflow_function_import_name UNIQUE (function_id, import_name),
     constraint workflow_function_import_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE
+);
+
+CREATE TABLE workflow_function_library
+(
+    function_id                  integer not null,
+    position                     integer not null,
+    imported_id                  integer not null,
+    import_name                  varchar(64) not null,
+    primary key (function_id, position),
+    constraint uq_workflow_function_library_name UNIQUE (function_id, import_name),
+    constraint workflow_function_library_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE
 );
 
 CREATE TABLE workflow_function_param
@@ -1277,6 +1316,8 @@ CREATE UNIQUE INDEX workspace_issue_observer_key ON workspace_issue_observer (is
 CREATE UNIQUE INDEX workspace_issue_relation_pair_key ON workspace_issue_relation (issue_id, other_issue_id);
 CREATE INDEX workspace_issue_relation_other_idx ON workspace_issue_relation (other_issue_id, linked_at);
 CREATE INDEX ix_agent_tool_import_imported ON agent_tool_import (imported_id);
+CREATE INDEX ix_agent_tool_library_imported ON agent_tool_library (imported_id);
+CREATE INDEX ix_workflow_function_library_imported ON workflow_function_library (imported_id);
 CREATE INDEX ix_workflow_function_import_imported ON workflow_function_import (imported_id);
 CREATE INDEX idx_workspace_variable_catalog ON workspace_variable (catalog_id);
 CREATE INDEX idx_workspace_variable_workspace ON workspace_variable (workspace_id);

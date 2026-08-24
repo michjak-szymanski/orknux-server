@@ -89,7 +89,7 @@ class ConditionEvaluator(
         val call = if (function.scope == FunctionScope.PLUGIN) {
             askPlugin(condition, function, arguments)
         } else {
-            when (val resolved = scriptImports.resolve(function.imports)) {
+            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
                 is ScriptImportsResult.Broken ->
                     throw ConditionNotDecidableException("${function.name} ${resolved.reason}")
 

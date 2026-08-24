@@ -178,6 +178,59 @@ class AgentMemoryBudgetTest(
     }
 
     /**
+     * And the way out of that refusal is the one the refusal names.
+     *
+     * It says to set the model's context window on the Models screen, which
+     * until issue #252 was a screen that could only print one: `updateModel`
+     * was in the schema with no form behind it, so a window could be typed once
+     * when the model was added and never again. What has to hold for that
+     * screen to be worth anything is asserted here rather than only in the
+     * browser - that the window `updateModel` writes is the very row a budget
+     * is worked out from, and that it can be taken off again.
+     */
+    @Test
+    fun `a window recorded on the model turns that refusal into a budget`() {
+        val model = model("Mystery", contextWindow = null)
+        val id = agent("Reviewer", model)
+
+        graphQlTester.document(
+            """mutation { updateModel(id: $model, input: {
+                 name: "Mystery", modelId: "stub", kind: CHAT, contextWindow: 200000, maxOutput: 8192
+               }) { contextWindow maxOutput } }""",
+        ).execute()
+            .path("updateModel.contextWindow").entity(Int::class.java).isEqualTo(200_000)
+            .path("updateModel.maxOutput").entity(Int::class.java).isEqualTo(8_192)
+
+        save(id, model, share = 10)
+        assertThat(agents.findAll().single().memoryShare).isEqualTo(10)
+
+        graphQlTester.document(
+            """query { memoryBudget(workspaceId: $workspaceId, modelId: $model, share: 10)
+               { contextWindow derived refusal totalTokens } }""",
+        ).execute()
+            .path("memoryBudget.contextWindow").entity(Int::class.java).isEqualTo(200_000)
+            .path("memoryBudget.derived").entity(Boolean::class.java).isEqualTo(true)
+            .path("memoryBudget.refusal").valueIsNull()
+            // 10% of 200,000 tokens, and the tokens come back as tokens.
+            .path("memoryBudget.totalTokens").entity(Int::class.java).isEqualTo(20_000)
+
+        // Empty is "not recorded", which is the other thing the form must be
+        // able to say - and it puts the refusal back rather than leaving a
+        // window nobody can clear.
+        graphQlTester.document(
+            """mutation { updateModel(id: $model, input: { name: "Mystery", modelId: "stub", kind: CHAT })
+               { contextWindow } }""",
+        ).execute().path("updateModel.contextWindow").valueIsNull()
+
+        graphQlTester.document(
+            """query { memoryBudget(workspaceId: $workspaceId, modelId: $model, share: 10) { derived refusal } }""",
+        ).execute()
+            .path("memoryBudget.derived").entity(Boolean::class.java).isEqualTo(false)
+            .path("memoryBudget.refusal").entity(String::class.java)
+            .satisfies { assertThat(it).contains("no context window recorded") }
+    }
+
+    /**
      * The preview answers the same question without saving, and without failing.
      *
      * It is what a slider asks while it is being dragged, so a share that could

@@ -88,12 +88,59 @@ have failed.
   `orknux-one` sets 30m and does not have it. The Kubernetes README says how to
   add the limit from outside until the image sets its own.
 
+- **Voice mode keeps listening while it is thinking and while it is talking, and
+  holds what you said until the turn comes round.** The microphone used to close
+  the moment your turn ended and stay closed until the answer had been read, so
+  anything said in that gap - which is most of a conversation - was said to
+  nothing at all, with no sign that it had been lost. It is held open now: what
+  you say is transcribed and shown under the circle marked **Waiting**, and sent
+  by itself when the turn ends. A second thing said while one is already waiting
+  is added to it rather than replacing it, since both were said to the same
+  turn; tapping the circle to cut in throws the waiting message away, because
+  cutting in means "listen to me now" and answering what you had already moved
+  on from is not that.
+
+- **You can type as well as speak in voice mode.** The message box stays live
+  while the panel is open, and what is sent from it is a turn like any other -
+  held by the same rules while the model is busy, and read back aloud in the same
+  way. It used to go out beside the turn the panel was already running, which put
+  two turns on one chat and left the answer unread.
+
+### Changed
+
+- **An answer read aloud is the answer as it is drawn, not the markdown behind
+  it.** The speech model was handed the message exactly as the model wrote it, so
+  it pronounced the asterisks around a bold word, the backticks around a name,
+  the hashes in front of a heading, the pipes between a table's cells, and the
+  address inside every link as well as its text. It is handed what the message
+  renders to now. A fenced code block is announced rather than read out - a block
+  of code said character by character is minutes nobody can follow, and saying
+  nothing at all leaves the answer referring to something you were never told was
+  there.
+
+- **Reading an answer aloud starts on its first sentences.** It waited for the
+  whole answer to be synthesised before playing any of it, so the longer the
+  answer the longer the silence after pressing the speaker - which is exactly
+  backwards. The first sentences are asked for on their own now and the rest is
+  made while what you are hearing plays, one piece ahead and no more.
+
 ### Fixed
 
 - **The trigger settings page can be saved more than once per visit.** Its Save
   Changes button stayed on "Saving…" and disabled after the first save, so a
   second change needed a reload. Nothing was lost; there was simply no way to
   send it.
+
+- **Voice mode no longer says it is speaking before anything has been spoken.**
+  The panel turned to *Speaking* when the answer started arriving, which is
+  seconds before there is any sound - the model is still writing and the speech
+  model has not been asked yet. It follows the audio actually starting.
+
+- **A conversation held by voice says the model is working.** *Waiting for
+  Gemma…* was drawn under the turn for a typed message and not for a spoken one,
+  so the transcript went from the question to the whole answer with nothing in
+  between, and the one screen saying anything was happening was the panel off to
+  the side.
 
 ## 0.9.2
 

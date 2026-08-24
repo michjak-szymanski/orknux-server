@@ -297,6 +297,17 @@ type Query {
     trigger(id: ID!): Trigger
     "The events this installation can actually deliver; the picker offers these."
     supportedTriggerActions: [TriggerAction!]!
+    """
+    Which Slack user each of a workspace's Slack connections posts as.
+
+    What the "whose messages does this watch" picker draws: a reply is matched by
+    `parent_user_id` against these ids, because a bot token is a Slack user. Two
+    connections sharing a token come back as one user twice, and say so.
+
+    It never fails. A connection whose token could not be asked is `UNCHECKED`
+    with one line saying why, rather than being left out of the list.
+    """
+    slackBotUsers(workspaceId: ID!): [SlackBotUser!]!
     "What a trigger has done, newest first — including the firings no run came of."
     triggerFirings(triggerId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
     "What every trigger in one workspace has done, newest first."
@@ -3706,11 +3717,77 @@ enum TriggerType {
 
 "The event on a connection that starts the workflow."
 enum TriggerAction {
+    "The bot was named in a message: `@orknux deploy please`."
     MENTION
+    """
+    A thread reply to a message one of the workspace's own bots wrote.
+
+    Which bots is `watchedConnectionIds`, and a reply trigger needs at least one:
+    a reply carries `parent_user_id`, the author of the message its thread hangs
+    under, and a bot token is a Slack user, so that id against those users is the
+    whole of the match. Replies from bots never fire it - a workflow answering in
+    a thread it watches would otherwise start itself for ever.
+    """
     REPLY
+    """
+    Anything anybody types in a channel the bot is a member of.
+
+    Far more traffic than a mention, and the same message can raise two events: a
+    reply is a message, and Slack sends a mention as a message as well. Needs
+    `channels:history` on the bot token, and `groups:`, `im:` or `mpim:` for the
+    other kinds of conversation.
+    """
     MESSAGE
     ISSUE_CREATED
     ISSUE_UPDATED
+}
+
+"Whether a connection's bot token was able to say which Slack user it posts as."
+enum SlackBotUserOutcome {
+    "Slack named the user, and `userId` is it."
+    FOUND
+    "No token, the app-level token in the bot token's place, a credential Slack refused, or Slack out of reach."
+    UNCHECKED
+}
+
+"""
+Which Slack user one of a workspace's connections posts as.
+
+A bot token is a Slack user, which is why a reply trigger picks connections and
+matches user ids. Two connections holding the same token are one Slack user twice
+over and cannot be told apart by anything on an arriving event; `message` says so
+where it is true rather than leaving a list of two rows to imply otherwise.
+
+It never fails and never gates. A connection that could not be asked comes back
+`UNCHECKED` with one line saying why, because a picker that empties itself in
+silence reads as a broken installation. `createTrigger` and `updateTrigger` are
+where a choice is refused.
+"""
+type SlackBotUser {
+    connectionId: ID!
+    "What the connection is called, so a list of these needs no second lookup."
+    name: String!
+    outcome: SlackBotUserOutcome!
+    """
+    One line, ready to show, and empty when there is nothing worth saying.
+
+    Never carries a credential. What it says, in this order: why the token could
+    not be asked; that this connection is the same Slack user as another; that
+    messages will not arrive because the token carries no history scope.
+    """
+    message: String!
+    "Slack's own id for the bot user, \"U0123456789\", when it was found. What `parent_user_id` is matched against."
+    userId: String
+    "What Slack calls that user, \"@orknux\", when it was found."
+    handle: String
+    """
+    Whether the token carries a scope a channel's messages arrive under.
+
+    Null where Slack did not say: a response carrying no scope header has
+    reported no absence, and drawing one would send somebody to fix a token that
+    is fine.
+    """
+    receives: Boolean
 }
 
 "One entry in a workspace's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
@@ -3732,6 +3809,15 @@ type Trigger {
     type: TriggerType!
     connectionId: ID
     action: TriggerAction
+    """
+    Whose messages a `REPLY` watches for replies to; empty on every other event.
+
+    Not the connection it listens on. That one is the socket - the Slack app
+    whose app-level token this installation receives events over. These are the
+    bot tokens whose own messages count as a thread's parent, and they are
+    usually other apps entirely.
+    """
+    watchedConnectionIds: [ID!]!
     cron: String
     timezone: String
     "JSON object handed to the runs this starts; null when it says nothing."
@@ -3817,6 +3903,16 @@ input CreateTriggerInput {
     "Required for an incoming connection trigger."
     connectionId: ID
     action: TriggerAction
+    """
+    Whose messages a `REPLY` watches for replies to. Required on one, ignored on
+    every other event.
+
+    Slack connections in the same workspace, and each has to be able to say which
+    Slack user it posts as - a token that will not authenticate is refused here
+    rather than making a trigger that is enabled, instanced and permanently deaf.
+    `slackBotUsers` is what a picker draws from and what says why one cannot.
+    """
+    watchedConnectionIds: [ID!]
     "Required for a scheduled trigger; five or six cron fields."
     cron: String
     timezone: String
@@ -3842,6 +3938,8 @@ input UpdateTriggerInput {
     name: String!
     connectionId: ID
     action: TriggerAction
+    "Whose messages a `REPLY` watches; omitted or empty watches nobody, which only a reply minds."
+    watchedConnectionIds: [ID!]
     cron: String
     timezone: String
     payload: String

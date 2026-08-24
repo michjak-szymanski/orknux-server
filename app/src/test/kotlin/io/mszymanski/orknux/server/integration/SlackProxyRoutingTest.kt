@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpServer
 import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
+import io.mszymanski.orknux.connector.connection.SlackBotUsers
 import io.mszymanski.orknux.connector.connection.SlackClients
 import io.mszymanski.orknux.connector.connection.SlackDirectory
 import io.mszymanski.orknux.connector.connection.SlackListener
@@ -211,12 +212,14 @@ class SlackProxyRoutingTest {
         // No endpoint is redirected here: this is the whole path as it runs, from
         // the connection row to Slack's real address, and the only thing arranged
         // is a rule saying that address needs a proxy.
+        val clients = SlackClients(router(tunnelRule(name = "Slack", pattern = """slack\.com""")))
         val listener = SlackListener(
             connections(),
             ApplicationEventPublisher { },
             SlackProperties(),
             plainCredentials(),
-            SlackClients(router(tunnelRule(name = "Slack", pattern = """slack\.com"""))),
+            clients,
+            SlackBotUsers(connections(), plainCredentials(), clients),
         )
 
         try {

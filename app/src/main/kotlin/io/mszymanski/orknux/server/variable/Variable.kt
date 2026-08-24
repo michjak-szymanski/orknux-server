@@ -200,33 +200,37 @@ class VariableInUseException(name: String, functions: List<String>) : RuntimeExc
 )
 
 /**
- * A variable a model provider reads its credential from cannot be deleted.
+ * A variable something reads a credential from cannot be deleted.
  *
- * Refused rather than allowed with the provider reporting a broken reference,
+ * Refused rather than allowed with the holder reporting a broken reference,
  * which was the other way it could have gone. Removing an MCP server entry is
  * ordinary housekeeping — the server is somebody else's and may genuinely be
  * gone — so #170 let that through and reported it. A credential is this
- * installation's own, nothing about the provider has stopped existing, and the
- * only thing a delete accomplishes is taking the provider offline at some later
+ * installation's own, nothing about the thing reading it has stopped existing,
+ * and the only thing a delete accomplishes is taking it offline at some later
  * moment nobody will connect to this. Renaming and moving are free, because the
  * reference is by id, so this refuses the one operation that actually destroys
  * something, and it names what is holding on.
+ *
+ * @param readers each already worded as a noun phrase — "the model provider
+ *   Shared OpenAI", "the connection Slack" — because a list of bare names
+ *   across three kinds of holder is a puzzle rather than an answer.
  */
-class VariableHeldByProviderException(name: String, providers: List<String>) : RuntimeException(
-    "\"$name\" is the credential of the model provider${if (providers.size == 1) "" else "s"} " +
-        "${providers.joinToString(", ")}. Give ${if (providers.size == 1) "it" else "them"} a key of " +
-        "${if (providers.size == 1) "its" else "their"} own, or point at another secret, first — removing it " +
-        "here would leave nothing to call the provider with.",
+class VariableHeldAsCredentialException(name: String, readers: List<String>) : RuntimeException(
+    "\"$name\" is the credential of ${readers.joinToString(", ")}. " +
+        "Give ${if (readers.size == 1) "it" else "them"} a value of " +
+        "${if (readers.size == 1) "its" else "their"} own, or point at another secret, first — removing it " +
+        "here would leave nothing to authenticate with.",
 )
 
 /**
- * And it cannot stop being a secret while a provider reads it.
+ * And it cannot stop being a secret while something reads it.
  *
  * A [VariableKind.VALUE] is returned with the listing, so turning a bound
  * variable into one would put an API key on every member's screen. The same
  * rule refuses the binding in the first place; this is the other end of it.
  */
-class VariableSecrecyHeldException(name: String, providers: List<String>) : RuntimeException(
-    "\"$name\" is the credential of ${providers.joinToString(", ")}, so it has to stay a secret. " +
+class VariableSecrecyHeldException(name: String, readers: List<String>) : RuntimeException(
+    "\"$name\" is the credential of ${readers.joinToString(", ")}, so it has to stay a secret. " +
         "A value is read with the list, and a key on a list is a key on a screen.",
 )

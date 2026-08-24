@@ -1,11 +1,7 @@
 package io.mszymanski.orknux.server.variable
 
-import io.mszymanski.orknux.connector.connection.McpServerService
-import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
-import io.mszymanski.orknux.connector.model.ModelService
-import io.mszymanski.orknux.server.action.ActionHeaders
-import io.mszymanski.orknux.server.action.WorkflowActionRepository
-import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -34,20 +30,21 @@ import java.time.format.DateTimeFormatter
 class VariableAPI(
     private val variables: WorkspaceVariableRepository,
     private val catalogs: VariableCatalogRepository,
-    private val functions: WorkflowFunctionRepository,
-    private val actions: WorkflowActionRepository,
-    private val actionHeaders: ActionHeaders,
     /**
      * Asked what still reads a variable before one is removed or made readable.
      *
-     * Three of them, because a credential is not one card's any more: since #244
-     * every secret field in the product may read a workspace secret, and a guard
-     * that only knows about model providers is a guard that lets somebody delete
-     * the variable a Slack connection posts with.
+     * Five sources behind one call: a function taking it as an external
+     * parameter, an action whose headers read it, and the model provider,
+     * connection and MCP server that authenticate with it — because a credential
+     * is not one card's any more. Since #244 every secret field in the product
+     * may read a workspace secret, and a guard that only knows about model
+     * providers is a guard that lets somebody delete the variable a Slack
+     * connection posts with.
+     *
+     * Asked here rather than assembled here, so that the sentence this refuses
+     * with and the list the variable's own screen draws are the same rows.
      */
-    private val models: ModelService,
-    private val connections: WorkspaceConnectionService,
-    private val mcpServers: McpServerService,
+    private val dependants: ComponentDependants,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -285,13 +282,8 @@ class VariableAPI(
          * here or it is nowhere, and nowhere means a header that names a variable
          * nobody can find and a request that fails at three in the morning.
          */
-        val usedBy = functions.findByWorkspaceId(variable.workspaceId)
-            .filter { function -> function.externals.any { it.variableId == variable.id } }
-            .map { it.name } +
-            actions.findByWorkspaceId(variable.workspaceId)
-                .filter { action -> actionHeaders.reads(action, requireNotNull(variable.id)) }
-                .map { it.name }
-        if (usedBy.isNotEmpty()) throw VariableInUseException(variable.name, usedBy)
+        val usedBy = dependants.signatureOfVariable(id)
+        if (usedBy.isNotEmpty()) throw VariableInUseException(variable.name, usedBy.phrases())
 
         /*
          * And anything reading it for a credential holds it in place too - see
@@ -321,14 +313,13 @@ class VariableAPI(
      * brave-search" reads, and a bare "Slack, brave-search" leaves whoever hit
      * the refusal to go and find out what those are. The order is by kind and
      * then by name, so two runs say the same thing.
+     *
+     * The sentence is assembled here and the rows come from
+     * [ComponentDependants], which is the same set the variable's own screen
+     * lists as links.
      */
-    private fun credentialOf(variable: WorkspaceVariable): List<String> {
-        val workspaceId = variable.workspaceId
-        val id = requireNotNull(variable.id)
-        return models.providersReading(workspaceId, id).map { "the model provider $it" } +
-            connections.connectionsReading(workspaceId, id).map { "the connection $it" } +
-            mcpServers.serversReading(workspaceId, id).map { "the MCP server $it" }
-    }
+    private fun credentialOf(variable: WorkspaceVariable): List<String> =
+        dependants.credentialOfVariable(requireNotNull(variable.id)).phrases()
 
     /**
      * A name a function can receive as an argument.

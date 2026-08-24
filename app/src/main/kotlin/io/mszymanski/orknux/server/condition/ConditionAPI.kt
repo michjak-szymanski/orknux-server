@@ -2,15 +2,15 @@ package io.mszymanski.orknux.server.condition
 
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ValueType
-import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
-import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -31,9 +31,7 @@ import org.springframework.transaction.annotation.Transactional
 class ConditionAPI(
     private val conditions: WorkflowConditionRepository,
     private val functions: WorkflowFunctionRepository,
-    private val actions: WorkflowActionRepository,
-    private val references: WorkflowReferences,
-    private val triggers: WorkflowTriggerRepository,
+    private val dependants: ComponentDependants,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
@@ -135,17 +133,8 @@ class ConditionAPI(
         val condition = conditions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
         // Anything pointing at a deleted condition would have nothing to ask.
-        val users = buildList {
-            addAll(actions.findByWorkspaceId(condition.workspaceId).filter { it.conditionId == id }.map { it.name })
-            addAll(
-                conditions.findByWorkspaceId(condition.workspaceId)
-                    .filter { id in it.members }
-                    .map { it.name },
-            )
-            addAll(references.toCondition(condition.workspaceId, id))
-            addAll(triggers.findByConditionId(id).map { it.name })
-        }
-        if (users.isNotEmpty()) throw ConditionInUseException(condition.name, users)
+        val users = dependants.of(DependencyKind.CONDITION, id)
+        if (users.isNotEmpty()) throw ConditionInUseException(condition.name, users.phrases())
 
         conditions.delete(condition)
         auditRecorder.record(condition.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Condition ${condition.name} deleted")

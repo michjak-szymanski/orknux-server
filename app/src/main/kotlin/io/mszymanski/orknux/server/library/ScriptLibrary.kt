@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.library
 
+import io.mszymanski.orknux.server.dependency.DependantView
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -209,8 +210,15 @@ data class ScriptLibraryView(
      * The whole reason a library is the installation's. An administrator deciding
      * whether to replace or remove one needs to know what depends on it, and that
      * is a question no workspace-level screen could answer.
+     *
+     * A [DependantView] and not a shape of this screen's own, because it is the
+     * same row the delete refusal is worded from and the same row every other
+     * component's Used by list draws — see
+     * [ComponentDependants][io.mszymanski.orknux.server.dependency.ComponentDependants].
+     * It carries the id, which is what #268 was about: a name in a sentence is
+     * somewhere the reader has to go and find.
      */
-    val usedBy: List<LibraryUsageView>,
+    val usedBy: List<DependantView>,
     val uploadedAt: String,
     val uploadedBy: String,
     /**
@@ -252,16 +260,6 @@ data class LibraryRegistryStatus(
 
 /** One thing a library's default export holds. */
 data class LibraryMemberView(val name: String, val callable: Boolean)
-
-/** One function or tool that imports a library, and where it lives. */
-data class LibraryUsageView(
-    /** FUNCTION or TOOL. */
-    val kind: String,
-    val id: Long,
-    val name: String,
-    val workspaceId: Long,
-    val workspaceName: String,
-)
 
 class LibraryNotFoundException(id: Long) : RuntimeException("There is no library $id")
 

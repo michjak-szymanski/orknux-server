@@ -3,11 +3,13 @@ package io.mszymanski.orknux.server.action
 import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
-import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import io.mszymanski.orknux.server.workspace.pageRequest
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
@@ -37,7 +39,7 @@ class ActionAPI(
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
-    private val references: WorkflowReferences,
+    private val dependants: ComponentDependants,
 ) {
 
     @QueryMapping
@@ -168,8 +170,8 @@ class ActionAPI(
     fun deleteAction(@Argument id: Long): Boolean {
         val action = actions.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val users = references.toAction(action.workspaceId, id)
-        if (users.isNotEmpty()) throw ActionInUseException(action.name, users)
+        val users = dependants.of(DependencyKind.ACTION, id)
+        if (users.isNotEmpty()) throw ActionInUseException(action.name, users.phrases())
 
         actions.delete(action)
         auditRecorder.record(action.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Action ${action.name} deleted")

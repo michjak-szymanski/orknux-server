@@ -1,11 +1,13 @@
 package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.llm.CHARS_PER_TOKEN
 import io.mszymanski.orknux.server.llm.ResolvedMemoryBudget
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.WorkspaceAccess
-import io.mszymanski.orknux.server.workflow.WorkflowReferences
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -27,7 +29,7 @@ import java.time.OffsetDateTime
 class AgentAPI(
     private val agents: AgentRepository,
     private val workspaces: WorkspaceRepository,
-    private val references: WorkflowReferences,
+    private val dependants: ComponentDependants,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val models: ModelService,
@@ -326,8 +328,8 @@ class AgentAPI(
     fun deleteAgent(@Argument id: Long): Boolean {
         val agent = agents.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val users = references.toAgent(agent.workspaceId, id)
-        if (users.isNotEmpty()) throw AgentInUseException(agent.name, users)
+        val users = dependants.of(DependencyKind.AGENT, id)
+        if (users.isNotEmpty()) throw AgentInUseException(agent.name, users.phrases())
 
         agents.delete(agent)
         auditRecorder.record(agent.workspaceId, WorkspaceAuditCategory.AGENT, "Agent ${agent.name} deleted")

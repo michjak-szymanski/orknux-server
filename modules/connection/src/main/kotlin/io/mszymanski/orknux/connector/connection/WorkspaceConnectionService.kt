@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.connector.connection
 
+import io.mszymanski.orknux.connector.CredentialReader
 import io.mszymanski.orknux.connector.security.HeldSecret
 import io.mszymanski.orknux.connector.security.SecretReferences
 import org.slf4j.LoggerFactory
@@ -44,18 +45,19 @@ class WorkspaceConnectionService(
         workspaceConnections.findByIdOrNull(id)?.let(::view)
 
     /**
-     * The connections in this workspace reading [variableId], by name.
+     * The connections in this workspace reading [variableId].
      *
      * What `VariableAPI` asks before it removes a variable or takes its secrecy
-     * away. Names rather than rows: the answer is a sentence somebody reads, and
-     * a connection row is a credential holder this has no business handing out.
-     * Either credential counts, and a connection reading it with both is named
-     * once.
+     * away. A [CredentialReader] rather than the row: the answer is read by
+     * somebody, and a connection row is a credential holder this has no business
+     * handing out. Either credential counts, and a connection reading it with both
+     * is named once — deduplicated by id now rather than by name, which is the
+     * same answer and a better question.
      */
-    fun connectionsReading(workspaceId: Long, variableId: Long): List<String> = (
+    fun connectionsReading(workspaceId: Long, variableId: Long): List<CredentialReader> = (
         workspaceConnections.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId) +
             workspaceConnections.findByWorkspaceIdAndAppTokenVariableId(workspaceId, variableId)
-        ).map { it.name }.distinct().sorted()
+        ).map { CredentialReader(requireNotNull(it.id), it.name) }.distinctBy { it.id }.sortedBy { it.name }
 
     @Transactional
     fun createWorkspaceConnection(input: CreateWorkspaceConnectionInput): WorkspaceConnectionView {

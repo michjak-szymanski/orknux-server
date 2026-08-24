@@ -3,11 +3,10 @@ package io.mszymanski.orknux.server.plugin
 import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ValueType
-import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
-import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
-import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.phrases
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
@@ -28,9 +27,7 @@ import java.time.OffsetDateTime
 @Service
 class PluginFunctionRegistry(
     private val functions: WorkflowFunctionRepository,
-    private val actions: WorkflowActionRepository,
-    private val conditions: WorkflowConditionRepository,
-    private val triggers: WorkflowTriggerRepository,
+    private val dependants: ComponentDependants,
     private val declarations: PluginDeclarations,
 ) {
 
@@ -107,11 +104,15 @@ class PluginFunctionRegistry(
      * The webhooks are here because a webhook may authenticate with one of these,
      * and a gatekeeper that has been cascaded away refuses every caller — the one
      * kind of breakage nobody is watching when it happens.
+     *
+     * Asked of [ComponentDependants] rather than assembled here. This was the
+     * second copy of the question, and the two had drifted in the one place a
+     * copy always drifts: a webhook was named bare, so a plugin's refusal sent the
+     * reader looking for an action of that name while the workspace's own refusal
+     * for the same function said "the webhook Nightly". One question, one wording,
+     * and the same rows the Used by list draws.
      */
-    private fun callersOf(functionId: Long): List<String> =
-        actions.findByFunctionId(functionId).map { it.name } +
-            conditions.findAll().filter { it.functionId == functionId }.map { it.name } +
-            triggers.findByAuthFunctionId(functionId).map { it.name }
+    private fun callersOf(functionId: Long): List<String> = dependants.callersOfFunction(functionId).phrases()
 
     /**
      * `teammates_isTeammate` — the plugin's id, then the name it declared.

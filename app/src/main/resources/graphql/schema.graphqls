@@ -547,6 +547,14 @@ type Query {
     componentRevisions(kind: ComponentRevisionKind!, componentId: ID!, limit: Int): [ComponentRevision!]!
     "One revision, with what it held."
     componentRevision(id: ID!): ComponentRevisionDetail!
+    """
+    Where a component is used: everything that would break if it went away.
+
+    The same set the delete guard refuses on, so a list saying nothing uses this
+    and a refusal naming three things cannot both be true. Every row carries an
+    id, because being told a name and left to go and find it is what this is for.
+    """
+    componentDependants(kind: DependencyKind!, componentId: ID!): Dependants!
     "What one run did: the graph as it ran, per-node outcome, and its log."
     execution(id: ID!): ExecutionDetail
     "Runs of a workspace's workflows, newest first."
@@ -1534,6 +1542,73 @@ type ComponentRevisionDetail {
     contentLanguage: String!
     "The whole component as it was, as JSON."
     snapshot: String!
+}
+
+"""
+What a dependency question is asked about, and what an answer may name.
+
+One vocabulary for both ends of the arrow: a function is asked about, and a
+function is also an answer, because a function imports another one.
+
+Not `ComponentKind`. That one is what an envelope can carry, and it is short for
+a reason - a variable, a library and a connection all hold something that cannot
+travel. This one is what can point at what, and those three are exactly the
+interesting cases.
+
+`WORKFLOW`, `CONNECTION`, `MCP_SERVER` and `MODEL_PROVIDER` are only ever
+answers: nothing in this product points at one, so asking about them is refused
+rather than answered with an empty list, which would read as "nothing uses it".
+"""
+enum DependencyKind {
+    OBJECT
+    FUNCTION
+    CONDITION
+    TOOL
+    "The folder, because the folder is what an agent is granted."
+    SKILL_CATALOG
+    "The folder, for the same reason."
+    MEMORY_CATALOG
+    ACTION
+    TRIGGER
+    AGENT
+    WORKFLOW
+    VARIABLE
+    LIBRARY
+    CONNECTION
+    MCP_SERVER
+    MODEL_PROVIDER
+}
+
+"One thing that depends on a component, and where to open it."
+type Dependant {
+    kind: DependencyKind!
+    id: ID!
+    name: String!
+    "Null for a function the organisation owns, which belongs to no workspace."
+    workspaceId: ID
+    workspaceName: String
+    """
+    Whether this names the published copy rather than the drawn one.
+
+    Only a workflow ever sets it, and it changes what has to be done about it: a
+    draft is redrawn, a publication is republished.
+    """
+    published: Boolean!
+}
+
+"""
+Where a component is used, as far as this reader may be told.
+
+`hidden` is the half that is neither a leak nor a lie. A library belongs to the
+installation and the functions importing it live in workspaces the reader may
+not be able to open; naming one of those says that a workspace exists and what
+is in it, and dropping it silently answers the question with rows missing. So it
+is counted instead. Every workspace-scoped component answers zero - the reader
+had to be able to see the workspace to ask at all.
+"""
+type Dependants {
+    entries: [Dependant!]!
+    hidden: Int!
 }
 
 """
@@ -4256,9 +4331,10 @@ type ScriptLibrary {
 
     Empty on the workspace query, which is not a claim that nothing uses it: who
     else imports a library is an administrator's question, and the people writing
-    functions are not administrators.
+    functions are not administrators. `componentDependants` is the way to ask it
+    from anywhere else, and it counts what it may not name.
     """
-    usedBy: [LibraryUsage!]!
+    usedBy: [Dependant!]!
     "ISO-8601 offset date-time."
     uploadedAt: String!
     uploadedBy: String!
@@ -4304,16 +4380,6 @@ type LibraryMember {
     name: String!
     "Whether it is something to call, rather than something to read."
     callable: Boolean!
-}
-
-"One function or tool that imports a library, and where it lives."
-type LibraryUsage {
-    "FUNCTION or TOOL."
-    kind: String!
-    id: ID!
-    name: String!
-    workspaceId: ID!
-    workspaceName: String!
 }
 
 """

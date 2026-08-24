@@ -1,5 +1,8 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -34,7 +37,7 @@ class SkillAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
-    private val grants: AgentGrants,
+    private val dependants: ComponentDependants,
 ) {
 
     /**
@@ -122,8 +125,8 @@ class SkillAPI(
     fun deleteSkillCatalog(@Argument id: Long): Boolean {
         val catalog = catalogs.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val granted = grants.toSkillCatalog(catalog.workspaceId, catalog.name)
-        if (granted.isNotEmpty()) throw SkillCatalogInUseException(catalog.name, granted)
+        val granted = dependants.of(DependencyKind.SKILL_CATALOG, id)
+        if (granted.isNotEmpty()) throw SkillCatalogInUseException(catalog.name, granted.phrases())
 
         val held = skills.countByCatalogId(id)
         // Every skill in it goes, so every skill's history goes with it -

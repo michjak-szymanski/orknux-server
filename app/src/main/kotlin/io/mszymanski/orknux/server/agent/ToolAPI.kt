@@ -13,6 +13,9 @@ import io.mszymanski.orknux.server.action.ScriptLibraryImportView
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.action.typeScriptType
+import io.mszymanski.orknux.server.dependency.ComponentDependants
+import io.mszymanski.orknux.server.dependency.DependencyKind
+import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.library.LibraryImports
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
@@ -52,7 +55,7 @@ class ToolAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
-    private val grants: AgentGrants,
+    private val dependants: ComponentDependants,
     private val functions: WorkflowFunctionRepository,
     private val scriptImports: ScriptImports,
     private val libraryImports: LibraryImports,
@@ -198,8 +201,8 @@ class ToolAPI(
     fun deleteTool(@Argument id: Long): Boolean {
         val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
 
-        val granted = grants.toTool(tool.workspaceId, tool.name)
-        if (granted.isNotEmpty()) throw ToolInUseException(tool.name, granted)
+        val granted = dependants.of(DependencyKind.TOOL, id)
+        if (granted.isNotEmpty()) throw ToolInUseException(tool.name, granted.phrases())
 
         tools.delete(tool)
         revisions.forget(ComponentRevisionKind.TOOL, id)

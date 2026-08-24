@@ -3,6 +3,8 @@ package io.mszymanski.orknux.server.workspace
 import io.mszymanski.orknux.server.security.Role
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
 import jakarta.persistence.FetchType
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
@@ -206,4 +208,65 @@ class Workspace(
      */
     @Column(name = "voice_unattended_microphone_ms")
     var voiceUnattendedMicrophoneMs: Int? = null,
+
+    /**
+     * Where an answer is cut before it is handed to the speech model.
+     *
+     * A value rather than a null, unlike the three above. Those store a
+     * departure from a number the interface owns, and null is how a workspace
+     * says it has decided nothing; this stores one of three named things a
+     * listener can ask for, and [SpeechChunking.SENTENCE] is one of them by
+     * name. "The default" as a fourth choice would be a second spelling of a
+     * choice already on the list, and a form offering both would have to say
+     * which of the two it saved.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "voice_speech_chunking", nullable = false, length = 16)
+    var voiceSpeechChunking: SpeechChunking = SpeechChunking.SENTENCE,
 )
+
+/**
+ * Where an answer being read aloud is cut for the speech provider.
+ *
+ * Reading is pipelined: a piece is asked for, played, and the next is made
+ * while it is in the air, which is what stops the wait before the first word
+ * being the wait for the last one to be synthesised. Where the cuts fall is the
+ * trade this names, and it has no right answer - it is a listening preference,
+ * which is why a workspace states it.
+ *
+ * The 220-character ceiling that holds a sentence-cut piece to about a breath
+ * lives in the interface and is deliberately not offered here. A mode and a
+ * size is two knobs describing one thing, and the second is only ever wrong in
+ * ways the first already covers.
+ */
+enum class SpeechChunking {
+    /**
+     * No cutting at all: one request for the finished answer.
+     *
+     * Nothing is asked for until the answer is complete, so the silence before
+     * the first word is however long the whole thing takes to synthesise - and
+     * the longer the answer, the longer the wait. What it buys is one seam-free
+     * clip from one request, which is what somebody reading a short answer on a
+     * metered provider wants.
+     */
+    NONE,
+
+    /**
+     * Whole sentences, gathered up to about a breath each.
+     *
+     * The default, and what a hands-free conversation needs: the first sentence
+     * is in the air while the second is being made, so somebody hears an answer
+     * begin at roughly the speed a person would begin one.
+     */
+    SENTENCE,
+
+    /**
+     * Paragraph boundaries, and nothing shorter.
+     *
+     * Fewer and longer requests than [SENTENCE], so fewer joins between clips
+     * to hear and less pressure on the provider, at the cost of a later first
+     * word. The middle of the three, and the one to move to when the seams
+     * between sentences are what is noticeable.
+     */
+    PARAGRAPH,
+}

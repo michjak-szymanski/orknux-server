@@ -903,6 +903,14 @@ type Mutation {
         speechOverRoomPercent: Int,
         unattendedMicrophoneMs: Int
     ): Workspace!
+    """
+    Where an answer is cut for the speech model here.
+
+    Its own call rather than a fourth argument above, although one card draws
+    both: turn-taking is three numbers that are one decision about the half of a
+    turn somebody else is talking, and this is about the half the model is.
+    """
+    setWorkspaceVoiceSpeechChunking(workspaceId: ID!, chunking: SpeechChunking!): Workspace!
 
     createObject(input: CreateObjectInput!): WorkflowObject!
     "Backs the object editor: the properties on the left, the details on the right."
@@ -1165,6 +1173,47 @@ type Workspace {
     Null means the workspace has decided nothing.
     """
     voiceUnattendedMicrophoneMs: Int
+    """
+    Where an answer is cut before it is handed to the speech model.
+
+    A value rather than a null, unlike the three above: those store a departure
+    from a number the interface owns, and this stores one of three named things
+    a listener can ask for. `SENTENCE` unless somebody says otherwise, which is
+    what every workspace was doing before this could be said.
+    """
+    voiceSpeechChunking: SpeechChunking!
+}
+
+"""
+Where an answer being read aloud is cut for the speech provider.
+
+Reading is pipelined - a piece is asked for, played, and the next made while it
+is in the air - and where the cuts fall trades the wait before the first word
+against the number of requests and the joins between clips. There is no right
+answer to that, which is why a workspace states one.
+"""
+enum SpeechChunking {
+    """
+    No cutting: one request for the finished answer, spoken when it is ready.
+
+    The silence before the first word is however long the whole answer takes to
+    synthesise. What it buys is one clip with no joins in it, from one request.
+    """
+    NONE
+    """
+    Whole sentences, gathered up to about a breath each.
+
+    An answer begins at roughly the speed a person would begin one, because the
+    first sentence is in the air while the second is being made.
+    """
+    SENTENCE
+    """
+    Paragraph boundaries, and nothing shorter.
+
+    Fewer and longer requests than `SENTENCE`, so fewer joins to hear and less
+    pressure on the provider, at the cost of a later first word.
+    """
+    PARAGRAPH
 }
 
 input CreateWorkspaceInput {

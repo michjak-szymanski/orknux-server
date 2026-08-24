@@ -48,9 +48,11 @@ rather than copied here: it is a submodule, and GitHub renders a submodule as a
 link, not as files it will serve an image from.
 
 ![A workflow on the canvas: the graph, what each edge carries, and the selected
-node's settings](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/editor.png)
+node's settings — its agent, its parameters, its retry policy, and what should
+happen when it fails anyway](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/editor.png)
 
-*A workflow. Edges are labelled with the fields that travel along them.*
+*A workflow. Edges are labelled with the fields that travel along them; the panel
+holds the selected node's retries and what to do when it fails anyway.*
 
 ![A run: its summary, and the graph as it ran, each node marked with what it
 did](https://raw.githubusercontent.com/michjak-szymanski/orknux-ui/main/public/screens/execution-detail.png)

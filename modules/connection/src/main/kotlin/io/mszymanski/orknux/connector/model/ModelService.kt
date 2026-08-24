@@ -11,7 +11,6 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.Clock
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -436,15 +435,21 @@ class ModelService(
      * What the tokens cost, at what the provider is recorded as charging. Null
      * when the model carries no prices, because a guess would be worse.
      */
-    private fun cost(model: LlmModel, totals: Totals): BigDecimal? {
-        val input = model.inputCostPerMillion
-        val output = model.outputCostPerMillion
-        if (input == null && output == null) return null
+    private fun cost(model: LlmModel, totals: Totals): BigDecimal? =
+        ModelPricing.cost(model, totals.inputTokens, totals.outputTokens, ModelPricing.WINDOW_SCALE)
 
-        val perMillion = { tokens: Long, price: BigDecimal? ->
-            price?.multiply(BigDecimal(tokens))?.divide(MILLION, COST_SCALE, RoundingMode.HALF_UP) ?: BigDecimal.ZERO
-        }
-        return perMillion(totals.inputTokens, input).add(perMillion(totals.outputTokens, output))
+    /**
+     * What one call cost, for a caller holding the counts a model reported.
+     *
+     * The same arithmetic the window above is reported with, at the finer scale
+     * a single answer needs - see [ModelPricing]. Null for a model that has been
+     * removed as well as for one carrying no prices: both mean there is nothing
+     * to cost it at, and a caller that shows nothing either way does not need to
+     * tell them apart.
+     */
+    fun costOf(modelId: Long, inputTokens: Long, outputTokens: Long): BigDecimal? {
+        val model = models.findByIdOrNull(modelId) ?: return null
+        return ModelPricing.cost(model, inputTokens, outputTokens)
     }
 
     /** The change from one window to the next, as a fraction. Null when there was nothing to compare with. */
@@ -472,9 +477,6 @@ class ModelService(
         /** Matches the column. */
         const val MESSAGE_LENGTH = 500
         const val FOREVER_YEARS = 100L
-        const val COST_SCALE = 2
-
-        val MILLION: BigDecimal = BigDecimal(1_000_000)
     }
 }
 

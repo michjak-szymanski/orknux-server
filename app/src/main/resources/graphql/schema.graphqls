@@ -769,6 +769,12 @@ type Mutation {
     as well - who hears about an issue is not changed by it.
     """
     setUserEmailNotifications(id: ID, enabled: Boolean!): AppUser!
+    """
+    Turns the cost line in your chats on or off. Yours only - it decides what is
+    drawn on one person's own screen, on chats nobody else can open, so there is
+    no id to pass.
+    """
+    setChatCostShown(shown: Boolean!): AppUser!
     "Mints a token. Yours when id is absent; anybody's, for an administrator."
     createUserToken(id: ID, name: String!): NewUserToken!
     deleteUserToken(id: ID!): Boolean!
@@ -2094,6 +2100,22 @@ type ChatAnswer {
     answer: ChatMessage!
     "How long the model took, which the screen shows as what it thought for."
     millis: Float!
+    """
+    What the provider said it charged for, over the whole turn rather than the
+    last call in it - an agent that looked three things up paid for four rounds,
+    and `millis` beside these has meant the turn's total since agents could call
+    tools at all.
+
+    Zero means the provider reported no counts, not that nothing was spent, so
+    the screen draws nothing where it finds one.
+    """
+    inputTokens: Float!
+    outputTokens: Float!
+    """
+    What those tokens cost at the prices recorded on the model. Null when it
+    carries none, which is not the same as free.
+    """
+    cost: Float
 }
 
 input StartChatInput {
@@ -4732,6 +4754,11 @@ type AppUser {
     installation with no mail server configured.
     """
     emailNotifications: Boolean!
+    """
+    Whether their chats print what an answer cost beside how long it took.
+    False unless they have turned it on.
+    """
+    chatCostShown: Boolean!
     type: UserType!
     roles: [RoleRef!]!
     "False for anybody the identity provider defines."

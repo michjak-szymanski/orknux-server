@@ -159,7 +159,8 @@ CREATE TABLE app_user
     password_hash                varchar(100),
     email                        varchar(320),
     email_chosen                 boolean not null default false,
-    email_notifications          boolean not null default true
+    email_notifications          boolean not null default true,
+    chat_cost_shown              boolean not null default false
 );
 
 CREATE TABLE app_user_role

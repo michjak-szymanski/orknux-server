@@ -481,10 +481,6 @@ orknux:
     # gives up. Long enough to cover a holiday, short enough that a forgotten
     # task is eventually a finished one.
     patience: ${ORKNUX_TASK_PATIENCE:7d}
-    # How often a parked task looks to see whether it has been answered. It
-    # lengthens tenfold once a task has been waiting a while, so a week of
-    # waiting is not a week of polling.
-    poll-while-waiting: ${ORKNUX_TASK_POLL_WHILE_WAITING:30s}
   temporal:
     # False runs workflows on the calling thread, with no retries and no
     # resumption. The tests do that; a deployment should not.

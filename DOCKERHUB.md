@@ -19,10 +19,9 @@ to this.
 
 A database - Postgres, or SQLite and no second container - something to sign in
 against (a directory, an OIDC provider, or accounts it holds itself), and
-Temporal. With the default
-configuration the application **refuses to start** when Temporal is not
-reachable, so a deployment brought up before its Temporal restarts until that
-service answers.
+Temporal. With the default configuration the application **refuses to start**
+when Temporal is not reachable, so a deployment brought up before its Temporal
+restarts until that service answers.
 
 ```yaml
 services:
@@ -118,7 +117,7 @@ is why.
 **How hard somebody may try.** A wrong password costs nothing until the
 allowance is spent, then a pause that doubles to the ceiling and stops there.
 Nothing locks anybody out: a success clears the record, and so does going quiet.
-Counted in memory, so a restart forgets.
+Counted in memory, so a restart forgets it.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -243,14 +242,13 @@ The README's **Publishing** section is the rest.
 | `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | How many times the platform tries a failing step. A node's own retry policy is separate and is not multiplied by this. | `3` | No |
 | `ORKNUX_TEMPORAL_UI_URL` | Temporal's own web interface, linked out to from a run. Empty offers no links. | `http://localhost:8233` | No |
 | `ORKNUX_INLINE_MAX_WAIT` | Only the inline engine: how long a run may spend parked in total before the step fails and says what would have carried it. A Temporal wait is a timer, bounded by the run timeout. | `5m` | No |
-| `ORKNUX_TASK_MAX_TURNS` | How many times a task's agent may be asked before the task is stopped unfinished. Copied onto a task when it is created, so a change here does not move the goalposts under one already running. | `40` | No |
-| `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting for somebody to approve something counts for none of it. | `2h` | No |
-| `ORKNUX_TASK_PATIENCE` | How long a task parked for permission or for an answer waits before it gives up. | `7d` | No |
-| `ORKNUX_TASK_POLL_WHILE_WAITING` | How often a parked task looks to see whether it has been answered. It lengthens tenfold once one has been waiting a while. | `30s` | No |
+| `ORKNUX_TASK_MAX_TURNS` | How many times a task's agent may be asked before it is stopped unfinished. This and the next are copied onto a task at creation, so a change does not affect one already running. | `40` | No |
+| `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting to be approved counts for none. | `2h` | No |
+| `ORKNUX_TASK_PATIENCE` | How long a parked task waits for a person before giving up. | `7d` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
 | `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
 | `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |
-| `ORKNUX_SCHEDULER_TICK_INTERVAL` | How often scheduled triggers are looked at, and so the finest schedule this installation can keep. A cron of seconds is accepted whatever this says; it fires whatever came due since the last tick, so lower this to make a schedule of seconds run like one. Every tick costs a query per enabled scheduled trigger. | `10s` | No |
+| `ORKNUX_SCHEDULER_TICK_INTERVAL` | How often scheduled triggers are looked at, and so the finest schedule this installation can keep. A cron of seconds is accepted whatever this says; a tick fires whatever came due since the last one, so lower this to make one run like one. Each tick costs a query per enabled trigger. | `10s` | No |
 
 ## What a workspace's code may do
 
@@ -302,7 +300,7 @@ cannot be carried by a rule at all.
 | --- | --- | --- | --- |
 | `ORKNUX_CHAT_ENABLED` | Whether this installation has a chat at all. `false` is final: an administrator may turn the chat off from the screen, but not back on where the operator said no. | `true` | No |
 | `ORKNUX_ATTACHMENTS_ENABLED` | Whether files may be attached at all - to a chat message, an issue, or a comment on one. `false` is final in the same way, and hides the upload controls without hiding files already uploaded. | `true` | No |
-| `ORKNUX_ATTACHMENTS_LOCATION` | Where the bytes go, one directory per workspace. **Relative resolves against the working directory**, which is wrong in a container: give an absolute path on a volume, or attachments go when the container does. | `data/attachments` | **Yes** if attachments are on |
+| `ORKNUX_ATTACHMENTS_LOCATION` | Where the bytes go, one directory per workspace. **Relative resolves against the working directory**, wrong in a container: give an absolute path on a volume, or attachments go with the container. | `data/attachments` | **Yes** if attachments are on |
 | `ORKNUX_ATTACHMENTS_MAX_FILE_SIZE_MB` | The largest file that will be accepted. | `25` | No |
 | `ORKNUX_UPLOAD_MAX_FILE_SIZE` | The servlet's own cap on one uploaded file. Keep it at or above the attachment cap, or the larger limit is never reached. | `25MB` | No |
 | `ORKNUX_UPLOAD_MAX_REQUEST_SIZE` | The cap on a whole upload request. | `26MB` | No |
@@ -316,8 +314,8 @@ and it needs nothing else configured here.
 | --- | --- | --- | --- |
 | `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
 | `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is elsewhere |
-| `ORKNUX_BASE_URL` | Where the interface is reached from, as a browser spells it, and what a mailed password reset link points at. Configured rather than read off the `Host` header, which whoever is calling writes. | `http://localhost:5173` | **Yes** for password resets |
-| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, written any way `DataSize` reads: `1MB`, `512KB`, `2000000`. That endpoint is open to the internet by necessity, so anything larger is refused with 413, before any trigger. | `1MB` | No |
+| `ORKNUX_BASE_URL` | Where the interface is reached from, as a browser spells it, and what a mailed password reset link points at. Configured rather than read off the `Host` header, which the caller writes. | `http://localhost:5173` | **Yes** for password resets |
+| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, any way `DataSize` reads: `1MB`, `512KB`. That endpoint is open to the internet by necessity, so more is refused with 413, before any trigger. | `1MB` | No |
 | `ORKNUX_ASYNC_REQUEST_TIMEOUT` | How long a request that answered with a promise may stay open. The container's own thirty seconds would cut off the five minutes `orknux_news` may be asked to wait. | `330s` | No |
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface shares this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
@@ -327,8 +325,8 @@ and it needs nothing else configured here.
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together. | `1GB` | No |
-| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. It opens nothing else under `/actuator`. Also on the Admin screen; once pressed that answer holds. | `false` | No |
-| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was, so this decides the size of that table. Also on the Admin screen, and once set that answer holds. | `14` | No |
+| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. Nothing else under `/actuator` opens. Also on the Admin screen; once pressed, that holds. | `false` | No |
+| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was, so this decides the size of that table. Also on the Admin screen; once set, that holds. | `14` | No |
 | `ORKNUX_REVISION_SWEEP_ENABLED` | Whether the retention sweep runs. `false` deletes nothing, and the history grows without limit. | `true` | No |
 | `ORKNUX_REVISION_SWEEP_INTERVAL` | How often it runs. | `6h` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |

@@ -55,15 +55,21 @@ data class TaskProperties(
      * and short enough that a forgotten task is eventually a finished one.
      */
     val patience: Duration = Duration.ofDays(7),
+) {
+    companion object {
 
-    /**
-     * How often a parked task looks to see whether it has been answered.
-     *
-     * It is a poll rather than a signal because that is what this application
-     * already does with a parked workflow step, and for the same reason: the
-     * wait belongs to whatever is carrying the task, the answer is in the
-     * database, and a timer that survives every process involved is worth more
-     * than one that has to be delivered.
-     */
-    val pollWhileWaiting: Duration = Duration.ofSeconds(30),
-)
+        /**
+         * How often a parked task looks to see whether it has been answered.
+         *
+         * A constant and not a setting. It is a poll rather than a signal for
+         * the reason a parked workflow step is one - the wait belongs to
+         * whatever is carrying the task, the answer is in the database, and a
+         * timer that survives every process involved is worth more than a
+         * delivery that can fail - and how often it looks is an implementation
+         * detail of that, not something an installation has a view on. The
+         * three above are what an operator is deciding: how much a task may
+         * cost, and how long it waits for them.
+         */
+        val POLL_WHILE_WAITING: Duration = Duration.ofSeconds(30)
+    }
+}

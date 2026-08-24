@@ -107,6 +107,35 @@ class FunctionParam(
 )
 
 /**
+ * One thing a script imports, and the name it imports it under.
+ *
+ * Two halves, and they are not the same fact. [importedId] is the reference, and it
+ * is an id because a name in a database is a name that goes stale: this product has
+ * already been through a grant held by name and stranded the first time somebody
+ * renamed what it pointed at, and an import stranded that way would be a workflow
+ * that fails at the moment it runs.
+ *
+ * [importName] is the importer's own word for it, written into the importer's own
+ * code. It is deliberately not the imported thing's name. If it were, renaming a
+ * function would silently break every function that calls it — the reference would
+ * survive and the code would not. So the name belongs to whoever wrote the call,
+ * the id belongs to whoever is being called, and neither can spoil the other.
+ *
+ * Which table the id is in is decided by which collection this is in, not by a
+ * kind stored beside it: a function's imports and its libraries are two lists
+ * pointing at two tables, and one column that could mean either is one column that
+ * will one day mean the wrong one.
+ */
+@Embeddable
+class ScriptImport(
+    @Column(name = "imported_id", nullable = false)
+    var importedId: Long = 0,
+
+    @Column(name = "import_name", nullable = false, length = 64)
+    var importName: String = "",
+)
+
+/**
  * A variable this function is handed, whatever calls it.
  *
  * A declared parameter is the caller's to fill; an external one is not. The
@@ -222,6 +251,20 @@ class WorkflowFunction(
     @OrderColumn(name = "position")
     var externals: MutableList<FunctionExternal> = mutableListOf(),
 
+    /**
+     * The workspace's other functions this one calls, under the names it calls them.
+     *
+     * Not arguments: an import is reached through `imports`, not through the
+     * signature, which is why adding one does not change what the code has to
+     * accept. Empty for a plugin's function — a plugin brings whatever it needs
+     * inside itself, and an organisation-level function has no workspace whose
+     * functions it could reach.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "workflow_function_import", joinColumns = [JoinColumn(name = "function_id")])
+    @OrderColumn(name = "position")
+    var imports: MutableList<ScriptImport> = mutableListOf(),
+
     @Column(name = "last_modified_at", nullable = false)
     var lastModifiedAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -265,6 +308,16 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
 
     /** Everything one plugin declared, which is what a reload reconciles against. */
     fun findByPluginId(pluginId: Long): List<WorkflowFunction>
+
+    /**
+     * Every function that imports the one with this id.
+     *
+     * Asked before a delete, and asked while looking for a cycle. Written as a
+     * query rather than by loading a workspace and filtering it in memory, because
+     * a cycle check walks this repeatedly and the answer is a join.
+     */
+    @Query("select f from WorkflowFunction f join f.imports i where i.importedId = :functionId")
+    fun findByImportedFunctionId(functionId: Long): List<WorkflowFunction>
 }
 
 class FunctionNotFoundException(id: Long) : RuntimeException("No function with id $id")
@@ -354,3 +407,59 @@ class FunctionSignatureMismatchException(
  */
 class FunctionInUseException(name: String, callers: List<String>) :
     RuntimeException("$name is called by ${callers.joinToString(", ")}")
+
+/**
+ * An import points at nothing, or at something this workspace cannot reach.
+ *
+ * Answered as "there is no such function" rather than as a refusal, because from
+ * where the caller stands there is not: a function in another workspace is not one
+ * this one may learn the existence of by being told it exists.
+ */
+class ImportNotFoundException(id: Long) : RuntimeException("There is no function $id to import")
+
+/**
+ * A function a plugin declared cannot be imported.
+ *
+ * Not a rule about tidiness. A plugin's function does not run in this sandbox at
+ * all — it runs in the plugin's, constructed from the plugin's source and handed
+ * the settings of the workspace calling it — so there is nothing here to import.
+ * Nodes call these; code does not.
+ */
+class ImportNotEditableException(name: String) : RuntimeException(
+    "$name is provided by a plugin, so it cannot be imported. Point an action at it instead.",
+)
+
+class ImportNameInvalidException(name: String) :
+    RuntimeException("\"$name\" is not a name an import can be called by")
+
+/**
+ * Two imports answer to the same name.
+ *
+ * Refused rather than resolved, because the code says the name once and only one
+ * of the two could ever answer to it — and which one is whichever the object
+ * literal was built with last.
+ */
+class ImportNameTakenException(name: String) :
+    RuntimeException("This already imports something called \"$name\"")
+
+/**
+ * A function imports itself, directly or round a loop.
+ *
+ * Names the loop rather than saying that there is one: "a imports b imports a" is
+ * the sentence somebody can act on, and a cycle three deep is not one anybody
+ * finds by being told it exists.
+ */
+class ImportCycleException(path: List<String>) : RuntimeException(
+    "That import would make a loop: ${path.joinToString(" imports ")}",
+)
+
+/**
+ * A function something imports is not one to delete.
+ *
+ * Kept apart from [FunctionInUseException] because the way out is different. A
+ * caller is a node somebody points elsewhere; an importer is code somebody has to
+ * edit, and telling them to go and change an action would send them to the wrong
+ * screen.
+ */
+class FunctionImportedException(name: String, importers: List<String>) :
+    RuntimeException("$name is imported by ${importers.joinToString(", ")}")

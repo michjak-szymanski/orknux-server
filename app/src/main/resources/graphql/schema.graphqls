@@ -1901,6 +1901,13 @@ type Tool {
     so nothing about how they are called moved.
     """
     params: [ToolParam!]!
+    """
+    The workspace's functions it calls, under the names it calls them.
+
+    One direction only: a tool may import a function, and nothing imports a tool.
+    A tool is what an agent decides to call, not a piece anybody builds out of.
+    """
+    imports: [ScriptImport!]!
     "\"(city: string, days: number)\", ready for the list."
     signature: String!
     "Off leaves it defined but out of reach."
@@ -2049,6 +2056,8 @@ input CreateToolInput {
     typescript: String
     "Left out means the one every tool used to take: an object called `input`."
     params: [ToolParamInput!]
+    "The workspace's functions it calls, under the names it calls them."
+    imports: [ScriptImportInput!]
 }
 
 input UpdateToolInput {
@@ -2060,6 +2069,8 @@ input UpdateToolInput {
     typescript: String
     "Null leaves them alone; an empty list takes them all off."
     params: [ToolParamInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    imports: [ScriptImportInput!]
 }
 
 """
@@ -3618,6 +3629,13 @@ type Function {
     returnObjectId: ID
     returnObjectName: String
     params: [FunctionParam!]!
+    """
+    The workspace's other functions it calls, under the names it calls them.
+
+    Not arguments. An import is reached through `imports` rather than through the
+    signature, so adding one does not change what the code has to accept.
+    """
+    imports: [ScriptImport!]!
     "\"(input: object, format: string)\", ready for the list."
     signature: String!
     "ISO-8601 offset date-time."
@@ -3671,6 +3689,8 @@ input CreateFunctionInput {
     "Required when the return type is OBJECT, and ignored otherwise."
     returnObjectId: ID
     params: [FunctionParamInput!]
+    "The workspace's other functions it calls, under the names it calls them."
+    imports: [ScriptImportInput!]
 }
 
 input UpdateFunctionInput {
@@ -3686,6 +3706,53 @@ input UpdateFunctionInput {
     "Required when the return type is OBJECT, and ignored otherwise."
     returnObjectId: ID
     params: [FunctionParamInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    imports: [ScriptImportInput!]
+}
+
+"""
+One thing a script imports, and the name it imports it under.
+
+Two halves, and they are not the same fact. `functionId` is the reference, held
+as an id because a reference held by name is one that goes stale the first time
+somebody renames what it points at. `name` is the importer's own word for it,
+written into the importer's own code — so renaming the imported function changes
+nothing about the code that calls it, which is the whole point of storing them
+apart.
+
+Shared by functions and tools. A tool importing a function is the same
+arrangement, and two types saying the same thing would drift.
+"""
+type ScriptImport {
+    functionId: ID!
+    "What the code calls it. Unaffected by anything happening to the function."
+    name: String!
+    "What was imported. Null only if it went away behind the delete guard's back."
+    function: ImportedFunction
+}
+
+"""
+What an imported function is, as far as the importer needs to know.
+
+Enough to annotate `imports` in the editor and to say in a panel what was
+imported. Not the source: whoever is reading this is writing the call, not the
+callee, and the callee has an editor of its own.
+"""
+type ImportedFunction {
+    name: String!
+    description: String
+    "\"(city: string, days: number)\", ready for the list."
+    signature: String!
+    returnType: ValueType!
+    "What its returned object is called, when it returns one."
+    returnObjectName: String
+}
+
+input ScriptImportInput {
+    "Which of the workspace's own functions. A plugin's cannot be imported."
+    functionId: ID!
+    "What the importing code calls it. An identifier, unique within the importer."
+    name: String!
 }
 
 "What an action does when a workflow reaches it."

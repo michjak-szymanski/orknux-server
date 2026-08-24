@@ -6,6 +6,8 @@ import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.plugin.PluginParameters
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
+import io.mszymanski.orknux.server.action.ScriptImports
+import io.mszymanski.orknux.server.action.ScriptImportsResult
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -33,6 +35,7 @@ class ConditionEvaluator(
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
     private val pluginRunner: PluginRunner,
+    private val scriptImports: ScriptImports,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
     private val externals: VariableArguments,
@@ -86,7 +89,19 @@ class ConditionEvaluator(
         val call = if (function.scope == FunctionScope.PLUGIN) {
             askPlugin(condition, function, arguments)
         } else {
-            scripts.call(function.source, function.name, arguments, contextFor(condition))
+            when (val resolved = scriptImports.resolve(function.imports)) {
+                is ScriptImportsResult.Broken ->
+                    throw ConditionNotDecidableException("${function.name} ${resolved.reason}")
+
+                is ScriptImportsResult.Resolved -> scripts.call(
+                    function.source,
+                    function.name,
+                    arguments,
+                    contextFor(condition),
+                    resolved.modules,
+                    resolved.imports,
+                )
+            }
         }
         return when (val result = call) {
             is ScriptResult.Returned -> when (result.json) {

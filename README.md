@@ -698,6 +698,12 @@ is handed to an agent and has to say what it is without being read in full.
 `SkillFormat` is where that is checked, and it is what the editor's Validate
 reports; the tool editor's Validate is the same parser that would run the code.
 
+A tool may **import** the workspace's functions, under names of its own, and reach
+them as `imports.thatName(…)` — the same arrangement a function has, described
+under **Actions and functions**. It goes one way only: nothing imports a tool,
+because a tool is what an agent decides to call and not a piece anybody builds
+out of.
+
 Both can be turned off without being deleted, and both record who last saved
 them, which the lists and the editors show.
 
@@ -898,6 +904,21 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 
 Everything crossing the boundary is JSON text; nothing the script touches is a
 live Java object. `ScriptRunnerTest` is where those are held.
+
+A function may **import** other functions, and so may a tool. The editor's
+*Imports* section names them, and the code reaches them through one frozen global:
+`imports.thatName(…)`. There is no module resolution in the sandbox and there is
+not going to be — resolving `import` would mean handing the context a filesystem,
+which is the one thing it exists to withhold — so the host does it: the imports
+are flattened and ordered here, evaluated into a registry, and the script is
+handed a one-line prelude that reads them out under the names it chose.
+
+The reference is stored as an id and the name as the importer's own word for it.
+That is what makes a rename cost nothing: the row points at the same function
+however it is called, and the code goes on saying what it always said. A loop is
+refused when it is saved, with the loop named; a function that is imported cannot
+be deleted, with the importers named; and a function a plugin declared cannot be
+imported at all, because it does not run in this sandbox.
 
 Every subtype runs. A send goes out through its connection, a mail leaves through
 its SMTP server, an HTTP request is made, a function is called, a wait parks. What

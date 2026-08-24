@@ -1,5 +1,10 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.ImportCycleException
+import io.mszymanski.orknux.server.action.ImportNameInvalidException
+import io.mszymanski.orknux.server.action.ImportNameTakenException
+import io.mszymanski.orknux.server.action.ImportNotEditableException
+import io.mszymanski.orknux.server.action.ImportNotFoundException
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
 import org.springframework.graphql.execution.DataFetcherExceptionResolverAdapter
@@ -28,11 +33,15 @@ class AgentExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is SkillCatalogNameInvalidException,
             is SkillCatalogInUseException,
             is ToolInUseException,
+            is ImportNameInvalidException,
+            is ImportNameTakenException,
+            is ImportNotEditableException,
             is AgentModelUnusableException,
             is AgentMemoryShareUnusableException,
             -> ErrorType.BAD_REQUEST
 
             is AgentNotFoundException,
+            is ImportNotFoundException,
             is ToolNotFoundException,
             is SkillNotFoundException,
             is SkillCatalogNotFoundException,

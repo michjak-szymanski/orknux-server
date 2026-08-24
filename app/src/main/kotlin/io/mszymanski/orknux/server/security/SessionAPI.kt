@@ -184,6 +184,14 @@ class SessionAPI(
              * the row appears the first time they sign in.
              */
             emailNotifications = held?.emailNotifications ?: true,
+            /*
+             * And whether their chats print what an answer cost. Here for the
+             * same reason and by the same route: the chat window needs it on
+             * every render and the preferences page is where it is turned on,
+             * and both of them already hold the session. False for somebody
+             * with no row yet, which is what the column defaults to.
+             */
+            chatCostShown = held?.chatCostShown ?: false,
         )
     }
 
@@ -221,6 +229,13 @@ data class SessionUser @JsonCreator constructor(
      * rather than being asked for separately.
      */
     @JsonProperty("emailNotifications") val emailNotifications: Boolean = true,
+    /**
+     * Whether a chat says what an answer cost as well as how long it took.
+     * Theirs to turn on, on the same preferences page, and read by the chat
+     * window on every answer - so it rides here rather than being a query of
+     * its own on a screen that already has one open.
+     */
+    @JsonProperty("chatCostShown") val chatCostShown: Boolean = false,
 ) {
     constructor(authentication: Authentication) : this(
         username = authentication.name,

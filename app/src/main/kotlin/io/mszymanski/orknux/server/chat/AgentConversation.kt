@@ -72,16 +72,35 @@ class AgentConversation(
 
         val conversation = turns.toMutableList()
         var spent = 0L
+        /*
+         * And what the rounds cost, added up the same way the time is.
+         *
+         * What a turn cost is every round it took: a lookup the agent made
+         * before it could answer was read by the model and charged for, and the
+         * last round's own counts are a fraction of that - the same fraction
+         * the last round's stopwatch is of what somebody waited. Reporting
+         * either one alone would be a number that is smaller than the bill,
+         * which is the worst kind of wrong for a number about money.
+         */
+        var input = 0L
+        var output = 0L
 
         repeat(MAX_ROUNDS) {
             when (val answer = models.complete(modelId, conversation, offered)) {
                 is ChatCompletion.Failed -> return answer.also { record(into, agent, it) }
 
-                is ChatCompletion.Answered ->
-                    return answer.copy(millis = spent + answer.millis).also { record(into, agent, it) }
+                is ChatCompletion.Answered -> return answer
+                    .copy(
+                        millis = spent + answer.millis,
+                        inputTokens = input + answer.inputTokens,
+                        outputTokens = output + answer.outputTokens,
+                    )
+                    .also { record(into, agent, it) }
 
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
+                    input += answer.inputTokens
+                    output += answer.outputTokens
                     conversation += answer.turn
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)

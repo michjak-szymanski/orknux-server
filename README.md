@@ -96,6 +96,13 @@ data lives, and what to change before it is anything more than a demonstration.
 Read the part about `ORKNUX_SECRET_KEY` before you save a credential rather than
 after.
 
+The same deployment is written as Kubernetes objects in
+[deploy/kubernetes/](deploy/kubernetes/) — one manifest, the same five services
+and the same images. [Its README](deploy/kubernetes/README.md) covers only what
+differs there: the secret key as a Secret the manifest deliberately does not
+carry, probes that can ask for a URL because kubelet is the one asking, why the
+server is one replica, and what an Ingress in front of it has to be told.
+
 ### To look at Orknux
 
 One container, no file to copy and nothing to configure. The interface, the

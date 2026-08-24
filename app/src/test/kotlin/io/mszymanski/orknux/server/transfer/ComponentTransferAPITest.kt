@@ -379,6 +379,40 @@ class ComponentTransferAPITest(
         val detail: String = "",
     )
 
+    /**
+     * A function that imports another travels with it, and points at it again.
+     *
+     * Two halves crossing an installation boundary. The reference has to be a
+     * name, because the ids on this side mean nothing on the other; the local
+     * name has to be carried as it stands, because it is a word in the source
+     * that came in the same file. Getting either wrong imports a function whose
+     * `imports` object is empty and whose code is full of calls into it.
+     */
+    @Test
+    fun `an imported function is carried, and the import is wired up again`() {
+        val shared = createFunction(from, "toUpper")
+        val caller = createFunction(from, "shout", imports = listOf(shared to "upper"))
+
+        val json = export(from, "FUNCTION", caller, "DEEP")
+        val envelope = mapper.readTree(json)
+
+        assertThat(envelope.path("components").values().map { it.path("kind").stringValue() })
+            .containsExactly("FUNCTION", "FUNCTION")
+        val written = envelope.path("components").values()
+            .single { it.path("name").stringValue() == "shout" }
+            .path("imports").values().single()
+        assertThat(written.path("functionRef").stringValue()).isEqualTo("toUpper")
+        assertThat(written.path("name").stringValue()).isEqualTo("upper")
+        assertThat(json).doesNotContain("\"functionId\"")
+
+        assertThat(import(into, json).importable).isTrue()
+
+        val landed = functions.findByWorkspaceId(into).single { it.name == "shout" }
+        val target = functions.findByWorkspaceId(into).single { it.name == "toUpper" }
+        assertThat(landed.imports.single().importName).isEqualTo("upper")
+        assertThat(landed.imports.single().importedId).isEqualTo(target.id)
+    }
+
     private data class Plan(val importable: Boolean, val entries: List<Entry>, val problems: List<String>)
 
     private fun export(workspaceId: Long, kind: String, id: Long, depth: String): String = graphQlTester.document(
@@ -454,10 +488,14 @@ class ComponentTransferAPITest(
         returnType: String = "MAP",
         returnObjectId: Long? = null,
         externalVariableIds: List<Long> = emptyList(),
+        imports: List<Pair<Long, String>> = emptyList(),
     ): Long {
         val arity = externalVariableIds.size
         val args = (0 until arity).joinToString(", ") { "a$it" }
         val body = "export default function ($args) { return {}; }"
+        val imported = imports.joinToString(", ", "[", "]") { (id, called) ->
+            """{ functionId: $id, name: "$called" }"""
+        }
         return graphQlTester.document(
             """
             mutation {
@@ -467,6 +505,7 @@ class ComponentTransferAPITest(
                 returnType: ${if (returnObjectId != null) "OBJECT" else returnType}
                 ${returnObjectId?.let { ", returnObjectId: $it" } ?: ""}
                 ${if (arity > 0) ", externalVariableIds: [${externalVariableIds.joinToString(", ")}]" else ""}
+                ${if (imports.isNotEmpty()) ", imports: $imported" else ""}
               }) { id }
             }
             """,

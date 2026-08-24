@@ -155,6 +155,95 @@ have failed.
   secret would put an installation credential in that team's hands. Those wait
   on a decision about where an installation keeps a secret of its own.
 
+- **A function or a tool can call another function.** The editors gained an
+  *Imports* section: pick one of the workspace's own functions, give it a name,
+  and the code reaches it as `imports.thatName(…)`. A function may import a
+  function, and so may a tool; nothing imports a tool, because a tool is what an
+  agent decides to call rather than a piece anybody builds out of. What was
+  copied between three functions can now be written once.
+
+  The reference is stored as an id and the name is stored as your own word for
+  it, and holding those two apart is the whole point. Renaming the imported
+  function changes nothing in the code that calls it — the row still points at
+  the same function, and the call still says the name you chose. This is the
+  lesson of the grants that were held by name and stranded the first time
+  somebody renamed what they pointed at.
+
+  What cannot be done is refused while you are looking at it rather than at the
+  moment a workflow runs: a loop, however many functions round, is named in the
+  refusal; a function another function or a tool imports cannot be deleted, and
+  the message says which; and a function a plugin declared cannot be imported at
+  all, because it does not run in this sandbox — point an action at it instead.
+
+  Exported components carry their imports, and the function they name travels
+  with them. So does a tool's parameter list, which the export had been
+  dropping — a tool imported from an envelope written before this arrived with
+  no signature at all, which is a tool the receiving model is told the wrong
+  thing about.
+
+- **Libraries: JavaScript an installation loads once and its scripts import.** An
+  administrator loads a `.js` bundle on a new *Libraries* page, and any
+  workspace's function or tool can then import it under a name of its own —
+  `imports.slugs.of(title)`. The key comes from the filename, so `date-fns.js`
+  loads as `date-fns`, and loading the same key again replaces it in place: the
+  row keeps its id, so nothing that imports it has to be repointed.
+
+  A library here is a stored artefact, not a name from a registry, and it has to
+  be. Fetching one at run time would mean giving the sandbox a network, which is
+  the thing the sandbox exists to withhold; fetching it at upload would mean this
+  server reaching out to a registry, which makes an offline installation unusable
+  and makes what a workspace runs depend on what a registry served that
+  afternoon.
+
+  It belongs to the installation rather than to a workspace because the question
+  an installation has to be able to answer is what code is running inside it. The
+  Libraries page answers the other half — every function and every tool that
+  imports a given library, named with the workspace it lives in — and that is
+  what stops one being removed while something still uses it.
+
+  The file is evaluated once, when it is loaded, and what its export turned out
+  to hold is what the editor annotates `imports` from. Nothing more is claimed
+  about it: a member is something to call or something to read, because nothing
+  in a bundle says what its arguments are. A file that is not a module with a
+  default export is refused there and then.
+
+  An exported function carries the library it uses by name; an installation that
+  has not loaded it refuses the import and says which one to load. The library
+  itself does not travel — importing a function is not a thing that should
+  install software.
+
+- **A plugin says which JavaScript it needs, and loading it asks you to agree.** A
+  plugin embeds its libraries — that is what makes it portable, and it is why a
+  plugin cannot import one the way a function can. The cost is that a bundle
+  written for a browser or for Node expects language features the sandbox does not
+  switch on, so a plugin needing `TextDecoder` has simply not worked. It can now
+  declare what it needs, and loading it shows that list and refuses until somebody
+  accepts it by name.
+
+  There are five things it can ask for: writing to the server's log, `Intl`,
+  `TextEncoder` and `TextDecoder`, `performance.now`, and the `Temporal` API. That
+  is the whole vocabulary, and its being closed is the point of it — there is no
+  name for reading a file, opening a socket or reaching a Java class, so a plugin
+  cannot ask for one and nobody can grant one by clicking through a dialog. A
+  plugin naming something that is not on the list is refused with the list.
+
+  What was accepted is turned on for that one plugin, in the sandbox its own call
+  runs in. Nothing is turned on for another plugin, nothing for the engine they
+  share, and nothing at all for a workspace's own functions and tools — those run
+  in a different class with a different configuration, which is why that class has
+  no branch that could turn a capability on.
+
+  **A plugin edited to need more is asked again.** The acceptance names the
+  permissions it was given for rather than being a yes to the plugin, so a new one
+  is not covered by it: the load is refused, with the new list, and the plugin that
+  is already installed goes on running with what it already had. A plugin that
+  stops asking for something stops being granted it.
+
+  And what was accepted stays readable. The Plugins page shows each plugin's
+  permissions beside who accepted them and when — a decision about what code may do
+  that lives only in a dialog somebody clicked through last month is a decision
+  nobody can audit.
+
 ### Changed
 
 - **An answer read aloud is the answer as it is drawn, not the markdown behind
@@ -172,6 +261,14 @@ have failed.
   answer the longer the silence after pressing the speaker - which is exactly
   backwards. The first sentences are asked for on their own now and the rest is
   made while what you are hearing plays, one piece ahead and no more.
+
+- **A plugin no longer gets `console` or `Intl` for free.** GraalJS turns both on by
+  default and this sandbox had been leaving them on, which made "nothing is relaxed
+  unless it was accepted" untrue of exactly the two things nobody had thought
+  about. They are now off unless the plugin asks and somebody accepts. A plugin
+  that used `console.log` or `Intl` without declaring them will fail on its next
+  call: add `permissions()` to it, load it again, and accept the list. Nothing else
+  a plugin could reach has changed, because there was nothing else it could reach.
 
 ### Fixed
 

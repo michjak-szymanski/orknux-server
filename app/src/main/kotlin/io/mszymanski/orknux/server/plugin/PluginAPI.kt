@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.script.PluginInspection
+import io.mszymanski.orknux.workflow.script.PluginPermission
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.springframework.http.HttpHeaders
 import org.springframework.http.MediaType
@@ -56,6 +57,7 @@ class PluginUploadAPI(
     private val runner: PluginRunner,
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
+    private val permissions: PluginPermissions,
 ) {
 
     /**
@@ -111,6 +113,23 @@ class PluginUploadAPI(
                     .replace(
                         "@PARAMETER_TYPE_UNION@",
                         declarations.parameterTypes().joinToString(" | ") { "'$it'" },
+                    )
+                    /*
+                     * The permissions this build can grant, as a union, so an
+                     * editor refuses one this server has never heard of rather
+                     * than leaving it to be discovered on upload. Written from the
+                     * enumeration that does the granting: a template cannot
+                     * describe a contract different from the one doing the judging.
+                     */
+                    .replace(
+                        "@PERMISSION_UNION@",
+                        PluginPermission.entries.joinToString(" | ") { "'${it.name}'" },
+                    )
+                    .replace(
+                        "@PERMISSION_LIST@",
+                        PluginPermission.entries.joinToString("\n") {
+                            "   *   - `${it.name}` - ${it.summary.lowercase()}"
+                        },
                     ),
             )
     }
@@ -156,6 +175,16 @@ class PluginUploadAPI(
          * thing somebody actually wrote — and it is never evaluated.
          */
         @RequestParam("typescript", required = false) typescript: String?,
+        /*
+         * Which permissions the person loading it is agreeing to, by name.
+         *
+         * A list rather than a flag, and that is the point of it. "Yes" would be
+         * an agreement to whatever the file happened to ask for, including
+         * whatever it started asking for since it was last looked at; naming them
+         * is an agreement to these. A load whose names do not match exactly what
+         * the plugin declares is refused, so this cannot drift from what was shown.
+         */
+        @RequestParam("accept", required = false) accept: String?,
     ): ResponseEntity<Any> {
         access.requireAdmin()
 
@@ -190,9 +219,43 @@ class PluginUploadAPI(
         val declared = declarations.validated(inspected.functions)
         val parameters = declarations.validatedParameters(inspected.parameters)
 
+        /*
+         * What it needs, and whether anybody has said it may have it.
+         *
+         * Three ways this goes, and only one of them grants anything new. Asking
+         * for nothing needs no acceptance. Asking for what is already accepted
+         * needs none either — nothing new is being handed over, and making somebody
+         * agree again to what they agreed to last week teaches them to click
+         * through it. Asking for anything else is refused, with the list, until a
+         * second load names exactly that list.
+         *
+         * This is where an escalation is caught: a plugin edited to need one more
+         * thing lands in the third case, because the acceptance on the row names
+         * the permissions it was given for and not the plugin in general.
+         */
+        val wanted = permissions.validated(inspected.permissions)
+        val already = plugins.findByKey(key)?.let { permissions.read(it.acceptedPermissions) } ?: emptySet()
+        val agreeing = wanted.isNotEmpty() && !already.containsAll(wanted)
+        if (agreeing && permissions.accepted(accept) != wanted) {
+            throw PluginPermissionsNotAcceptedException(permissions.viewOf(wanted))
+        }
+
         val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
 
         val existing = plugins.findByKey(key)
+        // Stamped when somebody has just agreed; carried over when nothing new was
+        // granted; cleared with the list when the plugin stops asking for anything.
+        val acceptedAt = when {
+            wanted.isEmpty() -> null
+            agreeing -> OffsetDateTime.now()
+            else -> existing?.permissionsAcceptedAt ?: OffsetDateTime.now()
+        }
+        val acceptedBy = when {
+            wanted.isEmpty() -> null
+            agreeing -> currentUser()
+            else -> existing?.permissionsAcceptedBy ?: currentUser()
+        }
+
         val plugin = existing?.apply {
             this.name = name
             this.filename = filename.takeLast(MAX_NAME)
@@ -202,6 +265,10 @@ class PluginUploadAPI(
             this.apiVersion = apiVersion
             this.declaredFunctions = declared
             this.declaredParameters = parameters
+            this.declaredPermissions = permissions.write(wanted)
+            this.acceptedPermissions = permissions.write(wanted)
+            this.permissionsAcceptedAt = acceptedAt
+            this.permissionsAcceptedBy = acceptedBy
             this.sha256 = digest(source)
             this.uploadedAt = OffsetDateTime.now()
             this.uploadedBy = currentUser()
@@ -215,6 +282,15 @@ class PluginUploadAPI(
             apiVersion = apiVersion,
             declaredFunctions = declared,
             declaredParameters = parameters,
+            declaredPermissions = permissions.write(wanted),
+            /*
+             * Accepted is set to exactly what is declared, never to more. The check
+             * above is what decides whether that was allowed; by here it has been
+             * agreed to, or there was nothing to agree to.
+             */
+            acceptedPermissions = permissions.write(wanted),
+            permissionsAcceptedAt = acceptedAt,
+            permissionsAcceptedBy = acceptedBy,
             sha256 = digest(source),
             uploadedBy = currentUser(),
         )
@@ -230,6 +306,7 @@ class PluginUploadAPI(
                 "plugin" to saved.view(
                     declarations.read(saved.declaredFunctions),
                     declarations.readParameters(saved.declaredParameters),
+                    permissions.viewOf(permissions.grantedTo(saved)),
                 ),
                 "replaced" to (existing != null),
                 "provides" to provided,
@@ -245,6 +322,25 @@ class PluginUploadAPI(
      * is a 400 carrying the sentence, not a 500. Scoped to this controller
      * because these exceptions mean nothing anywhere else.
      */
+    /**
+     * A plugin needing permissions nobody has agreed to, answered as the question
+     * it is.
+     *
+     * Its own handler because the list has to travel: a message alone would leave
+     * the interface with nothing to show, and something to accept that nobody was
+     * shown is exactly what this is meant to prevent. The status is a 400 like
+     * every other refusal — nothing was stored, and the way forward is a second
+     * request.
+     */
+    @ExceptionHandler(PluginPermissionsNotAcceptedException::class)
+    fun needsAccepting(failure: PluginPermissionsNotAcceptedException): ResponseEntity<Map<String, Any>> =
+        ResponseEntity.badRequest().body(
+            mapOf(
+                "message" to (failure.message ?: "This plugin needs permissions"),
+                "permissions" to failure.needed.map { mapOf("name" to it.name, "summary" to it.summary) },
+            ),
+        )
+
     @ExceptionHandler(
         PluginEmptyException::class,
         PluginTooLargeException::class,
@@ -257,6 +353,7 @@ class PluginUploadAPI(
         
         PluginIdInvalidException::class,
         PluginFunctionInUseException::class,
+        PluginPermissionUnknownException::class,
     )
     fun refused(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.badRequest().body(mapOf("message" to (failure.message ?: "That file could not be loaded")))
@@ -326,6 +423,29 @@ class PluginUploadAPI(
               /** What this plugin has to be told before it can work. Defaults to none. */
               parameters(): OrknuxParameter[];
               /**
+               * Which JavaScript this plugin needs. Defaults to none.
+               *
+               * A plugin embeds its libraries rather than importing them - that is
+               * what makes it portable - and a bundle written for a browser or for
+               * Node often expects language features this sandbox does not switch
+               * on. Say which, and whoever loads the plugin is shown the list and
+               * has to accept it. Nothing is relaxed that was not accepted, and
+               * nothing is relaxed for any other plugin.
+               *
+               * This is the whole of what can be asked for:
+               @PERMISSION_LIST@
+               *
+               * There is deliberately no name for reading a file, opening a socket
+               * or reaching a Java class. Those are not permissions this list can
+               * express, and asking for one is refused rather than half-granted.
+               *
+               * Loading is done with none of them granted, because that is the run
+               * that finds out which you want - so the top level of your bundle has
+               * to evaluate without them. Ask for what `run` needs, not for what
+               * loading needs.
+               */
+              permissions(): OrknuxPermission[];
+              /**
                * What a workspace set those parameters to, keyed by name.
                *
                * Frozen, and put there by the server for the length of one call. A
@@ -342,6 +462,9 @@ class PluginUploadAPI(
 
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;
+
+            /** What a plugin may ask for. Exactly this list, and nothing else. */
+            type OrknuxPermission = @PERMISSION_UNION@;
 
             declare class OrknuxFunction {
               constructor(declaration: {
@@ -438,6 +561,21 @@ class PluginUploadAPI(
               }
 
               /**
+               * Which JavaScript this plugin needs beyond what every plugin gets.
+               *
+               * Whoever loads this is shown the list and has to accept it, and only
+               * what was accepted is turned on - for this plugin, in the sandbox one
+               * of its calls runs in, and nowhere else. Editing this to ask for more
+               * means being asked again: the acceptance names the permissions it was
+               * given for, so a new one is not covered by it.
+               *
+               * Leave it out if you need nothing, which is the common case.
+               */
+              permissions(): OrknuxPermission[] {
+                return ['INTL'];
+              }
+
+              /**
                * What this plugin offers.
                *
                * Each one is checked as it is constructed — a missing name, return type
@@ -489,6 +627,7 @@ class PluginAPI(
     private val access: WorkspaceAccess,
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
+    private val permissions: PluginPermissions,
 ) {
 
     /** Everything loaded into this installation, by name. */
@@ -496,7 +635,14 @@ class PluginAPI(
     fun plugins(): List<PluginView> {
         access.requireAdmin()
         return plugins.findAllByOrderByNameAsc().map {
-            it.view(declarations.read(it.declaredFunctions), declarations.readParameters(it.declaredParameters))
+            it.view(
+                declarations.read(it.declaredFunctions),
+                declarations.readParameters(it.declaredParameters),
+                // What was accepted, shown to whoever is reading the list rather
+                // than only to whoever accepted it. A decision about what code may
+                // do that lives in a dialog is a decision nobody can audit.
+                permissions.viewOf(permissions.grantedTo(it)),
+            )
         }
     }
 
@@ -676,6 +822,8 @@ class PluginExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is PluginDeclarationInvalidException,
             
             is PluginIdInvalidException,
+            is PluginPermissionUnknownException,
+            is PluginPermissionsNotAcceptedException,
             is PluginInUseException,
             is PluginFunctionInUseException,
             is PluginParameterUnknownException,

@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
@@ -57,9 +58,11 @@ class ActionNodeRunner(
     private val headers: ActionHeaders,
     private val functions: WorkflowFunctionRepository,
     private val scripts: ScriptRunner,
+    private val scriptImports: ScriptImports,
     private val pluginRunner: PluginRunner,
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
+    private val pluginPermissions: PluginPermissions,
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val mapper: ObjectMapper,
@@ -360,7 +363,25 @@ class ActionNodeRunner(
         val result = if (function.scope == FunctionScope.PLUGIN) {
             runPlugin(function, action, arguments)
         } else {
-            scripts.call(function.source, function.name, arguments, contextFor(action))
+            /*
+             * What it imports is assembled before it runs, because the sandbox
+             * resolves nothing itself. An import that no longer resolves is
+             * permanent: nothing about running the step again would find the
+             * function somebody deleted.
+             */
+            when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {
+                is ScriptImportsResult.Broken ->
+                    throw ActionFailedException("${function.name} ${resolved.reason}", permanent = true)
+
+                is ScriptImportsResult.Resolved -> scripts.call(
+                    function.source,
+                    function.name,
+                    arguments,
+                    contextFor(action),
+                    resolved.modules,
+                    resolved.imports,
+                )
+            }
         }
 
         return when (result) {
@@ -420,6 +441,10 @@ class ActionNodeRunner(
             declared,
             arguments,
             pluginParameters.settingsFor(plugin, action.workspaceId),
+            // What a person accepted for this plugin, and nothing else. Read
+            // per call from this plugin's row, so one plugin's agreement cannot
+            // reach another's context.
+            pluginPermissions.grantedTo(plugin),
         )
     }
 

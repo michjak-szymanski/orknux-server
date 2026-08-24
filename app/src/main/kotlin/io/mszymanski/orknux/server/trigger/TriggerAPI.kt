@@ -1,6 +1,10 @@
 package io.mszymanski.orknux.server.trigger
 
+import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.DeliverableActions
+import io.mszymanski.orknux.connector.connection.SlackBotUser
+import io.mszymanski.orknux.connector.connection.SlackBotUserOutcome
+import io.mszymanski.orknux.connector.connection.SlackBotUsers
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
 import io.mszymanski.orknux.server.action.FunctionScope
@@ -46,6 +50,8 @@ class TriggerAPI(
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val references: WorkflowReferences,
+    /** Who a Slack connection posts as, which is what a reply is matched against. */
+    private val botUsers: SlackBotUsers,
 ) {
 
     @QueryMapping
@@ -77,6 +83,10 @@ class TriggerAPI(
                 action = input.action
                     ?.also(::requireDeliverable)
                     .takeIf { input.type == TriggerType.INCOMING_CONNECTION },
+                watchedConnectionIds = input.watchedConnectionIds
+                    .takeIf { input.type == TriggerType.INCOMING_CONNECTION }
+                    .orEmpty()
+                    .toMutableSet(),
                 cron = input.cron?.trim()?.ifEmpty { null }.takeIf { input.type == TriggerType.SCHEDULED },
                 timezone = input.timezone?.trim()?.ifEmpty { null }.takeIf { input.type == TriggerType.SCHEDULED },
                 webhookPath = input.webhookPath?.let(::pathOf).takeIf { input.type == TriggerType.WEBHOOK },
@@ -168,6 +178,16 @@ class TriggerAPI(
                 requireDeliverable(it)
                 trigger.action = it
             }
+            // Assigned rather than only applied when it was sent, the way the
+            // condition below is: watching nobody is a choice a form has to be
+            // able to save, and it is the shape every non-reply trigger has.
+            //
+            // Emptied and refilled rather than replaced, because this is the
+            // loaded collection Hibernate is tracking and handing it a new one
+            // is how a managed entity gets an orphan it will not save.
+            val watched = input.watchedConnectionIds.orEmpty().toSet()
+            trigger.watchedConnectionIds.retainAll(watched)
+            trigger.watchedConnectionIds.addAll(watched)
         } else if (trigger.type == TriggerType.WEBHOOK) {
             input.webhookPath?.let { trigger.webhookPath = pathOf(it) }
             // Null takes the contract off, which the form has to be able to say.
@@ -262,6 +282,7 @@ class TriggerAPI(
             type = trigger.type,
             connectionId = trigger.connectionId,
             action = trigger.action,
+            watchedConnectionIds = trigger.watchedConnectionIds.sorted(),
             cron = trigger.cron,
             timezone = trigger.timezone,
             payload = trigger.payload,
@@ -317,6 +338,75 @@ class TriggerAPI(
     }
 
     /**
+     * A reply trigger has somebody to watch, and every one of them can say who
+     * it is.
+     *
+     * **Resolved at save time and not only at match time.** The match is
+     * `parent_user_id` against the Slack user behind each watched bot token, so
+     * a token that will not authenticate makes a trigger that is enabled,
+     * instanced and permanently deaf. The only way to discover that later is to
+     * wait for a reply that never fires, which is the failure this refuses at
+     * the door instead. It also warms the cache the matching reads, so the first
+     * reply after a save costs nothing.
+     *
+     * Only a reply needs one. A mention or a message is about the connection it
+     * arrives on, so a watch list on either is left alone rather than refused —
+     * a form that switches the event over should not have to remember to clear
+     * a field the new event does not read.
+     */
+    private fun requireWatchable(trigger: WorkflowTrigger) {
+        if (trigger.action != TriggerAction.REPLY) return
+        if (trigger.watchedConnectionIds.isEmpty()) throw TriggerReplyWatchRequiredException()
+
+        for (id in trigger.watchedConnectionIds) {
+            val connection = connections.workspaceConnection(id)
+            if (connection == null || connection.workspaceId != trigger.workspaceId) {
+                throw TriggerConnectionRequiredException()
+            }
+            // A reply's parent is a Slack user, and only a Slack connection has
+            // one. Nothing else could ever be the author of a thread.
+            if (connection.type != ConnectionType.SLACK) throw TriggerConnectionRequiredException()
+
+            val bot = botUsers.identify(id)
+            if (bot.outcome != SlackBotUserOutcome.FOUND || bot.userId == null) {
+                throw TriggerReplyWatchUnusableException(connection.name, bot.message)
+            }
+        }
+    }
+
+    /**
+     * Which Slack user each of a workspace's connections posts as.
+     *
+     * The picker for "whose messages does this watch" is what asks. A bot token
+     * is a Slack user, so the row a person chooses is really a user id — and two
+     * connections holding the same token are one user twice over, which the
+     * answer says out loud rather than leaving a list of two rows to imply a
+     * distinction Slack does not make.
+     *
+     * It never fails and never gates: a connection whose token could not be
+     * asked comes back `UNCHECKED` with one line saying why, because a picker
+     * that empties itself in silence reads as a broken installation. Saving is
+     * where a choice is refused, and it is refused for a reason this has already
+     * shown.
+     */
+    @QueryMapping
+    fun slackBotUsers(@Argument workspaceId: Long): List<SlackBotUserView> {
+        requireWorkspaceAccess(workspaceId)
+        val slack = connections.workspaceConnections(workspaceId).filter { it.type == ConnectionType.SLACK }
+        return botUsers.identify(slack.map { it.id }).map(::describe)
+    }
+
+    private fun describe(bot: SlackBotUser) = SlackBotUserView(
+        connectionId = bot.connectionId,
+        name = bot.name,
+        outcome = bot.outcome,
+        message = bot.message,
+        userId = bot.userId,
+        handle = bot.handle,
+        receives = bot.receives,
+    )
+
+    /**
      * A trigger asks its own workspace's question and no other's — the same rule
      * a workflow node follows when it points at a definition.
      */
@@ -348,6 +438,7 @@ class TriggerAPI(
                 if (connection == null || connection.workspaceId != trigger.workspaceId) {
                     throw TriggerConnectionRequiredException()
                 }
+                requireWatchable(trigger)
             }
 
             TriggerType.SCHEDULED -> {
@@ -469,6 +560,13 @@ data class CreateTriggerInput(
     val type: TriggerType,
     val connectionId: Long? = null,
     val action: TriggerAction? = null,
+    /**
+     * Whose messages a `REPLY` watches for replies to, and required on one.
+     *
+     * Not the connection it listens on: that one is the socket, these are the
+     * bot tokens whose own messages count as a thread's parent.
+     */
+    val watchedConnectionIds: List<Long>? = null,
     val cron: String? = null,
     val timezone: String? = null,
     /** JSON object handed to the runs this starts. */
@@ -501,6 +599,8 @@ data class UpdateTriggerInput(
     val name: String,
     val connectionId: Long? = null,
     val action: TriggerAction? = null,
+    /** Whose messages a `REPLY` watches; null watches nobody, which only a reply minds. */
+    val watchedConnectionIds: List<Long>? = null,
     val cron: String? = null,
     val timezone: String? = null,
     val payload: String? = null,
@@ -533,6 +633,8 @@ data class TriggerView(
     val type: TriggerType,
     val connectionId: Long?,
     val action: TriggerAction?,
+    /** Whose messages a `REPLY` watches for replies to; empty on every other event. */
+    val watchedConnectionIds: List<Long>,
     val cron: String?,
     val timezone: String?,
     /** JSON object handed to the runs this starts; null when it says nothing. */
@@ -560,6 +662,27 @@ data class TriggerView(
     val source: String,
     /** What the event is, ready to show: "Mention", or the cron expression. */
     val event: String,
+)
+
+/**
+ * Which Slack user one connection posts as, for the picker that chooses whose
+ * messages a reply trigger watches.
+ *
+ * @property message one line, ready to show, and empty when there is nothing
+ *   worth saying. Never carries a credential.
+ * @property receives whether the bot token carries a scope a channel's messages
+ *   arrive under, and null where Slack did not say — a response that carried no
+ *   scope header has reported no absence, and drawing one would send somebody to
+ *   fix a token that is fine.
+ */
+data class SlackBotUserView(
+    val connectionId: Long,
+    val name: String,
+    val outcome: SlackBotUserOutcome,
+    val message: String,
+    val userId: String?,
+    val handle: String?,
+    val receives: Boolean?,
 )
 
 data class TriggerFiringPage(

@@ -1018,6 +1018,14 @@ CREATE TABLE workflow_trigger
     constraint workflow_trigger_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE workflow_trigger_watch
+(
+    trigger_id                   integer not null,
+    connection_id                integer not null,
+    primary key (trigger_id, connection_id),
+    constraint workflow_trigger_watch_trigger_id_fkey FOREIGN KEY (trigger_id) REFERENCES workflow_trigger(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workspace
 (
     id                           integer not null primary key autoincrement,

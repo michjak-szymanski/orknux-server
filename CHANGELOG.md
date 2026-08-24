@@ -106,6 +106,18 @@ have failed.
   way. It used to go out beside the turn the panel was already running, which put
   two turns on one chat and left the answer unread.
 
+- **A model's context window can be set.** It is on the model's own page, under
+  *Context Window*, beside the *Max Output* that comes out of it — both in
+  tokens, both as the provider states them, and either left empty meaning not
+  recorded. Until now the two could be typed once, when the model was added, and
+  never again: a model discovered from a provider, or added before anybody knew
+  the number, was stuck at nothing for good. Which mattered, because the window
+  is what a session's memory is a share of — so refusing a share said *"Set the
+  model's context window on the Models screen first"* about a screen that could
+  only print one. The number belongs to the model rather than to the provider,
+  since one provider serves models whose windows differ by an order of
+  magnitude.
+
 ### Changed
 
 - **An answer read aloud is the answer as it is drawn, not the markdown behind
@@ -141,6 +153,17 @@ have failed.
   so the transcript went from the question to the whole answer with nothing in
   between, and the one screen saying anything was happening was the panel off to
   the side.
+
+- **An agent's settings point at everything they name.** The card names a model,
+  memory catalogs, skill catalogs, tools and MCP servers, and offered no way to
+  any of them — so deciding whether to grant a tool meant leaving the form to go
+  and find out what it was. Each now carries the same mark every other form here
+  uses: beside the model picker, and at the end of each catalog, tool and server
+  row. They open in a tab of their own so a half-edited agent is not thrown away,
+  a row's mark grants nothing when it is pressed, and a catalog's mark opens the
+  memory or skills screen on the catalog it names rather than on whichever is
+  first. An MCP server the workspace does not have gets no mark, because a grant
+  there is a name somebody typed rather than a reference.
 
 ## 0.9.2
 

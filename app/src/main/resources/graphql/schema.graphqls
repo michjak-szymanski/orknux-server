@@ -817,6 +817,17 @@ type Mutation {
     "Changes a comment. Only whoever wrote it may."
     editIssueComment(id: ID!, content: String!): Issue!
     """
+    Takes a comment off an issue. Whoever wrote it may, and so may an
+    administrator of the workspace - wider than editing, because a removal
+    cannot put words in anybody's mouth and this one is written down.
+
+    Really removed, not marked removed: the row goes, its files go with it,
+    rows and bytes, and so does the copy of what was said that the bell was
+    given. What is left is one line in the issue's history saying a comment by
+    somebody was removed, by somebody, and never what it said.
+    """
+    removeIssueComment(id: ID!): Issue!
+    """
     Puts uploaded files on an issue. Sent after it is filed, since a new issue
     has no id while it is still being written.
     """
@@ -5722,6 +5733,12 @@ type IssueComment {
     attachments: [IssueAttachment!]!
     "Whether the person reading this wrote it, and so may change it."
     mine: Boolean!
+    """
+    Whether they may take it off: whoever wrote it, or an administrator of the
+    workspace. Wider than `mine`, so it is answered separately rather than
+    worked out from it.
+    """
+    mayRemove: Boolean!
 }
 
 type Issue {
@@ -5763,10 +5780,11 @@ type IssuePage {
 """
 What kind of change one line in an issue's history is.
 
-Six of these are stored when they happen; OPENED is read off the issue itself
-and COMMENT off the comments table, because both were already recorded
+All but two of these are stored when they happen; OPENED is read off the issue
+itself and COMMENT off the comments table, because both were already recorded
 faithfully and a second copy of a comment is a copy that goes stale the moment
-somebody edits it.
+somebody edits it. COMMENT_REMOVED is stored for the opposite reason: once a
+comment is gone there is no table left to read it from.
 """
 enum IssueEventKind {
     "It was filed."
@@ -5805,6 +5823,15 @@ enum IssueEventKind {
     LINK
     "Somebody said something."
     COMMENT
+    """
+    A comment was taken off, and this line is all that is left of it.
+
+    `was` is who wrote it and `became` is null. What it said is deliberately
+    nowhere: a record of the removal that reproduced the text would defeat the
+    removal. The only kind here written because a row went away - every other
+    one describes a change some other table still holds.
+    """
+    COMMENT_REMOVED
 }
 
 type IssueEvent {

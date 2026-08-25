@@ -555,8 +555,15 @@ class IssueTools(
         held.lastCommentAt = OffsetDateTime.now()
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
-        issues.save(held)
-        newsDesk.commented(held, currentUser(), said.trim())
+        /*
+         * Flushed rather than saved, for the reason the controller's door
+         * flushes: the news has to say which comment it is about, and a comment
+         * that has not been written yet has no id to say. Without one, an agent's
+         * comment would be the one nobody could ever fully remove.
+         */
+        val saved = issues.saveAndFlush(held)
+        val posted = saved.comments.maxByOrNull { requireNotNull(it.id) }
+        newsDesk.commented(saved, currentUser(), said.trim(), commentId = posted?.id)
         return mapper.writeValueAsString(
             mapOf("said" to true, "issue" to held.number, "url" to issueLink(scope.workspaceId, held.number)),
         )

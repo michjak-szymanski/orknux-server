@@ -172,7 +172,14 @@ class IssueMoveAPI(
          * workspace where they will now find it, and the words they are told
          * are the words on the issue.
          */
-        newsDesk.commented(saved, currentUser(), said)
+        newsDesk.commented(
+            saved,
+            currentUser(),
+            said,
+            // Which comment, so that removing it later takes this news with it.
+            // The newest is the highest id, the column being an identity.
+            commentId = saved.comments.maxByOrNull { requireNotNull(it.id) }?.id,
+        )
 
         return requireNotNull(reading.workspaceIssue(requireNotNull(destination.id), saved.number))
     }

@@ -128,13 +128,17 @@ class NpmRegistry(
             ),
         )
 
-        val candidates = modules(described)
-        if (candidates.isEmpty()) throw LibraryNotAModuleException("$name@$resolved")
-        val (path, source) = candidates.firstNotNullOfOrNull { candidate ->
-            entry(archive, "package/$candidate")?.let { candidate to it }
-        } ?: throw LibraryNotAModuleException("$name@$resolved")
+        val (path, source) = entryOf(archive, described) ?: throw LibraryNoEntryException("$name@$resolved")
 
-        imported(source)?.let { throw LibraryDependsException("$name@$resolved", path, it) }
+        val format = LibrarySource.formatOf(source)
+        LibrarySource.imported(source)?.let {
+            throw LibraryDependsException("$name@$resolved", path, "imports", it)
+        }
+        if (format == LibrarySource.COMMONJS) {
+            LibrarySource.required(source)?.let {
+                throw LibraryDependsException("$name@$resolved", path, "requires", it)
+            }
+        }
 
         return Fetched(
             packageName = name,
@@ -179,54 +183,80 @@ class NpmRegistry(
     }
 
     /**
-     * The files in the package that could be the module, best first.
+     * The file this installs, with the path it came from, or null.
      *
-     * Only ever ES modules. `exports` is asked before `module`, and `main` is
-     * asked only where `"type": "module"` says it is one — a package's `main` is
-     * a CommonJS file far more often than not, and evaluating one in the sandbox
-     * fails on `module is not defined`, which is a true sentence that tells
-     * nobody anything.
+     * **An ES module is preferred wherever the package ships one**, and that is
+     * decided by reading the candidate rather than by trusting the field it was
+     * named under: `exports.default` is as often the CommonJS build as not, and a
+     * package that publishes both should have its module installed even where its
+     * manifest lists them the other way round. So the candidates are walked in
+     * [modules]' order, the first that is genuinely an ES module wins, and the
+     * first that exists at all is the fallback.
      *
-     * More than one candidate is collected rather than the first taken, because a
-     * package's `exports` frequently points at a file it did not publish (a
-     * `./src` entry a build step was supposed to produce), and falling through to
-     * `module` is what npm's own resolver would do next.
+     * More than one candidate is walked rather than the first taken for a second
+     * reason too: a package's `exports` frequently points at a file it did not
+     * publish — a `./src` entry a build step was supposed to produce — and
+     * falling through is what npm's own resolver would do next.
+     */
+    private fun entryOf(archive: ByteArray, described: JsonNode): Pair<String, String>? {
+        var fallback: Pair<String, String>? = null
+        for (candidate in modules(described)) {
+            val source = entry(archive, "package/$candidate") ?: continue
+            if (LibrarySource.formatOf(source) == LibrarySource.ESM) return candidate to source
+            if (fallback == null) fallback = candidate to source
+        }
+        return fallback
+    }
+
+    /**
+     * The files in the package that could be the entry, best first.
+     *
+     * ES builds first and the CommonJS ones after them, because the sandbox runs
+     * a module natively and a CommonJS file only through the wrapper
+     * [LibrarySource.runnable] puts round it. Within the ES half `exports` is
+     * asked before `module`, and `main` counts as one only where `"type":
+     * "module"` says it is.
+     *
+     * Then the same manifest is read again for what it says is CommonJS: the
+     * `require` condition of `exports`, and `main`. Until #274 those were not
+     * candidates at all and a package shipping only them was refused; a CommonJS
+     * file that requires nothing is a self-contained module with a different
+     * spelling, and refusing it was a rule wider than its reason.
      */
     internal fun modules(described: JsonNode): List<String> {
         val found = LinkedHashSet<String>()
 
         val exports = described.path("exports")
-        if (exports.isTextual) {
-            file(exports.asString(""))?.let(found::add)
-        } else if (exports.isObject) {
-            val root = if (exports.has(".")) exports.path(".") else exports
-            conditions(root, found, 0)
-        }
+        if (exports.isTextual) file(exports.asString(""))?.let(found::add)
+        val root = if (exports.isObject) (if (exports.has(".")) exports.path(".") else exports) else null
+        if (root != null) conditions(root, found, 0, PREFERRED)
 
         file(described.path("module").asString(""))?.let(found::add)
-        if (described.path("type").asString("") == "module") {
-            file(described.path("main").asString(""))?.let(found::add)
-        }
+        val main = file(described.path("main").asString(""))
+        if (described.path("type").asString("") == "module") main?.let(found::add)
+
+        if (root != null) conditions(root, found, 0, REQUIRED)
+        main?.let(found::add)
         return found.toList()
     }
 
     /**
-     * Walks an `exports` condition tree, preferring the ES module branch.
+     * Walks an `exports` condition tree, following the conditions it is given.
      *
-     * `import` and `module` are the ones that name a module; `default` is asked
-     * last because it is as often the CommonJS file as not. `require` is never
-     * asked, and neither is a subpath — a library here is one module, and a
-     * package's second entry point is a second file it would have to import.
+     * Called twice: once with [PREFERRED], the conditions that name an ES module,
+     * and once with [REQUIRED], which is the CommonJS branch. A subpath is never
+     * asked for — a library here is one module, and a package's second entry
+     * point is a second file it would have to import.
      */
-    private fun conditions(node: JsonNode, into: MutableSet<String>, depth: Int) {
+    private fun conditions(node: JsonNode, into: MutableSet<String>, depth: Int, asked: List<String>) {
         if (depth > MAX_CONDITIONS) return
         if (node.isTextual) {
             file(node.asString(""))?.let(into::add)
             return
         }
         if (!node.isObject) return
-        for (condition in PREFERRED) {
-            if (node.has(condition)) conditions(node.path(condition), into, depth + 1)
+        for (condition in asked) {
+            if (node.has(condition)) conditions(node.path(condition), into, depth + 1, asked)
         }
     }
 
@@ -236,32 +266,6 @@ class NpmRegistry(
         if (path.isEmpty() || path.startsWith("/") || path.contains("..") || path.contains('*')) return null
         return path
     }
-
-    /**
-     * The first module this file imports, or null when it imports nothing.
-     *
-     * **This is where the answer on dependencies lives.** A library is one
-     * self-contained module, so a file that imports anything at all is refused —
-     * a bare name because this installation is not going to fetch a second
-     * package to satisfy it, and a relative path because a package that split
-     * itself across files has published a module graph rather than a module, and
-     * the sandbox resolves no graph.
-     *
-     * Two of the three forms would be caught by evaluating the file anyway, since
-     * GraalJS resolves no module specifier and says so. The third would not:
-     * `import('x')` at run time loads nothing until it is called, so a package
-     * using one would install cleanly and fail in the middle of somebody's
-     * workflow. That case is the reason this reads the text rather than leaving
-     * it all to the sandbox — and the reason the sentence it produces names the
-     * specifier, which the sandbox's own message does not always do.
-     *
-     * `require` is deliberately not looked for. An ES bundle that mentions it
-     * mentions it inside a shim it never reaches, and refusing on that would
-     * refuse files that work.
-     */
-    internal fun imported(source: String): String? =
-        listOf(STATIC_IMPORT, EXPORT_FROM, DYNAMIC_IMPORT)
-            .firstNotNullOfOrNull { pattern -> pattern.find(source)?.groupValues?.get(2) }
 
     /**
      * Hashes what arrived and compares it with what the registry said it would be.
@@ -447,25 +451,28 @@ class NpmRegistry(
         /**
          * The `exports` conditions that name an ES module, best first.
          *
-         * `require` is missing on purpose, and `node` and `browser` are here
-         * because a package that ships both usually names the module under one
-         * of them rather than at the top.
+         * `require` is missing here and has [REQUIRED] to itself, because the two
+         * are asked in two passes: everything a package calls a module is a
+         * candidate before anything it calls CommonJS. `node` and `browser` are
+         * here because a package that ships both usually names the module under
+         * one of them rather than at the top.
          */
         val PREFERRED = listOf("module", "import", "browser", "node", "default")
+
+        /**
+         * The CommonJS branch, asked only once the ES ones have been.
+         *
+         * `node` and `default` are repeated because `require` is often nested
+         * under one of them, and a condition already visited costs a set
+         * membership.
+         */
+        val REQUIRED = listOf("require", "node", "default")
 
         /** npm's own rule for a name, scope included, and its length limit. */
         val PACKAGE = Regex("(?:@[a-z0-9][a-z0-9._-]{0,100}/)?[a-z0-9][a-z0-9._-]{0,100}")
 
         /** Exactly one version. No range, no tag, no `latest`. */
         val VERSION = Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?")
-
-        val STATIC_IMPORT = Regex("(?<![\\w$.])(import)\\s*(?:[^;'\"()]*?\\bfrom\\s*)?[\"']([^\"']+)[\"']")
-
-        val EXPORT_FROM = Regex(
-            "(?<![\\w$.])(export)\\s*(?:\\*(?:\\s+as\\s+[\\w$]+)?|\\{[^}]*})\\s*from\\s*[\"']([^\"']+)[\"']",
-        )
-
-        val DYNAMIC_IMPORT = Regex("(?<![\\w$.])(import)\\s*\\(\\s*[\"']([^\"']+)[\"']")
     }
 }
 

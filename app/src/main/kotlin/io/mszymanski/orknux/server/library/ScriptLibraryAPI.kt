@@ -170,7 +170,24 @@ class LibraryStore(
         if (!KEY.matches(key)) throw LibraryKeyInvalidException(key)
         if (sizeBytes > MAX_SIZE) throw LibraryTooLargeException(MAX_SIZE / 1024)
 
-        val read = when (val answered = scripts.library(source)) {
+        // Which of the two spellings this is, and whether it is on its own. Asked
+        // here rather than in the door that fetched it, so that a CommonJS file
+        // somebody uploads is held to exactly the rule a package is: a `require`
+        // in a file that is going to be *run* as CommonJS is a call into a second
+        // package, and one stored without this would install and fail at its
+        // first use. An ES module is never asked, because a bundle mentions
+        // `require` inside a shim it never reaches - see LibrarySource.required.
+        val format = LibrarySource.formatOf(source)
+        if (format == LibrarySource.COMMONJS) {
+            LibrarySource.required(source)?.let {
+                throw LibraryUnreadableException(
+                    "it calls require(\"$it\"), and a library has to be one self-contained file. " +
+                        "This installation does not bundle.",
+                )
+            }
+        }
+
+        val read = when (val answered = scripts.library(LibrarySource.runnable(source, format))) {
             is LibraryInspection.Read -> answered
             is LibraryInspection.Unreadable -> throw LibraryUnreadableException(answered.reason)
         }
@@ -195,6 +212,7 @@ class LibraryStore(
                 this.sha256 = digest(source)
                 this.declaredMembers = members
                 this.callable = read.callable
+                this.sourceFormat = format
                 this.uploadedAt = OffsetDateTime.now()
                 this.uploadedBy = currentUser()
                 // Rewritten in full both ways round. A registry install over an
@@ -345,6 +363,7 @@ class ScriptLibraryAPI(
         sizeBytes = library.sizeBytes.toDouble(),
         sha256 = library.sha256,
         callable = library.callable,
+        format = library.sourceFormat,
         members = mapper.readTree(library.declaredMembers).values().map { held ->
             LibraryMemberView(
                 name = held.path("name").asString(""),
@@ -419,7 +438,7 @@ class ScriptLibraryExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is LibraryRegistryUnreachableException,
             is LibraryRegistrySilentException,
             is LibraryIntegrityException,
-            is LibraryNotAModuleException,
+            is LibraryNoEntryException,
             is LibraryDependsException,
             -> ErrorType.BAD_REQUEST
 

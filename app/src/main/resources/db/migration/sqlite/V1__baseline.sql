@@ -620,8 +620,14 @@ CREATE TABLE script_library
     origin_url                   varchar(500),
     origin_integrity             varchar(160),
     origin_entry                 varchar(255),
+    -- Which spelling the stored file is: ESM, or CommonJS wrapped on the way into
+    -- the sandbox. A statement about how the text is run, never about where it
+    -- came from - the file is stored exactly as it arrived so that sha256 and
+    -- origin_integrity stay claims anybody holding the same package can check.
+    source_format                varchar(16) not null default 'ESM',
     constraint uq_script_library_key UNIQUE (library_key),
-    constraint ck_script_library_origin CHECK ((origin) IN ('UPLOAD', 'REGISTRY'))
+    constraint ck_script_library_origin CHECK ((origin) IN ('UPLOAD', 'REGISTRY')),
+    constraint ck_script_library_source_format CHECK ((source_format) IN ('ESM', 'COMMONJS'))
 );
 
 CREATE TABLE security_role

@@ -387,7 +387,7 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
      * either losing a line or sending it twice.
      *
      * `llm_session_event_tail_idx` is what makes it a seek rather than a walk of
-     * a session that has been running all night - see V204 for why the index
+     * a session that has been running all night - see V205 for why the index
      * that was already there is not the one this wants.
      */
     @Query(

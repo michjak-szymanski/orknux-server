@@ -1,0 +1,28 @@
+-- Which comment a piece of news is about.
+--
+-- Added because a comment can now be removed from an issue, and until this
+-- column there was no way to remove it from here. `issue_news.says` holds what
+-- was said in full, and one row is written per person told - so an issue with
+-- five watchers keeps five copies of every comment, addressed to five bells,
+-- for as long as the issue exists.
+--
+-- That is fine while the tracker is the record. It stops being fine the moment
+-- a comment can be taken off, because the reason most worth taking one off is
+-- that the text should not exist anywhere: a credential pasted into a thread, a
+-- customer's details in a bug report. A removal that emptied the comments table
+-- and left the news alone would be a removal in the interface only, which is
+-- exactly what the report asking for this was complaining about.
+--
+-- Null for everything that is not about a comment - a status, an assignment, a
+-- link, a task - and null for every row written before this column existed.
+-- Backfilling is not possible and would not be worth it if it were: matching
+-- old news to old comments means comparing the text, which is the thing this
+-- exists to stop having lying about.
+--
+-- Deliberately not a foreign key. What happens to this news when its comment
+-- goes is a decision the application makes - IssueNewsDesk.forgetComment - and
+-- an ON DELETE clause would be a second path doing the same job with no code
+-- behind it, on a pair of schemas where nothing compares the two files'
+-- cascades to each other. The issue's own cascade still takes every row here
+-- with it when an issue is deleted.
+ALTER TABLE issue_news ADD COLUMN comment_id BIGINT;

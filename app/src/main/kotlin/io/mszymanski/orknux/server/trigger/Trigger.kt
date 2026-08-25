@@ -204,6 +204,18 @@ interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
         action: TriggerAction,
     ): List<WorkflowTrigger>
 
+    /**
+     * The same question asked of several connections at once.
+     *
+     * Because one Slack app can be several connection rows, and Slack decides
+     * for itself which of an app's open sockets an event is delivered to - see
+     * `IncomingTriggerListener` for what that did to a trigger bound to one row.
+     */
+    fun findByConnectionIdInAndActionAndEnabledTrue(
+        connectionIds: Collection<Long>,
+        action: TriggerAction,
+    ): List<WorkflowTrigger>
+
     /** What the scheduler's tick asks: which definitions run on a clock? */
     fun findByTypeAndEnabledTrue(type: TriggerType): List<WorkflowTrigger>
 

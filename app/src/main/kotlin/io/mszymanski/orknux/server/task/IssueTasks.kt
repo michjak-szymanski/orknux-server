@@ -201,7 +201,7 @@ class IssueTaskStarter(
             ),
         )
         audit.record(issue.workspaceId, WorkspaceAuditCategory.TASK, "Task ${task.title} started")
-        announce(issue, agents.findByIdOrNull(agentId)?.name, by)
+        announce(issue, agents.findByIdOrNull(agentId)?.name, by, task)
         pickUp(issue, by)
         return task
     }
@@ -243,16 +243,27 @@ class IssueTaskStarter(
      * pressed the button is named inside the sentence rather than being the
      * author: they did not write this.
      *
+     * **The task is linked**, because the comment is the only place an issue
+     * mentions the task at all and a reader following it has nowhere else to
+     * go: the work is happening on that page, live, and the thread's next
+     * entry is whatever the agent says when it has finished. A relative
+     * address, so it stays inside the installation the reader is signed in to
+     * rather than pointing at whichever origin the server was configured with.
+     *
      * Written before the status moves, so the thread reads in the order it
      * happened. Never allowed to be the reason a start fails: the task is
      * already running by the time this is written, and an issue that could not
      * be commented on is not a reason to lose it.
      */
-    private fun announce(issue: Issue, agent: String?, by: String) {
+    private fun announce(issue: Issue, agent: String?, by: String, task: Task) {
         if (agent == null) return
         runCatching {
+            val where = "/workspace/${issue.workspaceId}/tasks/${requireNotNull(task.id)}"
             issue.comments.add(
-                IssueComment(author = agent, content = "Started by AI. $by set me to work on this."),
+                IssueComment(
+                    author = agent,
+                    content = "Started by AI. $by set me to work on this — [follow it]($where).",
+                ),
             )
             issue.lastCommentAt = OffsetDateTime.now()
             issue.lastModifiedAt = OffsetDateTime.now()

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.chat
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -68,4 +69,8 @@ interface ChatAnswerTakeRepository : JpaRepository<ChatAnswerTake, Long> {
  * was followed by three more turns would rewrite what those turns were replying
  * to.
  */
-class ChatNothingToRegenerateException(says: String) : RuntimeException(says)
+class ChatNothingToRegenerateException(val says: String) : RuntimeException(says), Refusal {
+
+    override val arguments get() = mapOf("says" to says)
+}
+

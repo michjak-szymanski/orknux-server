@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.memory
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -130,10 +131,16 @@ fun memoryFilter(catalogId: Long, search: String?, author: String?): Specificati
         builder.and(*predicates.toTypedArray())
     }
 
-class MemoryCatalogNotFoundException(id: Long) : RuntimeException("No memory catalog with id $id")
+class MemoryCatalogNotFoundException(val id: Long) : RuntimeException("No memory catalog with id $id"), Refusal {
 
-class MemoryCatalogNameTakenException(name: String) :
-    RuntimeException("A memory catalog named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class MemoryCatalogNameTakenException(val name: String) :
+    RuntimeException("A memory catalog named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class MemoryCatalogNameInvalidException : RuntimeException("A catalog name is required")
 
@@ -145,11 +152,17 @@ class MemoryCatalogNameInvalidException : RuntimeException("A catalog name is re
  * folder at once. Named agents rather than a count, because the way out is to go
  * and take the grant off each of them and "2 agents" does not say which.
  */
-class MemoryCatalogInUseException(name: String, agents: List<String>) : RuntimeException(
+class MemoryCatalogInUseException(val name: String, val agents: List<String>) : RuntimeException(
     "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
 
-class MemoryNotFoundException(id: Long) : RuntimeException("No memory with id $id")
+    override val arguments get() = mapOf("name" to name, "agents" to agents)
+}
+
+class MemoryNotFoundException(val id: Long) : RuntimeException("No memory with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 class MemoryTitleInvalidException : RuntimeException("A memory title is required")
 

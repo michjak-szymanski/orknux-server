@@ -878,6 +878,13 @@ type Mutation {
     """
     setUserEmailNotifications(id: ID, enabled: Boolean!): AppUser!
     """
+    Sets the language you read the product in. Yours only - nobody sets somebody
+    else's. A BCP-47 tag such as `en` or `pl`; null puts you back to having
+    chosen nothing, so the browser's own locale decides again. A tag no
+    catalogue was shipped for reads as English.
+    """
+    setMyLanguage(language: String): AppUser!
+    """
     Turns the cost line in your chats on or off. Yours only - it decides what is
     drawn on one person's own screen, on chats nobody else can open, so there is
     no id to pass.
@@ -5339,6 +5346,12 @@ type AppUser {
     False unless they have turned it on.
     """
     chatCostShown: Boolean!
+    """
+    The language they read the product in, as a BCP-47 tag. Null where they have
+    not chosen, which is not the same as English: it is what lets the browser
+    open in the language it is already set to.
+    """
+    language: String
     type: UserType!
     roles: [RoleRef!]!
     "False for anybody the identity provider defines."

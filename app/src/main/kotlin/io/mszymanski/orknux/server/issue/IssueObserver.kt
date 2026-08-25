@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -87,5 +88,9 @@ interface IssueObserverRepository : JpaRepository<IssueObserver, Long> {
  * both are worth reporting now rather than storing: a model, which has nowhere
  * to read its news, or an id that names nothing in this workspace.
  */
-class IssueObserverInvalidException(what: String) :
-    RuntimeException("$what is not something in this workspace that can observe an issue")
+class IssueObserverInvalidException(val what: String) :
+    RuntimeException("$what is not something in this workspace that can observe an issue"), Refusal {
+
+    override val arguments get() = mapOf("what" to what)
+}
+

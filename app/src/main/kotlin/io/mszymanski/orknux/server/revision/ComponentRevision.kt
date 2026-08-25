@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.revision
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -155,7 +156,10 @@ interface ComponentRevisionRepository : JpaRepository<ComponentRevision, Long> {
     fun idsRecordedBefore(before: OffsetDateTime): List<Long>
 }
 
-class ComponentRevisionNotFoundException(id: Long) : RuntimeException("No revision with id $id")
+class ComponentRevisionNotFoundException(val id: Long) : RuntimeException("No revision with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Somebody asked to restore a component that is no longer there.
@@ -174,5 +178,9 @@ class RevisionComponentGoneException(kind: ComponentRevisionKind, id: Long) :
  * thing that changes it, and putting an old snapshot back would be this
  * application overwriting what a plugin owns.
  */
-class RevisionNotRestorableException(name: String) :
-    RuntimeException("\"$name\" is not editable here, so a revision of it cannot be put back")
+class RevisionNotRestorableException(val name: String) :
+    RuntimeException("\"$name\" is not editable here, so a revision of it cannot be put back"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
+

@@ -479,6 +479,40 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
     fun after(sessionId: Long, after: Long, page: Pageable): List<LlmSessionEvent>
 
     /**
+     * The lines up to a point that have not finished saying what they will say.
+     *
+     * For a reader that joins partway through. [after] is a forward-only
+     * cursor, which is right for lines that are written once and wrong for the
+     * two kinds that are not: a call recorded before its tool runs, and a block
+     * of reasoning being written while the model thinks. The newest line of a
+     * task that is being worked on is very often exactly one of those, so a
+     * page that drew the tail and followed on from it would hold that line
+     * frozen at whatever it said when the page loaded.
+     *
+     * The condition is [LlmSessionEvent.unfinished] spelled in JPQL, and the two
+     * have to say the same thing. Written here rather than derived because a
+     * query cannot call a Kotlin getter; `SessionTailTest` is what notices when
+     * one of them moves.
+     *
+     * Newest first and bounded, because what this is for is the handful of
+     * lines around the reader's cursor rather than every call a night-long
+     * session left unanswered.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.id <= :upTo
+          and (
+            (e.kind = io.mszymanski.orknux.server.llm.LlmSessionEventKind.TOOL and e.result is null)
+            or (e.kind = io.mszymanski.orknux.server.llm.LlmSessionEventKind.THINKING and e.millis is null)
+          )
+        order by e.id desc
+        """,
+    )
+    fun unfinished(sessionId: Long, upTo: Long, page: Pageable): List<LlmSessionEvent>
+
+    /**
      * The counts for a whole page at once.
      *
      * One query rather than one per row: a list of twenty sessions that each

@@ -75,6 +75,42 @@ class LibraryInstallTest(
         assertThat(libraries.findByKey("slugs")?.origin).isEqualTo(ScriptLibrary.ORIGIN_REGISTRY)
     }
 
+    /**
+     * A CommonJS package, and the decision about what the row then holds. #274.
+     *
+     * The interesting assertion is the negative one. What is stored is the file
+     * the registry served, character for character, and *not* the wrapped text
+     * the sandbox is handed — because `origin_integrity` is the registry's hash
+     * of the archive that file came out of, and `sha256` is over the stored text.
+     * Store the wrapper's output and both become hashes of something this server
+     * invented, and the row goes on naming a package and a version while holding
+     * something nobody else can reproduce.
+     */
+    @Test
+    fun `a CommonJS package is installed, and the row holds the file the registry served`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "b64@1.5.1") {
+                key format callable members { name callable } registry { entry version }
+              }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.key").entity(String::class.java).isEqualTo("b64")
+            .path("installScriptLibrary.format").entity(String::class.java).isEqualTo("COMMONJS")
+            // Read off the value in the sandbox, through the wrapper, exactly as
+            // an ES module's members are read off it without one.
+            .path("installScriptLibrary.members[*].name").entityList(String::class.java).containsExactly("of", "tag")
+            .path("installScriptLibrary.registry.entry").entity(String::class.java).isEqualTo("index.js")
+            .path("installScriptLibrary.registry.version").entity(String::class.java).isEqualTo("1.5.1")
+
+        val stored = requireNotNull(libraries.findByKey("b64"))
+        assertThat(stored.source).isEqualTo(COMMONJS)
+        assertThat(stored.source).doesNotContain("export default")
+        assertThat(stored.sourceFormat).isEqualTo(LibrarySource.COMMONJS)
+    }
+
     /** A scope is folded into the key, since a key holds no `@` and no slash. */
     @Test
     fun `a scoped package loads under a key that can be said out loud`() {
@@ -152,6 +188,14 @@ class LibraryInstallTest(
         /** A file somebody wrote, to be replaced by the package and to replace it. */
         private const val MINE = "export default { of: (t) => t, mine: true };"
 
+        /** The same module in the other spelling: one file, requiring nothing. */
+        private val COMMONJS = """
+            'use strict'
+            exports.of = of
+            exports.tag = 'b64'
+            function of (t) { return String(t).toLowerCase() }
+        """.trimIndent()
+
         /**
          * The registry the whole context is pointed at.
          *
@@ -195,6 +239,12 @@ class LibraryInstallTest(
                     "index.mjs" to "const held = 1;",
                 ),
             ),
+            "b64" to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to """{"name":"b64","version":"1.5.1","main":"index.js"}""",
+                    "index.js" to COMMONJS,
+                ),
+            ),
         )
 
         private fun served(path: String): ByteArray? {
@@ -211,7 +261,11 @@ class LibraryInstallTest(
             return null
         }
 
-        private fun versionOf(name: String) = if (name == "hollow") "1.0.0" else "1.2.3"
+        private fun versionOf(name: String) = when (name) {
+            "hollow" -> "1.0.0"
+            "b64" -> "1.5.1"
+            else -> "1.2.3"
+        }
 
         private fun tarballPath(name: String) =
             "/$name/-/${name.substringAfterLast('/')}-${versionOf(name)}.tgz"

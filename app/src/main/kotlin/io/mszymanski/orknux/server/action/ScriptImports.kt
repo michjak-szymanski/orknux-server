@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.library.LibrarySource
 import io.mszymanski.orknux.server.library.ScriptLibraryRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.workflow.script.ScriptModule
@@ -163,7 +164,16 @@ class ScriptImports(
 
         val held = libraries.findById(id).orElse(null)
             ?: throw ImportUnresolvableException("imports a library that is no longer loaded")
-        modules[key] = ScriptModule(key = key, name = held.key, source = held.source)
+        // The stored text is the file as it arrived, so a CommonJS one is given
+        // the `module` and `exports` its code expects here, on the way into the
+        // sandbox. Wrapping at this end rather than at the stored end is what
+        // keeps the row's hashes claims about what was fetched - see
+        // LibrarySource.
+        modules[key] = ScriptModule(
+            key = key,
+            name = held.key,
+            source = LibrarySource.runnable(held.source, held.sourceFormat),
+        )
     }
 
     private fun named(imports: List<ScriptImport>): Map<String, String> =

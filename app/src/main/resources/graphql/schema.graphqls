@@ -4657,6 +4657,15 @@ type ScriptLibrary {
     "Whether its export is itself something to call, rather than an object."
     callable: Boolean!
     """
+    Which spelling the stored file is written in: `ESM` or `COMMONJS`.
+
+    Says how the stored text is run and nothing about where it came from. A
+    CommonJS file is given the `module` and `exports` its code expects on the way
+    into the sandbox, every time; the column holds the file as it arrived, so the
+    hashes beside it stay claims about what was fetched.
+    """
+    format: String!
+    """
     What its default export turned out to hold, read once when it was loaded.
 
     Not a type declaration. Nothing in a bundle says what its arguments are, so

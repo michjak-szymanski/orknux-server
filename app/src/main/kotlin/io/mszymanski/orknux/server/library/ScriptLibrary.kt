@@ -77,7 +77,17 @@ class ScriptLibrary(
     @Column(nullable = false, length = 255)
     var filename: String,
 
-    /** The JavaScript that is evaluated. A module whose default export is imported. */
+    /**
+     * The JavaScript, exactly as it arrived. What runs, and what the hashes are of.
+     *
+     * "Exactly as it arrived" is the load-bearing half. Where a registry served
+     * this, these are the bytes that were inside the archive [originIntegrity]
+     * hashes, so the row's provenance is a claim about the same text the row
+     * holds — anybody with the package can fetch it and compare. A CommonJS entry
+     * is *not* stored rewritten for that reason: it is wrapped by
+     * [LibrarySource.runnable] at the moment it is evaluated, and [sourceFormat]
+     * says that is what happens to it.
+     */
     @Column(nullable = false, columnDefinition = "text")
     var source: String,
 
@@ -117,6 +127,24 @@ class ScriptLibrary(
     /** Whether the default export is itself something to call, rather than an object. */
     @Column(nullable = false)
     var callable: Boolean = false,
+
+    /**
+     * Which spelling [source] is written in: `ESM` or `COMMONJS`.
+     *
+     * **A statement about how the stored text is run, never about what was
+     * fetched.** The sandbox evaluates ES modules; a CommonJS file is given the
+     * `module` and `exports` its code expects by [LibrarySource.runnable], on the
+     * way in, every time. Storing the wrapped text instead would have been the
+     * other honest answer and was rejected: [sha256] and [originIntegrity] would
+     * then be hashes of something this server invented, and a provenance nobody
+     * else can reproduce is not a provenance.
+     *
+     * Recorded rather than worked out at run time because working it out is a set
+     * of regular expressions over what can be a four-megabyte bundle, and the
+     * question is asked again on every run that imports the library.
+     */
+    @Column(name = "source_format", nullable = false, length = 16)
+    var sourceFormat: String = LibrarySource.ESM,
 
     @Column(name = "uploaded_at", nullable = false)
     var uploadedAt: OffsetDateTime = OffsetDateTime.now(),
@@ -203,6 +231,14 @@ data class ScriptLibraryView(
     val sha256: String,
     /** Whether it is something to call, rather than an object with members. */
     val callable: Boolean,
+    /**
+     * Which spelling the stored file is: `ESM` or `COMMONJS`.
+     *
+     * Shown, because a CommonJS library is run through a wrapper this server puts
+     * round it and an administrator answering "what code is running in here"
+     * should not have to read the source to find that out.
+     */
+    val format: String,
     val members: List<LibraryMemberView>,
     /**
      * What imports it, across every workspace.
@@ -342,28 +378,34 @@ class LibraryIntegrityException(spec: String, expected: String, actual: String) 
 )
 
 /**
- * The package ships no single ES module for this to install.
+ * There is no file in the package this could run.
  *
- * Refused rather than half-installed. A package whose only build is CommonJS
- * evaluates to `module is not defined` in the sandbox, which is a true sentence
- * that tells nobody what to do next; this one does.
+ * The narrower of the two refusals, and it used to be much the wider: until #274
+ * this said "ships no ES module", which was accurate then and is wrong now — a
+ * CommonJS entry is installed. What is left is a package whose `exports`,
+ * `module` and `main` between them name nothing that is actually in the archive,
+ * which is a published package that could not be loaded by anything.
  */
-class LibraryNotAModuleException(spec: String) : RuntimeException(
-    "$spec ships no ES module to install: this needs one self-contained file, the kind `module` or " +
-        "`exports` points at. Build a bundle and upload it.",
+class LibraryNoEntryException(spec: String) : RuntimeException(
+    "$spec ships no file this can install: nothing its package.json points at — `exports`, `module` or " +
+        "`main` — is in the package. Build a bundle and upload it.",
 )
 
 /**
- * It is a module, and it is not on its own.
+ * It has an entry, and the entry is not on its own.
  *
  * **The whole answer on dependencies, in one sentence to whoever asked.** This
  * installation does not bundle: assembling a package's dependency graph here
  * would produce an artefact no registry published and nobody can compare against
  * anything, which is the opposite of what the columns beside it are for. So a
- * package that imports is refused, by name, with the way out — a bundle built
- * where bundles are built, and uploaded.
+ * package that reaches for a second one is refused, by name, with the way out —
+ * a bundle built where bundles are built, and uploaded.
+ *
+ * [verb] is `imports` or `requires`, because the two are different files with
+ * different fixes and telling somebody their ES module imports something when it
+ * is a CommonJS file calling `require` sends them looking in the wrong place.
  */
-class LibraryDependsException(spec: String, entry: String, imported: String) : RuntimeException(
-    "$spec was not installed: its $entry imports \"$imported\", and a library has to be one self-contained " +
+class LibraryDependsException(spec: String, entry: String, verb: String, imported: String) : RuntimeException(
+    "$spec was not installed: its $entry $verb \"$imported\", and a library has to be one self-contained " +
         "file. This installation does not bundle. Build a bundle and upload it.",
 )

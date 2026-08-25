@@ -80,6 +80,124 @@ class ScriptLibraryTest(
             .path("scriptLibraries[0].callable").entity(Boolean::class.java).isEqualTo(true)
     }
 
+    /**
+     * A CommonJS library, end to end, because the wrapper has two ends. #274.
+     *
+     * It is put round the text once when the library is loaded — which is where
+     * the member list comes from — and again on every run that imports it. A test
+     * that only loaded one would pass on the day the run-time half stopped being
+     * applied, and the failure would be a `TypeError` in the middle of somebody's
+     * workflow rather than a sentence on the screen they chose the file on.
+     *
+     * What the row holds is the file as it was written, so the two hashes beside
+     * it stay claims about that file and not about something this server made up.
+     */
+    @Test
+    fun `a CommonJS library is wrapped on the way into the sandbox, and a function calling it runs`() {
+        val library = load(
+            "cased",
+            """
+            'use strict'
+            exports.upper = function (t) { return String(t).toUpperCase(); }
+            exports.tag = 'cased'
+            """.trimIndent(),
+        )
+
+        val stored = requireNotNull(libraries.findByKey("cased"))
+        assertThat(stored.sourceFormat).isEqualTo(LibrarySource.COMMONJS)
+        assertThat(stored.source).doesNotContain("export default")
+
+        graphQlTester.document("""query { scriptLibraries { format members { name callable } } }""").execute()
+            .path("scriptLibraries[0].format").entity(String::class.java).isEqualTo("COMMONJS")
+            .path("scriptLibraries[0].members[*].name").entityList(String::class.java)
+            .containsExactly("tag", "upper")
+
+        val shout = graphQlTester.document(
+            """
+            mutation {
+              createFunction(input: {
+                workspaceId: $workspaceId, name: "shout",
+                source: "export default function shout(t) { return imports.cased.upper(t); }",
+                typescript: "export default function shout(t) { return imports.cased.upper(t); }",
+                params: [{ name: "t", type: STRING }], returnType: STRING,
+                libraries: [{ libraryId: $library, name: "cased" }]
+              }) { id }
+            }
+            """,
+        ).execute().path("createFunction.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              runFunction(input: {
+                workspaceId: $workspaceId, functionId: $shout,
+                arguments: [{ name: "t", json: "\"hello\"" }]
+              }) { ok returned error }
+            }
+            """,
+        ).execute()
+            .path("runFunction.error").valueIsNull()
+            .path("runFunction.ok").entity(Boolean::class.java).isEqualTo(true)
+            .path("runFunction.returned").entity(String::class.java).isEqualTo("\"HELLO\"")
+    }
+
+    /**
+     * UMD, which is what a great many small packages are actually published as.
+     *
+     * Under the wrapper `module` and `exports` are defined and `define` is not,
+     * so the file takes its CommonJS branch. The AMD branch is left dead on
+     * purpose: defining `define` would mean standing up a loader this sandbox
+     * does not have, and a package that only ever registers through AMD leaves
+     * nothing on `module.exports` and is refused for having no default export —
+     * which is a sentence, at the moment somebody chose the file.
+     *
+     * `this` is asserted through, and it is the reason the wrapper uses `.call`.
+     * A UMD head passes `this` as its global object, and at the top of an ES
+     * module `this` is `undefined`; leaving it so would break the branch that
+     * reads `root` for no reason at all.
+     */
+    @Test
+    fun `a UMD bundle takes its CommonJS branch and is read for what it exports`() {
+        load(
+            "cased",
+            """
+            (function (root, factory) {
+              if (typeof define === 'function' && define.amd) { define([], factory); }
+              else if (typeof module === 'object' && module.exports) { module.exports = factory(); }
+              else { root.cased = factory(); }
+            }(this, function () {
+              return { upper: function (t) { return String(t).toUpperCase(); }, tag: 'cased' };
+            }));
+            """.trimIndent(),
+        )
+
+        graphQlTester.document("""query { scriptLibraries { format callable members { name callable } } }""")
+            .execute()
+            .path("scriptLibraries[0].format").entity(String::class.java).isEqualTo("COMMONJS")
+            .path("scriptLibraries[0].callable").entity(Boolean::class.java).isEqualTo(false)
+            .path("scriptLibraries[0].members[*].name").entityList(String::class.java)
+            .containsExactly("tag", "upper")
+    }
+
+    /**
+     * The same rule a package is held to, at the other door.
+     *
+     * A file being run as CommonJS that calls `require` names a second package.
+     * Stored, it would install cleanly and fail at its first call, so it is
+     * refused where somebody can still do something about it.
+     */
+    @Test
+    fun `a CommonJS file that requires another package is refused, and the refusal names it`() {
+        val failure = runCatching {
+            upload.upload(file("needy.js", "var b = require('buffer');\nmodule.exports = { b: b };"), null)
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(LibraryUnreadableException::class.java)
+        assertThat(failure?.message).contains("require(\"buffer\")")
+        assertThat(failure?.message).contains("does not bundle")
+        assertThat(libraries.findAll()).isEmpty()
+    }
+
     /** Refused where somebody is looking, rather than found when a workflow needed it. */
     @Test
     fun `a file with nothing to import is refused`() {

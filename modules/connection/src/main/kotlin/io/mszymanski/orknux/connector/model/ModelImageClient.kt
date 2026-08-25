@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.http.HttpClient
@@ -239,14 +240,14 @@ class ModelImageClient(
         val first = runCatching { mapper.readTree(body).path("data").path(0) }.getOrNull()
             ?: return Picture.Failed("$name answered something that was not a picture")
 
-        val encoded = first.path("b64_json").stringValue()
+        val encoded = text(first, "b64_json")
         if (!encoded.isNullOrBlank()) {
             val bytes = runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
                 ?: return Picture.Failed("$name answered a picture that could not be read")
             return Picture.Drawn(bytes, PNG, millis)
         }
 
-        val url = first.path("url").stringValue()
+        val url = text(first, "url")
         if (url.isNullOrBlank()) return Picture.Failed("$name answered no picture")
         return fetched(url, millis, name, provider)
     }
@@ -286,6 +287,17 @@ class ModelImageClient(
             Picture.Failed(failure.message ?: "The picture could not be collected")
         }
     }
+
+    /**
+     * One string off a node, or null where there is not one.
+     *
+     * Asked for rather than read straight, because Jackson 3's `stringValue()`
+     * throws on a node that is absent or is not a string - and both are ordinary
+     * here. A provider answers with `b64_json` or with `url` and never with
+     * both, so one of the two is always the missing node.
+     */
+    private fun text(node: JsonNode, field: String): String? =
+        runCatching { node.path(field).stringValue() }.getOrNull()
 
     /** What the provider said went wrong, where it said anything. */
     private fun refusal(body: String): String? = runCatching {

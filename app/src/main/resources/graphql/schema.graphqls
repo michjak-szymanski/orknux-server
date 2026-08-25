@@ -2463,11 +2463,6 @@ type SkillPage {
 }
 
 """
-One conversation. The messages are not here: they live in Spring AI's chat
-memory store, keyed by a conversation id, which is what lets a workflow run
-key one the same way and have every agent in it share a single thread.
-"""
-"""
 What was drawn, and what it cost.
 
 The bytes are not here: `attachmentId` is asked for at `/api/attachments/{id}`,
@@ -2491,6 +2486,11 @@ type ChatPicture {
     cost: Float
 }
 
+"""
+One conversation. The messages are not here: they live in Spring AI's chat
+memory store, keyed by a conversation id, which is what lets a workflow run
+key one the same way and have every agent in it share a single thread.
+"""
 type ChatSession {
     id: ID!
     workspaceId: ID!

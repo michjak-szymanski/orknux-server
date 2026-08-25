@@ -257,13 +257,24 @@ class ChatService(
         // not write into looks like a continuation and is not one.
         llmSessionId?.let { continuable(workspaceId, it) }
 
+        /*
+         * What answers, when the caller named nothing.
+         *
+         * Asked for as a pair rather than a model and then an agent, because
+         * the two are one decision: an agent brings its own model with it, and
+         * picking a model separately would either contradict it or be thrown
+         * away. See [lastUsed].
+         */
+        val answering = if (modelId != null) Answering(modelId, null) else lastUsed(workspaceId, userId)
+
         val opened = sessions.save(
             ChatSession(
                 workspaceId = workspaceId,
                 conversationId = UUID.randomUUID().toString(),
                 title = trimmed.take(TITLE_LENGTH),
                 userId = userId,
-                modelId = modelId ?: defaultModel(workspaceId, userId),
+                modelId = answering.modelId,
+                agentId = answering.agentId,
                 llmSessionId = llmSessionId,
                 createdAt = OffsetDateTime.now(),
             ),
@@ -313,25 +324,75 @@ class ChatService(
         )
     }
 
+    /** What a chat answers with: an agent and its model, or a bare model. */
+    private data class Answering(val modelId: Long?, val agentId: Long?)
+
     /**
-     * What a chat answers with when the caller named nothing.
+     * What a chat answers with when the caller named nothing: whatever this
+     * person last chatted with in this workspace.
      *
-     * A chat with no model is a dead end: every send fails, and the reason is
-     * only visible once someone has already typed a message. So a new chat picks
-     * up the model this person last chatted with here — a chat opens where the
-     * last one left off — and failing that any model the workspace can chat
-     * with. Choosing stays a preference rather than a prerequisite.
+     * ## Why it is remembered here rather than in the browser
+     *
+     * It is not remembered anywhere. It is *read* — off `chat_session`, which
+     * already carries a user, a workspace, an agent, a model and when the chat
+     * was last spoken in. Nothing new is stored because there is nothing new to
+     * store, and that answer is better than either of the two this could have
+     * copied.
+     *
+     * `recentlyOpened` keeps a trail in local storage on the argument that
+     * where somebody has been is theirs and belongs to the machine they are
+     * sitting at. `chat_cost_shown` went onto `app_user` on the argument that
+     * watching what you spend is a decision that should follow you. This is
+     * neither: it is not a preference somebody set, and it is not a trail
+     * through the interface — it is a fact about the conversations that exist,
+     * and the row it is a fact about is already in the database. A copy in
+     * local storage would disagree with it on a second machine and go stale the
+     * moment an agent is deleted; a column on `app_user` would be a second
+     * place to write on every send, saying what the chat rows already said.
+     *
+     * ## Scope, and the first visit
+     *
+     * Per person and per workspace, which falls out of the query rather than
+     * being decided: a workspace's agents do not exist in the next one, and
+     * pointing a new chat at one of them would be pointing it at nothing.
+     *
+     * A workspace nobody has chatted in yet has nothing to read, and the
+     * fallback is the first chat model the workspace offers — unchanged, and
+     * still not an agent. Issue #249 put agents first in the *picker*, which is
+     * where somebody is choosing; a chat nobody has chosen for opens on a bare
+     * model because that is the one thing certain to answer, and the picker
+     * opens on Agents over the top of it.
+     *
+     * ## What has since been deleted
+     *
+     * Read forward through the chats until one of them still names something
+     * usable, rather than taking the newest and hoping. An agent that was
+     * deleted, disabled, moved or left without a model fails the same four
+     * checks [chooseAgent] applies, so the answer here can never be one the
+     * picker would refuse — and a person whose last agent is gone gets the one
+     * before it rather than an empty picker.
      *
      * Null only when the workspace has no usable chat model at all, which is a
      * real condition worth reporting rather than papering over.
      */
-    private fun defaultModel(workspaceId: Long, userId: String): Long? =
-        sessions(workspaceId, userId)
-            .sortedByDescending { it.lastMessageAt ?: it.createdAt }
-            .firstNotNullOfOrNull { it.modelId }
-            ?: catalogue.models(workspaceId)
-                .firstOrNull { it.enabled && it.kind == ModelKind.CHAT }
-                ?.id
+    private fun lastUsed(workspaceId: Long, userId: String): Answering {
+        val recent = sessions(workspaceId, userId).sortedByDescending { it.lastMessageAt ?: it.createdAt }
+
+        for (chat in recent) {
+            val agent = chat.agentId?.let { agents.findByIdOrNull(it) }
+            if (agent != null && agent.workspaceId == workspaceId && agent.enabled) {
+                agent.modelId?.let { return Answering(it, agent.id) }
+            }
+            // A chat on a bare model is an answer too, and it is the answer
+            // whenever a bare model is what was last talked to.
+            if (chat.agentId == null && chat.modelId != null) return Answering(chat.modelId, null)
+        }
+
+        return Answering(
+            catalogue.models(workspaceId).firstOrNull { it.enabled && it.kind == ModelKind.CHAT }?.id,
+            null,
+        )
+    }
 
     @Transactional
     fun rename(id: Long, title: String): ChatSession {
@@ -421,12 +482,12 @@ class ChatService(
      * either side of it: [beginSend] before, [finishSend] after. It is the shape
      * `ChatStreamAPI` was already composed in, said once for both callers.
      */
-    fun ask(start: ChatSendStart): ChatCompletion =
+    fun ask(start: ChatSendStart, watch: RoundWatch? = null): ChatCompletion =
         if (start.agentId == null) {
             models.complete(start.modelId, start.turns)
         } else {
             // An agent may need its tools before it can answer; a bare model cannot.
-            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId)
+            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId, watch = watch)
         }
 
     /**

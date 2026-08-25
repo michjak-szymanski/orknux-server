@@ -41,6 +41,52 @@ import org.springframework.stereotype.Service
  * labelled issues were unlabelled, each correcting itself only when it called
  * the tool again.
  */
+/**
+ * Somebody watching a round happen, rather than reading it afterwards.
+ *
+ * The round already writes everything down — into an LLM session, where a task's
+ * page follows it live and a transcript keeps it for good. This is for the
+ * caller that has a reader waiting on the other end of an open connection and
+ * wants the same facts as they occur: the chat window, where an agent's answer
+ * used to be a spinner for a minute and then a paragraph, with no account of the
+ * three lookups in between.
+ *
+ * Not a replacement for the recording, and pointedly not a second one. Every
+ * method here is called beside the [LlmSessionRecorder] call that keeps the
+ * same fact, so a watcher that throws or a caller that provides none changes
+ * what is kept by nothing at all.
+ *
+ * **A call is identified by where it came in the round**, counted from nought
+ * across every round the answer took. Not by the provider's call id, which is
+ * the model's to choose and has been an empty string on more than one
+ * OpenAI-compatible server, and not by the session line's id, which is null
+ * whenever nothing is being recorded — a chat with a bare model, or a session
+ * write that failed. A reader pairing a result with the call it belongs to
+ * needs a handle that always exists.
+ *
+ * Every method does nothing by default, so a watcher implements the part it has
+ * a place to put.
+ */
+interface RoundWatch {
+
+    /** What the model thought before it did anything. Empty is never sent. */
+    fun thinking(text: String) = Unit
+
+    /** A call, the moment it is dispatched and before its tool has run. */
+    fun called(at: Int, tool: String, arguments: String) = Unit
+
+    /**
+     * And what that call gave back.
+     *
+     * @param failed whether the tool could not be run, as opposed to running
+     *   and answering unhelpfully. The distinction is the model's already — it
+     *   is told either way and can try something else — and it is the reader's
+     *   too: a lookup that failed explains an answer that a lookup which merely
+     *   returned nothing does not.
+     */
+    fun returned(at: Int, result: String, failed: Boolean) = Unit
+}
+
 @Service
 class AgentConversation(
     private val models: ModelChatClient,
@@ -53,10 +99,16 @@ class AgentConversation(
      * The same thing, for a caller holding only an id — the streaming endpoint,
      * which is outside the transaction that read the session.
      */
-    fun answer(modelId: Long, agentId: Long, turns: List<ChatTurn>, into: Long? = null): ChatCompletion {
+    fun answer(
+        modelId: Long,
+        agentId: Long,
+        turns: List<ChatTurn>,
+        into: Long? = null,
+        watch: RoundWatch? = null,
+    ): ChatCompletion {
         val agent = agents.findByIdOrNull(agentId)
             ?: return ChatCompletion.Failed("That agent no longer exists")
-        return answer(modelId, agent, turns, into)
+        return answer(modelId, agent, turns, into, watch = watch)
     }
 
     /**
@@ -69,6 +121,10 @@ class AgentConversation(
      *   See [ToolShed] for what one is for and why it is a parameter here rather
      *   than something [AgentTools] knows about.
      * @return what the agent said, or why it could not say anything.
+     * @param watch somebody following the round as it happens, or null for the
+     *   ordinary caller that only wants the answer. See [RoundWatch]: it is
+     *   told nothing that is not also written down, so a round with a watcher
+     *   and a round without keep exactly the same record.
      * @throws AgentRoundHalted where a [shed] ended the round. The agent's own
      *   tools never throw — a tool that failed is a fact the model is told — so
      *   this can only happen to a caller that lent it one.
@@ -79,9 +135,14 @@ class AgentConversation(
         turns: List<ChatTurn>,
         into: Long? = null,
         shed: ToolShed? = null,
+        watch: RoundWatch? = null,
     ): ChatCompletion {
         val offered = tools.specsFor(agent) + shed?.specs().orEmpty()
-        if (offered.isEmpty()) return models.complete(modelId, turns).also { record(into, agent, it) }
+        if (offered.isEmpty()) {
+            return models.complete(modelId, turns)
+                .also { told(watch, it) }
+                .also { record(into, agent, it) }
+        }
 
         val conversation = turns.toMutableList()
         var spent = 0L
@@ -97,29 +158,60 @@ class AgentConversation(
          */
         var input = 0L
         var output = 0L
+        /*
+         * Where a call came in the whole round, not in the round it was made
+         * in. See [RoundWatch]: it is the handle a reader pairs a result with
+         * its call by, and an agent that looks something up twice over two
+         * rounds must not hand out the same one twice.
+         */
+        var at = 0
+        /*
+         * What has been thought so far, added up across the rounds.
+         *
+         * A reasoning model does most of its thinking in the round where it
+         * decides to look something up, and none of that reaches the caller
+         * through the answer - which is the last round only. Kept here so the
+         * completion that goes back carries the whole of it.
+         */
+        val thinking = StringBuilder()
+
+        fun thought(reasoning: String) {
+            if (reasoning.isBlank()) return
+            if (thinking.isNotEmpty()) thinking.append("\n\n")
+            thinking.append(reasoning)
+            watch?.thinking(reasoning)
+        }
 
         repeat(MAX_ROUNDS) {
             when (val answer = models.complete(modelId, conversation, offered)) {
                 is ChatCompletion.Failed -> return answer.also { record(into, agent, it) }
 
-                is ChatCompletion.Answered -> return answer
-                    .copy(
-                        millis = spent + answer.millis,
-                        inputTokens = input + answer.inputTokens,
-                        outputTokens = output + answer.outputTokens,
-                    )
-                    .also { record(into, agent, it) }
+                is ChatCompletion.Answered -> {
+                    thought(answer.reasoning)
+                    return answer
+                        .copy(
+                            millis = spent + answer.millis,
+                            inputTokens = input + answer.inputTokens,
+                            outputTokens = output + answer.outputTokens,
+                            reasoning = thinking.toString(),
+                        )
+                        .also { record(into, agent, it) }
+                }
 
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
                     input += answer.inputTokens
                     output += answer.outputTokens
                     conversation += answer.turn
+                    thought(answer.reasoning)
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
+                        val here = at++
                         // Written before the tool runs, so one that hangs still
-                        // leaves the transcript saying what was asked of it.
+                        // leaves the transcript saying what was asked of it -
+                        // and told to anybody watching for the same reason.
                         val line = into?.let { sessions.toolCalled(it, call.name, call.arguments) }
+                        watch?.called(here, call.name, call.arguments)
                         val got = try {
                             if (shed != null && shed.handles(call.name)) shed.run(call) else tools.run(agent, call)
                         } catch (halted: AgentRoundHalted) {
@@ -127,6 +219,7 @@ class AgentConversation(
                             // still written down, or the transcript would stop
                             // on a call that never came back.
                             sessions.toolReturned(line, halted.message.orEmpty())
+                            watch?.returned(here, halted.message.orEmpty(), failed = false)
                             throw halted
                         }
                         /*
@@ -140,6 +233,7 @@ class AgentConversation(
                          * out of the summary. The session is where it survives.
                          */
                         sessions.toolReturned(line, got)
+                        watch?.returned(here, got, failed = AgentTools.failed(got))
                         conversation += ChatTurn(
                             role = "user",
                             content = got,
@@ -176,6 +270,24 @@ class AgentConversation(
      * those lines are written as the calls are dispatched, and the round is not
      * over.
      */
+    /**
+     * The thinking off a round that took no tools at all, handed to a watcher.
+     *
+     * An agent with no tools granted answers in one call, so there is no loop
+     * to thread the reasoning through and this is the only place it can be
+     * passed on. Written out rather than folded into [record], which is about
+     * what is kept rather than about who is watching.
+     */
+    private fun told(watch: RoundWatch?, answer: ChatCompletion) {
+        if (watch == null) return
+        val reasoning = when (answer) {
+            is ChatCompletion.Answered -> answer.reasoning
+            is ChatCompletion.CalledTools -> answer.reasoning
+            is ChatCompletion.Failed -> ""
+        }
+        if (reasoning.isNotBlank()) watch.thinking(reasoning)
+    }
+
     private fun record(into: Long?, agent: Agent, answer: ChatCompletion) {
         val session = into ?: return
         when (answer) {

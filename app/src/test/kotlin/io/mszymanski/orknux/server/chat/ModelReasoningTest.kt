@@ -103,6 +103,64 @@ class ModelReasoningTest(
         assertThat(whole.reasoning).isEqualTo("Two plus two. That is four.")
     }
 
+    /**
+     * How long it thought, for a provider that sends its reasoning all at once.
+     *
+     * This is the defect the feature was rejected for the second time, and it
+     * is invisible from a stub that pauses between frames. The duration was
+     * measured from the first reasoning frame to the last, so a model that
+     * emits the whole of its reasoning in a single frame had a first and a last
+     * frame in the same instant and reported nought - and the screen, told to
+     * draw nothing rather than nought seconds, drew nothing. On the machine it
+     * was tested on it read "Thought" with no time beside it at all.
+     *
+     * Measured from the request going out instead, which is both always
+     * non-zero and the more honest number: what somebody waited through is the
+     * request, the prompt being read, and then the reasoning - all of it before
+     * there was a word of answer on the screen.
+     */
+    @Test
+    fun `reasoning that arrives in one frame still reports how long it took`() {
+        val modelId = openAi(
+            serve(
+                "/chat/completions",
+                """
+                data: {"choices":[{"delta":{"reasoning_content":"All of it, at once."}}]}
+
+                data: {"choices":[{"delta":{"content":"Four."}}]}
+
+                data: [DONE]
+
+                """.trimIndent(),
+            ),
+        )
+
+        val answer = chat.stream(modelId, asked, onChunk = {}) as ChatCompletion.Answered
+
+        assertThat(answer.reasoning).isEqualTo("All of it, at once.")
+        // The point: a duration the screen can draw, from a single frame.
+        assertThat(answer.reasoningMillis).isGreaterThan(0)
+    }
+
+    /** And a model that thought nothing still reports no duration to draw. */
+    @Test
+    fun `a model that does not think reports no duration either`() {
+        val modelId = openAi(
+            serve(
+                "/chat/completions",
+                """
+                data: {"choices":[{"delta":{"content":"Four."}}]}
+
+                data: [DONE]
+
+                """.trimIndent(),
+            ),
+        )
+
+        assertThat((chat.stream(modelId, asked, onChunk = {}) as ChatCompletion.Answered).reasoningMillis)
+            .isEqualTo(0)
+    }
+
     /** The other spelling, which some gateways send instead. */
     @Test
     fun `the reasoning field is read as well as reasoning_content`() {

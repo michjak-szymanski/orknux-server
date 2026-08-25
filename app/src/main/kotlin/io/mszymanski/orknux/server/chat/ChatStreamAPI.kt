@@ -197,7 +197,14 @@ class ChatStreamAPI(
                         send("error", mapOf("reason" to "The model asked for a tool that could not be run"))
                     }
                     is ChatCompletion.Answered -> {
-                        chats.finishSend(id, answer.content, answer.reasoning, answer.reasoningMillis)
+                        chats.finishSend(
+                            id,
+                            answer.content,
+                            answer.reasoning,
+                            answer.reasoningMillis,
+                            answer.inputTokens,
+                            answer.outputTokens,
+                        )
                         kept = true
                         // Naming it is not part of the answer, so a companion
                         // model that will not answer costs the chat nothing.
@@ -214,6 +221,13 @@ class ChatStreamAPI(
                          * then two places would round money. Null where the
                          * model carries no prices, which the screen shows as
                          * nothing rather than as nought.
+                         */
+                        /*
+                         * The chat's own running total is deliberately not on
+                         * this frame. It is on `ChatSession`, which the screen
+                         * re-reads at the end of every turn anyway, and one
+                         * number arriving by two roads is one number that can
+                         * disagree with itself.
                          */
                         send(
                             "done",

@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.issue
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.attachment.AttachmentStore
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -357,4 +358,8 @@ class IssueMoveAPI(
  * administrator who has just pressed Move and needs to know what to change
  * before pressing it again, so each one names the thing in the way.
  */
-class IssueMoveRefusedException(why: String) : RuntimeException(why)
+class IssueMoveRefusedException(val why: String) : RuntimeException(why), Refusal {
+
+    override val arguments get() = mapOf("why" to why)
+}
+

@@ -11,6 +11,7 @@ import io.mszymanski.orknux.connector.model.ModelUsageView
 import io.mszymanski.orknux.connector.model.ResetInterval
 import io.mszymanski.orknux.connector.model.UpdateModelInput
 import io.mszymanski.orknux.connector.model.UpdateProviderInput
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -266,6 +267,13 @@ data class ModelUsageResponse(
 
 data class ModelUsageDayResponse(val day: String, val requests: Int, val tokens: Long)
 
-class ModelProviderNotFoundException(id: Long) : RuntimeException("No model provider with id $id")
+class ModelProviderNotFoundException(val id: Long) : RuntimeException("No model provider with id $id"), Refusal {
 
-class ModelNotFoundException(id: Long) : RuntimeException("No model with id $id")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class ModelNotFoundException(val id: Long) : RuntimeException("No model with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

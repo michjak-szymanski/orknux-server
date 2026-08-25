@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.task
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -344,9 +345,15 @@ interface TaskGrantRepository : JpaRepository<TaskGrant, Long> {
     fun findByTaskIdOrderByGrantedAtAscIdAsc(taskId: Long): List<TaskGrant>
 }
 
-class TaskNotFoundException(id: Long) : RuntimeException("No task with id $id")
+class TaskNotFoundException(val id: Long) : RuntimeException("No task with id $id"), Refusal {
 
-class TaskRequestNotFoundException(id: Long) : RuntimeException("No task request with id $id")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class TaskRequestNotFoundException(val id: Long) : RuntimeException("No task request with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * A request somebody has already decided.
@@ -358,7 +365,10 @@ class TaskRequestNotFoundException(id: Long) : RuntimeException("No task request
 class TaskRequestSettledException :
     RuntimeException("That has already been decided, and the task has moved on")
 
-class TaskNotRunnableException(what: String) : RuntimeException(what)
+class TaskNotRunnableException(val what: String) : RuntimeException(what), Refusal {
+
+    override val arguments get() = mapOf("what" to what)
+}
 
 class TaskPromptMissingException : RuntimeException("A task needs something to work on")
 

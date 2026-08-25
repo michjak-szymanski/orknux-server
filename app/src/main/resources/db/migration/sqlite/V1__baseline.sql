@@ -160,7 +160,8 @@ CREATE TABLE app_user
     email                        varchar(320),
     email_chosen                 boolean not null default false,
     email_notifications          boolean not null default true,
-    chat_cost_shown              boolean not null default false
+    chat_cost_shown              boolean not null default false,
+    language                     varchar(16)
 );
 
 CREATE TABLE app_user_role

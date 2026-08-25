@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.attachment
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -66,10 +67,17 @@ interface ChatAttachmentRepository : JpaRepository<ChatAttachment, Long> {
     fun findByChatSessionIdOrderByUploadedAtAsc(chatSessionId: Long): List<ChatAttachment>
 }
 
-class AttachmentNotFoundException(id: Long) : RuntimeException("No attachment with id $id")
+class AttachmentNotFoundException(val id: Long) : RuntimeException("No attachment with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 class AttachmentsDisabledException :
     RuntimeException("Attachments are turned off for this installation")
 
-class AttachmentTooLargeException(name: String, limitMb: Long) :
-    RuntimeException("\"$name\" is larger than the $limitMb MB an attachment may be")
+class AttachmentTooLargeException(val name: String, val limitMb: Long) :
+    RuntimeException("\"$name\" is larger than the $limitMb MB an attachment may be"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "limitMb" to limitMb)
+}
+

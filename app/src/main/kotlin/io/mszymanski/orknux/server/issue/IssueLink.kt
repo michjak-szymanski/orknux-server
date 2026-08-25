@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -67,7 +68,10 @@ interface IssueLinkRepository : JpaRepository<IssueLink, Long> {
     fun findByIssueIdOrderByAddedAtAscIdAsc(issueId: Long): List<IssueLink>
 }
 
-class IssueLinkNotFoundException(id: Long) : RuntimeException("No link with id $id")
+class IssueLinkNotFoundException(val id: Long) : RuntimeException("No link with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Somebody tried to remove a link that is not theirs.
@@ -82,7 +86,10 @@ class IssueLinkNotYoursException :
     RuntimeException("A link can only be removed by whoever added it")
 
 /** Said in the words the person who typed the address needs to read. */
-class IssueLinkInvalidException(why: String) : RuntimeException(why)
+class IssueLinkInvalidException(val why: String) : RuntimeException(why), Refusal {
+
+    override val arguments get() = mapOf("why" to why)
+}
 
 /**
  * What counts as an address worth putting on an issue.

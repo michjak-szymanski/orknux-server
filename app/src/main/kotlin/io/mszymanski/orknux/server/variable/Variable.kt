@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.variable
 
 import io.mszymanski.orknux.connector.security.SECRET_COLUMN_LENGTH
 import io.mszymanski.orknux.connector.security.SecretConverter
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Convert
 import jakarta.persistence.Entity
@@ -172,32 +173,53 @@ interface WorkspaceVariableRepository : JpaRepository<WorkspaceVariable, Long> {
     fun findByWorkspaceId(workspaceId: Long): List<WorkspaceVariable>
 }
 
-class VariableNotFoundException(id: Long) : RuntimeException("No variable with id $id")
+class VariableNotFoundException(val id: Long) : RuntimeException("No variable with id $id"), Refusal {
 
-class VariableNameTakenException(name: String, catalog: String) :
-    RuntimeException("$catalog already holds a variable named \"$name\"")
+    override val arguments get() = mapOf("id" to id)
+}
 
-class VariableNameInvalidException(name: String) : RuntimeException(
+class VariableNameTakenException(val name: String, val catalog: String) :
+    RuntimeException("$catalog already holds a variable named \"$name\""), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "catalog" to catalog)
+}
+
+class VariableNameInvalidException(val name: String) : RuntimeException(
     "\"$name\" cannot be a variable name. A name is letters, digits and underscores, starting with " +
         "a letter — a function receives it as an argument, and an argument has to be nameable.",
-)
+), Refusal {
 
-class VariableCatalogNotFoundException(id: Long) : RuntimeException("No catalog with id $id")
+    override val arguments get() = mapOf("name" to name)
+}
 
-class VariableCatalogNameTakenException(name: String) :
-    RuntimeException("A catalog named \"$name\" already exists in this workspace")
+class VariableCatalogNotFoundException(val id: Long) : RuntimeException("No catalog with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+
+class VariableCatalogNameTakenException(val name: String) :
+    RuntimeException("A catalog named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class VariableCatalogNameInvalidException : RuntimeException("A catalog name is required")
 
-class VariableCatalogNotEmptyException(name: String, held: Long) : RuntimeException(
+class VariableCatalogNotEmptyException(val name: String, val held: Long) : RuntimeException(
     "$name still holds $held ${if (held == 1L) "variable" else "variables"}. " +
         "Move or remove them first; a catalog is a folder, and emptying it is a decision about its contents.",
-)
+), Refusal {
 
-class VariableInUseException(name: String, functions: List<String>) : RuntimeException(
+    override val arguments get() = mapOf("name" to name, "held" to held)
+}
+
+class VariableInUseException(val name: String, val functions: List<String>) : RuntimeException(
     "\"$name\" is an external parameter of ${functions.joinToString(", ")}. " +
         "Take it off those functions first; removing it here would change what they are handed.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "functions" to functions)
+}
 
 /**
  * A variable something reads a credential from cannot be deleted.
@@ -216,12 +238,15 @@ class VariableInUseException(name: String, functions: List<String>) : RuntimeExc
  *   Shared OpenAI", "the connection Slack" — because a list of bare names
  *   across three kinds of holder is a puzzle rather than an answer.
  */
-class VariableHeldAsCredentialException(name: String, readers: List<String>) : RuntimeException(
+class VariableHeldAsCredentialException(val name: String, val readers: List<String>) : RuntimeException(
     "\"$name\" is the credential of ${readers.joinToString(", ")}. " +
         "Give ${if (readers.size == 1) "it" else "them"} a value of " +
         "${if (readers.size == 1) "its" else "their"} own, or point at another secret, first — removing it " +
         "here would leave nothing to authenticate with.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "readers" to readers)
+}
 
 /**
  * And it cannot stop being a secret while something reads it.
@@ -230,7 +255,11 @@ class VariableHeldAsCredentialException(name: String, readers: List<String>) : R
  * variable into one would put an API key on every member's screen. The same
  * rule refuses the binding in the first place; this is the other end of it.
  */
-class VariableSecrecyHeldException(name: String, readers: List<String>) : RuntimeException(
+class VariableSecrecyHeldException(val name: String, val readers: List<String>) : RuntimeException(
     "\"$name\" is the credential of ${readers.joinToString(", ")}, so it has to stay a secret. " +
         "A value is read with the list, and a key on a list is a key on a screen.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "readers" to readers)
+}
+

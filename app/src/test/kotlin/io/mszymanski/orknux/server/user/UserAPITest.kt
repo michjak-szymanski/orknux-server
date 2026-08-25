@@ -213,6 +213,57 @@ class UserAPITest(
             .path("setUserEmail.emailChosen").entity(Boolean::class.java).isEqualTo(false)
     }
 
+    /**
+     * The language somebody reads the product in is theirs, and null is a real
+     * answer rather than "English".
+     *
+     * The distinction is what lets a browser open in the language it is already
+     * set to. Once somebody has said English, this holds `en` and their Polish
+     * browser has to leave them in English - so clearing it has to put the
+     * column back to null rather than to a tag.
+     */
+    @Test
+    @WithMockUser(username = "kasia", roles = ["USERS"])
+    fun `somebody chooses the language they read the product in`() {
+        detection.onSignIn(AuthenticationSuccessEvent(TestingAuthenticationToken("kasia", "n/a", "ROLE_USERS")))
+
+        graphQlTester.document("""mutation { setMyLanguage(language: "PL") { language } }""")
+            .execute()
+            .path("setMyLanguage.language").entity(String::class.java).isEqualTo("pl")
+
+        assertThat(requireNotNull(users.findByUsername("kasia")).language).isEqualTo("pl")
+
+        // Chosen English is not the same as having chosen nothing.
+        graphQlTester.document("""mutation { setMyLanguage(language: "en") { language } }""")
+            .execute()
+            .path("setMyLanguage.language").entity(String::class.java).isEqualTo("en")
+
+        graphQlTester.document("""mutation { setMyLanguage(language: null) { language } }""")
+            .execute()
+            .path("setMyLanguage.language").valueIsNull()
+
+        assertThat(requireNotNull(users.findByUsername("kasia")).language).isNull()
+    }
+
+    /**
+     * A tag no catalogue was shipped for is stored rather than refused.
+     *
+     * The words live in the interface's bundle and the server has no list of
+     * what shipped in it, so a whitelist here would be a second list to keep in
+     * step and would refuse a language the day it was added. An unknown tag
+     * reads as English, which is what an interface with no catalogue for it
+     * does anyway.
+     */
+    @Test
+    @WithMockUser(username = "lars", roles = ["USERS"])
+    fun `a language the interface has no words for is kept rather than refused`() {
+        detection.onSignIn(AuthenticationSuccessEvent(TestingAuthenticationToken("lars", "n/a", "ROLE_USERS")))
+
+        graphQlTester.document("""mutation { setMyLanguage(language: "sv") { language } }""")
+            .execute()
+            .path("setMyLanguage.language").entity(String::class.java).isEqualTo("sv")
+    }
+
     @Test
     @WithMockUser(username = "ivan", roles = ["USERS"])
     fun `somebody without the administrator role cannot set another person's`() {

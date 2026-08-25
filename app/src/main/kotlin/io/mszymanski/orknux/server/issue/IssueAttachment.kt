@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -93,7 +94,10 @@ interface IssueAttachmentRepository : JpaRepository<IssueAttachment, Long> {
     fun findByIssueIdOrderByUploadedAtAsc(issueId: Long): List<IssueAttachment>
 }
 
-class IssueAttachmentNotFoundException(id: Long) : RuntimeException("No attachment with id $id")
+class IssueAttachmentNotFoundException(val id: Long) : RuntimeException("No attachment with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Somebody tried to remove a file that is not theirs.

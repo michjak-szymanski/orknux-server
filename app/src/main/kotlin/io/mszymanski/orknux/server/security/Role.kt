@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -103,9 +104,15 @@ interface RoleRepository : JpaRepository<Role, Long> {
     fun findByBuiltinTrue(): List<Role>
 }
 
-class RoleNotFoundException(id: Long) : RuntimeException("No role with id $id")
+class RoleNotFoundException(val id: Long) : RuntimeException("No role with id $id"), Refusal {
 
-class RoleNameTakenException(name: String) : RuntimeException("A role named \"$name\" already exists")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class RoleNameTakenException(val name: String) : RuntimeException("A role named \"$name\" already exists"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class RoleNameInvalidException : RuntimeException("A role needs a name")
 
@@ -115,13 +122,20 @@ class RoleNameInvalidException : RuntimeException("A role needs a name")
  * Says which one and why, because "forbidden" invites a second attempt and this is
  * not something that becomes possible with more permission — nobody has it.
  */
-class RoleBuiltInException(name: String) : RuntimeException(
+class RoleBuiltInException(val name: String) : RuntimeException(
     "\"$name\" is built in and cannot be edited or removed. An installation with no " +
         "administrator role is one nobody can administer.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /** A role cannot be removed while a workspace still depends on it for access. */
-class RoleInUseException(name: String, workspaces: List<String>) : RuntimeException(
+class RoleInUseException(val name: String, val workspaces: List<String>) : RuntimeException(
     "$name is assigned to ${workspaces.joinToString(", ")}. Take it off those workspaces first, " +
         "or whoever holds it loses access to them without anybody deciding that.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "workspaces" to workspaces)
+}
+

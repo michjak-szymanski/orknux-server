@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.workflow
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.graphql.refused
 import io.mszymanski.orknux.server.action.ActionFailedException
 import io.mszymanski.orknux.server.action.ActionInUseException
 import io.mszymanski.orknux.server.action.ActionNameInvalidException
@@ -242,11 +243,6 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             else -> return null
         }
 
-        return GraphQLError.newError()
-            .errorType(errorType)
-            .message(exception.message)
-            .path(environment.executionStepInfo.path)
-            .location(environment.field.sourceLocation)
-            .build()
+        return refused(exception, errorType, environment)
     }
 }

@@ -185,6 +185,17 @@ class SessionAPI(
              */
             emailNotifications = held?.emailNotifications ?: true,
             /*
+             * The language comes with the session for a harder reason than the
+             * address does: it decides what the first screen says. The browser
+             * has already opened in whatever it last remembered, and finding a
+             * different answer here costs it a reload - so this arrives with
+             * the session rather than in a question of its own, and the reload
+             * happens once, on a machine somebody has not signed in on before.
+             * Null where they have never chosen, and the browser's own locale
+             * decides.
+             */
+            language = held?.language,
+            /*
              * And whether their chats print what an answer cost. Here for the
              * same reason and by the same route: the chat window needs it on
              * every render and the preferences page is where it is turned on,
@@ -229,6 +240,14 @@ data class SessionUser @JsonCreator constructor(
      * rather than being asked for separately.
      */
     @JsonProperty("emailNotifications") val emailNotifications: Boolean = true,
+    /**
+     * Which language to draw the product in, or null where they have not
+     * chosen and the browser's own locale should decide.
+     *
+     * Here rather than asked for, because it decides what the first screen
+     * says and the browser has to know before it draws one.
+     */
+    @JsonProperty("language") val language: String? = null,
     /**
      * Whether a chat says what an answer cost as well as how long it took.
      * Theirs to turn on, on the same preferences page, and read by the chat

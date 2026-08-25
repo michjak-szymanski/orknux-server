@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.model
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.graphql.refused
 import io.mszymanski.orknux.connector.model.ModelDiscoveryFailedException
 import io.mszymanski.orknux.connector.model.ModelIdInvalidException
 import io.mszymanski.orknux.connector.model.ModelNameInvalidException
@@ -45,11 +46,6 @@ class ModelExceptionResolver : DataFetcherExceptionResolverAdapter() {
             else -> return null
         }
 
-        return GraphQLError.newError()
-            .errorType(errorType)
-            .message(exception.message)
-            .path(environment.executionStepInfo.path)
-            .location(environment.field.sourceLocation)
-            .build()
+        return refused(exception, errorType, environment)
     }
 }

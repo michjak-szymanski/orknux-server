@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.task
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.Issue
+import io.mszymanski.orknux.server.issue.IssueComment
 import io.mszymanski.orknux.server.issue.IssueHistoryRecorder
 import io.mszymanski.orknux.server.issue.IssueNewsDesk
 import io.mszymanski.orknux.server.issue.IssueRepository
@@ -10,6 +11,7 @@ import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.issue.auditedAs
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -199,20 +201,7 @@ class IssueTaskStarter(
             ),
         )
         audit.record(issue.workspaceId, WorkspaceAuditCategory.TASK, "Task ${task.title} started")
-        /*
-         * Written on the issue before the status moves, so the history reads in
-         * the order it happened: somebody set an agent to work, and the issue
-         * went to in progress because of it.
-         *
-         * The issue says so at all because the alternative was that it did not.
-         * A person pressing this saw "alice changed the status from Open to In
-         * progress" and then, later, comments from an agent - which reads as
-         * though the agent turned up on its own, and says nothing anywhere
-         * about the work having been handed to one (issue #230). The agent is
-         * named rather than "an agent", because a workspace has several and
-         * which one was set on this is the thing worth knowing afterwards.
-         */
-        agents.findByIdOrNull(agentId)?.let { history.taskStarted(issue, it.name, by) }
+        announce(issue, agents.findByIdOrNull(agentId)?.name, by)
         pickUp(issue, by)
         return task
     }
@@ -235,6 +224,45 @@ class IssueTaskStarter(
         val assignee = issue.assignee ?: return null
         if (assignee.kind != AssigneeKind.AGENT) return null
         return assignee.id?.toLongOrNull()
+    }
+
+    /**
+     * The agent says in the thread that it has been set to work on this.
+     *
+     * A comment and not a line in the history, which is what this was first and
+     * what it should not have been. The history is where a *change* to the issue
+     * is written down - a status, a label, who holds it - and a person reading
+     * the thread sees those as one-line asides between what people said. What
+     * happens here is somebody handing the work to an agent, and the agent then
+     * writing in the thread when it is done; an announcement that is not in the
+     * thread leaves those two halves in different registers, so the first thing
+     * the agent says arrives with nothing before it (issue #230).
+     *
+     * Signed by the agent, because it is the agent speaking - the same name its
+     * later comments carry, which is what makes the two read as one voice. Who
+     * pressed the button is named inside the sentence rather than being the
+     * author: they did not write this.
+     *
+     * Written before the status moves, so the thread reads in the order it
+     * happened. Never allowed to be the reason a start fails: the task is
+     * already running by the time this is written, and an issue that could not
+     * be commented on is not a reason to lose it.
+     */
+    private fun announce(issue: Issue, agent: String?, by: String) {
+        if (agent == null) return
+        runCatching {
+            issue.comments.add(
+                IssueComment(author = agent, content = "Started by AI. $by set me to work on this."),
+            )
+            issue.lastCommentAt = OffsetDateTime.now()
+            issue.lastModifiedAt = OffsetDateTime.now()
+            issue.lastModifiedBy = by
+            // Flushed rather than saved: the news has to name which comment it
+            // is about, and one not yet written has no id to give.
+            val saved = issues.saveAndFlush(issue)
+            val posted = saved.comments.maxByOrNull { requireNotNull(it.id) }
+            newsDesk.commented(saved, agent, requireNotNull(posted).content, commentId = posted.id)
+        }.onFailure { log.warn("Could not say on issue #{} that a task had started", issue.number, it) }
     }
 
     /**
@@ -271,5 +299,9 @@ class IssueTaskStarter(
         )
         history.statusChanged(saved, was, saved.status, by)
         newsDesk.statusChanged(saved, by)
+    }
+
+    private companion object {
+        val log = LoggerFactory.getLogger(IssueTaskStarter::class.java)
     }
 }

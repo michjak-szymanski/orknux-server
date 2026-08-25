@@ -5917,13 +5917,6 @@ enum IssueEventKind {
     one describes a change some other table still holds.
     """
     COMMENT_REMOVED
-    """
-    An agent was set to work on this issue.
-
-    `became` is the agent's name and `was` is null. Nothing writes a closing
-    line: what became of the task is the task's own record.
-    """
-    TASK_STARTED
 }
 
 type IssueEvent {

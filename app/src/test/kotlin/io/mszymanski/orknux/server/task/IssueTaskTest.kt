@@ -135,15 +135,16 @@ class IssueTaskTest(
         assertThat(moves).hasSize(1)
         assertThat(moves.first().became).isEqualTo("IN_PROGRESS")
 
-        // And the issue says an agent was set to work on it, by name. Without
-        // this the thread reads as a person picking the work up and an agent
-        // then turning up in the comments unannounced (issue #230).
-        val started = history.findAll().filter { it.kind == IssueEventKind.TASK_STARTED }
-        assertThat(started).hasSize(1)
-        assertThat(started.first().became).isEqualTo("Responder")
-        assertThat(started.first().actor).isEqualTo("alice")
-        // Before the status moved, so the history reads in the order it happened.
-        assertThat(started.first().id).isLessThan(moves.first().id)
+        // And the agent says so in the thread, signed with its own name - the
+        // same name its later comments carry, so the two read as one voice.
+        // Without it the first thing an agent says arrives with nothing before
+        // it, and nothing anywhere says the work was handed to one (#230).
+        graphQlTester.document(
+            """query { workspaceIssue(workspaceId: $workspaceId, number: 1) { comments { author content } } }""",
+        ).execute()
+            .path("workspaceIssue.comments[2].author").entity(String::class.java).isEqualTo("Responder")
+            .path("workspaceIssue.comments[2].content").entity(String::class.java)
+            .isEqualTo("Started by AI. alice set me to work on this.")
 
         val lines = audit.findAll()
         assertThat(lines.filter { it.category == WorkspaceAuditCategory.TASK }.map { it.message })

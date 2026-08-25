@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.task
 
 import io.mszymanski.orknux.connector.model.ModelKind
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
@@ -55,6 +56,8 @@ class TaskService(
     private val sessions: LlmSessionRecorder,
     private val engine: TaskEngine,
     private val properties: TaskProperties,
+    /** Where the turn count is decided now: the workspace, falling back to the file. */
+    private val workspaces: WorkspaceRepository,
 ) {
 
     /**
@@ -65,6 +68,18 @@ class TaskService(
      * no turn has been taken. A page that draws an empty log for the first
      * minute is one nobody can tell from a broken one.
      */
+    /**
+     * How many turns this workspace's next task gets.
+     *
+     * The workspace where it has said, and the installation's own number where
+     * it has not - which is every workspace until somebody fills it in, so
+     * nothing changed for anybody by this becoming a setting. Read here and
+     * copied onto the row below, the same as the working time beside it:
+     * raising it does not extend a task already going.
+     */
+    private fun turnsFor(workspaceId: Long): Int =
+        workspaces.findByIdOrNull(workspaceId)?.taskMaxTurns ?: properties.maxTurns
+
     @Transactional
     fun start(input: NewTask): Task {
         val prompt = input.prompt.trim()
@@ -91,7 +106,7 @@ class TaskService(
                 modelId = modelId,
                 issueId = input.issueId,
                 createdBy = input.createdBy,
-                turnsAllowed = properties.maxTurns,
+                turnsAllowed = turnsFor(input.workspaceId),
                 secondsAllowed = properties.workingTime.toSeconds(),
             ),
         )

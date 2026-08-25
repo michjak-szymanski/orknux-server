@@ -1069,6 +1069,7 @@ type Mutation {
     true` for what this mutation would accept.
     """
     setWorkspaceDefaultMemoryShare(workspaceId: ID!, share: Int): Workspace!
+    setWorkspaceTaskMaxTurns(workspaceId: ID!, turns: Int): Workspace!
     """
     Sets how voice mode decides somebody has finished talking, for this
     workspace.
@@ -1367,6 +1368,19 @@ type Workspace {
     somebody sets this. An agent with a share of its own never consults it.
     """
     defaultMemoryShare: Int
+    """
+    How many times a task started here may ask its model before it is stopped.
+
+    One turn is one round of the agent's own tool loop, so this is the outer of
+    two counts and not the only ceiling - a task is also stopped once its
+    working time is spent.
+
+    Null means the workspace has decided nothing and the installation's own
+    number is used, which is where every workspace starts. Read when a task is
+    created and copied onto it, so changing this decides what the next task gets
+    and leaves the ones already running as they are.
+    """
+    taskMaxTurns: Int
     """
     How long a pause has to run, after somebody has been talking, before their
     turn ends and what they said is sent.
@@ -4562,10 +4576,20 @@ input RunFunctionInput {
 
     A name the function does not declare is ignored, and a parameter nobody
     filled in arrives as `null` — which is what a node passes for a mapping it
-    does not have. The workspace's variables are not here and cannot be: a grant
-    belongs to the function that declared it, and is resolved on the server.
+    does not have.
     """
     arguments: [FunctionArgumentInput!]
+    """
+    What to hand a granted variable instead of what the workspace holds, by the
+    variable's name.
+
+    Only a test run fills this in. Nothing that runs on its own — a node, a
+    trigger, a workflow — can pass it, so an unattended run is handed exactly
+    what the workspace says. A name this function was not granted is ignored,
+    and one left out means the stored value. The workspace's audit says which
+    were given by hand, so such a run is never mistaken for the real one.
+    """
+    externals: [FunctionArgumentInput!]
 }
 
 """
@@ -5888,6 +5912,13 @@ enum IssueEventKind {
     one describes a change some other table still holds.
     """
     COMMENT_REMOVED
+    """
+    An agent was set to work on this issue.
+
+    `became` is the agent's name and `was` is null. Nothing writes a closing
+    line: what became of the task is the task's own record.
+    """
+    TASK_STARTED
 }
 
 type IssueEvent {

@@ -32,14 +32,20 @@ class VariableArguments(
      * nothing should answer no, which is what it will do, and that is a better
      * failure than a run that dies before it can.
      */
-    fun of(function: WorkflowFunction): List<String> = function.externals.map { external ->
-        val variable = variables.findByIdOrNull(external.variableId)
-        if (variable == null) {
-            log.warn("Function {} is handed a variable that no longer exists", function.name)
-            return@map "null"
+    /**
+     * @param instead values to hand over in place of what the workspace holds,
+     *   by variable name and already JSON. Empty everywhere except a test run:
+     *   see [FunctionCaller.call].
+     */
+    fun of(function: WorkflowFunction, instead: Map<String, String> = emptyMap()): List<String> =
+        function.externals.map { external ->
+            val variable = variables.findByIdOrNull(external.variableId)
+            if (variable == null) {
+                log.warn("Function {} is handed a variable that no longer exists", function.name)
+                return@map "null"
+            }
+            instead[variable.name] ?: json(variable)
         }
-        json(variable)
-    }
 
     /** The names those arguments arrive under, for anything that has to say so. */
     fun namesOf(function: WorkflowFunction): List<String> = function.externals.mapNotNull { external ->

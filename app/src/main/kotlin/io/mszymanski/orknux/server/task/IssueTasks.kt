@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.task
 
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.issue.AssigneeKind
 import io.mszymanski.orknux.server.issue.Issue
 import io.mszymanski.orknux.server.issue.IssueHistoryRecorder
@@ -9,6 +10,7 @@ import io.mszymanski.orknux.server.issue.IssueStatus
 import io.mszymanski.orknux.server.issue.auditedAs
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
@@ -141,6 +143,8 @@ object IssueTaskPrompt {
 @Service
 class IssueTaskStarter(
     private val issues: IssueRepository,
+    /** Only to put the agent's name on the issue's history; the task holds its id. */
+    private val agents: AgentRepository,
     private val tasks: TaskRepository,
     private val service: TaskService,
     private val history: IssueHistoryRecorder,
@@ -195,6 +199,20 @@ class IssueTaskStarter(
             ),
         )
         audit.record(issue.workspaceId, WorkspaceAuditCategory.TASK, "Task ${task.title} started")
+        /*
+         * Written on the issue before the status moves, so the history reads in
+         * the order it happened: somebody set an agent to work, and the issue
+         * went to in progress because of it.
+         *
+         * The issue says so at all because the alternative was that it did not.
+         * A person pressing this saw "alice changed the status from Open to In
+         * progress" and then, later, comments from an agent - which reads as
+         * though the agent turned up on its own, and says nothing anywhere
+         * about the work having been handed to one (issue #230). The agent is
+         * named rather than "an agent", because a workspace has several and
+         * which one was set on this is the thing worth knowing afterwards.
+         */
+        agents.findByIdOrNull(agentId)?.let { history.taskStarted(issue, it.name, by) }
         pickUp(issue, by)
         return task
     }

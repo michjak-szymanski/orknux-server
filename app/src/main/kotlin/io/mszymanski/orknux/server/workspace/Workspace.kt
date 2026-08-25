@@ -164,6 +164,29 @@ class Workspace(
     var defaultMemoryShare: Int? = null,
 
     /**
+     * How many times a task may ask its model before it is stopped.
+     *
+     * One turn is one round of the agent's own tool loop - it is asked, it may
+     * call its tools, and it answers - so this is the outer of two counts and
+     * not the only ceiling: a task is also stopped after its working time is
+     * spent, which is what bounds a turn sitting on a slow tool.
+     *
+     * Here rather than only in the configuration file because it is the number
+     * somebody wants to change while watching a task run out of turns, and the
+     * only way to change it was an environment variable and a restart of the
+     * whole server (issue #229). A workspace and not the installation: what a
+     * task is worth is a judgement about the work that workspace does, and one
+     * doing overnight research has no bearing on one answering questions.
+     *
+     * Null is what every workspace starts as and means it has decided nothing,
+     * so the installation's own number is used. Read when a task is created and
+     * copied onto the row, so raising it does not extend a task already going
+     * and lowering it does not kill one.
+     */
+    @Column(name = "task_max_turns")
+    var taskMaxTurns: Int? = null,
+
+    /**
      * How long a pause has to run, after somebody has been talking, before
      * voice mode ends their turn and sends what they said.
      *

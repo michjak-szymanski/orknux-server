@@ -404,7 +404,7 @@ class IssueTools(
         if (missing.isNotEmpty()) {
             return refuse("There is nobody called ${missing.joinToString(", ")} in this workspace to observe an issue")
         }
-        val watching = found.mapNotNull { it.second }.ifEmpty { administrators() }
+        val watching = found.mapNotNull { it.second }.ifEmpty { administrators(scope) }
 
         val made = issues.save(
             Issue(
@@ -413,19 +413,19 @@ class IssueTools(
                 title = title,
                 description = text(arguments, "description")?.trim(),
                 type = type,
-                reporter = currentUser(),
+                reporter = currentUser(scope),
                 labels = labels,
-                lastModifiedBy = currentUser(),
+                lastModifiedBy = currentUser(scope),
             ),
         )
-        audited(scope.workspaceId, "Issue #${made.number} \"$title\" opened")
+        audited(scope, scope.workspaceId, "Issue #${made.number} \"$title\" opened")
         watching.forEach {
             observers.save(
                 IssueObserver(
                     issueId = requireNotNull(made.id),
                     kind = it.kind,
                     observerId = requireNotNull(it.id),
-                    addedBy = currentUser(),
+                    addedBy = currentUser(scope),
                 ),
             )
             // Said the same way `observeIssue` says it, because it is the same
@@ -433,13 +433,13 @@ class IssueTools(
             // asked about observers, and it has to answer whether they were
             // named on the tool call that filed it or added from the page
             // afterwards.
-            audited(scope.workspaceId, "Issue #${made.number}: ${it.name} is now an observer")
+            audited(scope, scope.workspaceId, "Issue #${made.number}: ${it.name} is now an observer")
         }
         // Opened rather than observing: at creation the news worth having is
         // that the issue exists. "You are now an observer" is the right sentence
         // for somebody added to an issue that was already there, and that is where
         // it still gets said.
-        newsDesk.opened(made, currentUser())
+        newsDesk.opened(made, currentUser(scope))
 
         return mapper.writeValueAsString(
             mapOf(
@@ -532,10 +532,10 @@ class IssueTools(
      * Whoever is asking is left out. Observing an issue you filed yourself
      * subscribes you to your own doing, which the news desk drops anyway.
      */
-    private fun administrators(): List<NewsReader> =
+    private fun administrators(scope: OrknuxScope): List<NewsReader> =
         users.findAll()
             .filter { person -> person.roles.any { it.administers } }
-            .filterNot { it.username.equals(currentUser(), ignoreCase = true) }
+            .filterNot { it.username.equals(currentUser(scope), ignoreCase = true) }
             .map { NewsReader(AssigneeKind.USER, it.username, requireNotNull(it.id).toString()) }
 
     /**
@@ -551,10 +551,10 @@ class IssueTools(
         val held = issueIn(scope, arguments) ?: return refuse("Which issue? Give its number.")
         val said = text(arguments, "content") ?: return refuse("What should the comment say?")
 
-        held.comments.add(IssueComment(author = currentUser(), content = said.trim()))
+        held.comments.add(IssueComment(author = currentUser(scope), content = said.trim()))
         held.lastCommentAt = OffsetDateTime.now()
         held.lastModifiedAt = OffsetDateTime.now()
-        held.lastModifiedBy = currentUser()
+        held.lastModifiedBy = currentUser(scope)
         /*
          * Flushed rather than saved, for the reason the controller's door
          * flushes: the news has to say which comment it is about, and a comment
@@ -563,7 +563,7 @@ class IssueTools(
          */
         val saved = issues.saveAndFlush(held)
         val posted = saved.comments.maxByOrNull { requireNotNull(it.id) }
-        newsDesk.commented(saved, currentUser(), said.trim(), commentId = posted?.id)
+        newsDesk.commented(saved, currentUser(scope), said.trim(), commentId = posted?.id)
         return mapper.writeValueAsString(
             mapOf("said" to true, "issue" to held.number, "url" to issueLink(scope.workspaceId, held.number)),
         )
@@ -581,16 +581,16 @@ class IssueTools(
         val moved = held.status != wanted
         held.status = wanted
         held.lastModifiedAt = OffsetDateTime.now()
-        held.lastModifiedBy = currentUser()
+        held.lastModifiedBy = currentUser(scope)
         issues.save(held)
         if (moved) {
-            newsDesk.statusChanged(held, currentUser())
-            audited(scope.workspaceId, "Issue #${held.number} ${wanted.auditedAs(was)}")
+            newsDesk.statusChanged(held, currentUser(scope))
+            audited(scope, scope.workspaceId, "Issue #${held.number} ${wanted.auditedAs(was)}")
         }
         // Written here as well as in the controller, because this is the other
         // door into the tracker and a history with a hole exactly where the
         // agents worked is worse than no history at all.
-        history.statusChanged(held, was, wanted, currentUser())
+        history.statusChanged(held, was, wanted, currentUser(scope))
         return mapper.writeValueAsString(mapOf("issue" to held.number, "status" to wanted))
     }
 
@@ -693,13 +693,13 @@ class IssueTools(
             }
         }
         held.lastModifiedAt = OffsetDateTime.now()
-        held.lastModifiedBy = currentUser()
+        held.lastModifiedBy = currentUser(scope)
         issues.save(held)
-        history.labelsChanged(held, labelsWere, held.labels.toSet(), currentUser())
+        history.labelsChanged(held, labelsWere, held.labels.toSet(), currentUser(scope))
         // The other door writes the same line, for the reason the status does:
         // a history whose gaps line up with the work nobody watched is worse
         // than none.
-        history.typeChanged(held, typeWas, held.type?.name, currentUser())
+        history.typeChanged(held, typeWas, held.type?.name, currentUser(scope))
 
         /*
          * And only if it actually moved.
@@ -711,9 +711,10 @@ class IssueTools(
          * a display name and neither of them is the other.
          */
         if (held.assignee?.let { it.kind to it.id } != was) {
-            newsDesk.assigned(held, currentUser())
-            history.assigneeChanged(held, heldBy, nameOf(held), currentUser())
+            newsDesk.assigned(held, currentUser(scope))
+            history.assigneeChanged(held, heldBy, nameOf(held), currentUser(scope))
             audited(
+                scope,
                 scope.workspaceId,
                 nameOf(held)
                     ?.let { "Issue #${held.number} assigned to $it" }
@@ -801,9 +802,22 @@ class IssueTools(
         }
     }
 
-    /** Whoever is asking: a token carries its owner, so this is a real name. */
-    private fun currentUser(): String =
-        SecurityContextHolder.getContext().authentication?.name ?: "orknux"
+    /**
+     * Whoever is asking.
+     *
+     * Three doors, three answers. A token on the MCP endpoint carries its owner,
+     * so that is a real username and it wins - a name passed in a scope must
+     * never be able to sign somebody else's name to a change. An agent working a
+     * task comes through in-process with no session at all, and [OrknuxScope.actor]
+     * is the agent's own name: issue #230, where every comment an agent left and
+     * every status it moved was filed as "orknux", so an issue's history could
+     * not say which agent had done the work or even that an agent had.
+     *
+     * The product's own name is what is left when neither applies, which is
+     * something calling these tools with no principal and no agent behind it.
+     */
+    private fun currentUser(scope: OrknuxScope): String =
+        SecurityContextHolder.getContext().authentication?.name ?: scope.actor ?: "orknux"
 
     /**
      * The same audit entry the controller writes, from the other door.
@@ -826,8 +840,8 @@ class IssueTools(
      * names whoever the issue itself names - a real username where a token
      * carried one, and `orknux` where the platform acted on its own.
      */
-    private fun audited(workspaceId: Long, message: String) {
-        audit.recordAutomated(workspaceId, WorkspaceAuditCategory.WORKSPACE, message, currentUser())
+    private fun audited(scope: OrknuxScope, workspaceId: Long, message: String) {
+        audit.recordAutomated(workspaceId, WorkspaceAuditCategory.WORKSPACE, message, currentUser(scope))
     }
 
 }

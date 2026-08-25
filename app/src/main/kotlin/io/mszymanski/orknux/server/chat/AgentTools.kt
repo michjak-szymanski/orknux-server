@@ -47,7 +47,18 @@ class AgentTools(
      * granted this is for. The grant is the decision; there is no session here
      * to ask for a second one.
      */
-    private fun scopeFor(agent: Agent) = OrknuxScope(workspaceId = agent.workspaceId, mayWrite = true)
+    private fun scopeFor(agent: Agent) = OrknuxScope(
+        workspaceId = agent.workspaceId,
+        mayWrite = true,
+        /*
+         * And it signs its own name to what it does. There is no session behind
+         * an agent's tool call, so everything it wrote on an issue was filed
+         * under the product's name and a tracker could not say which agent had
+         * done the work (issue #230). The agent has a name somebody chose; it
+         * is the true answer to who commented.
+         */
+        actor = agent.name,
+    )
 
     fun specsFor(agent: Agent): List<ToolSpec> = buildList {
         if (agent.skillCatalogs.isNotEmpty()) addAll(skills.descriptors().map(::spec))

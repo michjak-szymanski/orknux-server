@@ -52,6 +52,18 @@ class FunctionCaller(
      * @param context what the script may know about where it is running, as JSON.
      * @param workspaceId which workspace is asking. Only a plugin's function reads
      *   it — its settings and the permissions somebody agreed to are per workspace.
+     * @param insteadOfVariables what to hand a named variable in place of what the
+     *   workspace holds. **Empty for every caller but a test run**, and that is the
+     *   whole of the rule: a node, a trigger and a workflow pass nothing here, so a
+     *   run that happens on its own is handed exactly what the workspace says.
+     *
+     *   A test run may. The argument against it is real - a run given a value the
+     *   real run would never see proves less about the function - but it was
+     *   answered: a signature check against a secret nobody may read is untestable
+     *   from the editor otherwise, and the person testing it already has the
+     *   editor open on its source. What is not affected is anything the run leaves
+     *   behind: the audit line says a run was given values by hand, so a run that
+     *   behaved differently from the real one is never mistaken for it later.
      *
      * Never throws for anything the script did. A broken import and a plugin that
      * has not been configured come back as [ScriptResult.Failed] with `settled`
@@ -63,8 +75,9 @@ class FunctionCaller(
         declared: List<String>,
         context: String,
         workspaceId: Long,
+        insteadOfVariables: Map<String, String> = emptyMap(),
     ): ScriptResult {
-        val arguments = declared + externals.of(function)
+        val arguments = declared + externals.of(function, insteadOfVariables)
 
         /*
          * A plugin's function is not this workspace's JavaScript, and its source

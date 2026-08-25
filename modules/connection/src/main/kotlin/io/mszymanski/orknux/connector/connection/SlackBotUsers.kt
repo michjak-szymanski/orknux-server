@@ -233,7 +233,19 @@ class SlackBotUsers(
             known.remove(connectionId, held)
             return null
         }
-        val goodFor = if (held.answer.outcome == SlackBotUserOutcome.FOUND) GOOD_FOR else A_REFUSAL_IS_GOOD_FOR
+        /*
+         * An answer somebody is in the middle of fixing is not worth ten minutes.
+         *
+         * The credential is the fingerprint, and adding `channels:history` to a
+         * Slack app does not change the bot token - so a connection that was
+         * found and cannot receive keeps saying so for ten minutes after the
+         * scope has been granted, with nothing a person can do about it but
+         * wait or restart the server. That is the one answer on this screen
+         * anybody is actively trying to change, which puts it in the same class
+         * as a refusal rather than in the same class as a settled fact.
+         */
+        val settled = held.answer.outcome == SlackBotUserOutcome.FOUND && held.answer.receives != false
+        val goodFor = if (settled) GOOD_FOR else A_REFUSAL_IS_GOOD_FOR
         if (System.currentTimeMillis() - held.readAt > goodFor.toMillis()) {
             known.remove(connectionId, held)
             return null

@@ -25,6 +25,8 @@ class IncomingTriggerListener(
     private val runs: TriggerRunner,
     /** Who each watched connection posts as; the answer is cached, never asked per reply. */
     private val botUsers: SlackBotUsers,
+    /** Only to ask whether a trigger has ever fired. See [FiringOutcome.NOT_WATCHED]. */
+    private val firings: TriggerFiringRepository,
 ) {
 
     @EventListener
@@ -68,11 +70,20 @@ class IncomingTriggerListener(
      * each watched bot token, since a bot token *is* a Slack user. Resolving
      * that is a lookup in `SlackBotUsers`' cache and not a call to Slack.
      *
-     * **A miss is passed over rather than recorded.** It is the same kind of
-     * non-event as a mention arriving for a trigger watching another connection:
-     * this reply was never this trigger's. Writing a firing for each would fill
-     * the log a trigger's own page exists to make readable with every thread
-     * anybody in the workspace happens to be having.
+     * **A miss is passed over rather than recorded — except the first.** Every
+     * one after it is the same kind of non-event as a mention arriving for a
+     * trigger watching another connection: this reply was never this trigger's,
+     * and writing a firing for each would fill the log a trigger's own page
+     * exists to make readable with every thread anybody in the workspace happens
+     * to be having.
+     *
+     * But the first is not that. A trigger with nothing to its name is one
+     * somebody is still setting up, and "no firings at all" is the same picture
+     * whether Slack is delivering nothing or delivering replies under the wrong
+     * message — which is issue #269, reported as "does not trigger" with the
+     * bot resolved, the scope granted and the trigger enabled. One line ends
+     * that: it says the wire works and what arrived was not what was asked for.
+     * After it, the trigger has a history and the silence is legible again.
      */
     private fun toOneOfOurs(trigger: WorkflowTrigger, event: IncomingEvent): Boolean {
         if (trigger.action != TriggerAction.REPLY) return true
@@ -84,12 +95,36 @@ class IncomingTriggerListener(
                 event.connectionId,
                 trigger.id,
             )
+            firstSignOfLife(trigger, "A reply arrived here, but not inside a thread one of the watched bots started")
             return false
         }
         // Watching nobody is refused on save, so a definition here with an empty
         // list predates the guard or was written straight to the database. It
         // matches nothing, which is the safe half of the two.
-        return parent in botUsers.userIdsOf(trigger.watchedConnectionIds)
+        if (parent in botUsers.userIdsOf(trigger.watchedConnectionIds)) return true
+
+        firstSignOfLife(
+            trigger,
+            "A reply arrived here, under a message none of the watched bots wrote. " +
+                "A reply trigger fires on replies to its own bots' messages, so the thread has to start with one.",
+        )
+        return false
+    }
+
+    /**
+     * The one line a trigger that has never fired gets, and no more.
+     *
+     * The count is asked before the write, so a trigger already carrying a
+     * history stays quiet — which is what keeps this from becoming a row per
+     * thread. Never allowed to be the reason anything fails: this is a note
+     * about an event that was not this trigger's in the first place.
+     */
+    private fun firstSignOfLife(trigger: WorkflowTrigger, detail: String) {
+        runCatching {
+            if (!firings.existsByTriggerId(requireNotNull(trigger.id))) {
+                runs.note(trigger, FiringOutcome.NOT_WATCHED, detail)
+            }
+        }.onFailure { log.warn("Could not note what reached trigger {}", trigger.id, it) }
     }
 
     /**

@@ -2519,6 +2519,31 @@ type ChatSession {
     "ISO-8601 offset date-times. `lastMessageAt` is null until something is said."
     createdAt: String!
     lastMessageAt: String
+    """
+    What this whole chat has read and written, kept and added to as each turn
+    lands - not the last answer's, which `ChatAnswer` carries and which is gone
+    on reload.
+
+    Every round of every turn, an agent's lookups included, and a regenerated
+    answer counts on top of the one it replaced because both were paid for.
+    Tokens rather than money: prices belong to the model, models are repriced,
+    and a chat can be moved onto another model mid-conversation, so a stored
+    total in currency is arithmetic nobody could check afterwards.
+
+    Zero means nothing was recorded, not that nothing was spent - a chat nobody
+    has spoken in, a provider that reported no counts, and a chat older than the
+    column all read the same, and the screen draws nothing for all three.
+    """
+    spentInputTokens: Float!
+    spentOutputTokens: Float!
+    """
+    How many pictures were drawn in this chat.
+
+    Counted rather than costed in tokens, because an image model charges per
+    picture and reports no counts at all. Folded into the token total it would
+    add nought and read as free.
+    """
+    spentPictures: Int!
 }
 
 """

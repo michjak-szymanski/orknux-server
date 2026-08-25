@@ -92,6 +92,48 @@ class ChatSession(
     /** Orders RECENT, and is null on a chat nobody has said anything in. */
     @Column(name = "last_message_at")
     var lastMessageAt: OffsetDateTime? = null,
+
+    /**
+     * What this whole chat has read and written, added to as each turn lands.
+     *
+     * A running total rather than a table of turns: it is one number and one
+     * number is what it is for. `chat_answer_take` set out what a chat-side
+     * table has to justify and a per-turn one would clear the bar without
+     * earning anything - `model_usage_day` already holds every call at the
+     * grain an invoice is read at, and a per-turn row here would need to say
+     * which turn, which a regenerate makes ambiguous exactly where the money
+     * is.
+     *
+     * Every round of every turn, an agent's lookups included, because that is
+     * what the provider charged for and what #227 already reports on the answer
+     * itself. A turn that failed halfway adds nothing: what is added is added by
+     * [ChatService.finishSend], which only an answered turn reaches, and a
+     * failure carries no counts to add anyway.
+     *
+     * Tokens, never money. Prices belong to the model and models are repriced,
+     * so a stored money total is arithmetic nobody can check afterwards - and a
+     * chat can be moved onto another model mid-conversation, so costing the
+     * total at whichever model answers now would be no better. The per-answer
+     * line keeps the money, where the model and its prices are both in front of
+     * you.
+     */
+    @Column(name = "spent_input_tokens", nullable = false)
+    var spentInputTokens: Long = 0,
+
+    @Column(name = "spent_output_tokens", nullable = false)
+    var spentOutputTokens: Long = 0,
+
+    /**
+     * How many pictures this chat has had drawn in it.
+     *
+     * Counted rather than costed in tokens. An image model charges per picture
+     * and reports no counts at all, so a drawn picture adds nought to the two
+     * above; left at that, a chat that spent real money on pictures would read
+     * as a chat that spent nothing. It is said beside the tokens rather than
+     * folded into them, because a picture is not a token.
+     */
+    @Column(name = "spent_pictures", nullable = false)
+    var spentPictures: Int = 0,
 )
 
 interface ChatSessionRepository : JpaRepository<ChatSession, Long> {

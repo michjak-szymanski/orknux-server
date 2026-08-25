@@ -163,8 +163,17 @@ class TaskStreamAPITest(
             recorder.toolReturned(line, "four open issues")
             val answered = nextOf(frames, "step")
             assertThat(answered).contains("four open issues")
-            // The same line, filled in - not a second one.
-            assertThat(answered).contains("\"id\":$line")
+            /*
+             * The same line, filled in - not a second one.
+             *
+             * And the id is *text*, which is the half of that the page depends
+             * on. It draws the tail with `llmSessionEvents`, where the id is a
+             * GraphQL `ID!` and arrives as a string, then merges what the stream
+             * sends by `===`. A number here matched nothing, so every line the
+             * stream sent twice was drawn twice: the lookup once running and
+             * once returned, the reasoning once frozen and once growing.
+             */
+            assertThat(answered).contains("\"id\":\"$line\"")
         } finally {
             frames.close()
         }

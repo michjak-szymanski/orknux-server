@@ -139,6 +139,73 @@ class LlmSessionRecorder(
         write(session, LlmSessionEventKind.SYSTEM, SYSTEM, said)
 
     /**
+     * Opens a line for what the model is thinking, with the first of it on.
+     *
+     * The three methods below are one line of transcript in three moments, and
+     * they are three rather than one for the same reason [toolCalled] and
+     * [toolReturned] are: the line has to exist *while* the thing it records is
+     * still happening. A turn of a task is minutes long and most of that is a
+     * reasoning model thinking; written down only at the end, the page showing
+     * the task read as dead for exactly the stretch there was most to watch.
+     *
+     * @return the line to hand back to [thinkingGrew] and [thoughtFor], or null
+     *   where it could not be written - the same bargain [toolCalled] makes.
+     */
+    fun thinking(session: Long, agent: String, thought: String): Long? =
+        write(session, LlmSessionEventKind.THINKING, agent, thought)
+
+    /**
+     * More of it arrived, so the line says more.
+     *
+     * The whole of the thinking so far rather than the piece that just came,
+     * because the line is one block and a reader merges it by id. A frame per
+     * row would be hundreds of rows for one turn, and a transcript in which the
+     * reasoning is spread over three hundred lines is not one anybody reads.
+     *
+     * How often this is called is the caller's to decide, and it should not be
+     * on every frame - see `TaskLoop`, which flushes on a clock.
+     */
+    fun thinkingGrew(event: Long?, thought: String) {
+        val line = event ?: return
+        try {
+            events.findByIdOrNull(line)?.let {
+                // Nothing shortens a line in place, and a follower notices a
+                // change by the length - so a write that made it shorter would
+                // be one nobody was told about.
+                if ((it.content?.length ?: 0) >= thought.length) return
+                it.content = thought
+                events.save(it)
+                announce(it.sessionId)
+            }
+        } catch (failure: Exception) {
+            log.warn("What {} was thinking could not be added to", line, failure)
+        }
+    }
+
+    /**
+     * The model stopped thinking, and this is how long it went on for.
+     *
+     * What settles the line: until this is written the duration is null, which
+     * is what a page reads as "still thinking". So it is written whatever
+     * happened - a turn that failed still stops thinking - and a line left
+     * unsettled by a process that died is the one case a reader falls back to
+     * the task's own state for.
+     */
+    fun thoughtFor(event: Long?, thought: String, millis: Long) {
+        val line = event ?: return
+        try {
+            events.findByIdOrNull(line)?.let {
+                if (thought.length > (it.content?.length ?: 0)) it.content = thought
+                it.millis = millis.coerceAtLeast(0)
+                events.save(it)
+                announce(it.sessionId)
+            }
+        } catch (failure: Exception) {
+            log.warn("How long {} thought for could not be recorded", line, failure)
+        }
+    }
+
+    /**
      * What was said before, as turns to put in front of the model.
      *
      * This is the half that makes a session memory rather than a log. Without

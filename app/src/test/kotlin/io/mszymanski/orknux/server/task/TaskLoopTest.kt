@@ -120,7 +120,7 @@ class TaskLoopTest(
      */
     @Test
     fun `text without task_done is progress and the task carries on`() {
-        val taskId = taskFor(serve { """{"choices":[{"message":{"role":"assistant","content":"Started reading."}}]}""" })
+        val taskId = taskFor(serve { saying("Started reading.") })
 
         assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
 
@@ -218,7 +218,7 @@ class TaskLoopTest(
     @Test
     fun `a task that never finishes runs out of turns and says so`() {
         val taskId = taskFor(
-            serve { """{"choices":[{"message":{"role":"assistant","content":"Still going."}}]}""" },
+            serve { saying("Still going.") },
             turns = 2,
         )
 
@@ -229,6 +229,45 @@ class TaskLoopTest(
         val task = requireNotNull(tasks.findByIdOrNull(taskId))
         assertThat(task.status).isEqualTo(TaskStatus.FAILED)
         assertThat(task.endedBecause).isEqualTo("out of turns after 2")
+    }
+
+    /**
+     * What the model thought is written into the task's log, and settles.
+     *
+     * The complaint this answers was that a task's page does not move while the
+     * model is working, and the reason it did not is here rather than in the
+     * page: nothing was written between one turn and the next. So what is
+     * asserted is the record - a line of its own kind, carrying the whole of the
+     * reasoning, with a duration on it once the model stopped.
+     *
+     * The duration is the marker as well as the measurement: null means still
+     * thinking, and a line left null is what a page draws as a model at work. A
+     * turn that has ended and left one null would be a page claiming for ever
+     * that a finished task is thinking.
+     */
+    @Test
+    fun `what the model thought is recorded as its own line and settles when it stops`() {
+        val taskId = taskFor(serve { thinkingThen("Started reading.") })
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
+
+        val task = requireNotNull(tasks.findByIdOrNull(taskId))
+        val thinking = events.findAll()
+            .filter { it.sessionId == task.sessionId && it.kind == LlmSessionEventKind.THINKING }
+
+        // One line for the round rather than one per frame: a model emits
+        // hundreds of those and a transcript spread over them is unreadable.
+        assertThat(thinking).hasSize(1)
+        assertThat(thinking.single().content)
+            .isEqualTo("Let me look at what failed. Last week had three runs.")
+        assertThat(thinking.single().millis).isNotNull()
+        assertThat(thinking.single().unfinished).isFalse()
+
+        // And it is not something the agent said. What goes back in front of a
+        // model is USER and AGENT, and reasoning replayed as an answer is the
+        // lie the chat's own thinking was kept out of its thread to avoid.
+        assertThat(recorder.remembered(requireNotNull(task.sessionId)).map { it.content })
+            .noneMatch { it.contains("Last week had three runs") }
     }
 
     /** A finished task is not started again by a second delivery of the same turn. */
@@ -285,11 +324,43 @@ class TaskLoopTest(
     private fun finishing(summary: String) =
         calling("task_done", """{\"summary\":\"$summary\"}""")
 
-    private fun calling(tool: String, arguments: String) = """
-        {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
-          {"id":"call_1","type":"function","function":{"name":"$tool","arguments":"$arguments"}}
-        ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
-    """.trimIndent()
+    /**
+     * A round the stub streams, because a task's rounds are streamed.
+     *
+     * They were not when this was written: the loop passed no `RoundWatch`, so
+     * [io.mszymanski.orknux.server.chat.AgentConversation] took the blocking
+     * path and the stub could answer with one JSON object. It passes one now,
+     * which is what makes a turn visible while it is happening, and the price
+     * is that the stub has to speak the shape a provider speaks when it is
+     * asked to stream. Spelled once here rather than in every answer.
+     */
+    private fun streamed(vararg frames: String) =
+        frames.joinToString("\n\n", postfix = "\n\ndata: [DONE]\n\n") { "data: $it" }
+
+    private fun calling(tool: String, arguments: String) = streamed(
+        """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",""" +
+            """"function":{"name":"$tool","arguments":"$arguments"}}]}}]}""",
+        """{"choices":[{"delta":{}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}""",
+    )
+
+    /** A round that says something and asks for nothing. */
+    private fun saying(said: String) = streamed(
+        """{"choices":[{"delta":{"content":"$said"}}]}""",
+    )
+
+    /**
+     * A round that thinks out loud before it says anything.
+     *
+     * Two frames of reasoning rather than one, because what is pinned by the
+     * test using it is that a *growing* block reaches the session. One frame
+     * would pass just as well on a build that wrote the thinking down once the
+     * round was over, which is the shape this feature replaced.
+     */
+    private fun thinkingThen(said: String) = streamed(
+        """{"choices":[{"delta":{"reasoning_content":"Let me look at what failed. "}}]}""",
+        """{"choices":[{"delta":{"reasoning_content":"Last week had three runs."}}]}""",
+        """{"choices":[{"delta":{"content":"$said"}}]}""",
+    )
 
     private fun serve(answer: (String) -> String): String {
         server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)

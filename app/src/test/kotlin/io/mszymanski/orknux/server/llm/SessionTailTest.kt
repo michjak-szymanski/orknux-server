@@ -132,6 +132,103 @@ class SessionTailTest(
     }
 
     /**
+     * A block of thinking arrives while it is still being thought, and again
+     * every time it has grown.
+     *
+     * The other half of what makes a tail more than forward-only, and the half
+     * a task's page was missing entirely: a turn is minutes long and most of
+     * that is a reasoning model thinking, so a page shown only lines it had not
+     * seen before had nothing at all to draw for the stretch there was most to
+     * watch.
+     *
+     * Three handings for one line, and each is a different fact: it started, it
+     * has more on it, it stopped. The last one is the one a page reads as the
+     * model having finished, because the duration is what settles the line.
+     */
+    @Test
+    fun `thinking arrives as it grows and again when it settles`() {
+        val watch = tail.follow(session, 0)
+        try {
+            val line = recorder.thinking(session, "Ada", "Let me look")
+
+            val opened = waitFor(watch)
+            assertThat(opened?.kind).isEqualTo(LlmSessionEventKind.THINKING)
+            assertThat(opened?.content).isEqualTo("Let me look")
+            // No duration is what "still thinking" is: one fact, so nothing can
+            // disagree with it.
+            assertThat(opened?.millis).isNull()
+            assertThat(opened?.unfinished).isTrue()
+
+            recorder.thinkingGrew(line, "Let me look at what failed last week")
+            val grew = waitFor(watch)
+            assertThat(grew?.id).isEqualTo(line)
+            assertThat(grew?.content).isEqualTo("Let me look at what failed last week")
+
+            recorder.thoughtFor(line, "Let me look at what failed last week", 4_200)
+            val settled = waitFor(watch)
+            assertThat(settled?.id).isEqualTo(line)
+            assertThat(settled?.millis).isEqualTo(4_200)
+            assertThat(settled?.unfinished).isFalse()
+        } finally {
+            tail.unfollow(watch)
+        }
+    }
+
+    /**
+     * Somebody opening a task while the model is mid-thought.
+     *
+     * The cursor only moves forwards, so a line older than where a reader
+     * joined is never offered - which is right for a line that is finished and
+     * was wrong for the two kinds that are not. A page draws the tail with
+     * `llmSessionEvents` and follows on from the newest line it holds, and on a
+     * task being worked on the newest line is very often the unfinished one:
+     * the block of reasoning the model is in the middle of, or a lookup still
+     * running. Followed from there, that line stayed frozen at whatever the
+     * page happened to load while every line after it arrived perfectly.
+     *
+     * Found by running `task-live-check` against a model that thinks for
+     * twelve seconds: the block appeared with fifteen characters on it and was
+     * still fifteen characters two seconds later, while the stream read with
+     * `curl` from nought showed it growing in thirteen steps.
+     */
+    @Test
+    fun `a reader that joins mid-thought is given the rest of it`() {
+        val line = requireNotNull(recorder.thinking(session, "Ada", "Let me look"))
+
+        // Following from the thinking line itself, which is what a page that
+        // has just drawn it does.
+        val watch = tail.follow(session, line)
+        try {
+            recorder.thinkingGrew(line, "Let me look at what failed last week")
+
+            val grew = waitUntil(watch) { it.content == "Let me look at what failed last week" }
+            assertThat(grew?.id).isEqualTo(line)
+
+            recorder.thoughtFor(line, "Let me look at what failed last week", 3_000)
+            assertThat(waitUntil(watch) { it.millis != null }?.millis).isEqualTo(3_000)
+        } finally {
+            tail.unfollow(watch)
+        }
+    }
+
+    /** The same, for the lookup a page was drawn in the middle of. */
+    @Test
+    fun `a reader that joins mid-call is given what it returned`() {
+        val line = requireNotNull(recorder.toolCalled(session, "orknux_issues", """{"status":"OPEN"}"""))
+
+        val watch = tail.follow(session, line)
+        try {
+            recorder.toolReturned(line, "four open issues")
+
+            val answered = waitUntil(watch) { it.result != null }
+            assertThat(answered?.id).isEqualTo(line)
+            assertThat(answered?.result).isEqualTo("four open issues")
+        } finally {
+            tail.unfollow(watch)
+        }
+    }
+
+    /**
      * Two people watching one task cost what one does.
      *
      * The cost decision, pinned. Both followers are attached at different
@@ -199,6 +296,24 @@ class SessionTailTest(
     }
 
     /** The next line owed, waited on for long enough to be a real answer. */
+    /**
+     * The next line that satisfies something, rather than simply the next line.
+     *
+     * For the readers that join partway through. One of those is handed the
+     * unfinished line as it stands *and* every version of it after, and which
+     * of those arrives first is a race between the pump's first pass and the
+     * write the test has just made. What the test means is "the version that
+     * says what I am asserting about", so that is what it asks for.
+     */
+    private fun waitUntil(watch: SessionWatch, wanted: (LlmSessionEvent) -> Boolean): LlmSessionEvent? {
+        val until = System.currentTimeMillis() + WAIT_MILLIS
+        while (System.currentTimeMillis() < until) {
+            val line = watch.next(WAIT_SLICE) ?: continue
+            if (wanted(line)) return line
+        }
+        return null
+    }
+
     private fun waitFor(watch: SessionWatch, expecting: String? = null): LlmSessionEvent? {
         val until = System.currentTimeMillis() + WAIT_MILLIS
         while (System.currentTimeMillis() < until) {

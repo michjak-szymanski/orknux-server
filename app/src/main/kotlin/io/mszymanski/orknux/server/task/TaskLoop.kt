@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
+import io.mszymanski.orknux.server.chat.RoundWatch
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import org.slf4j.LoggerFactory
@@ -119,10 +120,29 @@ class TaskLoop(
             addAll(sessions.recalled(session, budget))
         }
 
+        /*
+         * Somebody is watching, and that is the whole of what makes this turn
+         * visible while it happens.
+         *
+         * A round with a watcher is streamed and a round without is one
+         * blocking call - see [AgentConversation], where the two paths differ
+         * by nothing else. A task used to pass none, so a turn was up to eight
+         * HTTP calls that each said nothing until they were over, and a page
+         * showing the task had minutes with nothing to draw. It is not the
+         * chat's watcher: a chat has a reader on the other end of an open
+         * connection and relays to them, while a task has nobody in particular
+         * and writes to the session instead. See [TaskThinking].
+         */
+        val watching = TaskThinking(session, agent.name, sessions)
+
         val begun = System.nanoTime()
         val answer = try {
-            conversation.answer(working.modelId, agent, turns, session, tools.shed())
+            conversation.answer(working.modelId, agent, turns, session, tools.shed(), watching)
         } finally {
+            // Before the turn is counted, and whatever the turn did. A line
+            // left open is one a page reads as still being thought, and on a
+            // turn that threw there is nothing left to close it later.
+            watching.settle()
             record(task, Duration.ofNanos(System.nanoTime() - begun))
         }
 

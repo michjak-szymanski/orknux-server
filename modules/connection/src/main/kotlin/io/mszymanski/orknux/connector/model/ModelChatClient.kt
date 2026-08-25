@@ -11,6 +11,7 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import tools.jackson.databind.node.ArrayNode
 import tools.jackson.databind.node.ObjectNode
@@ -330,19 +331,40 @@ class ModelChatClient(
             val tree = mapper.readTree(payload)
             if (anthropic) {
                 val delta = tree.path("delta")
-                ModelPiece(
-                    said = delta.path("text").stringValue().orEmpty(),
-                    thought = delta.path("thinking").stringValue().orEmpty(),
-                )
+                ModelPiece(said = wordsOf(delta, "text"), thought = wordsOf(delta, "thinking"))
             } else {
                 val delta = tree.path("choices").firstOrNull()?.path("delta") ?: return@runCatching null
                 ModelPiece(
-                    said = delta.path("content").stringValue().orEmpty(),
-                    thought = delta.path("reasoning_content").stringValue()
-                        ?: delta.path("reasoning").stringValue().orEmpty(),
+                    said = wordsOf(delta, "content"),
+                    thought = wordsOf(delta, "reasoning_content", "reasoning"),
                 )
             }
         }.getOrNull()?.takeIf { it.said.isNotEmpty() || it.thought.isNotEmpty() }
+    }
+
+    /**
+     * The first of these fields that holds a string, or nothing.
+     *
+     * **Jackson 3's `stringValue()` throws on a node that is not a string**, and
+     * a missing field is not a string — so the obvious spelling of "read two
+     * fields off one object" throws the moment either of them is absent, which
+     * is every frame. Wrapped in a `runCatching` around the whole frame, as the
+     * code here already was, that does not fail: it silently discards the
+     * frame. A stream where every frame carries one of two fields would then
+     * arrive as no frames at all, and be reported as a provider that answered
+     * with no message.
+     *
+     * Asked field by field for that reason. Several fields also lets one
+     * accessor cover a shape spelled two ways, which the OpenAI-compatible
+     * world needs for reasoning.
+     */
+    private fun wordsOf(node: JsonNode?, vararg names: String): String {
+        if (node == null) return ""
+        names.forEach { name ->
+            val held = runCatching { node.path(name).stringValue() }.getOrNull()
+            if (!held.isNullOrEmpty()) return held
+        }
+        return ""
     }
 
     /**
@@ -807,10 +829,11 @@ class ModelChatClient(
      * that exist in the wild. See [pieceOf] for which servers send which.
      */
     private fun openAiReasoning(body: String): String = runCatching {
-        val message = mapper.readTree(body).path("choices").firstOrNull()?.path("message")
-            ?: return@runCatching ""
-        message.path("reasoning_content").stringValue()
-            ?: message.path("reasoning").stringValue().orEmpty()
+        wordsOf(
+            mapper.readTree(body).path("choices").firstOrNull()?.path("message"),
+            "reasoning_content",
+            "reasoning",
+        )
     }.getOrDefault("")
 
     /**
@@ -826,9 +849,8 @@ class ModelChatClient(
      */
     private fun anthropicReasoning(body: String): String = runCatching {
         val blocks = mapper.readTree(body).path("content") as? ArrayNode ?: return@runCatching ""
-        blocks.filter { it.path("type").stringValue() == "thinking" }
-            .mapNotNull { it.path("thinking").stringValue() }
-            .joinToString("")
+        blocks.filter { wordsOf(it, "type") == "thinking" }
+            .joinToString("") { wordsOf(it, "thinking") }
     }.getOrDefault("")
 
     private fun openAiContent(body: String): String? = runCatching {
@@ -836,9 +858,22 @@ class ModelChatClient(
             ?.path("message")?.path("content")?.stringValue()
     }.getOrNull()
 
+    /**
+     * The text blocks, and only those.
+     *
+     * A thinking block has no `text` field, and reading one used to throw -
+     * Jackson 3's `stringValue()` does that for a node that is not a string -
+     * which the `runCatching` around this turned into "the provider answered
+     * with no message". Nothing had ever noticed, because nothing here asks
+     * Anthropic for extended thinking, so no answer had ever carried one. The
+     * moment one did, a perfectly good answer would have been reported as an
+     * empty one. Read leniently now, so the blocks this does not understand are
+     * skipped rather than fatal - which is what should happen to a block type
+     * Anthropic adds next year, too.
+     */
     private fun anthropicContent(body: String): String? = runCatching {
         val blocks = mapper.readTree(body).path("content") as? ArrayNode ?: return null
-        blocks.mapNotNull { it.path("text").stringValue() }.joinToString("").ifBlank { null }
+        blocks.joinToString("") { wordsOf(it, "text") }.ifBlank { null }
     }.getOrNull()
 
     /**

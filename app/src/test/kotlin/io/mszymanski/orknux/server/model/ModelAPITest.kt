@@ -537,7 +537,9 @@ class ModelAPITest(
         val modelId = model(providerId, "Gemma", "gemma-4")
 
         val pieces = mutableListOf<String>()
-        val answer = chat.stream(modelId, listOf(ChatTurn(role = "user", content = "Hi")), pieces::add)
+        // Named, because there are two callbacks now - the answer and the
+        // thinking - and which one a bare third argument was would be a guess.
+        val answer = chat.stream(modelId, listOf(ChatTurn(role = "user", content = "Hi")), onChunk = pieces::add)
 
         assertThat(answer).isInstanceOf(ChatCompletion.Answered::class.java)
         assertThat(pieces.joinToString("")).isEqualTo("Hello.")

@@ -5,7 +5,6 @@ import io.mszymanski.orknux.connector.connection.IncomingEvent
 import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.SlackBotUsers
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionRepository
-import org.springframework.data.domain.Sort
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
@@ -50,10 +49,17 @@ class IncomingTriggerListener(
         }
 
         for (trigger in waiting) {
-            // The trigger names a workspace; the event names the workspace the connection
-            // belongs to. They can only differ if one of the two was moved
-            // underneath the other, and then the trigger is stale.
-            if (trigger.workspaceId != event.workspaceId) {
+            /*
+             * A trigger has to still belong to the workspace its *own* connection
+             * does. Not to the workspace the event was delivered to - those are
+             * legitimately different now, because one Slack app can be a row in
+             * more than one workspace and Slack picks which row it delivers to.
+             *
+             * What this still catches is what it always caught: a trigger or a
+             * connection moved out from under the other, which leaves a trigger
+             * pointing at a connection somebody else's workspace now owns.
+             */
+            if (trigger.workspaceId != workspaceOf(trigger.connectionId)) {
                 log.warn("Trigger {} no longer belongs to the workspace its connection does", trigger.id)
                 continue
             }
@@ -93,11 +99,18 @@ class IncomingTriggerListener(
      * bot token, which is what `SlackBotUsers` already caches for the reply
      * guard, so the widening costs a lookup and no call.
      *
-     * **The workspace is still the boundary.** Only rows in the workspace the
-     * event was delivered to are considered, so the same Slack app added to two
-     * workspaces does not let a trigger in one hear traffic recorded against
-     * the other - a workspace is who may see what, and Slack's routing is not a
-     * reason to widen that.
+     * **The Slack app is the boundary, and the workspace is not.** That was the
+     * other way round at first, out of an instinct that a workspace is who may
+     * see what. The instinct does not survive the question being asked plainly:
+     * a workspace holding a row for this app holds a bot token for it, and
+     * anybody who can use that token can read the channel whenever they like.
+     * Refusing to match their trigger protects nothing - it only makes whether
+     * it fires depend on which socket Slack happened to choose, which is the
+     * whole fault being removed. So a row is a row, wherever it is kept.
+     *
+     * What that means in practice: adding the same Slack app to a second
+     * workspace gives that workspace's triggers the app's traffic, which is
+     * what adding it was for.
      *
      * Falls back to the single connection whenever the bot behind it cannot be
      * resolved, which is the behaviour this replaces.
@@ -114,12 +127,14 @@ class IncomingTriggerListener(
         val arrived = setOf(event.connectionId)
         return runCatching {
             val bot = botUsers.identify(event.connectionId).userId ?: return arrived
-            val here = connections.findByWorkspaceId(event.workspaceId, Sort.unsorted())
-                .filter { it.type == ConnectionType.SLACK }
-                .mapNotNull { it.id }
-            arrived + botUsers.identify(here).filter { it.userId == bot }.map { it.connectionId }
+            val slack = connections.findByType(ConnectionType.SLACK).mapNotNull { it.id }
+            arrived + botUsers.identify(slack).filter { it.userId == bot }.map { it.connectionId }
         }.getOrElse { arrived }
     }
+
+    /** Which workspace a connection is kept in, for the staleness check above. */
+    private fun workspaceOf(connectionId: Long?): Long? =
+        connectionId?.let { id -> connections.findById(id).map { it.workspaceId }.orElse(null) }
 
     /**
      * Whether a reply hangs under a message one of the trigger's own bots wrote.

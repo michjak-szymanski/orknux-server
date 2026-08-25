@@ -1,0 +1,24 @@
+-- Reading a session in the order it was written, for whoever is watching it happen.
+--
+-- A task's page follows its log live, and what it follows by is the id of the
+-- last line it holds: `where session_id = ? and id > ? order by id`. Nothing
+-- else in this application reads a session that way. Every other query here
+-- reads it by `at`, because that is how a person reads a conversation - and
+-- `llm_session_event_session_idx` is (session_id, at, id) for exactly that.
+--
+-- That index does not serve this one. The leading column matches, so Postgres
+-- will use it, but the `id >` predicate sits on the third column behind an
+-- unbounded `at`, which makes every read of the tail a walk of every line the
+-- session has ever held. On a chat that is nothing; on a task that has been
+-- working since last night it is thousands of rows fetched every two seconds
+-- for every task somebody has left open - and the point of the live view is
+-- that watching one costs almost nothing.
+--
+-- Why the cursor is an id and not a moment is written on
+-- LlmSessionEventRepository.after, and it is worth repeating here because it is
+-- what this index exists for: one turn writes its question, its calls and its
+-- answer inside a single millisecond, so "everything since 10:04:31.226" is a
+-- boundary that lands in the middle of an exchange. A reader resuming from it
+-- either loses a line or is sent one twice, and neither is something a person
+-- watching an agent work should have to see.
+CREATE INDEX llm_session_event_tail_idx ON llm_session_event (session_id, id);

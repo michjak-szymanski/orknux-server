@@ -7,6 +7,8 @@ import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.attachment.ChatAttachments
 import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.stream.ServerSentEvents
+import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.PathVariable
@@ -73,14 +75,18 @@ class ChatStreamAPI(
      * the status code has already been sent and there is no way to say no.
      */
     @PostMapping("/api/chats/{id}/stream", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun stream(@PathVariable id: Long, @RequestBody request: ChatStreamRequest): StreamingResponseBody {
+    fun stream(
+        @PathVariable id: Long,
+        @RequestBody request: ChatStreamRequest,
+        response: HttpServletResponse,
+    ): StreamingResponseBody {
         if (!settings.chatEnabled()) throw ChatDisabledException()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
         // Tied to the chat here, and read for anything the model can look at.
         val sent = attachments.attach(session, request.attachmentIds)
-        return answering(id, chats.beginSend(id, request.text, attachments.imagesOf(sent)), request.text)
+        return answering(id, chats.beginSend(id, request.text, attachments.imagesOf(sent)), request.text, response)
     }
 
     /**
@@ -97,12 +103,14 @@ class ChatStreamAPI(
      * in the sidebar would move it out from under them.
      */
     @PostMapping("/api/chats/{id}/regenerate", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun regenerate(@PathVariable id: Long): StreamingResponseBody {
+    fun regenerate(@PathVariable id: Long, response: HttpServletResponse): StreamingResponseBody {
         if (!settings.chatEnabled()) throw ChatDisabledException()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        return answering(id, chats.beginRegenerate(id), said = null) { chats.abandonRegenerate(id) }
+        return answering(id, chats.beginRegenerate(id), said = null, response = response) {
+            chats.abandonRegenerate(id)
+        }
     }
 
     /**
@@ -119,16 +127,30 @@ class ChatStreamAPI(
         id: Long,
         start: ChatSendStart,
         said: String?,
+        response: HttpServletResponse,
         giveUp: () -> Unit = {},
     ): StreamingResponseBody {
-        return StreamingResponseBody { out ->
-            fun send(event: String, payload: Any) {
-                // One frame: the event name, the JSON, and the blank line that
-                // ends it. Flushed each time, or the answer arrives all at once
-                // anyway and the whole exercise is pointless.
-                out.write("event: $event\ndata: ${mapper.writeValueAsString(payload)}\n\n".toByteArray())
-                out.flush()
-            }
+        // Nothing between here and the browser may hold a piece of the answer
+        // back. See the task stream, which sets these for the same reason.
+        response.setHeader("Cache-Control", "no-cache, no-transform")
+        response.setHeader("X-Accel-Buffering", "no")
+
+        return StreamingResponseBody { _ ->
+            /*
+             * The frames themselves are [ServerSentEvents]', which is also what
+             * put the pieces on the wire.
+             *
+             * They used to be written here by hand, as `out.write` and
+             * `out.flush` - and that flush did nothing. Spring hands a
+             * `StreamingResponseBody` a stream whose `flush` is a no-op, so this
+             * answer moved when the container's buffer filled at eight kilobytes
+             * rather than when the model produced a piece of it. It was
+             * invisible because a model writing prose does eventually fill eight
+             * kilobytes: a long answer appeared to stream, in lurches, and a
+             * short one arrived whole at the end and read as a slow model.
+             */
+            val stream = ServerSentEvents(response, mapper)
+            fun send(event: String, payload: Any) = stream.send(event, payload)
 
             // Set the moment the answer is safely in the history, so the
             // rescue below cannot run on top of one that did arrive.

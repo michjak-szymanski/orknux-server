@@ -376,6 +376,32 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
     ): List<LlmSessionEvent>
 
     /**
+     * What was written after a line, oldest first.
+     *
+     * The tail a live reader follows, and the only query here ordered by id
+     * alone. Everything else in this repository reads a session by *when* things
+     * were said, because that is how a person reads one; this reads it by the
+     * order it was written in, because that is what a cursor can be. A moment is
+     * not one: a turn writes its question, its calls and its answer inside the
+     * same millisecond, so "everything since 10:04:31.226" is a boundary that
+     * falls in the middle of an exchange and cannot be resumed from without
+     * either losing a line or sending it twice.
+     *
+     * `llm_session_event_tail_idx` is what makes it a seek rather than a walk of
+     * a session that has been running all night - see V205 for why the index
+     * that was already there is not the one this wants.
+     */
+    @Query(
+        """
+        select e from LlmSessionEvent e
+        where e.sessionId = :sessionId
+          and e.id > :after
+        order by e.id asc
+        """,
+    )
+    fun after(sessionId: Long, after: Long, page: Pageable): List<LlmSessionEvent>
+
+    /**
      * The counts for a whole page at once.
      *
      * One query rather than one per row: a list of twenty sessions that each

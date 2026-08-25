@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.obj
 import io.mszymanski.orknux.server.dependency.ComponentDependants
 import io.mszymanski.orknux.server.dependency.DependencyKind
 import io.mszymanski.orknux.server.dependency.phrases
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -376,9 +377,16 @@ data class ObjectPage(
     )
 }
 
-class ObjectNotFoundException(id: Long) : RuntimeException("No object with id $id")
+class ObjectNotFoundException(val id: Long) : RuntimeException("No object with id $id"), Refusal {
 
-class ObjectNameTakenException(name: String) : RuntimeException("This workspace already has an object called $name")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class ObjectNameTakenException(val name: String) :
+    RuntimeException("This workspace already has an object called $name"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class ObjectNameInvalidException(name: String? = null) : RuntimeException(
     if (name == null) {
@@ -388,8 +396,15 @@ class ObjectNameInvalidException(name: String? = null) : RuntimeException(
     },
 )
 
-class ObjectPropertyInvalidException(says: String) : RuntimeException(says)
+class ObjectPropertyInvalidException(val says: String) : RuntimeException(says), Refusal {
 
-class ObjectInUseException(name: String, users: List<String>) : RuntimeException(
+    override val arguments get() = mapOf("says" to says)
+}
+
+class ObjectInUseException(val name: String, val users: List<String>) : RuntimeException(
     "$name is used by ${users.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "users" to users)
+}
+

@@ -9,6 +9,7 @@ import io.mszymanski.orknux.connector.connection.SlackTargetKind
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionView
 import io.mszymanski.orknux.connector.connection.UpdateWorkspaceConnectionInput
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -254,7 +255,10 @@ class WorkspaceConnectionAPI(
     }
 }
 
-class ConnectionNotFoundException(id: Long) : RuntimeException("No connection with id $id")
+class ConnectionNotFoundException(val id: Long) : RuntimeException("No connection with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Which of Slack's two kinds of name a lookup was asked about, or turned up.

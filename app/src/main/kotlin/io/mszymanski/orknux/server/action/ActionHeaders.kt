@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
@@ -219,17 +220,26 @@ class ActionHeaders(
     }
 }
 
-class ActionHeaderAmbiguousException(name: String) : RuntimeException(
+class ActionHeaderAmbiguousException(val name: String) : RuntimeException(
     "The header \"$name\" was given both a value and a variable to read. It is one or the other.",
-)
+), Refusal {
 
-class ActionHeaderEmptyException(name: String) : RuntimeException(
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ActionHeaderEmptyException(val name: String) : RuntimeException(
     "The header \"$name\" was given neither a value nor a variable. Remove the row instead if that is what you meant.",
-)
+), Refusal {
 
-class ActionHeaderVariableElsewhereException(name: String) : RuntimeException(
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ActionHeaderVariableElsewhereException(val name: String) : RuntimeException(
     "That variable belongs to another workspace, so the header \"$name\" cannot read it.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /** Raised while a step runs; the runner turns it into a permanent failure. */
 class ActionHeaderUnresolvedException(message: String) : RuntimeException(message)

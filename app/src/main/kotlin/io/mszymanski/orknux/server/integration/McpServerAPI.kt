@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.connection.McpServerService
 import io.mszymanski.orknux.connector.connection.McpServerView
 import io.mszymanski.orknux.connector.connection.UpdateMcpServerInput
 import io.mszymanski.orknux.server.agent.AgentGrants
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -201,4 +202,8 @@ class McpServerAPI(
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
 
-class McpServerNotFoundException(id: Long) : RuntimeException("No MCP server with id $id")
+class McpServerNotFoundException(val id: Long) : RuntimeException("No MCP server with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

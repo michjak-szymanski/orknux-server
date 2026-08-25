@@ -13,6 +13,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.action.ActionParamView
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
 import io.mszymanski.orknux.server.condition.WorkflowConditionRepository
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
 import io.mszymanski.orknux.workflow.execution.WorkflowGraph as RunnableGraph
 import org.springframework.data.domain.PageRequest
@@ -826,8 +827,11 @@ data class WorkflowPublicationView(
     )
 }
 
-class WorkflowPublicationNotFoundException(id: Long) :
-    RuntimeException("No publication with id $id")
+class WorkflowPublicationNotFoundException(val id: Long) :
+    RuntimeException("No publication with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 data class WorkflowGraphView(
     val workflowId: Long,
@@ -898,17 +902,30 @@ class OutputNameInvalidException(name: String) : RuntimeException(
         "starting with a letter — a later node has to be able to point at it",
 )
 
-class TriggerNotInCatalogueException(id: Long) :
-    RuntimeException("Trigger $id is not in this workspace's catalogue")
+class TriggerNotInCatalogueException(val id: Long) :
+    RuntimeException("Trigger $id is not in this workspace's catalogue"), Refusal {
 
-class ActionNotInCatalogueException(id: Long) :
-    RuntimeException("Action $id is not in this workspace's catalogue")
+    override val arguments get() = mapOf("id" to id)
+}
 
-class ObjectNotInCatalogueException(id: Long) :
-    RuntimeException("Object $id is not in this workspace's catalogue")
+class ActionNotInCatalogueException(val id: Long) :
+    RuntimeException("Action $id is not in this workspace's catalogue"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+
+class ObjectNotInCatalogueException(val id: Long) :
+    RuntimeException("Object $id is not in this workspace's catalogue"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 class AgentNotInCatalogueException(id: Long) :
     RuntimeException("No agent with id $id in this workspace")
 
-class ConditionNotInCatalogueException(id: Long) :
-    RuntimeException("Condition $id is not in this workspace's catalogue")
+class ConditionNotInCatalogueException(val id: Long) :
+    RuntimeException("Condition $id is not in this workspace's catalogue"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

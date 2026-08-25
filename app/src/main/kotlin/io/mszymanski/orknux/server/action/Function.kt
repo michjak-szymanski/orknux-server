@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -339,10 +340,16 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
     fun findByImportedLibraryId(libraryId: Long): List<WorkflowFunction>
 }
 
-class FunctionNotFoundException(id: Long) : RuntimeException("No function with id $id")
+class FunctionNotFoundException(val id: Long) : RuntimeException("No function with id $id"), Refusal {
 
-class FunctionNameTakenException(name: String) :
-    RuntimeException("A function named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class FunctionNameTakenException(val name: String) :
+    RuntimeException("A function named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * Somebody tried to change a function a plugin declared.
@@ -350,16 +357,25 @@ class FunctionNameTakenException(name: String) :
  * These are the plugin's to define. Loading the plugin again is how they change;
  * nothing in a workspace may edit or delete one.
  */
-class FunctionExternallyManagedException(name: String) : RuntimeException(
+class FunctionExternallyManagedException(val name: String) : RuntimeException(
     "\"$name\" is provided by a plugin and cannot be changed here. " +
         "Load the plugin again to change what it declares.",
-)
+), Refusal {
 
-class FunctionNameInvalidException(name: String) :
-    RuntimeException("\"$name\" is not a name a script can be called by")
+    override val arguments get() = mapOf("name" to name)
+}
 
-class FunctionParamInvalidException(name: String) :
-    RuntimeException("\"$name\" is not a name a parameter can have")
+class FunctionNameInvalidException(val name: String) :
+    RuntimeException("\"$name\" is not a name a script can be called by"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
+
+class FunctionParamInvalidException(val name: String) :
+    RuntimeException("\"$name\" is not a name a parameter can have"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * A parameter says it takes an object without saying which.
@@ -368,12 +384,18 @@ class FunctionParamInvalidException(name: String) :
  * type at all. MAP is what to use for a shape nobody has written down — and the
  * message says so, because that is the choice being made.
  */
-class FunctionObjectRequiredException(name: String) : RuntimeException(
+class FunctionObjectRequiredException(val name: String) : RuntimeException(
     "\"$name\" is declared as an object but no object is chosen. Pick one of this " +
         "workspace's objects, or use map for a structure without a defined shape.",
-)
+), Refusal {
 
-class FunctionSourceInvalidException(reason: String) : RuntimeException(reason)
+    override val arguments get() = mapOf("name" to name)
+}
+
+class FunctionSourceInvalidException(val reason: String) : RuntimeException(reason), Refusal {
+
+    override val arguments get() = mapOf("reason" to reason)
+}
 
 /**
  * A test run was handed something that is not JSON.
@@ -401,10 +423,13 @@ class FunctionArgumentInvalidException(name: String, reason: String?) : RuntimeE
  * guessed at, because there is no way to derive the missing one — the compiler
  * lives in the editor, and this side cannot type-strip or un-type-strip anything.
  */
-class FunctionCodeIncompleteException(missing: String) : RuntimeException(
+class FunctionCodeIncompleteException(val missing: String) : RuntimeException(
     "The $missing is missing. A function's TypeScript and the JavaScript compiled " +
         "from it are saved together, so that what runs is always what was written.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("missing" to missing)
+}
 
 /**
  * The code and the declared parameters disagree about how many arguments there are.
@@ -437,8 +462,11 @@ class FunctionSignatureMismatchException(
  * webhook Nightly", because it is not in any of those lists and a bare name
  * would send the reader looking for an action that does not exist.
  */
-class FunctionInUseException(name: String, callers: List<String>) :
-    RuntimeException("$name is called by ${callers.joinToString(", ")}")
+class FunctionInUseException(val name: String, val callers: List<String>) :
+    RuntimeException("$name is called by ${callers.joinToString(", ")}"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "callers" to callers)
+}
 
 /**
  * An import points at nothing, or at something this workspace cannot reach.
@@ -447,7 +475,10 @@ class FunctionInUseException(name: String, callers: List<String>) :
  * where the caller stands there is not: a function in another workspace is not one
  * this one may learn the existence of by being told it exists.
  */
-class ImportNotFoundException(id: Long) : RuntimeException("There is no function $id to import")
+class ImportNotFoundException(val id: Long) : RuntimeException("There is no function $id to import"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * A function a plugin declared cannot be imported.
@@ -457,12 +488,18 @@ class ImportNotFoundException(id: Long) : RuntimeException("There is no function
  * the settings of the workspace calling it — so there is nothing here to import.
  * Nodes call these; code does not.
  */
-class ImportNotEditableException(name: String) : RuntimeException(
+class ImportNotEditableException(val name: String) : RuntimeException(
     "$name is provided by a plugin, so it cannot be imported. Point an action at it instead.",
-)
+), Refusal {
 
-class ImportNameInvalidException(name: String) :
-    RuntimeException("\"$name\" is not a name an import can be called by")
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ImportNameInvalidException(val name: String) :
+    RuntimeException("\"$name\" is not a name an import can be called by"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * Two imports answer to the same name.
@@ -471,8 +508,11 @@ class ImportNameInvalidException(name: String) :
  * of the two could ever answer to it — and which one is whichever the object
  * literal was built with last.
  */
-class ImportNameTakenException(name: String) :
-    RuntimeException("This already imports something called \"$name\"")
+class ImportNameTakenException(val name: String) :
+    RuntimeException("This already imports something called \"$name\""), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * A function imports itself, directly or round a loop.
@@ -481,9 +521,12 @@ class ImportNameTakenException(name: String) :
  * the sentence somebody can act on, and a cycle three deep is not one anybody
  * finds by being told it exists.
  */
-class ImportCycleException(path: List<String>) : RuntimeException(
+class ImportCycleException(val path: List<String>) : RuntimeException(
     "That import would make a loop: ${path.joinToString(" imports ")}",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("path" to path)
+}
 
 /**
  * A function something imports is not one to delete.
@@ -493,5 +536,9 @@ class ImportCycleException(path: List<String>) : RuntimeException(
  * edit, and telling them to go and change an action would send them to the wrong
  * screen.
  */
-class FunctionImportedException(name: String, importers: List<String>) :
-    RuntimeException("$name is imported by ${importers.joinToString(", ")}")
+class FunctionImportedException(val name: String, val importers: List<String>) :
+    RuntimeException("$name is imported by ${importers.joinToString(", ")}"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "importers" to importers)
+}
+

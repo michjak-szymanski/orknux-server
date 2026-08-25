@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.security
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.graphql.refused
 import io.mszymanski.orknux.connector.security.SecretCredentialAmbiguousException
 import io.mszymanski.orknux.connector.security.SecretVariableNotFoundException
 import io.mszymanski.orknux.connector.security.SecretVariableNotSecretException
@@ -36,11 +37,6 @@ class SecretExceptionResolver : DataFetcherExceptionResolverAdapter() {
             else -> return null
         }
 
-        return GraphQLError.newError()
-            .errorType(errorType)
-            .message(exception.message)
-            .path(environment.executionStepInfo.path)
-            .location(environment.field.sourceLocation)
-            .build()
+        return refused(exception, errorType, environment)
     }
 }

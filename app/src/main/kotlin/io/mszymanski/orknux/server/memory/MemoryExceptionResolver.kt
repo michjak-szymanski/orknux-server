@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.memory
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.graphql.refused
 import org.springframework.graphql.execution.DataFetcherExceptionResolverAdapter
 import org.springframework.graphql.execution.ErrorType
 import org.springframework.stereotype.Component
@@ -26,11 +27,6 @@ class MemoryExceptionResolver : DataFetcherExceptionResolverAdapter() {
             else -> return null
         }
 
-        return GraphQLError.newError()
-            .errorType(errorType)
-            .message(exception.message)
-            .path(environment.executionStepInfo.path)
-            .location(environment.field.sourceLocation)
-            .build()
+        return refused(exception, errorType, environment)
     }
 }

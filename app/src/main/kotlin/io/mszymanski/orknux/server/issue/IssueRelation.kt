@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -170,7 +171,10 @@ interface IssueRelationRepository : JpaRepository<IssueRelation, Long> {
     fun between(@Param("one") one: Long, @Param("other") other: Long): IssueRelation?
 }
 
-class IssueRelationNotFoundException(id: Long) : RuntimeException("No link with id $id")
+class IssueRelationNotFoundException(val id: Long) : RuntimeException("No link with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /** An issue has nothing to say about itself that a link could carry. */
 class IssueRelationToItselfException : RuntimeException("An issue cannot be linked to itself")
@@ -196,8 +200,11 @@ class IssueRelationElsewhereException :
  * replaced, because changing what one issue says about another is a thing
  * somebody should do on purpose.
  */
-class IssueRelationAlreadyException(said: String) :
-    RuntimeException("These two are already linked: $said. Take that link off first.")
+class IssueRelationAlreadyException(val said: String) :
+    RuntimeException("These two are already linked: $said. Take that link off first."), Refusal {
+
+    override val arguments get() = mapOf("said" to said)
+}
 
 /**
  * Which way round a link is written, and how it reads from either end.

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -97,20 +98,29 @@ interface IssueTypeRepository : JpaRepository<IssueType, Long> {
  * `orknux_open_issue` is writing one - and being told which words work is the
  * difference between a refusal and a correction.
  */
-class IssueTypeUnknownException(name: String, known: List<String>) : RuntimeException(
+class IssueTypeUnknownException(val name: String, val known: List<String>) : RuntimeException(
     if (known.isEmpty()) {
         "There is no issue type called $name here, and this workspace has none"
     } else {
         "There is no issue type called $name here. This workspace has ${known.joinToString(", ")}"
     },
-)
+), Refusal {
 
-class IssueTypeNotFoundException(id: Long) : RuntimeException("No issue type with id $id")
+    override val arguments get() = mapOf("name" to name, "known" to known)
+}
+
+class IssueTypeNotFoundException(val id: Long) : RuntimeException("No issue type with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 class IssueTypeNameInvalidException : RuntimeException("An issue type needs a name")
 
-class IssueTypeNameTakenException(name: String) :
-    RuntimeException("This workspace already files issues as $name")
+class IssueTypeNameTakenException(val name: String) :
+    RuntimeException("This workspace already files issues as $name"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * A type that issues are carrying, refused with the count.
@@ -123,7 +133,11 @@ class IssueTypeNameTakenException(name: String) :
  * is what tells an administrator whether they meant to do this, and the filter
  * is one click away from showing them which.
  */
-class IssueTypeInUseException(name: String, issues: Long) : RuntimeException(
+class IssueTypeInUseException(val name: String, val issues: Long) : RuntimeException(
     "$name is on ${if (issues == 1L) "1 issue" else "$issues issues"}, so it cannot be deleted. " +
         "Retype those issues, then delete it.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "issues" to issues)
+}
+

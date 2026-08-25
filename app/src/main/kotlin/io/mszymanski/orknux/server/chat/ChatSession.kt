@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.chat
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -110,10 +111,16 @@ interface ChatSessionRepository : JpaRepository<ChatSession, Long> {
     fun findByModelId(modelId: Long): List<ChatSession>
 }
 
-class ChatSessionNotFoundException(id: Long) : RuntimeException("No chat with id $id")
+class ChatSessionNotFoundException(val id: Long) : RuntimeException("No chat with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /** An agent that cannot answer, and why — the picker says so rather than failing later. */
-class ChatAgentUnusableException(says: String) : RuntimeException(says)
+class ChatAgentUnusableException(val says: String) : RuntimeException(says), Refusal {
+
+    override val arguments get() = mapOf("says" to says)
+}
 
 /**
  * A session that cannot be continued here, and why.
@@ -122,7 +129,10 @@ class ChatAgentUnusableException(says: String) : RuntimeException(says)
  * it may not write into is a chat that looks like a continuation and is not one,
  * and the first thing anybody would do with it is say something into nowhere.
  */
-class ChatLlmSessionUnusableException(says: String) : RuntimeException(says)
+class ChatLlmSessionUnusableException(val says: String) : RuntimeException(says), Refusal {
+
+    override val arguments get() = mapOf("says" to says)
+}
 
 class ChatTitleInvalidException : RuntimeException("A chat needs a title")
 
@@ -133,4 +143,8 @@ class ChatDisabledException : RuntimeException("Chat is turned off for this inst
 class ChatModelNotChosenException :
     RuntimeException("This chat has no model to answer with; choose one first")
 
-class ChatModelUnusableException(reason: String) : RuntimeException(reason)
+class ChatModelUnusableException(val reason: String) : RuntimeException(reason), Refusal {
+
+    override val arguments get() = mapOf("reason" to reason)
+}
+

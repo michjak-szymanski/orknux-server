@@ -215,6 +215,32 @@ class UserAPI(
     }
 
     /**
+     * Which language somebody reads the product in.
+     *
+     * Theirs alone, and the only door to it - there is deliberately no
+     * administrator's screen for setting it on somebody else. An address is
+     * arranged for a person who has left; a language is not something anybody
+     * else is in a position to decide.
+     *
+     * A tag or null, and null is a real answer: it puts them back to having
+     * chosen nothing, so their browser's own locale decides again. What is not
+     * validated here is whether the tag is one the interface has words for. The
+     * catalogue lives in the bundle and the server has no list of what shipped
+     * in it, so a server-side whitelist would be a second list to keep in step
+     * and would refuse a language the day it was added. An unknown tag reads as
+     * English, which is what an interface with no catalogue for it does anyway.
+     */
+    @MutationMapping
+    @Transactional
+    fun setMyLanguage(@Argument language: String?): UserView {
+        val held = mineOr(null)
+        held.language = language?.trim()?.lowercase()?.takeIf(String::isNotEmpty)
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = editor()
+        return describe(users.save(held))
+    }
+
+    /**
      * The account this call is allowed to change: mine when no id was given,
      * anybody's for an administrator.
      *
@@ -313,6 +339,7 @@ class UserAPI(
         emailChosen = user.emailChosen,
         emailNotifications = user.emailNotifications,
         chatCostShown = user.chatCostShown,
+        language = user.language,
         type = user.type,
         roles = user.roles.map { RoleRef(requireNotNull(it.id), it.name) }.sortedBy { it.name.lowercase() },
         editable = user.editable,
@@ -334,6 +361,8 @@ data class UserView(
     val emailNotifications: Boolean,
     /** Whether their chats say what an answer cost as well as how long it took. */
     val chatCostShown: Boolean,
+    /** The language they read the product in, or null where they have not said. */
+    val language: String?,
     val type: UserType,
     val roles: List<RoleRef>,
     /** False for anybody the identity provider defines. */

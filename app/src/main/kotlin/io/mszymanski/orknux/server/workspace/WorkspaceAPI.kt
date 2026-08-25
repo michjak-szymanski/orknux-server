@@ -21,6 +21,7 @@ import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.graphql.data.method.annotation.SchemaMapping
 import org.springframework.stereotype.Controller
 import io.mszymanski.orknux.connector.model.ModelKind
+import io.mszymanski.orknux.server.graphql.Refusal
 import org.springframework.transaction.annotation.Transactional
 
 @Controller
@@ -559,9 +560,16 @@ data class WorkspacePage(
     )
 }
 
-class WorkspaceNotFoundException(id: Long) : RuntimeException("No workspace with id $id")
+class WorkspaceNotFoundException(val id: Long) : RuntimeException("No workspace with id $id"), Refusal {
 
-class WorkspaceNameTakenException(name: String) : RuntimeException("A workspace named \"$name\" already exists")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class WorkspaceNameTakenException(val name: String) :
+    RuntimeException("A workspace named \"$name\" already exists"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class WorkspaceNameInvalidException : RuntimeException("A workspace name is required")
 
@@ -573,10 +581,13 @@ class WorkspaceNameInvalidException : RuntimeException("A workspace name is requ
  * looks granted on the settings page and does nothing at all. The sentence names
  * the roles, since the fix is to add them above and save again.
  */
-class WorkspaceAdminRoleNotAssignedException(names: List<String>) : RuntimeException(
+class WorkspaceAdminRoleNotAssignedException(val names: List<String>) : RuntimeException(
     "${names.joinToString(", ")} cannot administer this workspace without being assigned to it. " +
         "Add them to the roles that open it, then mark them as administering.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("names" to names)
+}
 
 /** A model chosen for a workspace has to be one of that workspace's own. */
 class ModelNotTranscriptionException(name: String) : RuntimeException(
@@ -702,3 +713,4 @@ object VoiceTurnTaking {
  * settings page does not describe. The sentence names what is allowed instead.
  */
 class WorkspaceVoiceTurnTakingUnusableException(message: String) : RuntimeException(message)
+

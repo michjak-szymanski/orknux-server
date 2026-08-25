@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
@@ -162,21 +163,36 @@ object SkillFormat {
     """.trimIndent()
 }
 
-class SkillNotFoundException(id: Long) : RuntimeException("No skill with id $id")
+class SkillNotFoundException(val id: Long) : RuntimeException("No skill with id $id"), Refusal {
 
-class SkillCatalogNotFoundException(id: Long) : RuntimeException("No skill catalog with id $id")
+    override val arguments get() = mapOf("id" to id)
+}
 
-class SkillCatalogNameTakenException(name: String) :
-    RuntimeException("This workspace already has a skill catalog called $name")
+class SkillCatalogNotFoundException(val id: Long) : RuntimeException("No skill catalog with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+
+class SkillCatalogNameTakenException(val name: String) :
+    RuntimeException("This workspace already has a skill catalog called $name"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class SkillCatalogNameInvalidException : RuntimeException("A skill catalog needs a name")
 
-class SkillNameTakenException(name: String) :
-    RuntimeException("A skill named \"$name\" already exists in this workspace")
+class SkillNameTakenException(val name: String) :
+    RuntimeException("A skill named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class SkillNameInvalidException : RuntimeException("A skill name is required")
 
-class SkillContentInvalidException(reason: String) : RuntimeException(reason)
+class SkillContentInvalidException(val reason: String) : RuntimeException(reason), Refusal {
+
+    override val arguments get() = mapOf("reason" to reason)
+}
 
 /**
  * A skill catalog an agent draws on is not one to delete.
@@ -185,6 +201,10 @@ class SkillContentInvalidException(reason: String) : RuntimeException(reason)
  * what an agent is granted: the skills go with it, so the loss is every page in
  * the folder at once.
  */
-class SkillCatalogInUseException(name: String, agents: List<String>) : RuntimeException(
+class SkillCatalogInUseException(val name: String, val agents: List<String>) : RuntimeException(
     "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "agents" to agents)
+}
+

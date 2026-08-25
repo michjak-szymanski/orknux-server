@@ -45,6 +45,27 @@ enum class FiringOutcome {
      * whole of what somebody debugging it needs to know.
      */
     UNAUTHENTICATED,
+
+    /**
+     * A reply arrived, and it hangs under a message none of the watched bots
+     * wrote.
+     *
+     * Written **once**, and only while the trigger has no other line to its
+     * name. The reasoning either way is the same one [UNAUTHENTICATED] settles:
+     * a trigger that is silent because nothing reaches it and a trigger that is
+     * silent because what reaches it is not what it asked for look identical
+     * from the outside, and the difference is the whole of what somebody
+     * debugging one needs. Issue #269 is that difference — a reply trigger set
+     * up correctly, watching the right bot, that never fires, with no way to
+     * tell whether Slack is delivering at all.
+     *
+     * Once is the answer to the volume this deliberately used to avoid: a
+     * definition matching every thread in every channel the bot can read would
+     * fill a log that exists to be readable. One line says Slack is delivering
+     * and this is not what was asked for; the second would say nothing the first
+     * did not, and the thousandth would bury the firing somebody is looking for.
+     */
+    NOT_WATCHED,
 }
 
 /**
@@ -90,4 +111,7 @@ interface TriggerFiringRepository : JpaRepository<TriggerFiring, Long> {
 
     /** The one line the list shows against each trigger. */
     fun findFirstByTriggerIdOrderByAtDesc(triggerId: Long): TriggerFiring?
+
+    /** Whether this trigger has anything to its name yet. See [FiringOutcome.NOT_WATCHED]. */
+    fun existsByTriggerId(triggerId: Long): Boolean
 }

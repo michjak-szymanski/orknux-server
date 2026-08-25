@@ -4339,6 +4339,8 @@ enum FiringOutcome {
     UNAUTHENTICATED
     "Every workflow this trigger reaches is switched off in its workspace."
     WORKFLOW_DISABLED
+    "A reply arrived under a message none of the watched bots wrote. Written once, while the trigger has no other line."
+    NOT_WATCHED
 }
 
 type TriggerFiringPage {

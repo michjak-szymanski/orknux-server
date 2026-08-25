@@ -245,12 +245,60 @@ class SlackReplyTriggerTest(
         publisher.publishEvent(reply(parentUserId = "U0000ALICE"))
 
         assertThat(started()).isEmpty()
-        // Not written to the trigger's own log either: this reply was never
-        // this trigger's, the way a mention on another connection is not, and a
-        // firing per thread in the workspace would bury the entries that matter.
+        // One line, because this trigger had none. Issue #269: a reply trigger
+        // watching the right bot, with the scope granted, that never fires,
+        // looks exactly like one Slack is delivering nothing to - and the
+        // difference is the whole of what somebody setting it up needs.
+        graphQlTester.document(
+            """query { triggerFirings(triggerId: $trigger) { totalElements content { outcome detail } } }""",
+        )
+            .execute()
+            .path("triggerFirings.totalElements").entity(Int::class.java).isEqualTo(1)
+            .path("triggerFirings.content[0].outcome").entity(String::class.java).isEqualTo("NOT_WATCHED")
+            .path("triggerFirings.content[0].detail").entity(String::class.java)
+            .satisfies { assertThat(it).contains("none of the watched bots wrote") }
+    }
+
+    /**
+     * And only the first, which is what keeps the note from becoming the noise
+     * it replaced. Every thread in every channel the bot can read arrives here;
+     * a line for each would bury the firing somebody is looking for.
+     */
+    @Test
+    fun `a second reply to somebody else's message adds nothing`() {
+        val trigger = graphQlTester.document(createReply("Answered In Thread", listOf(watchedId)))
+            .execute().path("createTrigger.id").entity(Long::class.java).get()
+        instance(trigger)
+
+        publisher.publishEvent(reply(parentUserId = "U0000ALICE"))
+        publisher.publishEvent(reply(parentUserId = "U0000CAROL"))
+        publisher.publishEvent(reply(parentUserId = "U0000DAVE"))
+
         graphQlTester.document("""query { triggerFirings(triggerId: $trigger) { totalElements } }""")
             .execute()
-            .path("triggerFirings.totalElements").entity(Int::class.java).isEqualTo(0)
+            .path("triggerFirings.totalElements").entity(Int::class.java).isEqualTo(1)
+    }
+
+    /**
+     * A trigger that has fired stays quiet. The note answers "is anything
+     * reaching this at all", and a trigger with a history has already answered
+     * it.
+     */
+    @Test
+    fun `a trigger that has already fired says nothing about a miss`() {
+        val trigger = graphQlTester.document(createReply("Answered In Thread", listOf(watchedId)))
+            .execute().path("createTrigger.id").entity(Long::class.java).get()
+        instance(trigger)
+
+        publisher.publishEvent(reply(parentUserId = WATCHED_BOT))
+        publisher.publishEvent(reply(parentUserId = "U0000ALICE"))
+
+        graphQlTester.document(
+            """query { triggerFirings(triggerId: $trigger) { totalElements content { outcome } } }""",
+        )
+            .execute()
+            .path("triggerFirings.totalElements").entity(Int::class.java).isEqualTo(1)
+            .path("triggerFirings.content[0].outcome").entity(String::class.java).isEqualTo("STARTED")
     }
 
     /** A reply arriving with no parent at all is not a reply to anything of ours. */

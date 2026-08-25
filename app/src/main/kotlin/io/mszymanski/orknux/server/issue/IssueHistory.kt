@@ -95,6 +95,24 @@ enum class IssueEventKind {
      * text should not exist.
      */
     COMMENT_REMOVED,
+
+    /**
+     * An agent was set to work on it.
+     *
+     * Its own kind rather than a sentence in the thread, because it is a fact
+     * about the issue and not somebody's opinion of it - and because the two
+     * lines it would otherwise be read from say something different. "alice
+     * changed the status from Open to In progress" is true of a person picking
+     * the work up themselves, and an issue whose next entries are comments by
+     * an agent that nothing announced reads as though the agent wandered in
+     * (issue #230). This says who pressed it and which agent went to work.
+     *
+     * [IssueEvent.became] is the agent's name. There is no `was`: nothing is
+     * being changed from anything, and a task ending writes no closing line
+     * here - what became of it is the task's own record, and the issue's room
+     * hears about it from `TaskNewsDesk`.
+     */
+    TASK_STARTED,
 }
 
 /**
@@ -271,6 +289,10 @@ class IssueHistoryRecorder(private val events: IssueEventRepository) {
 
     fun unlinked(issue: Issue, kind: IssueRelationKind, otherNumber: Int, actor: String) =
         write(issue, IssueEventKind.LINK, actor, IssueRelations.said(kind, otherNumber), null)
+
+    /** An agent was set to work on this issue, by somebody, at their press. */
+    fun taskStarted(issue: Issue, agent: String, actor: String) =
+        write(issue, IssueEventKind.TASK_STARTED, actor, null, agent)
 
     private fun write(issue: Issue, kind: IssueEventKind, actor: String, was: String?, became: String?) {
         val issueId = issue.id ?: return

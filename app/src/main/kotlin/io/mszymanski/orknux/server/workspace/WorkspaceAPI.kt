@@ -444,6 +444,34 @@ class WorkspaceAPI(
     }
 
     /**
+     * How many times a task in this workspace may ask its model.
+     *
+     * Null clears it, which puts the workspace back on the installation's own
+     * number - the same shape the memory share above has, and for the same
+     * reason: "this workspace has no opinion" is a real answer and is not the
+     * same as any particular count.
+     *
+     * Read when a task is created and copied onto its row, so this decides what
+     * the next task is given and leaves the ones already running alone.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceTaskMaxTurns(@Argument workspaceId: Long, @Argument turns: Int?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        if (turns != null && turns !in MIN_TASK_TURNS..MAX_TASK_TURNS) throw TaskTurnsOutOfRangeException(turns)
+
+        workspace.taskMaxTurns = turns
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            turns?.let { "A task may take $it turns" } ?: "The turns a task may take are the installation's again",
+        )
+        return workspace
+    }
+
+    /**
      * How voice mode decides somebody has finished talking, for this workspace.
      *
      * Three settings and one call, because they are one decision. The pause is
@@ -650,6 +678,24 @@ class ModelNotFoundForWorkspaceException(id: Long) :
  * same setting and must not come to disagree about which numbers are allowed.
  */
 class WorkspaceMemoryShareUnusableException(message: String) : RuntimeException(message)
+
+/**
+ * One turn, and two hundred.
+ *
+ * The floor is one because a task that may ask its model once is a real thing
+ * to want: it is how somebody tries a prompt without paying for a loop. The
+ * ceiling is there because this is the count that bounds the bill, and a number
+ * typed with one digit too many is the mistake it exists to catch - the working
+ * time stops a runaway task either way, but hours later and after the model
+ * calls have been made.
+ */
+const val MIN_TASK_TURNS = 1
+const val MAX_TASK_TURNS = 200
+
+class TaskTurnsOutOfRangeException(val turns: Int) : RuntimeException(
+    "$turns is not a number of turns a task can be given. " +
+        "Choose between $MIN_TASK_TURNS and $MAX_TASK_TURNS.",
+)
 
 /**
  * The bounds voice mode's turn-taking settings are held to, and the reasons.

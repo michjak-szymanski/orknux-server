@@ -289,12 +289,42 @@ class FunctionAPI(
         // what a node passes for a mapping it does not have.
         val arguments = function.params.map { byName[it.name] ?: "null" }
 
-        val result = caller.call(function, arguments, contextOf(input.workspaceId, function), input.workspaceId)
+        /*
+         * The grants somebody typed over, by name.
+         *
+         * Filtered to what this function actually declares, so a name nobody
+         * granted cannot reach the sandbox as an argument - and parsed through
+         * the same `jsonOf` the parameters go through, so a value that is not
+         * JSON is refused while it still has a name on it.
+         */
+        val granted = caller.grantsOf(function).toSet()
+        val instead = input.externals.orEmpty()
+            .filter { it.name in granted }
+            .associate { it.name to jsonOf(it) }
 
+        val result = caller.call(
+            function,
+            arguments,
+            contextOf(input.workspaceId, function),
+            input.workspaceId,
+            instead,
+        )
+
+        /*
+         * And the audit says when a run was not the run the workflow would have
+         * had. A test given a signing secret by hand can answer yes where the
+         * real one answers no, and a line that read the same either way would
+         * leave somebody reading the log to assume the wrong one.
+         */
         auditRecorder.record(
             input.workspaceId,
             WorkspaceAuditCategory.WORKFLOW,
-            "Function ${function.name} run from the editor",
+            if (instead.isEmpty()) {
+                "Function ${function.name} run from the editor"
+            } else {
+                "Function ${function.name} run from the editor, given " +
+                    instead.keys.sorted().joinToString(", ") + " by hand"
+            },
         )
 
         return when (result) {
@@ -986,6 +1016,21 @@ data class RunFunctionInput(
      * node passes for a mapping it does not have.
      */
     val arguments: List<FunctionArgumentInput>? = null,
+    /**
+     * What to hand a granted variable instead of what the workspace holds, by
+     * the variable's name.
+     *
+     * Only a test run may fill this in, and only in the editor. Nothing else -
+     * a node, a trigger, a workflow - can pass it, so a run that happens on its
+     * own is handed exactly what the workspace says and the grant still belongs
+     * to the function that declared it.
+     *
+     * A name that is not one of this function's grants is ignored, and one left
+     * out means the stored value, which is what an empty field on the window
+     * sends. The audit says a run was given values by hand, so a run that
+     * behaved differently from the real one cannot later be mistaken for it.
+     */
+    val externals: List<FunctionArgumentInput>? = null,
 )
 
 /**

@@ -66,6 +66,22 @@ data class OrknuxScope(
      * worse than not having it.
      */
     val watched: Boolean = false,
+    /**
+     * Whose name goes on what these tools change, when nobody is signed in.
+     *
+     * An agent working a task reaches the tracker through here in-process,
+     * with no session and no security context behind it, so every comment it
+     * left and every status it moved was filed under the product's own name -
+     * a tracker in which "orknux commented" is the only thing an issue's
+     * history can say about work an agent did (issue #230). The agent has a
+     * name, somebody chose it, and it is the true answer to who wrote that.
+     *
+     * Null wherever there *is* somebody signed in - the MCP endpoint, where a
+     * token carries its owner. The security context wins over this on purpose:
+     * a name passed in an argument must never be able to sign somebody else's
+     * name to a change.
+     */
+    val actor: String? = null,
 )
 
 /**
@@ -1219,16 +1235,22 @@ class OrknuxTools(
         revisions.saved(chosen)
         chosen.enabled = wanted
         chosen.lastModifiedAt = OffsetDateTime.now()
-        chosen.lastModifiedBy = currentUser()
+        chosen.lastModifiedBy = currentUser(scope)
         agents.save(chosen)
         return mapper.writeValueAsString(
             mapOf("agent" to chosen.name, "enabled" to wanted, "url" to agentLink(scope.workspaceId, chosen.id)),
         )
     }
 
-    /** Whoever is asking, for the stamp a revision of this state will carry. */
-    private fun currentUser(): String =
-        SecurityContextHolder.getContext().authentication?.name ?: "orknux"
+    /**
+     * Whoever is asking, for the stamp a revision of this state will carry.
+     *
+     * A signed-in name wins; an agent reaching these in-process has none and is
+     * named by [OrknuxScope.actor] instead. See `IssueTools.currentUser` for why
+     * that order and not the other one.
+     */
+    private fun currentUser(scope: OrknuxScope): String =
+        SecurityContextHolder.getContext().authentication?.name ?: scope.actor ?: "orknux"
 
     private fun readOnly(): String = refuse("This conversation may read what is here, but not change it")
 

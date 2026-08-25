@@ -37,6 +37,16 @@ data class TaskStepView(
     val content: String?,
     /** What a call gave back. Null while its tool has not answered yet. */
     val result: String?,
+    /**
+     * How long a THINKING line thought for, and null while it is still
+     * thinking.
+     *
+     * The one field on a step that means two things, and deliberately: a page
+     * watching a task has to know both how long the model has been at it and
+     * whether it has stopped, and a second field saying the second thing would
+     * be one that could disagree with this.
+     */
+    val millis: Long?,
     val at: String,
 )
 
@@ -304,6 +314,7 @@ class TaskStreamAPI(
         actor = event.actor,
         content = event.content,
         result = event.result,
+        millis = event.millis,
         at = event.at.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 

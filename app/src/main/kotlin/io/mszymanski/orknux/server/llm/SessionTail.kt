@@ -50,27 +50,35 @@ class SessionWatch(val session: Long, from: Long) {
         private set
 
     /**
-     * Calls handed over with nothing back from them yet.
+     * Lines handed over that have not finished saying what they will say, and
+     * how each of them looked when it went.
      *
-     * A call is recorded before its tool runs, so the line arrives with
-     * arguments and a null result and is filled in afterwards - see
-     * [LlmSessionRecorder.toolReturned]. A tail that only ever moved forwards
-     * would therefore show every lookup as permanently unanswered, which is the
-     * one thing somebody watching an agent work most wants to see. These ids are
-     * looked at again on each pass until they answer.
+     * Two kinds are written before they are done. A call is recorded before its
+     * tool runs, so the line arrives with arguments and a null result and is
+     * filled in afterwards - see [LlmSessionRecorder.toolReturned]. Thinking is
+     * recorded while the model is still doing it, and the line grows for as long
+     * as the reasoning does. A tail that only ever moved forwards would show
+     * every lookup as permanently unanswered and every block of reasoning frozen
+     * at its first sentence, which are the two things somebody watching an agent
+     * work most wants to see move.
+     *
+     * The value is [LlmSessionEvent.revision] as this follower last had it, so a
+     * line is handed over again when it has actually changed rather than on
+     * every pass. Two people watching one session are two of these, because they
+     * may have been handed different versions of the same line.
      *
      * Bounded by [OUTSTANDING]: an agent that made a thousand calls that never
      * returned is a broken tool, not a reason to re-read a thousand rows a
      * second.
      */
-    val outstanding: MutableSet<Long> = ConcurrentHashMap.newKeySet()
+    val outstanding: MutableMap<Long, String> = ConcurrentHashMap()
 
     /**
      * Hands one line over, or gives up on this follower.
      *
-     * The cursor moves only forwards. A result arriving on a line that was
-     * already sent is offered again under the same id - the reader merges by id -
-     * and must not drag the cursor back to it.
+     * The cursor moves only forwards. A line that changed after it was sent is
+     * offered again under the same id - the reader merges by id - and must not
+     * drag the cursor back to it.
      */
     fun offer(event: LlmSessionEvent): Boolean {
         val id = event.id ?: return true
@@ -79,12 +87,25 @@ class SessionWatch(val session: Long, from: Long) {
             return false
         }
         if (id > cursor) cursor = id
-        if (event.kind == LlmSessionEventKind.TOOL && event.result == null) {
-            if (outstanding.size < OUTSTANDING) outstanding.add(id)
+        if (event.unfinished) {
+            if (outstanding.size < OUTSTANDING || outstanding.containsKey(id)) outstanding[id] = event.revision
         } else {
             outstanding.remove(id)
         }
         return true
+    }
+
+    /**
+     * Whether a line this follower is still watching has moved since it had it.
+     *
+     * Asked of the row as it stands now. A line that has finished answers true
+     * once - the version it settled at differs from the one that was sent - and
+     * [offer] then drops it, so nothing is handed over twice for the same news.
+     */
+    fun moved(event: LlmSessionEvent): Boolean {
+        val id = event.id ?: return false
+        val had = outstanding[id] ?: return false
+        return had != event.revision
     }
 
     /** The next line owed, or null when nothing arrived in that long. */
@@ -237,23 +258,25 @@ class SessionTail(private val events: LlmSessionEventRepository) : DisposableBea
     }
 
     /**
-     * The calls that have answered since anybody last looked.
+     * The lines that have moved since anybody last looked.
      *
      * Read by id rather than by scanning the tail again, because these are lines
-     * *behind* every follower's cursor: a lookup dispatched thirty seconds ago
-     * has long since been passed by everything said after it. Nothing is read at
-     * all while no call is outstanding, which is most of the time - an agent is
-     * either between calls or in one, and a call takes as long as the tool does.
+     * *behind* every follower's cursor: a lookup dispatched thirty seconds ago,
+     * or a block of reasoning opened at the top of the turn, has long since been
+     * passed by everything written after it. Nothing is read at all while
+     * nothing is outstanding, which is most of the time.
+     *
+     * A line that has not changed is not handed over again. That is what makes
+     * this affordable on thinking, which grows for as long as the model does:
+     * the pass runs every two seconds and the read is one query for a handful of
+     * ids, and only what actually moved reaches a browser.
      */
     private fun fillIn(watchers: Set<SessionWatch>) {
-        val open = watchers.flatMapTo(mutableSetOf()) { it.outstanding }
+        val open = watchers.flatMapTo(mutableSetOf()) { it.outstanding.keys }
         if (open.isEmpty()) return
-        events.findAllById(open)
-            .filter { it.result != null }
-            .forEach { answered ->
-                val id = answered.id ?: return@forEach
-                watchers.forEach { watcher -> if (watcher.outstanding.remove(id)) hand(watcher, answered) }
-            }
+        events.findAllById(open).forEach { line ->
+            watchers.forEach { watcher -> if (watcher.moved(line)) hand(watcher, line) }
+        }
     }
 
     /** Hands a line over, and lets go of a follower that could not take it. */

@@ -1,0 +1,45 @@
+-- What a model thought on its way to a turn of a task, written while it is
+-- still thinking it.
+--
+-- The complaint this answers was about a *page*: a task's detail screen "does
+-- not update in realtime", and what somebody wanted to see on it was that the
+-- model is thinking and what about. Two things were wrong and only one of them
+-- was the thinking. A task's turn was taken as a blocking call per round, up to
+-- eight of them, so nothing at all reached the session between one turn and the
+-- next; and the reasoning the round did produce was handed back on the
+-- completion and dropped on the floor. The first is a line of Kotlin - the loop
+-- now passes the same `RoundWatch` a watched chat round passes, and the round
+-- streams. This file is the second.
+--
+-- **Why it is not `chat_message_thinking`, which V207 built two migrations ago.**
+-- That table is keyed on `chat_session_id` and a position in a chat's thread,
+-- because that is what a chat's thinking hangs off - Spring AI's store gives a
+-- message no id, so the position is the only handle there is. A task has no chat
+-- session and no thread: its record is `llm_session_event`, which is where its
+-- prompt, its answers and its tool calls already are. Keying a task's reasoning
+-- on a chat session would mean opening a chat session for every task purely to
+-- have somewhere to point at, and the page would then be reading two logs and
+-- merging them by time - which is the join V207's own note says a session view
+-- exists to avoid. So this is the same argument as V207 reaching the opposite
+-- answer, because the question is which record the thing belongs to and the two
+-- features have different records.
+--
+-- **A kind rather than a table.** `llm_session_event.kind` carries no CHECK, and
+-- V104 says why: the enum is enforced where the rows are written and a
+-- constraint here would have to be widened in two schemas every time a kind was
+-- added. So THINKING costs no DDL of its own, and everything that already reads
+-- a session - the transcript page, the live tail, the search - sees it without
+-- being taught anything. What it is deliberately not in is the memory: the kinds
+-- put back in front of a model are USER and AGENT, and reasoning replayed as
+-- something the agent said is exactly the lie V207 refused to write into a
+-- chat's thread.
+--
+-- **What the column is for, and why it is one column and not two.** A thinking
+-- line is opened on the first frame of reasoning and grown as the rest arrives,
+-- so it exists for as long as the model is thinking. `millis` is written once,
+-- when the model stops. So the same field says how long the wait was and whether
+-- it is over, and a page reads "still thinking" as "no duration yet". A separate
+-- boolean beside it would be a second answer to the second question, and the
+-- first time the two disagreed the page would be claiming a model is thinking
+-- about a task that finished last week.
+ALTER TABLE llm_session_event ADD COLUMN millis BIGINT;

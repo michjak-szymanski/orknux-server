@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.issue
 
 import io.mszymanski.orknux.server.attachment.AttachmentProperties
+import io.mszymanski.orknux.server.attachment.InstallationSettingRepository
 import io.mszymanski.orknux.server.mcp.OrknuxScope
 import io.mszymanski.orknux.server.mcp.OrknuxTools
 import io.mszymanski.orknux.server.security.Role
@@ -65,6 +66,7 @@ class IssueCommentRemovalTest(
     @Autowired val roles: RoleRepository,
     @Autowired val audit: WorkspaceAuditRepository,
     @Autowired val properties: AttachmentProperties,
+    @Autowired val settings: InstallationSettingRepository,
     @Autowired val tools: OrknuxTools,
     @Autowired val jdbc: JdbcTemplate,
 ) {
@@ -82,6 +84,13 @@ class IssueCommentRemovalTest(
         events.deleteAll()
         observers.deleteAll()
         attachments.deleteAll()
+        /*
+         * The attachments switch is a row, so a class that turned it off left it
+         * off for whatever ran next - which is how the file half of this failed
+         * only when the whole suite was run. `IssueAttachmentTest` clears it for
+         * the same reason.
+         */
+        settings.deleteAll()
         issues.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()

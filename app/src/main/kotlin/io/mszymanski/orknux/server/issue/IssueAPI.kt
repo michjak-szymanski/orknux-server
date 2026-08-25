@@ -366,6 +366,89 @@ class IssueAPI(
         return describe(issues.save(issue))
     }
 
+    /**
+     * Taking a comment off a thread.
+     *
+     * **Removed, and not marked removed.** A tombstone in the comments table
+     * would read better in the thread - the reader would see where a message
+     * used to be - and it would be the wrong shape for what this is mostly
+     * going to be used for. The report that asked for this calls a comment
+     * carrying something that should not be there permanent, and a row kept
+     * with its content blanked is a row somebody has to trust was blanked
+     * everywhere: in the comments table, in the excerpt the history draws, in
+     * the copy of the text the news desk wrote for every watcher. So the row
+     * goes, and the record of it goes somewhere the text never was.
+     *
+     * That somewhere is the issue's history, which is what makes deleting safe
+     * rather than silent. [IssueHistoryRecorder.commentRemoved] writes who
+     * wrote it and who took it and not a word of what it said, so a thread
+     * cannot lose a message without the tab beside it saying so. A history
+     * that reproduced the comment would have been a tombstone by another name.
+     *
+     * Whoever wrote it, or an administrator of the workspace. Wider than
+     * [editIssueComment] on purpose, and the reasoning is on
+     * [IssueCommentNotYoursToRemoveException].
+     *
+     * Its files go with it, rows and bytes, exactly as they do when an issue is
+     * deleted. A comment's attachment is claimed by that comment and by nothing
+     * else - [tie] only ever takes a file that is spoken for by nothing - so
+     * there is nothing else pointing at it to break, and a file whose comment
+     * is gone is one no page can draw and nobody can remove: a leak, and often
+     * the screenshot with the credential in it.
+     */
+    @MutationMapping
+    @Transactional
+    fun removeIssueComment(@Argument id: Long): IssueView {
+        val issue = issues.findAll()
+            .firstOrNull { held -> held.comments.any { it.id == id } }
+            ?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw IssueCommentNotFoundException(id)
+
+        val comment = issue.comments.first { it.id == id }
+        if (comment.author != currentUser() && !access.canAdminister(issue.workspaceId)) {
+            throw IssueCommentNotYoursToRemoveException()
+        }
+
+        /*
+         * The bytes first, and by hand.
+         *
+         * `workspace_issue_attachment.comment_id` cascades, so the rows would
+         * go on their own the moment the comment did - and the bytes never
+         * would, which is precisely the leak `deleteIssue` writes its own note
+         * about. Flushed here so the deletes are ordered ahead of the comment's
+         * rather than left to whichever order the action queue settles on.
+         */
+        val files = attachments.findByIssueIdOrderByUploadedAtAsc(requireNotNull(issue.id))
+            .filter { it.commentId == comment.id }
+        files.forEach { store.remove(it.location) }
+        attachments.deleteAll(files)
+        attachments.flush()
+
+        newsDesk.forgetComment(id)
+        history.commentRemoved(issue, comment.author, currentUser())
+
+        issue.comments.remove(comment)
+        /*
+         * Worked out again rather than cleared, because "the last comment" is a
+         * fact about the comments that are left. Removing the newest one moves
+         * this back to the one before it; removing the only one makes it null,
+         * which is what the field already means when nobody has said anything.
+         * A field left pointing at a comment that no longer exists is a lie the
+         * LAST_COMMENT sort would go on reading.
+         */
+        issue.lastCommentAt = issue.comments.maxOfOrNull { it.createdAt }
+        issue.lastModifiedAt = OffsetDateTime.now()
+        issue.lastModifiedBy = currentUser()
+
+        val saved = issues.save(issue)
+        audit.record(
+            saved.workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Issue #${saved.number}: removed a comment by ${comment.author}",
+        )
+        return describe(saved)
+    }
+
     @MutationMapping
     @Transactional
     fun deleteIssue(@Argument id: Long): Boolean {
@@ -417,7 +500,7 @@ class IssueAPI(
          */
         val posted = requireNotNull(saved.comments.maxByOrNull { requireNotNull(it.id) })
         tie(saved, attachmentIds.orEmpty(), commentId = posted.id)
-        newsDesk.commented(saved, currentUser(), said)
+        newsDesk.commented(saved, currentUser(), said, commentId = posted.id)
         return describe(saved)
     }
 
@@ -489,43 +572,59 @@ class IssueAPI(
         addresses: List<IssueLink>,
         linked: List<IssueRelation>,
         watching: List<IssueObserver>,
-    ) = IssueView(
-        id = requireNotNull(issue.id),
-        workspaceId = issue.workspaceId,
-        number = issue.number,
-        title = issue.title,
-        description = issue.description,
-        status = issue.status,
-        type = issue.type?.let { IssueTypeView(requireNotNull(it.id), it.workspaceId, it.name, 0) },
-        reporter = issue.reporter,
-        assignee = nameFor(issue),
-        labels = issue.labels.sorted(),
-        attachments = files.filter { it.commentId == null }.map(::describeFile),
-        links = addresses.map(::describeLink),
-        related = describeRelations(issue, linked),
-        observers = watching.map { describeObserver(issue.workspaceId, it) },
-        comments = issue.comments.map { comment ->
-            IssueCommentView(
-                id = requireNotNull(comment.id),
-                author = comment.author,
-                content = comment.content,
-                createdAt = comment.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-                editedAt = comment.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-                attachments = files.filter { it.commentId == comment.id }.map(::describeFile),
-                /*
-                 * Whether the person reading this may change it. Answered here
-                 * rather than compared in the browser, so the button and the
-                 * refusal agree - and so a second window signed in as somebody
-                 * else does not offer an edit that would be refused.
-                 */
-                mine = comment.author == currentUser(),
-            )
-        },
-        lastCommentAt = issue.lastCommentAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-        createdAt = issue.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-        lastModifiedAt = issue.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-        lastModifiedBy = issue.lastModifiedBy,
-    )
+    ): IssueView {
+        /*
+         * Asked once for the whole issue rather than once per comment: the
+         * answer is about the reader and the workspace, and an issue with
+         * fifteen comments would otherwise be fifteen reads of the same
+         * workspace to draw fifteen identical buttons.
+         */
+        val administers = access.canAdminister(issue.workspaceId)
+        return IssueView(
+            id = requireNotNull(issue.id),
+            workspaceId = issue.workspaceId,
+            number = issue.number,
+            title = issue.title,
+            description = issue.description,
+            status = issue.status,
+            type = issue.type?.let { IssueTypeView(requireNotNull(it.id), it.workspaceId, it.name, 0) },
+            reporter = issue.reporter,
+            assignee = nameFor(issue),
+            labels = issue.labels.sorted(),
+            attachments = files.filter { it.commentId == null }.map(::describeFile),
+            links = addresses.map(::describeLink),
+            related = describeRelations(issue, linked),
+            observers = watching.map { describeObserver(issue.workspaceId, it) },
+            comments = issue.comments.map { comment ->
+                IssueCommentView(
+                    id = requireNotNull(comment.id),
+                    author = comment.author,
+                    content = comment.content,
+                    createdAt = comment.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                    editedAt = comment.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+                    attachments = files.filter { it.commentId == comment.id }.map(::describeFile),
+                    /*
+                     * Whether the person reading this may change it. Answered here
+                     * rather than compared in the browser, so the button and the
+                     * refusal agree - and so a second window signed in as somebody
+                     * else does not offer an edit that would be refused.
+                     */
+                    mine = comment.author == currentUser(),
+                    /*
+                     * Whether they may take it off, which is a wider question than
+                     * `mine` and so cannot be read off it. Answered here for the
+                     * same reason `mine` is: a button drawn on a rule the browser
+                     * guessed at is a button that disagrees with the refusal.
+                     */
+                    mayRemove = comment.author == currentUser() || administers,
+                )
+            },
+            lastCommentAt = issue.lastCommentAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            createdAt = issue.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            lastModifiedAt = issue.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            lastModifiedBy = issue.lastModifiedBy,
+        )
+    }
 
     /**
      * The assignee as a name, looked up now.
@@ -1156,8 +1255,14 @@ data class IssueCommentView(
     /** Null until somebody changes it. */
     val editedAt: String?,
     val attachments: List<IssueAttachmentView>,
-    /** Whether the person reading this wrote it. */
+    /** Whether the person reading this wrote it, and so may change it. */
     val mine: Boolean,
+    /**
+     * Whether they may take it off: whoever wrote it, or an administrator of
+     * the workspace. Wider than [mine], so it is its own answer rather than
+     * something the page could work out from that one.
+     */
+    val mayRemove: Boolean,
 )
 
 /** A file on an issue, as the page shows it. */

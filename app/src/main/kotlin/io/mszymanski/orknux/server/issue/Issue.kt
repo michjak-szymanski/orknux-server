@@ -478,6 +478,28 @@ class IssueCommentNotFoundException(val id: Long) : RuntimeException("No comment
 class IssueCommentNotYoursException :
     RuntimeException("A comment can only be edited by whoever wrote it")
 
+/**
+ * Somebody tried to remove a comment that is neither theirs nor their
+ * workspace's to remove.
+ *
+ * A wider rule than [IssueCommentNotYoursException], deliberately, and the
+ * difference between the two is the difference between rewriting a record and
+ * subtracting from one. An edit can put words in somebody's mouth and leaves
+ * nothing behind saying whose they were; a removal can only take something
+ * away, and the history says it happened, who wrote it and who took it - so
+ * there is nothing an administrator could do here that the thread would not
+ * report.
+ *
+ * The case it exists for is the one that makes this feature urgent at all: a
+ * comment carrying a credential has to be removable by whoever notices, and
+ * whoever notices is very often not whoever pasted it - who may be an agent, or
+ * gone. The only alternative already in the product is deleting the issue,
+ * which anybody who can see the workspace may do and which takes the whole
+ * thread with it. A narrower power is the safer one to hand out.
+ */
+class IssueCommentNotYoursToRemoveException :
+    RuntimeException("A comment can only be removed by whoever wrote it, or by an administrator of this workspace")
+
 class IssueAssigneeInvalidException(val what: String) :
     RuntimeException("$what is not something in this workspace to assign an issue to"), Refusal {
 

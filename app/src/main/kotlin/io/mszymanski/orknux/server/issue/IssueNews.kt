@@ -136,6 +136,26 @@ class IssueNewsItem(
     @Column(columnDefinition = "text")
     val says: String? = null,
 
+    /**
+     * Which comment this is about, for the two kinds that are about one.
+     *
+     * Here for one reason, and it is a reason nothing else in this table has:
+     * [says] holds the comment in full, once per person told, so a comment
+     * removed from the tracker and not from here has not been removed. The
+     * whole point of being able to take a comment off an issue is the one
+     * carrying something that should not exist, and a copy of it sitting in
+     * somebody's bell is that thing still existing.
+     *
+     * A plain column and not a foreign key. What happens to this news when the
+     * comment goes is a decision - the rows are deleted, by
+     * [IssueNewsDesk.forgetComment] - and an `ON DELETE` clause would be a
+     * second path doing the same job with no code behind it, on a pair of
+     * schemas where nothing compares the two files' cascades. The issue's own
+     * cascade still takes every row here with it.
+     */
+    @Column(name = "comment_id")
+    val commentId: Long? = null,
+
     @Enumerated(EnumType.STRING)
     @Column(name = "audience_kind", nullable = false, length = 16)
     val audienceKind: AssigneeKind,
@@ -192,6 +212,17 @@ interface IssueNewsRepository : JpaRepository<IssueNewsItem, Long> {
         @Param("kind") kind: AssigneeKind,
         @Param("name") name: String,
     ): List<IssueNewsItem>
+
+    /**
+     * Every row about one comment, however many people were told.
+     *
+     * One event is written per audience, so forgetting a comment is a delete
+     * over a set rather than over a row.
+     */
+    fun deleteByCommentId(commentId: Long)
+
+    /** The same rows, for a test that wants to see them go. */
+    fun findByCommentId(commentId: Long): List<IssueNewsItem>
 }
 
 /** Who has read how far. */

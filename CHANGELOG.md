@@ -15,6 +15,74 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.4
+
+### ✨ Added
+
+- 🤖 **Tasks: an agent given a problem, working at it until it is done.** Its own
+  section, its own page, and a log that fills in as the model works — what it is
+  thinking, what it called, what came back.
+- 🚀 **Start by AI on an issue**, which hands the issue's own agent the title, the
+  kind, the labels, the description and the thread, picks the issue up, and says
+  so in the thread with a link to the task.
+- ❓ **A task can stop and ask** — a question, or permission for a capability —
+  and waits for an answer rather than guessing.
+- 🎛 **A workspace decides how many turns a task may take.** Empty means the
+  installation's own number.
+- 🏷 **Issue types, decided per workspace**, rather than a fixed list.
+- 💬 **Slack triggers on a message and on a reply to one of our own bots** —
+  a reply is matched by the author of the thread it hangs under.
+- 📦 **A library can be installed from npm**, fetched once into the database and
+  served from there; CommonJS packages included.
+- ▶ **A function can be test-run from its editor**, down the path a workflow runs
+  it on, with a field per parameter — and the workspace's variables can be given
+  by hand for the run.
+- 🔍 **Where a component is used, asked in one place** — every function, tool,
+  skill, agent, action and condition says what depends on it before you remove it.
+- 🎨 **A fourth kind of model, one that draws**, and a picture button in the chat.
+- 🇵🇱 **Polish**, chosen per person — including what the server refuses and why.
+- 💰 **What a chat has spent**, as a running total kept on the chat itself.
+- 🧠 **What the model thought before it answered**, in a chat and on a task,
+  arriving while it is being thought rather than after.
+- 🗑 **A comment can be taken off an issue**, and off everywhere it was copied to.
+- 📄 **An action is edited on a page of its own**, the way a condition is.
+- 🔔 **A bell that rings for a task**, and news about one.
+- 🧭 **The top bar remembers where you have been.**
+
+### 🔧 Changed
+
+- 📡 **A Slack trigger belongs to the app, not to one connection row.** One app
+  opens one socket per row and Slack delivers each event to exactly one of them,
+  so a trigger bound to a single row fired on a fraction of what it was set up
+  for. Every row of that app now hears it — *including rows in other workspaces*,
+  each still answering for its own token and its own scopes.
+- 🛡 **One trigger failing no longer stops the others** that were waiting on the
+  same event.
+- 🔑 **A bot token that gains a scope is noticed at once**, rather than after ten
+  minutes of the old answer.
+- 🧰 **A function's wiring is a page of its own**, off the editor's column.
+- ⌨ **A Slack connection trigger needs the event subscribed in the Slack app**,
+  not only the scope granted — the manual and the Action picker now say which
+  events and where.
+
+### 🐛 Fixed
+
+- 📜 **A chat opens on its newest turn** rather than at the top of the thread.
+- ⏳ **A task's turn streams.** It was one blocking call per round, so nothing
+  reached the page between one turn and the next.
+- 🧵 **A page joining mid-thought is told the rest of it**, instead of watching a
+  line that never finishes.
+- 👯 **A line on a task's page is drawn once**, not twice.
+- 🏁 **A task's stream drains before it says it has ended**, so nothing is lost
+  at the last frame.
+- ⚙ **A task's worker is given the activity its workflow calls** — Tasks did not
+  run at all without it.
+- 📝 **Switching workspace while filing an issue keeps you on the form**, rather
+  than dropping you on the next workspace's issue list.
+- 🔇 **A reply trigger says once that something reached it** and was not what it
+  asked for, so silence can be told from nothing arriving.
+- 🖼 **The Test Run window no longer flashes its own explanation** as it opens.
+
 ## 0.9.3
 
 ### ✨ Added

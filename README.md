@@ -674,15 +674,38 @@ turn is written before the model is called, the answer when it ends, and nothing
 holds a database transaction open for the minutes in between — a transaction
 open that long is a pooled connection nobody else can have.
 
+### Language
+
+The interface is in English and in **Polish**, chosen per person and remembered on
+their account. The catalogue is keyed on the English sentence rather than on an
+invented name: there are about thirteen hundred of them, inventing thirteen
+hundred identifiers is thirteen hundred chances to make a mechanical mistake that
+shows up as the wrong sentence on a screen rather than as a compile error, and
+`git grep "Add Connection"` is how anybody finds the screen a report is about.
+The cost is accepted deliberately — editing an English string breaks its own
+translation, which is not silent: it falls back to the English that is right there
+in the diff, and `catalogue-check` fails on any entry whose English has left the
+source.
+
+**What the server refuses is translated too.** A refusal carries a code and named
+arguments alongside its English sentence, so a client can say it in its own words
+rather than showing a message assembled on the server. The English is still sent,
+so a client that has no translation for a code is never left with a blank.
+
 ### The tracker
 
 Every workspace has an issue tracker. An issue has a **number** of its own within
 its workspace — `#4` is what people say and what the URL carries, not a row id —
 a title, a description in markdown, a status (`OPEN`, `IN_PROGRESS`, `CLOSED`),
-free-text labels, and an assignee. What can be assigned is a person, an **agent**
-or a **model**, because half the work here is done by something that is not a
-person. There is no priority column: `p1` is a label, which is what stops one
-workspace's idea of urgent from being fixed in the schema.
+free-text labels, an assignee, and a **type**. What can be assigned is a person,
+an **agent** or a **model**, because half the work here is done by something that
+is not a person. There is no priority column: `p1` is a label, which is what stops
+one workspace's idea of urgent from being fixed in the schema.
+
+The types are the workspace's own — Bug, Feature, whatever a team actually files —
+rather than a fixed list, and an issue may have none. A type is stored by name on
+the history when it changes, not by id, so renaming one in June does not rewrite
+what March says.
 
 Comments are markdown, editable only by whoever wrote one — administrators
 included — and they carry the time they were edited. Files attach to an issue or
@@ -704,6 +727,46 @@ Reading marks read, which is right for an assistant asking what it has missed an
 wrong for a bell — the number would clear itself the moment it was drawn. So
 there are two ways in: `myNotifications` looks without saying it looked, and
 `readMyNotifications` is what says they have been seen.
+
+### Tasks
+
+A **task** is an agent given a problem and left to work at it until it says it is
+done. Not a workflow: a workflow is a graph somebody drew and every step of it was
+decided in advance, and a task is the opposite bargain — you say what you want,
+the agent decides what to do, and what you get to see is the working.
+
+One turn is one round of the agent's ordinary tool loop: it is asked, it may call
+its tools, and it answers. Anything it writes without calling a tool is recorded
+as progress and it is asked to carry on. Three tools are lent to it for the run
+and belong to no agent afterwards: `task_done` says it has finished and carries
+the summary whoever asked for it reads; `task_ask` stops and asks a question;
+`task_request_permission` asks for a named capability. The last two **park** the
+task — it stops, what it wants is written down, whoever should hear is told, and
+it comes back with exactly what they said.
+
+Two ceilings, because they bound different things. **Turns** are how often the
+model may be asked, set per workspace and copied onto a task when it starts, so
+raising it gives the next task more and leaves the ones already running alone.
+**Working time** is the sum of those turns, which is what an installation is
+actually paying for — a task parked for two days waiting to be approved has spent
+none of it. There is deliberately no ceiling on tokens: a model already carries
+its own usage cap, and a second half-counter here would be a number that disagrees
+with the bill.
+
+The page is the point. A task's log is a `llm_session` like any other and it is
+**followed as it is written** rather than polled: the turn streams, so what the
+model is thinking appears while it is thinking it, tool calls open as they are
+made and close with what came back, and the block being written is the one that is
+open. A reader who arrives halfway through is told the rest of the line that was
+already in flight.
+
+**Start by AI** on an issue is the same machinery with the prompt composed for
+you: the issue's number, title and kind, its labels unread, its description whole,
+and its thread oldest-first with who said what — cut from the front when it is
+too long, because a decision is reached at the end of an argument and never at the
+start. The issue is picked up, and the agent says so in the thread, signed with
+its own name and linking the task. Nothing puts the issue back afterwards: the
+status is a person's statement about their own tracker.
 
 ### The MCP endpoint
 
@@ -791,6 +854,17 @@ the grants that were held by name are exactly what a rename stranded in #170 and
 provider working, deleting one a provider reads is refused and names the
 provider, and turning a secret into a plain value is refused too — a value comes
 back with the listing, and that would put the key on every member's screen.
+
+**A model has a kind**, and the kind decides which endpoint it is sent to and
+which pickers offer it. Four: one that **answers** (chat completions), one that
+**embeds**, one that **listens** (transcription), one that **speaks**, and one
+that **draws** — `POST /images/generations`, a prompt in and a picture back,
+filed into attachment storage so it survives the chat being reopened. Two
+providers are refused a drawing before a request is built rather than after a
+404: Anthropic's Messages API generates text, and Ollama serves no image
+generation on either of its surfaces. A local installation that wants to draw
+runs something that speaks `/images/generations` beside Ollama and adds it as a
+Custom provider.
 
 **A type exists where something branches on it**, and nowhere else. `OPENAI` is
 the shape the rest are measured against, `ANTHROPIC` has its own body, streaming
@@ -928,6 +1002,21 @@ What an action needs and what it produces are not stored. They are read off its
 settings, so a `{{input.name}}` typed into the content is an input the moment it
 is typed, and a function action's output follows the function's return type.
 
+**Both are edited on a page of their own**, and both say what depends on them.
+*Used by* is one question asked in one place — every function, tool, skill, agent,
+action and condition names what would break, and a removal that would break
+something is refused by name rather than after the fact.
+
+**A function can be test-run from its editor**, from the mark in the corner: a
+window with a field per parameter, typed as the parameter is typed, and the run
+goes down the path a workflow's action node runs it on — the saved function, the
+same sandbox, the same imports and libraries. The workspace's variables it is
+granted resolve as they normally would, and may be **given by hand for the run**,
+because the commonest thing worth testing is a check against a secret nobody may
+read back. Only that window can pass one; nothing that runs on its own has such a
+field, and the workspace's audit names the values that were given by hand, so a
+run that behaved differently from the real one is never mistaken for it.
+
 A **function** is JavaScript a workspace wrote, a module whose default export is
 called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 
@@ -988,6 +1077,10 @@ Four rules make that honest, and each of them is a refusal you will meet:
 - **The version is pinned by you.** `latest` and a range are refused. A
   specification that resolves differently tomorrow is not an answer to what code
   is running here.
+- **CommonJS counts as self-contained too.** A single dependency-free `.cjs` or
+  UMD file is wrapped at load time, so `base64-js` and its like install; what is
+  stored is still exactly what the registry served, byte for byte, so the
+  integrity hash still verifies against it.
 - **One self-contained ES module, or nothing.** A package that imports anything —
   another package, or a second file of its own — is refused by name. **This
   installation does not bundle**: assembling a dependency graph here would produce
@@ -1251,6 +1344,36 @@ workflow picks one up in the editor, by pointing a trigger node at a definition;
 that node is the **instance**, and it is what wires the event to that workflow.
 One definition can be instanced by several workflows, and an entry nobody
 instances starts nothing.
+
+**A Slack connection offers three events.** A **Mention** is somebody naming the
+bot, and arrives on any working bot token. A **Message** is anything typed in a
+channel the bot is a member of. A **Reply** is a thread reply to a message one of
+the workspace's own bots wrote — Slack puts the author of a thread's parent on
+every reply, and a bot token *is* a Slack user, so which bots to watch is which
+user ids a reply is measured against. A reply written by a bot never fires one, or
+a workflow answering in a thread it watches would start itself for ever.
+
+Both of the latter two need two separate things configured on Slack's side, and
+missing either gives the same symptom — an enabled trigger, an instanced
+workflow, an empty log. The **event** has to be subscribed under *Event
+Subscriptions → Subscribe to bot events* (`message.channels`, and
+`message.groups`, `message.im` or `message.mpim` for the other kinds); a new app
+has only `app_mention` there. The **scope** has to be granted under *OAuth &
+Permissions* (`channels:history` and its siblings), and a token that predates the
+change carries the old scopes until the app is reinstalled. Orknux checks the
+scope and marks a trigger that cannot fire; it cannot check the subscription,
+because Slack shows an app's subscriptions to no bot token.
+
+**A trigger belongs to the Slack app, not to one connection row.** One app opens a
+Socket Mode connection per row that holds an app-level token, and Slack delivers
+each event to exactly one of those sockets, of its own choosing — so a trigger
+matched on the arriving connection id fired on a fraction of what it was set up
+for, at random. Matching is on the Slack user behind the token, so every row of
+that app hears it, including rows in other workspaces: a workspace holding a row
+for the app holds a token that can read those channels anyway. Sharing the socket
+is not sharing the credential, though — a row is carried only where its own
+`auth.test` succeeded, and a message or a reply also needs that row's own history
+scope, so a post-only token is never handed traffic it could not have fetched.
 
 A trigger can also carry a **payload**: a JSON object handed to the runs it
 starts. The clock carries no data, so without one a scheduled workflow is handed

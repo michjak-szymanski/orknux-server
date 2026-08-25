@@ -331,8 +331,10 @@ Concretely, for `X.Y.Z`:
 3. Bump `version` in `orknux-ui/package.json` and move the submodule pin. The two
    halves are released together under one number.
 4. Move the pins in `deploy/compose.yaml` - `ORKNUX_SERVER_TAG` and
-   `ORKNUX_UI_TAG` default to the release, not to `latest` - and any version
-   quoted in `deploy/README.md`.
+   `ORKNUX_UI_TAG` default to the release, not to `latest` - and every version
+   quoted in `deploy/README.md`, `deploy/kubernetes/orknux.yaml` and
+   `deploy/kubernetes/README.md`. `grep -rn "X.Y.Z-1"` is the check: a version
+   left behind is one an operator is handed.
 5. Tag `vX.Y.Z` and push it.
 
 CI does the rest: `.github/workflows/ci.yml` builds, runs the suite, runs

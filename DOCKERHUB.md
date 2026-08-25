@@ -242,7 +242,7 @@ The README's **Publishing** section is the rest.
 | `ORKNUX_TEMPORAL_STEP_ATTEMPTS` | How many times the platform tries a failing step. A node's own retry policy is separate. | `3` | No |
 | `ORKNUX_TEMPORAL_UI_URL` | Temporal's own web interface, linked out to from a run. Empty offers no links. | `http://localhost:8233` | No |
 | `ORKNUX_INLINE_MAX_WAIT` | Only the inline engine: how long a run may spend parked in total before the step fails and says what would have carried it. A Temporal wait is a timer, bounded by the run timeout. | `5m` | No |
-| `ORKNUX_TASK_MAX_TURNS` | How many times a task's agent may be asked before it is stopped unfinished. This and the next are copied onto a task at creation, so a change does not affect one already running. | `40` | No |
+| `ORKNUX_TASK_MAX_TURNS` | How often a task's agent may be asked before it is stopped, unless the workspace sets its own. Copied onto a task at creation, as is the next, so a change spares one running. | `40` | No |
 | `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting to be approved counts for none. | `2h` | No |
 | `ORKNUX_TASK_PATIENCE` | How long a parked task waits for a person. | `7d` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |

@@ -20,6 +20,11 @@ import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleRepository
 import io.mszymanski.orknux.server.trigger.WorkflowTriggerRepository
+import io.mszymanski.orknux.server.workflow.WorkflowEdgeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowNodeRepository
+import io.mszymanski.orknux.server.workflow.WorkflowPublicationRepository
+import io.mszymanski.orknux.server.workflow.WorkflowRepository
+import io.mszymanski.orknux.server.workflow.WorkspaceWorkflowRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -56,6 +61,11 @@ class ComponentDependantsTest(
     @Autowired val libraries: ScriptLibraryRepository,
     @Autowired val plugins: PluginRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val workflows: WorkflowRepository,
+    @Autowired val assignments: WorkspaceWorkflowRepository,
+    @Autowired val nodes: WorkflowNodeRepository,
+    @Autowired val edges: WorkflowEdgeRepository,
+    @Autowired val publications: WorkflowPublicationRepository,
 ) {
 
     private var backendId: Long = 0
@@ -63,6 +73,12 @@ class ComponentDependantsTest(
 
     @BeforeEach
     fun seed() {
+        // Before the actions: a node holds one, and a publication holds a node.
+        publications.deleteAll()
+        nodes.deleteAll()
+        edges.deleteAll()
+        assignments.deleteAll()
+        workflows.deleteAll()
         actions.deleteAll()
         conditions.deleteAll()
         triggers.deleteAll()
@@ -124,6 +140,54 @@ class ComponentDependantsTest(
             .path("componentDependants.entries[*].name").entityList(String::class.java).get()
 
         graphQlTester.document("""mutation { deleteFunction(id: $shared) }""").execute()
+            .errors().satisfy { errors ->
+                val message = requireNotNull(errors.single().message)
+                assertThat(listed).isNotEmpty()
+                assertThat(listed).allSatisfy { named -> assertThat(message).contains(named) }
+            }
+    }
+
+    /**
+     * An action, which is the kind #258 had a question for and no screen.
+     *
+     * A workflow node is the only thing that names one, and it names it twice -
+     * in the drawn graph and in the copy publishing froze. The published half is
+     * the half that matters, because redrawing the canvas does not touch it, and
+     * it is what the row has to say so a reader knows whether to redraw or to
+     * republish.
+     *
+     * Written against the refusal rather than against a literal, for the reason
+     * `what the list names is what the refusal names` gives: the failure worth
+     * guarding is the two drifting, and two literals typed on one afternoon
+     * agree whatever the code does.
+     */
+    @Test
+    @WithMockUser(username = "alice", roles = ["ADMINS"])
+    fun `an action's dependants are the workflows whose nodes run it`() {
+        val actionId = act("Shout")
+        val workflowId = workflow("Answer")
+        graph(workflowId, actionId)
+
+        graphQlTester.document(dependants("ACTION", actionId)).execute()
+            .path("componentDependants.entries[*].kind").entityList(String::class.java)
+            .containsExactly("WORKFLOW")
+            .path("componentDependants.entries[*].name").entityList(String::class.java)
+            .containsExactly("Answer")
+            .path("componentDependants.entries[*].published").entityList(Boolean::class.java)
+            .containsExactly(false)
+
+        // Published, the same row says which copy holds it - a different thing
+        // to be rid of, and the only reason the flag is on the row at all.
+        publish(workflowId)
+
+        graphQlTester.document(dependants("ACTION", actionId)).execute()
+            .path("componentDependants.entries[*].published").entityList(Boolean::class.java)
+            .containsExactly(true)
+
+        val listed = graphQlTester.document(dependants("ACTION", actionId)).execute()
+            .path("componentDependants.entries[*].name").entityList(String::class.java).get()
+
+        graphQlTester.document("""mutation { deleteAction(id: $actionId) }""").execute()
             .errors().satisfy { errors ->
                 val message = requireNotNull(errors.single().message)
                 assertThat(listed).isNotEmpty()
@@ -279,6 +343,40 @@ class ComponentDependantsTest(
     fun `asking what uses a workflow is refused rather than answered empty`() {
         graphQlTester.document(dependants("WORKFLOW", 1)).execute()
             .errors().expect { it.message?.contains("Nothing points at") == true }.verify()
+    }
+
+    /** An action with no settings to get wrong, so the test is about the arrow. */
+    private fun act(name: String): Long = graphQlTester.document(
+        """
+        mutation {
+          createAction(input: {
+            workspaceId: $backendId, name: "$name", type: WAIT, subtype: TIME, durationSeconds: 1
+          }) { id }
+        }
+        """,
+    ).execute().path("createAction.id").entity(Long::class.java).get()
+
+    private fun workflow(name: String): Long = graphQlTester.document(
+        """mutation { createWorkflow(input: { workspaceId: $backendId, name: "$name" }) { workflowId } }""",
+    ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+
+    /** One action node, which is the whole workflow. */
+    private fun graph(workflowId: Long, actionId: Long) {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $backendId, workflowId: $workflowId, input: {
+                nodes: [{ key: "act", kind: ACTION, name: "Act", actionId: $actionId, x: 0, y: 0 }], edges: []
+              }) { nodes { key actionId } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].actionId").entity(Long::class.java).isEqualTo(actionId)
+    }
+
+    private fun publish(workflowId: Long) {
+        graphQlTester.document(
+            """mutation { publishWorkflow(workspaceId: $backendId, workflowId: $workflowId) { status } }""",
+        ).execute().path("publishWorkflow.status").entity(String::class.java).isEqualTo("PUBLISHED")
     }
 
     private fun dependants(kind: String, id: Long) = """

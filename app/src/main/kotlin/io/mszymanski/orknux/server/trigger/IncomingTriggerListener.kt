@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.trigger
 import io.mszymanski.orknux.connector.connection.IncomingAction
 import io.mszymanski.orknux.connector.connection.IncomingEvent
 import io.mszymanski.orknux.connector.connection.ConnectionType
+import io.mszymanski.orknux.connector.connection.SlackBotUserOutcome
 import io.mszymanski.orknux.connector.connection.SlackBotUsers
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionRepository
 import org.slf4j.LoggerFactory
@@ -36,7 +37,7 @@ class IncomingTriggerListener(
     @EventListener
     fun onIncomingEvent(event: IncomingEvent) {
         val action = event.action.asTriggerAction()
-        val waiting = triggers.findByConnectionIdInAndActionAndEnabledTrue(deliveredTo(event), action)
+        val waiting = triggers.findByConnectionIdInAndActionAndEnabledTrue(deliveredTo(event, action), action)
         if (waiting.isEmpty()) {
             log.debug("A {} on connection {} matched no trigger", action, event.connectionId)
             return
@@ -115,22 +116,48 @@ class IncomingTriggerListener(
      * Falls back to the single connection whenever the bot behind it cannot be
      * resolved, which is the behaviour this replaces.
      *
-     * **What a dead row costs.** Asking about every Slack row in the workspace
-     * means asking about the ones whose token Slack refuses, and a refusal is
-     * cached for thirty seconds rather than the full period a good answer is.
-     * So a workspace carrying an abandoned connection pays one `auth.test` per
-     * thirty seconds however busy the channel is - bounded, and the same shape
-     * the reply guard already had. It is not per message, which is the thing
-     * that would matter.
+     * **Every row still answers for itself.** Sharing a socket is not sharing a
+     * credential. A row is only carried in here when *its own* token was the
+     * one Slack authenticated - `userId` is the answer to that row's own
+     * `auth.test`, and a token Slack refused has none, so a row whose
+     * credential has been revoked or rotated away drops out on its own rather
+     * than riding on the row the event happened to arrive at.
+     *
+     * And for a message or a reply it must also carry the scope that traffic
+     * arrives under. A token with no `channels:history` could not have read the
+     * channel had it asked; letting its trigger fire on a message another row
+     * received would hand it something it is not allowed to fetch, which is the
+     * whole of what "reusing one socket" must not be allowed to mean. A mention
+     * needs no such scope, so nothing is required of one.
+     *
+     * **What a dead row costs.** Asking about every Slack row means asking about
+     * the ones whose token Slack refuses, and a refusal is cached for thirty
+     * seconds rather than the full period a good answer is. So an abandoned
+     * connection costs one `auth.test` per thirty seconds however busy the
+     * channel is - bounded, and the same shape the reply guard already had. It
+     * is not per message, which is the thing that would matter.
      */
-    private fun deliveredTo(event: IncomingEvent): Set<Long> {
+    private fun deliveredTo(event: IncomingEvent, action: TriggerAction): Set<Long> {
         val arrived = setOf(event.connectionId)
         return runCatching {
             val bot = botUsers.identify(event.connectionId).userId ?: return arrived
             val slack = connections.findByType(ConnectionType.SLACK).mapNotNull { it.id }
-            arrived + botUsers.identify(slack).filter { it.userId == bot }.map { it.connectionId }
+            arrived + botUsers.identify(slack)
+                .filter { it.userId == bot && it.outcome == SlackBotUserOutcome.FOUND }
+                .filter { needsHistory(action).not() || it.receives != false }
+                .map { it.connectionId }
         }.getOrElse { arrived }
     }
+
+    /**
+     * Whether this kind of event only reaches a token carrying a history scope.
+     *
+     * A mention arrives on any working bot token; a message and a reply are
+     * delivered under `channels:history` and its siblings. So the scope is what
+     * a row has to show before it is handed somebody else's socket's traffic.
+     */
+    private fun needsHistory(action: TriggerAction): Boolean =
+        action == TriggerAction.MESSAGE || action == TriggerAction.REPLY
 
     /** Which workspace a connection is kept in, for the staleness check above. */
     private fun workspaceOf(connectionId: Long?): Long? =

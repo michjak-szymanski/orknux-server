@@ -82,6 +82,15 @@ class SlackReplyTriggerTest(
     /** `auth.test` answers by token, because a token is what a Slack user is. */
     private val perToken = ConcurrentHashMap<String, String>()
 
+    /**
+     * What `x-oauth-scopes` says for a token, where the test cares.
+     *
+     * Left unset by default, which is a response that reported no scopes at all
+     * - and an absence Slack did not report is not an absence, so those tokens
+     * are treated as able to receive.
+     */
+    private val scopesPerToken = ConcurrentHashMap<String, String>()
+
     private var workspaceId: Long = 0
     private var workflowId: Long = 0
 
@@ -107,12 +116,14 @@ class SlackReplyTriggerTest(
         workspaces.deleteAll()
 
         perToken.clear()
+        scopesPerToken.clear()
         perToken[LISTENING_TOKEN] = ok("orknux", LISTENING_BOT)
         perToken[WATCHED_TOKEN] = ok("helper", WATCHED_BOT)
 
         api = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         api.createContext("/") { exchange ->
             val bearer = exchange.requestHeaders.getFirst("Authorization").orEmpty().removePrefix("Bearer ")
+            scopesPerToken[bearer]?.let { exchange.responseHeaders.add("x-oauth-scopes", it) }
             respond(exchange, perToken[bearer] ?: """{"ok":false,"error":"invalid_auth"}""")
         }
         api.start()
@@ -413,6 +424,54 @@ class SlackReplyTriggerTest(
         assertThat(runs.executions(elsewhere, null, null, null, null, null, null).content).hasSize(1)
     }
 
+    /**
+     * Sharing a socket is not sharing a credential.
+     *
+     * A row that authenticates but carries no history scope could not have read
+     * the channel had it asked, so it is not handed a message another row
+     * received. Otherwise "one app, several rows" would be a way to get traffic
+     * a token was never granted - which is the one thing reusing a socket must
+     * not be allowed to mean.
+     */
+    @Test
+    fun `a row without the history scope is not handed another row's traffic`() {
+        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "frontend")).id)
+        // The same Slack user, so it is the same app - but a token Slack says
+        // holds nothing it could read a channel's messages with.
+        scopesPerToken[POST_ONLY_TOKEN] = "chat:write,users:read"
+        perToken[POST_ONLY_TOKEN] = ok("gyloli", LISTENING_BOT)
+        val theirs = graphQlTester.document(
+            """
+            mutation {
+              createWorkspaceConnection(input: {
+                workspaceId: $elsewhere, name: "Post Only", type: SLACK, secret: "$POST_ONLY_TOKEN"
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createWorkspaceConnection.id").entity(Long::class.java).get()
+        botUsers.forget(theirs)
+
+        val workflow = graphQlTester.document(
+            """mutation { createWorkflow(input: { workspaceId: $elsewhere, name: "Their Answers" }) { workflowId } }""",
+        ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+        val trigger = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $elsewhere, name: "Answered In Thread",
+                type: INCOMING_CONNECTION, connectionId: $theirs, action: REPLY,
+                watchedConnectionIds: [$theirs]
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+        instanceOn(workflow, trigger, elsewhere)
+
+        publisher.publishEvent(reply(parentUserId = LISTENING_BOT))
+
+        assertThat(runs.executions(elsewhere, null, null, null, null, null, null).content).isEmpty()
+    }
+
     /** And a row that is a different Slack app hears nothing of it. */
     @Test
     fun `a trigger on a different Slack app is left alone`() {
@@ -510,6 +569,8 @@ class SlackReplyTriggerTest(
     private companion object {
         const val LISTENING_TOKEN = "xoxb-the-workspace-app"
         const val WATCHED_TOKEN = "xoxb-the-helper-bot"
+        const val POST_ONLY_TOKEN = "xoxb-post-only"
+
         const val SECOND_TOKEN = "xoxb-the-second-bot"
 
         const val LISTENING_BOT = "U0000ORKNU"

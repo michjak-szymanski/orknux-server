@@ -734,12 +734,42 @@ class ChatService(
      * Read back rather than appended to what [beginSend] had, because the model
      * was thinking for a while and the thread is the source of truth for what
      * is in it.
+     *
+     * **And the turn's counts go onto the chat's running total, here.** This is
+     * the one place an answered turn passes through - the blocking door, the
+     * streaming door and a regenerate all end here - so it is the one place the
+     * total can be added to without a second caller being able to forget. It is
+     * also, exactly, the place a turn that failed halfway never reaches:
+     * `ChatStreamAPI` gives up rather than finishing, and nothing is added,
+     * which is the honest answer because a failure carries no counts to add.
+     *
+     * @param inputTokens what the provider charged for over the whole turn,
+     *   every round of it, which is the same figure #227 puts on the answer.
+     *   Nought where the provider reported nothing, and nought adds nothing.
      */
     @Transactional
-    fun finishSend(id: Long, answer: String, thinking: String = "", thinkingMillis: Long = 0) {
+    fun finishSend(
+        id: Long,
+        answer: String,
+        thinking: String = "",
+        thinkingMillis: Long = 0,
+        inputTokens: Long = 0,
+        outputTokens: Long = 0,
+    ) {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + AssistantMessage(answer))
+        /*
+         * Added, never assigned.
+         *
+         * A regenerated answer counts on top of the one it replaced, because
+         * both were paid for. #245 keeps the displaced answer as a take on the
+         * ground that it was really said; it was really billed too, and a total
+         * that fell when somebody pressed a button that spends money would be
+         * the one thing a bill may never do.
+         */
+        session.spentInputTokens += inputTokens
+        session.spentOutputTokens += outputTokens
         // The answer's place in the thread, which is what its thinking is
         // filed under. Taken before nothing else can move it: the thread is
         // only appended to, so the turn just added sits where the old one
@@ -777,6 +807,10 @@ class ChatService(
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(prompt) + AssistantMessage(said))
+        // Counted, and counted as a picture. An image model reports no tokens,
+        // so a drawing that only touched the two token columns would leave them
+        // where they were and read as a turn that cost nothing.
+        session.spentPictures += 1
         session.lastMessageAt = OffsetDateTime.now()
 
         val into = recording(session)

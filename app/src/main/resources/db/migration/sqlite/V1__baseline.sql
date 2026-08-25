@@ -1377,6 +1377,10 @@ CREATE UNIQUE INDEX llm_session_key_key ON llm_session (workspace_id, session_ke
 CREATE INDEX llm_session_recent_idx ON llm_session (workspace_id, last_event_at DESC);
 CREATE INDEX llm_session_event_session_idx ON llm_session_event (session_id, at, id);
 CREATE INDEX llm_session_event_result_idx ON llm_session_event (session_id, at DESC, id DESC) WHERE result IS NOT NULL;
+-- The tail a live reader follows, by the order lines were written rather than by
+-- when they were said. See V205 for why the (session_id, at, id) index above is
+-- not the one that serves it.
+CREATE INDEX llm_session_event_tail_idx ON llm_session_event (session_id, id);
 CREATE INDEX idx_mcp_server_workspace_id ON mcp_server (workspace_id);
 CREATE INDEX idx_memory_catalog ON memory (catalog_id);
 CREATE INDEX idx_memory_modified ON memory (catalog_id, last_modified_at DESC);

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.user
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.Role
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
@@ -142,6 +143,24 @@ class AppUser(
     @Column(name = "chat_cost_shown", nullable = false)
     var chatCostShown: Boolean = false,
 
+    /**
+     * Which language they read the product in, or null while they have not said.
+     *
+     * A property of the person rather than of the workspace they are looking at
+     * or the machine they are sitting at: a workspace is shared and a browser is
+     * borrowed, and neither is a thing anybody chose. This is, and it follows
+     * them.
+     *
+     * Null is not "English". It means nobody has chosen, which is what lets the
+     * browser open in the language it is already set to; once somebody says
+     * English, this holds `en` and a Polish browser leaves them in English. A
+     * plain tag rather than an enum, because the set grows by a catalogue file
+     * and not by a migration - what refuses an unknown tag is the interface,
+     * which has no words for it and falls back.
+     */
+    @Column(length = 16)
+    var language: String? = null,
+
     @Column(name = "created_at", nullable = false)
     val createdAt: OffsetDateTime = OffsetDateTime.now(),
 
@@ -238,15 +257,24 @@ interface AppUserRepository : JpaRepository<AppUser, Long> {
  */
 const val SHORTEST_PASSWORD = 12
 
-class UserNotFoundException(id: Long) : RuntimeException("No user with id $id")
+class UserNotFoundException(val id: Long) : RuntimeException("No user with id $id"), Refusal {
 
-class UserNameTakenException(username: String) :
-    RuntimeException("A user named \"$username\" already exists")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class UserNameTakenException(val username: String) :
+    RuntimeException("A user named \"$username\" already exists"), Refusal {
+
+    override val arguments get() = mapOf("username" to username)
+}
 
 class UserNameInvalidException : RuntimeException("A user needs a username")
 
-class PasswordTooShortException(shortest: Int) :
-    RuntimeException("A password needs at least $shortest characters")
+class PasswordTooShortException(val shortest: Int) :
+    RuntimeException("A password needs at least $shortest characters"), Refusal {
+
+    override val arguments get() = mapOf("shortest" to shortest)
+}
 
 class PasswordWrongException : RuntimeException("That is not the current password")
 
@@ -258,8 +286,11 @@ class PasswordWrongException : RuntimeException("That is not the current passwor
  * suffix, a host nobody has heard of - and an installation that will not accept
  * somebody's real address is worse than one that accepts an odd-looking one.
  */
-class EmailInvalidException(email: String) :
-    RuntimeException("\"$email\" does not look like an email address")
+class EmailInvalidException(val email: String) :
+    RuntimeException("\"$email\" does not look like an email address"), Refusal {
+
+    override val arguments get() = mapOf("email" to email)
+}
 
 /**
  * Somebody tried to give a password to a user the directory owns.
@@ -267,11 +298,17 @@ class EmailInvalidException(email: String) :
  * Not a permission that can be granted: the provider is where they are true,
  * and a password here would be a second one to forget.
  */
-class PasswordNotSettableException(username: String) : RuntimeException(
+class PasswordNotSettableException(val username: String) : RuntimeException(
     "\"$username\" signs in through the identity provider, so there is no password to set here",
-)
+), Refusal {
 
-class TokenNotFoundException(id: Long) : RuntimeException("No token with id $id")
+    override val arguments get() = mapOf("username" to username)
+}
+
+class TokenNotFoundException(val id: Long) : RuntimeException("No token with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Somebody tried to edit an external user.
@@ -280,7 +317,11 @@ class TokenNotFoundException(id: Long) : RuntimeException("No token with id $id"
  * true, and an edit here would hold until their next sign-in and then silently
  * lose.
  */
-class UserExternallyManagedException(username: String) : RuntimeException(
+class UserExternallyManagedException(val username: String) : RuntimeException(
     "\"$username\" comes from the identity provider and cannot be edited here. " +
         "What the provider says about them overwrites this at their next sign-in.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("username" to username)
+}
+

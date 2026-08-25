@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.llm
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -467,9 +468,16 @@ interface LlmSessionEventRepository : JpaRepository<LlmSessionEvent, Long> {
 class LlmSessionKeyMissingException :
     RuntimeException("A session needs a key; a prefix on its own does not name one")
 
-class LlmSessionKeyTooLongException(length: Int) :
+class LlmSessionKeyTooLongException(val length: Int) :
     RuntimeException(
         "A session key is at most ${LlmSessionKey.LONGEST} characters, prefix included, and this one is $length",
-    )
+    ), Refusal {
 
-class LlmSessionNotFoundException(id: Long) : RuntimeException("No LLM session with id $id")
+    override val arguments get() = mapOf("length" to length)
+}
+
+class LlmSessionNotFoundException(val id: Long) : RuntimeException("No LLM session with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

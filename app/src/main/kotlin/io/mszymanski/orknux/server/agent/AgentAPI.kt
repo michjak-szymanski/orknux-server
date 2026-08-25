@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.dependency.ComponentDependants
 import io.mszymanski.orknux.server.dependency.DependencyKind
 import io.mszymanski.orknux.server.dependency.phrases
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.llm.CHARS_PER_TOKEN
 import io.mszymanski.orknux.server.llm.ResolvedMemoryBudget
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
@@ -558,13 +559,23 @@ data class AgentPage(
     )
 }
 
-class AgentInUseException(name: String, nodes: List<String>) : RuntimeException(
+class AgentInUseException(val name: String, val nodes: List<String>) : RuntimeException(
     "$name is used by ${nodes.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
 
-class AgentNotFoundException(id: Long) : RuntimeException("No agent with id $id")
+    override val arguments get() = mapOf("name" to name, "nodes" to nodes)
+}
 
-class AgentNameTakenException(name: String) : RuntimeException("An agent named \"$name\" already exists in this workspace")
+class AgentNotFoundException(val id: Long) : RuntimeException("No agent with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+
+class AgentNameTakenException(val name: String) :
+    RuntimeException("An agent named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class AgentNameInvalidException : RuntimeException("An agent name is required")
 
@@ -579,3 +590,4 @@ class AgentModelUnusableException(message: String) : RuntimeException(message)
  * what would fit.
  */
 class AgentMemoryShareUnusableException(message: String) : RuntimeException(message)
+

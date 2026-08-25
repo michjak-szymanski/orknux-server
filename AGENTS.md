@@ -162,6 +162,21 @@ is reported to the module rather than cascaded.
 - One `@Controller` per aggregate, with `@QueryMapping` / `@MutationMapping`
   methods and the DTOs, page wrapper and exceptions in the same file. An
   `…ExceptionResolver` maps those exceptions to GraphQL error types.
+- **A refusal is said twice: in English, and as something a client can
+  translate.** Every `…ExceptionResolver` answers through `refused()` in
+  `server/graphql/RefusedError.kt`, which keeps `message` exactly as it was and
+  adds `extensions.code` - the exception's class name with `Exception` dropped -
+  plus `extensions.arguments` for an exception that implements `Refusal`. The
+  Polish is in the interface's bundle and nowhere here, because the same
+  exception also reaches an agent through an `orknux_*` tool and an operator
+  through a log, and both of those must stay English; because the thread that
+  throws may have no person on it to have a language; and because every Polish
+  string this product says belongs in one file somebody can read end to end.
+  A resolver that builds its own `GraphQLError` sends no code and cannot be
+  translated - `RefusedErrorTest` fails on one. The code is derived rather than
+  declared, which is free and unambiguous right up until two classes share a
+  name; seven do, and that test records which.
+
 - **Every resolver checks access first.** `access.requireAdmin()` for
   admin-level work, `access.requireVisible(workspace)` for anything workspace-scoped.
   A resolver that loads by id resolves the owning workspace and checks that.

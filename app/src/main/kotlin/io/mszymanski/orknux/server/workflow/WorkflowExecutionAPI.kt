@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -388,4 +389,8 @@ data class RunDetailView(
     )
 }
 
-class ExecutionNotFoundException(id: Long) : RuntimeException("No execution with id $id")
+class ExecutionNotFoundException(val id: Long) : RuntimeException("No execution with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

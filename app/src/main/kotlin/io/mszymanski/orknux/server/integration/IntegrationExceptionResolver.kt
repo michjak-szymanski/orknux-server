@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.integration
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.graphql.refused
 import io.mszymanski.orknux.connector.connection.ConnectionNameInvalidException
 import io.mszymanski.orknux.connector.connection.ConnectionNameTakenException
 import io.mszymanski.orknux.connector.connection.ConnectionNotConfiguredException
@@ -73,11 +74,6 @@ class IntegrationExceptionResolver : DataFetcherExceptionResolverAdapter() {
             else -> return null
         }
 
-        return GraphQLError.newError()
-            .errorType(errorType)
-            .message(exception.message)
-            .path(environment.executionStepInfo.path)
-            .location(environment.field.sourceLocation)
-            .build()
+        return refused(exception, errorType, environment)
     }
 }

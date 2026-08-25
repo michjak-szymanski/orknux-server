@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -155,10 +156,16 @@ interface WorkflowConditionRepository : JpaRepository<WorkflowCondition, Long> {
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): WorkflowCondition?
 }
 
-class ConditionNotFoundException(id: Long) : RuntimeException("No condition with id $id")
+class ConditionNotFoundException(val id: Long) : RuntimeException("No condition with id $id"), Refusal {
 
-class ConditionNameTakenException(name: String) :
-    RuntimeException("A condition named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class ConditionNameTakenException(val name: String) :
+    RuntimeException("A condition named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class ConditionNameInvalidException : RuntimeException("A condition name is required")
 
@@ -177,17 +184,30 @@ class ConditionValuesRequiredException(check: ConditionCheck) :
 class ConditionMembersRequiredException :
     RuntimeException("A composite condition needs at least two conditions to combine")
 
-class ConditionCycleException(name: String) :
-    RuntimeException("$name would contain itself")
+class ConditionCycleException(val name: String) :
+    RuntimeException("$name would contain itself"), Refusal {
 
-class ConditionInUseException(name: String, used: List<String>) :
-    RuntimeException("$name is used by ${used.joinToString(", ")}")
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ConditionInUseException(val name: String, val used: List<String>) :
+    RuntimeException("$name is used by ${used.joinToString(", ")}"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "used" to used)
+}
 
 class ConditionFunctionRequiredException :
     RuntimeException("A function condition needs a function to call")
 
-class ConditionFunctionElsewhereException(name: String) :
-    RuntimeException("$name belongs to another workspace; a condition can call this workspace's functions and a plugin's")
+class ConditionFunctionElsewhereException(val name: String) :
+    RuntimeException("$name belongs to another workspace; a condition can call this workspace's functions and a plugin's"), Refusal {
 
-class ConditionFunctionNotBooleanException(name: String, returnType: String) :
-    RuntimeException("$name returns $returnType; a condition needs a function that returns a boolean")
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ConditionFunctionNotBooleanException(val name: String, val returnType: String) :
+    RuntimeException("$name returns $returnType; a condition needs a function that returns a boolean"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "returnType" to returnType)
+}
+

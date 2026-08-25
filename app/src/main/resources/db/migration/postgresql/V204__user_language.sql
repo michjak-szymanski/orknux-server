@@ -1,0 +1,25 @@
+-- Which language one person reads the product in.
+--
+-- On the person and not on the workspace or the browser. A workspace is shared,
+-- and a colleague joining somebody else's does not thereby change language; a
+-- browser is a machine, and somebody signing in from a borrowed one would find
+-- the product in a language they did not choose. What is left is the person,
+-- which is also the only one of the three that follows them between machines.
+--
+-- `Accept-Language` is still read, but only as an opening guess and only in the
+-- browser, for somebody who has never said. The moment they say, this column is
+-- the answer and the header is ignored - a header that could still override a
+-- stated preference would make the picker a suggestion.
+--
+-- Null rather than 'en' by default, and the distinction is load-bearing: null
+-- means nobody has chosen, so the browser may guess from its own locale, and
+-- 'en' means somebody chose English and a Polish browser must leave them in it.
+-- Every row written before this column existed has null, which is right - none
+-- of those people has chosen either.
+--
+-- A tag and not an enum constraint, because the set grows: English and Polish
+-- today, and a third arrives as a catalogue file with no migration behind it.
+-- What refuses an unknown tag is the interface, which falls back to English for
+-- anything it has no catalogue for.
+ALTER TABLE app_user
+    ADD COLUMN language VARCHAR(16);

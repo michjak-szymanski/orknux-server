@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.security
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -223,7 +224,11 @@ class SignInRequiredException : RuntimeException("Sign in to see this")
  * ask for: a role that administers *this* workspace, which is not the installation
  * administrator role and not a role that administers a different one.
  */
-class WorkspaceAdminRequiredException(name: String) : RuntimeException(
+class WorkspaceAdminRequiredException(val name: String) : RuntimeException(
     "This action needs a role that administers $name. Being able to see a workspace is not the same " +
         "as leading it, and a role that administers another workspace does not administer this one.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
+

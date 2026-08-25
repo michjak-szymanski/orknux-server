@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.issue
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CascadeType
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
@@ -453,13 +454,19 @@ private fun carriesLabel(
     return builder.exists(sub)
 }
 
-class IssueNotFoundException(id: Long) : RuntimeException("No issue with id $id")
+class IssueNotFoundException(val id: Long) : RuntimeException("No issue with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 class IssueTitleInvalidException : RuntimeException("An issue needs a title")
 
 class IssueCommentEmptyException : RuntimeException("A comment needs something in it")
 
-class IssueCommentNotFoundException(id: Long) : RuntimeException("No comment with id $id")
+class IssueCommentNotFoundException(val id: Long) : RuntimeException("No comment with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /**
  * Somebody tried to edit a comment that is not theirs.
@@ -471,8 +478,15 @@ class IssueCommentNotFoundException(id: Long) : RuntimeException("No comment wit
 class IssueCommentNotYoursException :
     RuntimeException("A comment can only be edited by whoever wrote it")
 
-class IssueAssigneeInvalidException(what: String) :
-    RuntimeException("$what is not something in this workspace to assign an issue to")
+class IssueAssigneeInvalidException(val what: String) :
+    RuntimeException("$what is not something in this workspace to assign an issue to"), Refusal {
 
-class IssueAssigneeKindMissingException(id: String) :
-    RuntimeException("An assignee is a kind and an id together; $id arrived without a kind")
+    override val arguments get() = mapOf("what" to what)
+}
+
+class IssueAssigneeKindMissingException(val id: String) :
+    RuntimeException("An assignee is a kind and an id together; $id arrived without a kind"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
+

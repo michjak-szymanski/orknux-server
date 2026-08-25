@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -209,10 +210,16 @@ interface WorkflowActionRepository : JpaRepository<WorkflowAction, Long> {
     fun findByFunctionId(functionId: Long): List<WorkflowAction>
 }
 
-class ActionNotFoundException(id: Long) : RuntimeException("No action with id $id")
+class ActionNotFoundException(val id: Long) : RuntimeException("No action with id $id"), Refusal {
 
-class ActionNameTakenException(name: String) :
-    RuntimeException("An action named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class ActionNameTakenException(val name: String) :
+    RuntimeException("An action named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class ActionNameInvalidException : RuntimeException("An action name is required")
 
@@ -223,17 +230,26 @@ class ActionNameInvalidException : RuntimeException("An action name is required"
  * different things from whoever reads it - republish, or redraw - so the
  * refusal has to be able to say which, rather than counting nodes.
  */
-class ActionInUseException(name: String, users: List<String>) : RuntimeException(
+class ActionInUseException(val name: String, val users: List<String>) : RuntimeException(
     "$name is used by ${users.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
 
-class ActionSettingMissingException(setting: String) :
-    RuntimeException("This kind of action needs $setting")
+    override val arguments get() = mapOf("name" to name, "users" to users)
+}
 
-class ActionHoldsPlaceholderException(setting: String) : RuntimeException(
+class ActionSettingMissingException(val setting: String) :
+    RuntimeException("This kind of action needs $setting"), Refusal {
+
+    override val arguments get() = mapOf("setting" to setting)
+}
+
+class ActionHoldsPlaceholderException(val setting: String) : RuntimeException(
     "$setting is used exactly as written, so {{…}} would be sent as text. " +
         "Leave it empty and let each node say what goes there.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("setting" to setting)
+}
 
 class ActionSubtypeMismatchException(type: ActionType, subtype: ActionSubtype) :
     RuntimeException("A ${type.name.lowercase()} action cannot be ${subtype.name.lowercase().replace('_', ' ')}")

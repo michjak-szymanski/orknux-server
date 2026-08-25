@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -289,11 +290,22 @@ data class WorkspaceWorkflowPage(
     )
 }
 
-class WorkflowNotFoundException(id: Long) : RuntimeException("No workflow assignment with id $id")
+class WorkflowNotFoundException(val id: Long) : RuntimeException("No workflow assignment with id $id"), Refusal {
 
-class WorkflowNameTakenException(name: String) : RuntimeException("A workflow named \"$name\" already exists")
+    override val arguments get() = mapOf("id" to id)
+}
+
+class WorkflowNameTakenException(val name: String) :
+    RuntimeException("A workflow named \"$name\" already exists"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class WorkflowNameInvalidException : RuntimeException("A workflow name is required")
 
-class WorkflowNotAssignedException(workspaceId: Long, workflowId: Long) :
-    RuntimeException("Workflow $workflowId is not assigned to workspace $workspaceId")
+class WorkflowNotAssignedException(val workspaceId: Long, val workflowId: Long) :
+    RuntimeException("Workflow $workflowId is not assigned to workspace $workspaceId"), Refusal {
+
+    override val arguments get() = mapOf("workspaceId" to workspaceId, "workflowId" to workflowId)
+}
+

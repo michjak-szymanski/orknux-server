@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.attachment
 
 import io.mszymanski.orknux.server.chat.ChatProperties
+import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.monitoring.MetricsProperties
 import io.mszymanski.orknux.server.revision.RevisionProperties
 import jakarta.persistence.Column
@@ -199,10 +200,13 @@ class InstallationSettings(
 const val MIN_RETENTION_DAYS = 1
 const val MAX_RETENTION_DAYS = 3650
 
-class RetentionOutOfRangeException(days: Int) : RuntimeException(
+class RetentionOutOfRangeException(val days: Int) : RuntimeException(
     "$days is not a number of days history can be kept for. " +
         "Choose between $MIN_RETENTION_DAYS and $MAX_RETENTION_DAYS.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("days" to days)
+}
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(AttachmentProperties::class, ChatProperties::class, MetricsProperties::class)

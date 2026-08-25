@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.trigger
 
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -210,15 +211,24 @@ interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
     fun findByWebhookPath(webhookPath: String): WorkflowTrigger?
 }
 
-class TriggerNotFoundException(id: Long) : RuntimeException("No trigger with id $id")
+class TriggerNotFoundException(val id: Long) : RuntimeException("No trigger with id $id"), Refusal {
+
+    override val arguments get() = mapOf("id" to id)
+}
 
 /** An event nothing publishes: a trigger on it would be enabled and silent for ever. */
-class TriggerActionUnsupportedException(action: String) : RuntimeException(
+class TriggerActionUnsupportedException(val action: String) : RuntimeException(
     "Nothing delivers $action events yet, so a trigger cannot listen for one",
-)
+), Refusal {
 
-class TriggerNameTakenException(name: String) :
-    RuntimeException("A trigger named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("action" to action)
+}
+
+class TriggerNameTakenException(val name: String) :
+    RuntimeException("A trigger named \"$name\" already exists in this workspace"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class TriggerNameInvalidException : RuntimeException("A trigger name is required")
 
@@ -231,9 +241,12 @@ class TriggerNameInvalidException : RuntimeException("A trigger name is required
  * started at all, with nothing anywhere saying why, which is why it is refused
  * here rather than reported later.
  */
-class TriggerInUseException(name: String, users: List<String>) : RuntimeException(
+class TriggerInUseException(val name: String, val users: List<String>) : RuntimeException(
     "$name is used by ${users.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "users" to users)
+}
 
 class TriggerConnectionRequiredException :
     RuntimeException("An incoming connection trigger needs a connection and an event")
@@ -257,8 +270,11 @@ class TriggerReplyWatchRequiredException : RuntimeException(
  * instanced and deaf — and the only way to find that out is to wait for a reply
  * that never fires.
  */
-class TriggerReplyWatchUnusableException(name: String, why: String) :
-    RuntimeException("$name cannot say which Slack user it posts as: $why")
+class TriggerReplyWatchUnusableException(val name: String, val why: String) :
+    RuntimeException("$name cannot say which Slack user it posts as: $why"), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "why" to why)
+}
 
 class TriggerScheduleRequiredException :
     RuntimeException("A scheduled trigger needs a cron expression")
@@ -266,26 +282,38 @@ class TriggerScheduleRequiredException :
 class TriggerWebhookPathRequiredException :
     RuntimeException("A webhook trigger needs a path to answer on")
 
-class TriggerWebhookPathInvalidException(path: String) : RuntimeException(
+class TriggerWebhookPathInvalidException(val path: String) : RuntimeException(
     "\"$path\" is not a path on this installation. A webhook answers here, so name somewhere " +
         "here — \"build/finished\", not a URL of your own.",
-)
+), Refusal {
 
-class TriggerWebhookPathTakenException(path: String) :
-    RuntimeException("Another trigger already answers at /api/webhooks/$path")
+    override val arguments get() = mapOf("path" to path)
+}
+
+class TriggerWebhookPathTakenException(val path: String) :
+    RuntimeException("Another trigger already answers at /api/webhooks/$path"), Refusal {
+
+    override val arguments get() = mapOf("path" to path)
+}
 
 class TriggerWebhookAuthFunctionRequiredException :
     RuntimeException("Function authentication needs a function to ask")
 
-class TriggerWebhookAuthFunctionNotBooleanException(name: String) : RuntimeException(
+class TriggerWebhookAuthFunctionNotBooleanException(val name: String) : RuntimeException(
     "$name does not answer true or false. A webhook is authenticated by a function that says yes or no.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 class TriggerWebhookShapeRequiredException :
     RuntimeException("A webhook trigger needs an object saying what a request has to contain")
 
-class TriggerScheduleInvalidException(cron: String) :
-    RuntimeException("\"$cron\" is not a cron expression this can schedule")
+class TriggerScheduleInvalidException(val cron: String) :
+    RuntimeException("\"$cron\" is not a cron expression this can schedule"), Refusal {
+
+    override val arguments get() = mapOf("cron" to cron)
+}
 
 /**
  * A cron that parses and never comes round.
@@ -296,8 +324,11 @@ class TriggerScheduleInvalidException(cron: String) :
  * with no next occurrence rather than refusing it. Calling that invalid sends
  * somebody hunting for a typo in something that has none.
  */
-class TriggerScheduleUnreachableException(cron: String) :
-    RuntimeException("\"$cron\" is a cron expression that never comes round")
+class TriggerScheduleUnreachableException(val cron: String) :
+    RuntimeException("\"$cron\" is a cron expression that never comes round"), Refusal {
+
+    override val arguments get() = mapOf("cron" to cron)
+}
 
 class TriggerPayloadInvalidException :
     RuntimeException("The payload has to be a JSON object, so its fields can be read as input")

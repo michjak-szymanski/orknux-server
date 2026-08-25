@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.server.action.ScriptImport
 import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.ElementCollection
@@ -178,18 +179,33 @@ interface AgentToolRepository : JpaRepository<AgentTool, Long> {
     fun findByImportedLibraryId(libraryId: Long): List<AgentTool>
 }
 
-class ToolNotFoundException(id: Long) : RuntimeException("No tool with id $id")
+class ToolNotFoundException(val id: Long) : RuntimeException("No tool with id $id"), Refusal {
 
-class ToolNameTakenException(name: String) :
-    RuntimeException("A tool named \"$name\" already exists in this workspace")
+    override val arguments get() = mapOf("id" to id)
+}
 
-class ToolNameInvalidException(name: String) :
-    RuntimeException("\"$name\" is not a name a script can be called by")
+class ToolNameTakenException(val name: String) :
+    RuntimeException("A tool named \"$name\" already exists in this workspace"), Refusal {
 
-class ToolSourceInvalidException(reason: String) : RuntimeException(reason)
+    override val arguments get() = mapOf("name" to name)
+}
 
-class ToolParamInvalidException(name: String) :
-    RuntimeException("\"$name\" is not a name a parameter can have")
+class ToolNameInvalidException(val name: String) :
+    RuntimeException("\"$name\" is not a name a script can be called by"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
+
+class ToolSourceInvalidException(val reason: String) : RuntimeException(reason), Refusal {
+
+    override val arguments get() = mapOf("reason" to reason)
+}
+
+class ToolParamInvalidException(val name: String) :
+    RuntimeException("\"$name\" is not a name a parameter can have"), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * Two of a tool's parameters answer to the same name.
@@ -198,8 +214,11 @@ class ToolParamInvalidException(name: String) :
  * called `query` are one the agent can fill and one it cannot reach, and which
  * is which is decided by whatever the provider's JSON does with a repeated key.
  */
-class ToolParamDuplicateException(name: String) :
-    RuntimeException("This tool already takes a parameter called \"$name\"")
+class ToolParamDuplicateException(val name: String) :
+    RuntimeException("This tool already takes a parameter called \"$name\""), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * A parameter says it takes an object without saying which.
@@ -208,10 +227,13 @@ class ToolParamDuplicateException(name: String) :
  * a type at all. MAP is what to use for a shape nobody has written down — and the
  * message says so, because that is the choice being made.
  */
-class ToolObjectRequiredException(name: String) : RuntimeException(
+class ToolObjectRequiredException(val name: String) : RuntimeException(
     "\"$name\" is declared as an object but no object is chosen. Pick one of this " +
         "workspace's objects, or use map for a structure without a defined shape.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /**
  * One half of a tool's code arrived without the other.
@@ -220,10 +242,13 @@ class ToolObjectRequiredException(name: String) : RuntimeException(
  * nothing on this side can strip types or put them back, so a save that carried
  * only one half would leave the two permanently out of step.
  */
-class ToolCodeIncompleteException(missing: String) : RuntimeException(
+class ToolCodeIncompleteException(val missing: String) : RuntimeException(
     "The $missing is missing. A tool's TypeScript and the JavaScript compiled " +
         "from it are saved together, so that what runs is always what was written.",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("missing" to missing)
+}
 
 /**
  * A tool an agent may call is not one to delete.
@@ -233,6 +258,10 @@ class ToolCodeIncompleteException(missing: String) : RuntimeException(
  * as "the agent Answerer" for the reason a workflow is: the sentence is read on
  * the tool list, where nothing else on the screen is an agent.
  */
-class ToolInUseException(name: String, agents: List<String>) : RuntimeException(
+class ToolInUseException(val name: String, val agents: List<String>) : RuntimeException(
     "$name is granted to ${agents.joinToString(", ")}, so it cannot be deleted",
-)
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name, "agents" to agents)
+}
+

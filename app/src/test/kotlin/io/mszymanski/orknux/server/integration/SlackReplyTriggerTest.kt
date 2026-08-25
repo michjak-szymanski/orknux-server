@@ -367,6 +367,52 @@ class SlackReplyTriggerTest(
         assertThat(started()).hasSize(1)
     }
 
+    /**
+     * And a second workspace holding a row for the same app hears it too.
+     *
+     * The boundary is the Slack app rather than the workspace, and the reason is
+     * that a workspace with a row for this app holds a bot token for it: whoever
+     * can use that token can read the channel whenever they like, so refusing to
+     * match their trigger protects nothing and only makes firing depend on which
+     * socket Slack chose.
+     */
+    @Test
+    fun `a trigger in another workspace with a row for the same app fires`() {
+        val elsewhere = requireNotNull(workspaces.save(Workspace(name = "frontend")).id)
+        val theirs = graphQlTester.document(
+            """
+            mutation {
+              createWorkspaceConnection(input: {
+                workspaceId: $elsewhere, name: "Their Slack", type: SLACK, secret: "$LISTENING_TOKEN"
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createWorkspaceConnection.id").entity(Long::class.java).get()
+        botUsers.forget(theirs)
+
+        val workflow = graphQlTester.document(
+            """mutation { createWorkflow(input: { workspaceId: $elsewhere, name: "Their Answers" }) { workflowId } }""",
+        ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+
+        val trigger = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $elsewhere, name: "Answered In Thread",
+                type: INCOMING_CONNECTION, connectionId: $theirs, action: REPLY,
+                watchedConnectionIds: [$theirs]
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+        instanceOn(workflow, trigger, elsewhere)
+
+        // Delivered to this workspace's socket, which is Slack's choice.
+        publisher.publishEvent(reply(parentUserId = LISTENING_BOT))
+
+        assertThat(runs.executions(elsewhere, null, null, null, null, null, null).content).hasSize(1)
+    }
+
     /** And a row that is a different Slack app hears nothing of it. */
     @Test
     fun `a trigger on a different Slack app is left alone`() {
@@ -429,11 +475,14 @@ class SlackReplyTriggerTest(
     ).execute().path("createWorkspaceConnection.id").entity(Long::class.java).get()
 
     /** Gives the workflow a trigger node instancing [triggerId], and publishes it. */
-    private fun instance(triggerId: Long) {
+    private fun instance(triggerId: Long) = instanceOn(workflowId, triggerId, workspaceId)
+
+    /** The same, for a workflow that is not this test's usual one. */
+    private fun instanceOn(workflow: Long, triggerId: Long, owner: Long) {
         graphQlTester.document(
             """
             mutation {
-              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+              saveWorkflowGraph(workspaceId: $owner, workflowId: $workflow, input: {
                 nodes: [
                   { key: "trigger", kind: TRIGGER, name: "Reply", triggerId: $triggerId, x: 0, y: 0 }
                 ],
@@ -443,7 +492,7 @@ class SlackReplyTriggerTest(
             """,
         ).execute()
         graphQlTester.document(
-            """mutation { publishWorkflow(workspaceId: $workspaceId, workflowId: $workflowId) { status } }""",
+            """mutation { publishWorkflow(workspaceId: $owner, workflowId: $workflow) { status } }""",
         ).execute()
     }
 

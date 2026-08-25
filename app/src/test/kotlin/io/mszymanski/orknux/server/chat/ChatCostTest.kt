@@ -48,6 +48,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 @WithMockUser(username = "alice", roles = ["ADMINS"])
 class ChatCostTest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
+    @Autowired val chats: ChatService,
     @Autowired val conversation: AgentConversation,
     @Autowired val client: ModelChatClient,
     @Autowired val sessions: ChatSessionRepository,
@@ -233,6 +234,143 @@ class ChatCostTest(
             .execute().path("setChatCostShown.chatCostShown").entity(Boolean::class.java).isEqualTo(false)
     }
 
+    /**
+     * The total is the chat's, it is added to, and it is read back off the row.
+     *
+     * Two turns at 2,000 in and 1,000 out is 4,000 and 2,000, and the assertion
+     * is made through `chatSession` rather than through what the second send
+     * answered - which is the whole difference between this and #227. That query
+     * is what the screen asks on the way in, so an assertion that passes here is
+     * an assertion that the number survives being come back to. The browser
+     * check reloads a real page to say the same thing out loud.
+     */
+    @Test
+    fun `a chat adds up what it has spent, and the total is read back off the chat`() {
+        val modelId = model(serveAnswer(input = 2000, output = 1000))
+        val chatId = chatOn(modelId)
+
+        repeat(2) {
+            graphQlTester.document("""mutation { sendChatMessage(id: $chatId, text: "Hello") { millis } }""")
+                .execute().path("sendChatMessage.millis").hasValue()
+        }
+
+        graphQlTester.document(
+            "{ chatSession(id: $chatId) { spentInputTokens spentOutputTokens spentPictures } }",
+        ).execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(4000.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(2000.0)
+            .path("chatSession.spentPictures").entity(Int::class.java).isEqualTo(0)
+    }
+
+    /**
+     * Nought, and nought is what "nothing was recorded" looks like.
+     *
+     * A chat nobody has spoken in reports it, a provider that reports no counts
+     * leaves it there, and every chat older than the column starts from it. The
+     * three are indistinguishable on purpose and the screen draws nothing for
+     * all three, because a conversation that claims to have cost nothing is
+     * worse than one that says nothing at all - which is the distinction #227
+     * settled and this had to keep.
+     */
+    @Test
+    fun `a chat nobody has spoken in has nothing to report, rather than nought spent`() {
+        val modelId = model(serveWithoutUsage())
+        val fresh = chatOn(modelId)
+
+        graphQlTester.document("{ chatSession(id: $fresh) { spentInputTokens spentOutputTokens } }")
+            .execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(0.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(0.0)
+
+        // And a turn the provider reported nothing about leaves it exactly there.
+        graphQlTester.document("""mutation { sendChatMessage(id: $fresh, text: "Hello") { millis } }""")
+            .execute().path("sendChatMessage.millis").hasValue()
+
+        graphQlTester.document("{ chatSession(id: $fresh) { spentInputTokens spentOutputTokens } }")
+            .execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(0.0)
+    }
+
+    /**
+     * An answer asked for again counts on top of the one it replaced.
+     *
+     * Both were paid for. #245 keeps the displaced answer as a take on the
+     * ground that it was really said; it was really billed too. A total that
+     * counted only the answer still standing would fall when somebody pressed a
+     * button that spends money, which is the one thing a bill may never do -
+     * and it would disagree with the provider's own invoice, which is the
+     * document this is meant to be checkable against.
+     *
+     * Driven through the service the way `ChatRegenerateTest` drives it: the
+     * door itself is an SSE stream, and what is being asked here is arithmetic.
+     */
+    @Test
+    fun `a regenerated answer counts on top of the one it replaced`() {
+        val modelId = model(serveAnswer(input = 2000, output = 1000))
+        val chatId = chatOn(modelId)
+
+        graphQlTester.document("""mutation { sendChatMessage(id: $chatId, text: "Hello") { millis } }""")
+            .execute().path("sendChatMessage.millis").hasValue()
+
+        val again = chats.beginRegenerate(chatId)
+        val said = chats.ask(again) as ChatCompletion.Answered
+        chats.finishSend(chatId, said.content, "", 0, said.inputTokens, said.outputTokens)
+
+        graphQlTester.document("{ chatSession(id: $chatId) { spentInputTokens spentOutputTokens } }")
+            .execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(4000.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(2000.0)
+    }
+
+    /**
+     * A turn that failed adds nothing, because there is nothing to add.
+     *
+     * The total is written by `finishSend`, which only an answered turn reaches
+     * - a stream that fails puts the chat back rather than finishing it. That is
+     * also the honest answer and not merely the convenient one: a refusal
+     * carries no counts at all, so anything added here would be invented.
+     */
+    @Test
+    fun `a turn that failed adds nothing to the total`() {
+        val modelId = model(serveRefusing())
+        val chatId = chatOn(modelId)
+
+        graphQlTester.document("""mutation { sendChatMessage(id: $chatId, text: "Hello") { millis } }""")
+            .execute().errors().satisfy { assertThat(it).isNotEmpty }
+
+        graphQlTester.document("{ chatSession(id: $chatId) { spentInputTokens spentOutputTokens } }")
+            .execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(0.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(0.0)
+    }
+
+    /**
+     * An agent's lookups are in the chat's total, because they were in the turn.
+     *
+     * The same rule #227 chose for the answer, carried the rest of the way: the
+     * stub asks for a tool on the first round at 7 and 2 and answers on the
+     * second at 9 and 4, so the turn cost 16 and 6 and so has the chat. Counting
+     * the last round only would understate every agent in the product, and by
+     * more the harder the agent worked.
+     */
+    @Test
+    fun `an agent's tool rounds are in the chat's total`() {
+        val modelId = model(serveToolThenAnswer())
+        val agentId = agentOn(modelId, catalog("Reviews"))
+        val chatId = chatOn(modelId)
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { id } }""")
+            .execute().path("chooseChatAgent.id").hasValue()
+
+        graphQlTester.document(
+            """mutation { sendChatMessage(id: $chatId, text: "How should I review this?") { millis } }""",
+        ).execute().path("sendChatMessage.millis").hasValue()
+
+        graphQlTester.document("{ chatSession(id: $chatId) { spentInputTokens spentOutputTokens } }")
+            .execute()
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(16.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(6.0)
+    }
+
     private fun serveAnswer(input: Long, output: Long): String = serve {
         """{"choices":[{"message":{"role":"assistant","content":"Hello back."}}],
            "usage":{"prompt_tokens":$input,"completion_tokens":$output}}"""
@@ -240,6 +378,22 @@ class ChatCostTest(
 
     private fun serveWithoutUsage(): String = serve {
         """{"choices":[{"message":{"role":"assistant","content":"Hello back."}}]}"""
+    }
+
+    /** A provider that says no, in its own words and with no counts at all. */
+    private fun serveRefusing(): String {
+        server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/chat/completions") { exchange ->
+            exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            val bytes = """{"error":{"message":"That request was refused."}}"""
+                .toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(400, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+            exchange.close()
+        }
+        server.start()
+        return "http://${server.address.hostString}:${server.address.port}"
     }
 
     private fun serveToolThenAnswer(): String = serve { body ->

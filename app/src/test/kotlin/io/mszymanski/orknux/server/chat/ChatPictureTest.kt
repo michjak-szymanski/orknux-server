@@ -184,6 +184,34 @@ class ChatPictureTest(
     }
 
     /**
+     * A drawing is counted on the chat as a picture, never as nought tokens.
+     *
+     * The chat's running total is in tokens and an image model reports none, so
+     * a picture folded into it would add nothing and leave a chat that has spent
+     * real money reading as a chat that has spent none. It is counted in its own
+     * column and said beside the tokens instead, because a picture is not a
+     * token and adding them would only be a way of hiding that.
+     */
+    @Test
+    fun `a picture is counted on the chat as a picture, not as nought tokens`() {
+        drawing(PIXEL)
+        val chatId = chatWithImageModel(imagePrice = 0.04)
+
+        repeat(2) {
+            graphQlTester.document(
+                """mutation { drawChatPicture(chatId: $chatId, prompt: "A red square") { attachmentId } }""",
+            ).execute().path("drawChatPicture.attachmentId").hasValue()
+        }
+
+        graphQlTester.document(
+            "{ chatSession(id: $chatId) { spentPictures spentInputTokens spentOutputTokens } }",
+        ).execute()
+            .path("chatSession.spentPictures").entity(Int::class.java).isEqualTo(2)
+            .path("chatSession.spentInputTokens").entity(Double::class.java).isEqualTo(0.0)
+            .path("chatSession.spentOutputTokens").entity(Double::class.java).isEqualTo(0.0)
+    }
+
+    /**
      * And the metrics card costs its window the same way.
      *
      * Two pictures at four cents is eight cents, worked out from the requests

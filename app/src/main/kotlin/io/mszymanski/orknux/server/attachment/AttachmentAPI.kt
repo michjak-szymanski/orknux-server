@@ -106,6 +106,19 @@ class AttachmentAPI(
             if (!ownership.owns(chat)) throw AttachmentNotFoundException(id)
         }
 
+        /*
+         * A row whose bytes have gone is answered as a file that is not here.
+         *
+         * Left alone this opened the stream inside the response body and threw
+         * from there: a 500 with a stack trace, which says the server broke when
+         * what happened is that a file was deleted out from under a row. It
+         * matters more since a chat can hold a picture it drew - the answer
+         * itself is an `<img>` at this URL, and a browser handed a 500 draws the
+         * broken-image icon, while a 404 is what the interface says one line
+         * about.
+         */
+        if (!store.exists(attachment.location)) throw AttachmentNotFoundException(id)
+
         return downloads.serve(
             filename = attachment.filename,
             contentType = attachment.contentType,

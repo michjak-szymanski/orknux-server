@@ -375,8 +375,9 @@ CREATE TABLE llm_model
     input_cost_per_million       numeric(12,4),
     output_cost_per_million      numeric(12,4),
     voice                        varchar(80),
+    image_cost_per_image         numeric(12,4),
     constraint uk_llm_model_name UNIQUE (provider_id, name),
-    constraint ck_llm_model_kind CHECK (((kind) IN ('CHAT', 'EMBEDDING', 'COMPLETION', 'TRANSCRIPTION', 'SPEECH'))),
+    constraint ck_llm_model_kind CHECK (((kind) IN ('CHAT', 'EMBEDDING', 'COMPLETION', 'TRANSCRIPTION', 'SPEECH', 'IMAGE'))),
     constraint ck_llm_model_reset CHECK (((reset_interval) IN ('DAILY', 'WEEKLY', 'MONTHLY', 'NEVER'))),
     constraint llm_model_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES model_provider(id) ON DELETE CASCADE
 );
@@ -1105,6 +1106,7 @@ CREATE TABLE workspace
     companion_model_id           integer,
     transcription_model_id       integer,
     speech_model_id              integer,
+    image_model_id               integer,
     quick_chat_model_id          integer,
     quick_chat_may_write         boolean not null default false,
     default_memory_share         integer,
@@ -1119,6 +1121,7 @@ CREATE TABLE workspace
     constraint ck_workspace_voice_unattended_microphone CHECK (voice_unattended_microphone_ms IS NULL OR (voice_unattended_microphone_ms BETWEEN 300000 AND 3600000)),
     constraint ck_workspace_voice_speech_chunking CHECK ((voice_speech_chunking) IN ('NONE', 'SENTENCE', 'PARAGRAPH')),
     constraint workspace_quick_chat_model_id_fkey FOREIGN KEY (quick_chat_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
+    constraint workspace_image_model_id_fkey FOREIGN KEY (image_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_speech_model_id_fkey FOREIGN KEY (speech_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_transcription_model_id_fkey FOREIGN KEY (transcription_model_id) REFERENCES llm_model(id) ON DELETE SET NULL
 );

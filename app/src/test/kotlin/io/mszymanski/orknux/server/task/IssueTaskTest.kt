@@ -135,6 +135,16 @@ class IssueTaskTest(
         assertThat(moves).hasSize(1)
         assertThat(moves.first().became).isEqualTo("IN_PROGRESS")
 
+        // And the issue says an agent was set to work on it, by name. Without
+        // this the thread reads as a person picking the work up and an agent
+        // then turning up in the comments unannounced (issue #230).
+        val started = history.findAll().filter { it.kind == IssueEventKind.TASK_STARTED }
+        assertThat(started).hasSize(1)
+        assertThat(started.first().became).isEqualTo("Responder")
+        assertThat(started.first().actor).isEqualTo("alice")
+        // Before the status moved, so the history reads in the order it happened.
+        assertThat(started.first().id).isLessThan(moves.first().id)
+
         val lines = audit.findAll()
         assertThat(lines.filter { it.category == WorkspaceAuditCategory.TASK }.map { it.message })
             .containsExactly("Task #1 Replies arrive twice started")

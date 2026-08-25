@@ -175,60 +175,121 @@ class AgentRoundWatchTest(
         assertThat(seen).isEmpty()
     }
 
+    /*
+     * The stubs speak the streaming shape, because a watched round is read as
+     * one.
+     *
+     * That is the change these tests are about as much as the watcher is: an
+     * agent's rounds used to be one blocking call each, so a reasoning model's
+     * thinking could not reach anybody until the round was over. Serving frames
+     * here is what makes the assertions above assertions about the path the
+     * chat actually takes - and it exercises the other half of it, gathering a
+     * tool call out of deltas that spell it a few characters at a time.
+     */
     private fun serveListThenAnswer(): String = serve { body ->
-        if (body.contains("tool_call_id")) {
-            """{"choices":[{"message":{"role":"assistant","content":"None are open."}}],
-               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
-        } else {
-            callFor("orknux_issues", "{}")
-        }
+        if (answeringATool(body)) framesFor(said = "None are open.") else framesFor(tool = "orknux_issues")
     }
 
     private fun serveUnknownToolThenAnswer(): String = serve { body ->
-        if (body.contains("tool_call_id")) {
-            """{"choices":[{"message":{"role":"assistant","content":"I could not look."}}],
-               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
-        } else {
-            callFor("no_such_tool", "{}")
-        }
+        if (answeringATool(body)) framesFor(said = "I could not look.") else framesFor(tool = "no_such_tool")
     }
 
     private fun serveThinkThenListThenAnswer(): String = serve { body ->
-        if (body.contains("tool_call_id")) {
-            """{"choices":[{"message":{"role":"assistant",
-                 "reasoning_content":"None open.","content":"None are open."}}],
-               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
+        if (answeringATool(body)) {
+            framesFor(thinking = "None open.", said = "None are open.")
         } else {
-            """
-            {"choices":[{"message":{"role":"assistant","content":null,
-              "reasoning_content":"I should count them.",
-              "tool_calls":[{"id":"call_1","type":"function",
-                "function":{"name":"orknux_issues","arguments":"{}"}}]}}],
-             "usage":{"prompt_tokens":7,"completion_tokens":2}}
-            """.trimIndent()
+            framesFor(thinking = "I should count them.", tool = "orknux_issues")
         }
     }
 
-    private fun callFor(name: String, arguments: String) = """
-        {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
-          {"id":"call_1","type":"function",
-           "function":{"name":"$name","arguments":"$arguments"}}
-        ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
-    """.trimIndent()
+    private fun answeringATool(body: String) = body.contains("tool_call_id")
 
+    /**
+     * What ends one server-sent frame: the blank line the protocol separates
+     * them with. Named because it follows every frame below, and a bare pair of
+     * newlines wedged between two JSON strings is exactly the thing an edit
+     * loses without anybody noticing.
+     */
+    private val blank = "\n\n"
+
+    /**
+     * One round, as server-sent frames.
+     *
+     * The tool call is deliberately spread over two frames — the name in the
+     * first and the arguments in the second — because that is how a provider
+     * sends one, and a reader that only coped with a whole call in a single
+     * frame would work here and fail everywhere real.
+     */
+    private fun framesFor(thinking: String = "", said: String = "", tool: String? = null): String = buildString {
+        if (thinking.isNotEmpty()) {
+            append("""data: {"choices":[{"delta":{"reasoning_content":"$thinking"}}]}""").append(blank)
+        }
+        if (tool != null) {
+            append(
+                """data: {"choices":[{"delta":{"tool_calls":[""" +
+                    """{"index":0,"id":"call_1","type":"function","function":{"name":"$tool","arguments":""}}]}}]}""",
+            ).append(blank)
+            append(
+                """data: {"choices":[{"delta":{"tool_calls":[""" +
+                    """{"index":0,"function":{"arguments":"{}"}}]}}]}""",
+            ).append(blank)
+        }
+        if (said.isNotEmpty()) {
+            append("""data: {"choices":[{"delta":{"content":"$said"}}]}""").append(blank)
+        }
+        append("""data: {"choices":[{"delta":{}}],"usage":{"prompt_tokens":9,"completion_tokens":4}}""")
+            .append(blank)
+        append("data: [DONE]").append(blank)
+    }
+
+    /**
+     * A stub provider that answers whichever way it was asked.
+     *
+     * Both shapes, because both are now used: a round somebody is watching is
+     * read as a stream so the thinking can appear while the model is having it,
+     * and a round nobody is watching is still one blocking call. A stub that
+     * only spoke one of them would pass the tests about the path it served and
+     * fail the others for a reason that has nothing to do with what they are
+     * about — which is exactly what happened when this served frames alone.
+     */
     private fun serve(answer: (String) -> String): String {
         server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/chat/completions") { exchange ->
             val body = exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
             received += body
-            val bytes = answer(body).toByteArray(StandardCharsets.UTF_8)
-            exchange.responseHeaders.add("Content-Type", "application/json")
+            val streaming = body.replace(" ", "").contains("\"stream\":true")
+            val said = answer(body)
+            val bytes = (if (streaming) said else blocking(said)).toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", if (streaming) "text/event-stream" else "application/json")
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
             exchange.close()
         }
         server.start()
         return "http://${server.address.hostString}:${server.address.port}"
+    }
+
+    /**
+     * The same round as one message rather than as frames.
+     *
+     * Folded from the frames the helpers built rather than written out a second
+     * time: two descriptions of what one stub says is two things to keep in
+     * step, and the one that is not being looked at is the one that drifts.
+     */
+    private fun blocking(frames: String): String {
+        val thinking = StringBuilder()
+        val said = StringBuilder()
+        var tool: String? = null
+        Regex("\"reasoning_content\":\"([^\"]*)\"").findAll(frames).forEach { thinking.append(it.groupValues[1]) }
+        Regex("\"content\":\"([^\"]*)\"").findAll(frames).forEach { said.append(it.groupValues[1]) }
+        Regex("\"name\":\"([^\"]*)\"").find(frames)?.let { tool = it.groupValues[1] }
+
+        val reasoning = if (thinking.isEmpty()) "" else """"reasoning_content":"$thinking","""
+        val calls = tool?.let {
+            ""","tool_calls":[{"id":"call_1","type":"function","function":{"name":"$it","arguments":"{}"}}]"""
+        }.orEmpty()
+        return """{"choices":[{"message":{"role":"assistant",$reasoning""" +
+            """"content":"$said"$calls}}],"usage":{"prompt_tokens":9,"completion_tokens":4}}"""
     }
 
     private fun agentWithOrknux(name: String, modelId: Long): Long {

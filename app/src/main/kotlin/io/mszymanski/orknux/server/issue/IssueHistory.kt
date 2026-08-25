@@ -15,12 +15,17 @@ import java.time.OffsetDateTime
 /**
  * One line in an issue's history.
  *
- * Nine kinds and only seven of them are ever stored. [OPENED] is read off the
+ * Ten kinds, and exactly two of them are not stored. [OPENED] is read off the
  * issue itself and [COMMENT] off the comments table, because both are already
  * recorded faithfully and a second copy of a comment is a copy that goes stale
  * the moment somebody edits it. They are in the same enum because the reader
  * sees one list: what happened to this issue, in order, whatever table it came
  * from.
+ *
+ * [COMMENT_REMOVED] is the odd one, and reading it beside [COMMENT] is the
+ * clearest way to see why this table exists. A comment is not stored here
+ * because the comments table holds it; a removed comment is stored here
+ * because nothing else can hold it any more.
  */
 enum class IssueEventKind {
     /** It was filed. Assembled from the issue's own date and reporter. */
@@ -72,6 +77,24 @@ enum class IssueEventKind {
 
     /** Somebody said something. Assembled from the comments table. */
     COMMENT,
+
+    /**
+     * A comment was taken off, and this line is all that is left of it.
+     *
+     * The one kind here that exists because a row went away. Every other event
+     * is a change something else still records: a status is on the issue, a
+     * label is in its labels, a comment is in the comments table. A removed
+     * comment is in none of them, so a history assembled from those tables
+     * would show a thread that had quietly lost a message - and a thread
+     * nobody can trust to be whole is not a record of a conversation.
+     *
+     * [IssueEvent.was] is who wrote it and [IssueEvent.became] is null, the
+     * way a label taken off is written. What it said is deliberately nowhere:
+     * a record of the removal that reproduced the text would defeat the
+     * removal, and the reason most worth removing a comment for is that the
+     * text should not exist.
+     */
+    COMMENT_REMOVED,
 }
 
 /**
@@ -210,6 +233,17 @@ class IssueHistoryRecorder(private val events: IssueEventRepository) {
         if (was == became) return
         write(issue, IssueEventKind.ASSIGNEE, actor, was, became)
     }
+
+    /**
+     * A comment was removed. Who wrote it, who took it, and not a word of it.
+     *
+     * The author is written down because a line saying only that something was
+     * removed is a line that cannot be argued with later; the text is not,
+     * because this table would then be the copy that survives the removal.
+     * See [IssueEventKind.COMMENT_REMOVED].
+     */
+    fun commentRemoved(issue: Issue, author: String, actor: String) =
+        write(issue, IssueEventKind.COMMENT_REMOVED, actor, author, null)
 
     fun observerAdded(issue: Issue, name: String, actor: String) =
         write(issue, IssueEventKind.OBSERVER, actor, null, name)

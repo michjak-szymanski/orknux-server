@@ -113,15 +113,46 @@ class IssueNewsDesk(
         write(issue, IssueNewsKind.LINKED, actor, says = says, to = watchers(issue))
     }
 
-    /** Somebody said something. The same audience, and the words with it. */
+    /**
+     * Somebody said something. The same audience, and the words with it.
+     *
+     * [commentId] is which comment, so that [forgetComment] can find these rows
+     * again. Null is allowed and means the caller could not say - a comment
+     * that has not been flushed has no id yet - but every door into the tracker
+     * passes one, because a row that cannot be found is a copy of what was said
+     * that outlives the saying of it.
+     */
     @Transactional
-    fun commented(issue: Issue, actor: String, said: String) {
-        write(issue, IssueNewsKind.COMMENT, actor, says = said, to = watchers(issue))
+    fun commented(issue: Issue, actor: String, said: String, commentId: Long? = null) {
+        write(issue, IssueNewsKind.COMMENT, actor, says = said, to = watchers(issue), commentId = commentId)
         // A name written into a comment is addressed to that person whether or
         // not they have anything to do with the issue, which is the whole point
         // of writing it - so it is its own event, and it reaches somebody the
         // watcher list never would.
-        write(issue, IssueNewsKind.MENTIONED, actor, says = said, to = mentioned(said))
+        write(issue, IssueNewsKind.MENTIONED, actor, says = said, to = mentioned(said), commentId = commentId)
+    }
+
+    /**
+     * A comment is gone, so what was said about it goes too.
+     *
+     * Written here rather than in the resolver for the reason everything else
+     * about news is: this is the one place that knows what a comment being
+     * commented on left behind. What it leaves behind is [IssueNewsItem.says],
+     * which holds the comment in full and once for every person told - so a
+     * removal that stopped at the tracker would take a comment off the page and
+     * leave as many copies of it in the database as the issue had watchers.
+     *
+     * Nothing new is written in its place, and that is a decision rather than an
+     * omission. A bell that rang for a removal would announce to everybody that
+     * something on this issue was worth removing, which is the opposite of what
+     * somebody taking a credential off a thread wants, and noise for the far
+     * commoner case of a typo. The history on the issue says it happened, to
+     * whoever goes looking. Mail already sent cannot be recalled, and this does
+     * not pretend otherwise.
+     */
+    @Transactional
+    fun forgetComment(commentId: Long) {
+        news.deleteByCommentId(commentId)
     }
 
     /**
@@ -223,6 +254,7 @@ class IssueNewsDesk(
         actor: String,
         says: String?,
         to: List<NewsReader>,
+        commentId: Long? = null,
     ) {
         val issueId = issue.id ?: return
         record(actor, to) { reader ->
@@ -234,6 +266,7 @@ class IssueNewsDesk(
                 kind = kind,
                 actor = actor,
                 says = says,
+                commentId = commentId,
                 audienceKind = reader.kind,
                 audienceName = reader.name,
                 audienceId = reader.id,

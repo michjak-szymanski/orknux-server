@@ -12,6 +12,7 @@ import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import io.mszymanski.orknux.server.llm.RememberedTurn
 import io.mszymanski.orknux.server.llm.SessionMemoryBudget
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
+import org.slf4j.LoggerFactory
 import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
@@ -42,6 +43,7 @@ class ChatService(
     private val sessions: ChatSessionRepository,
     private val history: ChatMemoryRepository,
     private val takes: ChatAnswerTakeRepository,
+    private val thoughts: ChatMessageThinkingRepository,
     private val models: ModelChatClient,
     private val catalogue: ModelService,
     private val agents: AgentRepository,
@@ -162,8 +164,24 @@ class ChatService(
         val earlier = takes
             .findByChatSessionIdOrderByIdAsc(requireNotNull(session.id))
             .groupBy { it.messageIndex }
+        /*
+         * And what the model thought on the way to each of them, put back
+         * beside the answer it belongs to.
+         *
+         * Keyed by place in the thread, the same as a take and read the same
+         * way - which is what makes every answer carry its own rather than only
+         * the one being written now. The first build of this kept none of it,
+         * so reloading the page lost the reasoning for every answer on it.
+         */
+        val thought = thoughts.findByChatSessionId(requireNotNull(session.id)).associateBy { it.messageIndex }
         val thread = history.findByConversationId(session.conversationId)
-            .mapIndexed { at, message -> ChatMessage(message).copy(takes = earlier[at]?.map { it.content }.orEmpty()) }
+            .mapIndexed { at, message ->
+                ChatMessage(message).copy(
+                    takes = earlier[at]?.map { it.content }.orEmpty(),
+                    thinking = thought[at]?.content,
+                    thinkingMillis = thought[at]?.millis?.takeIf { it > 0 },
+                )
+            }
         val llmSessionId = session.llmSessionId ?: return thread
         /*
          * How far into the session to read, which is two different questions.
@@ -195,6 +213,50 @@ class ChatService(
      * A column saying the same thing would be a second answer to a question the
      * data already answers, and one that could be wrong.
      */
+    /**
+     * Files what the model thought under the answer it belongs to.
+     *
+     * Replaced rather than added to, which is what makes a regenerate correct:
+     * asking again produces a new answer at the same place in the thread, and
+     * leaving the old thinking under it would be the same lie as a lookup drawn
+     * under an answer that did not make it. The unique constraint says the same
+     * thing; this is what keeps the constraint from being the thing that
+     * reports it.
+     *
+     * Nothing is written for a model that thought nothing, so a chat with an
+     * ordinary model puts no rows here at all - and a message with no row is
+     * drawn with no container rather than an empty one.
+     *
+     * It never throws. What the model thought is worth keeping and is not worth
+     * failing an answer over: the answer is already in the thread by this
+     * point, and losing the reasoning leaves a chat that reads exactly as it
+     * did before this feature existed.
+     */
+    private fun keepThinking(session: ChatSession, at: Int, thinking: String, millis: Long) {
+        if (thinking.isBlank()) return
+        val chatId = session.id ?: return
+        try {
+            val held = thoughts.findByChatSessionIdAndMessageIndex(chatId, at)
+            if (held == null) {
+                thoughts.save(
+                    ChatMessageThinking(
+                        chatSessionId = chatId,
+                        messageIndex = at,
+                        content = thinking,
+                        millis = millis,
+                    ),
+                )
+            } else {
+                held.content = thinking
+                held.millis = millis
+                held.thoughtAt = OffsetDateTime.now()
+                thoughts.save(held)
+            }
+        } catch (failure: Exception) {
+            log.warn("What the model thought on chat {} could not be kept", chatId, failure)
+        }
+    }
+
     private fun ownSession(session: ChatSession): Boolean {
         val id = session.llmSessionId ?: return false
         val mine = runCatching { LlmSessionKey.of(CHAT_PREFIX, session.conversationId) }.getOrNull() ?: return false
@@ -674,12 +736,15 @@ class ChatService(
      * is in it.
      */
     @Transactional
-    fun finishSend(id: Long, answer: String) {
+    fun finishSend(id: Long, answer: String, thinking: String = "", thinkingMillis: Long = 0) {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
-        history.saveAll(
-            session.conversationId,
-            history.findByConversationId(session.conversationId) + AssistantMessage(answer),
-        )
+        val thread = history.findByConversationId(session.conversationId)
+        history.saveAll(session.conversationId, thread + AssistantMessage(answer))
+        // The answer's place in the thread, which is what its thinking is
+        // filed under. Taken before nothing else can move it: the thread is
+        // only appended to, so the turn just added sits where the old one
+        // ended.
+        keepThinking(session, thread.size, thinking, thinkingMillis)
         session.lastMessageAt = OffsetDateTime.now()
         // Read off the chat rather than opened: [beginSend] has already opened
         // whatever this chat records into, and opening one here would be a
@@ -808,6 +873,8 @@ class ChatService(
     }
 
     private companion object {
+        val log = LoggerFactory.getLogger(ChatService::class.java)
+
         /** Matches the column. */
         const val TITLE_LENGTH = 200
 
@@ -868,6 +935,29 @@ data class ChatMessage(
      * losing the answer somebody was about to keep.
      */
     val takes: List<String> = emptyList(),
+    /**
+     * What the model thought on its way to this answer, or null where it
+     * thought nothing anybody kept.
+     *
+     * Null rather than empty, and the difference is drawn: a model that emits
+     * no reasoning gets no container at all, rather than an empty one asserting
+     * there was thinking to see.
+     *
+     * Never part of [content]. That is the whole arrangement rather than a
+     * detail - the copy control, the speech model and the next turn's prompt
+     * all read the content, and they are correct because the string they read
+     * does not hold this, not because three places remember to strip it.
+     */
+    val thinking: String? = null,
+    /**
+     * How long that thinking went on for, or null where nobody measured it.
+     *
+     * Null rather than nought, and never the turn's own time: the turn is
+     * already reported on the answer's disclosure, and a screen showing two
+     * numbers that look like the same measurement and are not is worse than one
+     * that shows a number less.
+     */
+    val thinkingMillis: Long? = null,
 ) {
     constructor(message: Message) : this(message.messageType.name.lowercase(), message.text.orEmpty())
 }

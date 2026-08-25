@@ -817,6 +817,17 @@ type Mutation {
     "Changes a comment. Only whoever wrote it may."
     editIssueComment(id: ID!, content: String!): Issue!
     """
+    Takes a comment off an issue. Whoever wrote it may, and so may an
+    administrator of the workspace - wider than editing, because a removal
+    cannot put words in anybody's mouth and this one is written down.
+
+    Really removed, not marked removed: the row goes, its files go with it,
+    rows and bytes, and so does the copy of what was said that the bell was
+    given. What is left is one line in the issue's history saying a comment by
+    somebody was removed, by somebody, and never what it said.
+    """
+    removeIssueComment(id: ID!): Issue!
+    """
     Puts uploaded files on an issue. Sent after it is filed, since a new issue
     has no id while it is still being written.
     """
@@ -2543,6 +2554,31 @@ type ChatMessage {
     of a model.
     """
     takes: [String!]!
+    """
+    What the model thought on its way to this answer, for a reasoning model.
+
+    Null where it thought nothing anybody kept, which is every ordinary model
+    and every kind of line that is not an answer. Null rather than empty on
+    purpose: the screen draws no container at all for a message with none,
+    rather than an empty one asserting there was thinking to see.
+
+    Never part of `content`, and that is the whole arrangement rather than a
+    detail. The copy control, the speech model and the next turn's prompt all
+    read the content, and they are correct because the string they read does
+    not hold this - not because each of them remembers to strip it. It is never
+    put in front of a model.
+    """
+    thinking: String
+    """
+    How long that thinking went on for, in milliseconds.
+
+    Null where nobody measured it - a round read whole rather than as a stream
+    hands the reasoning over complete and there is no duration in it. Never the
+    turn's own time standing in: the turn is already reported on the answer's
+    disclosure, and two numbers on one screen that look like the same
+    measurement and are not is worse than one number missing.
+    """
+    thinkingMillis: Float
 }
 
 type ChatAnswer {
@@ -5697,6 +5733,12 @@ type IssueComment {
     attachments: [IssueAttachment!]!
     "Whether the person reading this wrote it, and so may change it."
     mine: Boolean!
+    """
+    Whether they may take it off: whoever wrote it, or an administrator of the
+    workspace. Wider than `mine`, so it is answered separately rather than
+    worked out from it.
+    """
+    mayRemove: Boolean!
 }
 
 type Issue {
@@ -5738,10 +5780,11 @@ type IssuePage {
 """
 What kind of change one line in an issue's history is.
 
-Six of these are stored when they happen; OPENED is read off the issue itself
-and COMMENT off the comments table, because both were already recorded
+All but two of these are stored when they happen; OPENED is read off the issue
+itself and COMMENT off the comments table, because both were already recorded
 faithfully and a second copy of a comment is a copy that goes stale the moment
-somebody edits it.
+somebody edits it. COMMENT_REMOVED is stored for the opposite reason: once a
+comment is gone there is no table left to read it from.
 """
 enum IssueEventKind {
     "It was filed."
@@ -5780,6 +5823,15 @@ enum IssueEventKind {
     LINK
     "Somebody said something."
     COMMENT
+    """
+    A comment was taken off, and this line is all that is left of it.
+
+    `was` is who wrote it and `became` is null. What it said is deliberately
+    nowhere: a record of the removal that reproduced the text would defeat the
+    removal. The only kind here written because a row went away - every other
+    one describes a change some other table still holds.
+    """
+    COMMENT_REMOVED
 }
 
 type IssueEvent {

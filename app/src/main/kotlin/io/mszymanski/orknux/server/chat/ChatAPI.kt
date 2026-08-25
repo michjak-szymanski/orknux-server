@@ -63,7 +63,7 @@ class ChatAPI(
     fun chatMessages(@Argument id: Long): List<ChatMessageView> {
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
-        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor, it.takes) }
+        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor, it.takes, it.thinking, it.thinkingMillis) }
     }
 
     @MutationMapping
@@ -171,13 +171,18 @@ class ChatAPI(
                 throw ChatModelUnusableException("The model asked for a tool that could not be run")
             is ChatCompletion.Answered -> said
         }
-        chats.finishSend(id, answer.content)
+        chats.finishSend(id, answer.content, answer.reasoning, answer.reasoningMillis)
         // Same as the streaming path: a first exchange earns the chat a name.
         runCatching { titles.nameFrom(id, text, answer.content) }
         val named = chats.session(id) ?: session
         return ChatAnswerView(
             session = describe(named),
-            answer = ChatMessageView("assistant", answer.content),
+            answer = ChatMessageView(
+                "assistant",
+                answer.content,
+                thinking = answer.reasoning.ifBlank { null },
+                thinkingMillis = answer.reasoningMillis.takeIf { it > 0 },
+            ),
             millis = answer.millis,
             inputTokens = answer.inputTokens,
             outputTokens = answer.outputTokens,
@@ -279,6 +284,14 @@ data class ChatMessageView(
      * line.
      */
     val takes: List<String> = emptyList(),
+    /**
+     * What the model thought on its way to this answer, or null where it
+     * thought nothing anybody kept. Never part of [content] — see the schema
+     * for why that is the whole arrangement rather than a detail.
+     */
+    val thinking: String? = null,
+    /** How long that thinking went on for, or null where nobody measured it. */
+    val thinkingMillis: Long? = null,
 )
 
 data class ChatAnswerView(

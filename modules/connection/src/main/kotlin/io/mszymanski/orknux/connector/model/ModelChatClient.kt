@@ -81,6 +81,17 @@ sealed interface ChatCompletion {
          * two together has undone the whole of the separation.
          */
         val reasoning: String = "",
+        /**
+         * How long that thinking went on for, in milliseconds, measured over
+         * the reasoning frames alone.
+         *
+         * Not the round's own [millis], which also covers the answer being
+         * written and the request going out. Nought where the reasoning did not
+         * arrive as a stream - a blocking call hands it over whole and there is
+         * no duration to measure - and the screen draws nothing rather than
+         * presenting the turn's time as the thinking's.
+         */
+        val reasoningMillis: Long = 0,
     ) : ChatCompletion
 
     /**
@@ -101,6 +112,8 @@ sealed interface ChatCompletion {
          * finally answers, which is why this is on both shapes.
          */
         val reasoning: String = "",
+        /** How long it thought, measured the same way [Answered.reasoningMillis] is. */
+        val reasoningMillis: Long = 0,
     ) : ChatCompletion
 
     /**
@@ -212,10 +225,11 @@ class ModelChatClient(
     fun stream(
         modelId: Long,
         turns: List<ChatTurn>,
+        tools: List<ToolSpec> = emptyList(),
         onThinking: (String) -> Unit = {},
         onChunk: (String) -> Unit,
     ): ChatCompletion {
-        val call = prepare(modelId, turns, streaming = true)
+        val call = prepare(modelId, turns, streaming = true, tools = tools)
         if (call is Prepared.Failed) return ChatCompletion.Failed(call.reason)
         val ready = call as Prepared.Call
 
@@ -241,9 +255,44 @@ class ModelChatClient(
              * both of them on screen.
              */
             val tags = ThinkTags()
+            /*
+             * The calls being spelled out across the frames, gathered by the
+             * place the provider gives them.
+             *
+             * A streamed tool call arrives in pieces the same way text does -
+             * the name in one frame and the arguments a few characters at a
+             * time after it - so there is nothing to hand back until the stream
+             * ends. Keyed by index rather than appended, because a model asking
+             * for two tools interleaves their frames.
+             */
+            val asked = sortedMapOf<Int, StreamedCall>()
+
+            /*
+             * When the thinking stopped, so the screen can say how long it went
+             * on for.
+             *
+             * **From the request going out, not from the first reasoning
+             * frame.** Measuring between the first and last reasoning frames is
+             * what this did first, and it reported nothing on most real
+             * providers: a model that emits its whole reasoning in one frame
+             * has a first frame and a last frame at the same instant, so the
+             * answer was nought and the screen drew no time at all. It was only
+             * ever non-zero here because a stub deliberately paused between
+             * frames.
+             *
+             * Time to the end of the thinking is also the more honest number.
+             * What somebody waited through is the request going out, the model
+             * loading the prompt, and then the reasoning being produced - all
+             * of it before there was a word of answer to read. That is the wait
+             * the block is explaining.
+             */
+            var sawThought = false
+            var thoughtTo = 0L
 
             fun hand(piece: ModelPiece) {
                 if (piece.thought.isNotEmpty()) {
+                    sawThought = true
+                    thoughtTo = System.nanoTime()
                     thinking.append(piece.thought)
                     onThinking(piece.thought)
                 }
@@ -259,9 +308,11 @@ class ModelChatClient(
                     // one, and carry no text — so they are read from every frame
                     // rather than from the answer.
                     if (line.startsWith(DATA_PREFIX)) {
-                        val (frameInput, frameOutput) = tokensOf(line.removePrefix(DATA_PREFIX).trim())
+                        val payload = line.removePrefix(DATA_PREFIX).trim()
+                        val (frameInput, frameOutput) = tokensOf(payload)
                         if (frameInput > 0) input = frameInput
                         if (frameOutput > 0) output = frameOutput
+                        gatherCalls(payload, ready.anthropic, asked)
                     }
                     val frame = pieceOf(line, ready.anthropic) ?: return@forEach
                     // Thinking the provider named is thinking: it does not go
@@ -272,6 +323,30 @@ class ModelChatClient(
                 }
             }
             hand(tags.finish())
+            val thoughtFor = if (!sawThought) 0L else (thoughtTo - started) / 1_000_000
+
+            /*
+             * A round that asked for tools has not answered, whichever way it
+             * was read. The same rule the blocking path follows, and it has to
+             * be the same rule or an agent would behave differently depending
+             * on whether anybody was watching it.
+             */
+            val calls = asked.values.mapNotNull { it.settled() }
+            if (calls.isNotEmpty()) {
+                val millis = (System.nanoTime() - started) / 1_000_000
+                return counted(
+                    modelId,
+                    ChatCompletion.CalledTools(
+                        calls = calls,
+                        turn = ChatTurn("assistant", whole.toString(), asked = calls),
+                        millis = millis,
+                        inputTokens = input,
+                        outputTokens = output,
+                        reasoning = thinking.toString(),
+                        reasoningMillis = thoughtFor,
+                    ),
+                )
+            }
             val millis = (System.nanoTime() - started) / 1_000_000
             if (whole.isBlank()) {
                 /*
@@ -290,7 +365,14 @@ class ModelChatClient(
             } else {
                 counted(
                     modelId,
-                    ChatCompletion.Answered(whole.toString(), millis, input, output, thinking.toString()),
+                    ChatCompletion.Answered(
+                        whole.toString(),
+                        millis,
+                        input,
+                        output,
+                        thinking.toString(),
+                        thoughtFor,
+                    ),
                 )
             }
         } catch (failure: Exception) {
@@ -358,6 +440,66 @@ class ModelChatClient(
      * accessor cover a shape spelled two ways, which the OpenAI-compatible
      * world needs for reasoning.
      */
+    /**
+     * One tool call being spelled out across a stream's frames.
+     *
+     * The name arrives once and the arguments a few characters at a time, so
+     * this is a builder rather than a value: it is only a [ToolCall] once the
+     * stream has ended.
+     */
+    private class StreamedCall {
+        var id: String = ""
+        var name: String = ""
+        val arguments = StringBuilder()
+
+        /** The call, or null for a slot the provider opened and never named. */
+        fun settled(): ToolCall? =
+            if (name.isEmpty()) null else ToolCall(id, name, arguments.toString())
+    }
+
+    /**
+     * Gathers whatever one frame says about the tools being asked for.
+     *
+     * Both shapes spell a call out over several frames and both key the pieces
+     * by an index, which is what lets a model ask for two tools at once without
+     * their arguments being concatenated into one unparseable string.
+     *
+     * The OpenAI shape puts them in `choices[0].delta.tool_calls`, each with its
+     * own `index`; the name comes on the first frame for that index and
+     * `function.arguments` in pieces after it. Anthropic opens a block with
+     * `content_block_start` carrying `tool_use`, its id and its name, and then
+     * sends `input_json_delta` frames whose `partial_json` builds the input.
+     */
+    private fun gatherCalls(payload: String, anthropic: Boolean, into: MutableMap<Int, StreamedCall>) {
+        if (payload.isEmpty() || payload == DONE) return
+        runCatching {
+            val tree = mapper.readTree(payload)
+            if (anthropic) {
+                val at = tree.path("index").asInt(0)
+                val block = tree.path("content_block")
+                if (wordsOf(block, "type") == "tool_use") {
+                    val call = into.getOrPut(at) { StreamedCall() }
+                    call.id = wordsOf(block, "id")
+                    call.name = wordsOf(block, "name")
+                }
+                val delta = tree.path("delta")
+                if (wordsOf(delta, "type") == "input_json_delta") {
+                    into.getOrPut(at) { StreamedCall() }.arguments.append(wordsOf(delta, "partial_json"))
+                }
+            } else {
+                val calls = tree.path("choices").firstOrNull()?.path("delta")?.path("tool_calls") as? ArrayNode
+                    ?: return@runCatching
+                calls.forEach { asked ->
+                    val call = into.getOrPut(asked.path("index").asInt(0)) { StreamedCall() }
+                    wordsOf(asked, "id").takeIf { it.isNotEmpty() }?.let { call.id = it }
+                    val function = asked.path("function")
+                    wordsOf(function, "name").takeIf { it.isNotEmpty() }?.let { call.name = it }
+                    call.arguments.append(wordsOf(function, "arguments"))
+                }
+            }
+        }
+    }
+
     private fun wordsOf(node: JsonNode?, vararg names: String): String {
         if (node == null) return ""
         names.forEach { name ->

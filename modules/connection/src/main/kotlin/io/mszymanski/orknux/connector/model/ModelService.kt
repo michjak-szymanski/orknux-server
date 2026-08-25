@@ -267,6 +267,7 @@ class ModelService(
                 inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal(),
                 outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal(),
                 voice = input.voice?.trim()?.ifEmpty { null },
+                imageCostPerImage = input.imageCostPerImage?.toBigDecimal(),
             ),
         )
         return LlmModelView(model, provider)
@@ -299,6 +300,7 @@ class ModelService(
         model.inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal()
         model.outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal()
         model.voice = input.voice?.trim()?.ifEmpty { null }
+        model.imageCostPerImage = input.imageCostPerImage?.toBigDecimal()
         return LlmModelView(model, provider)
     }
 
@@ -437,11 +439,21 @@ class ModelService(
     }
 
     /**
-     * What the tokens cost, at what the provider is recorded as charging. Null
+     * What the window cost, at what the provider is recorded as charging. Null
      * when the model carries no prices, because a guess would be worse.
+     *
+     * An image model is costed on its requests rather than on its tokens, and
+     * that is not a refinement — it is the difference between a number and a
+     * lie. These models are billed per picture and report no tokens at all, so
+     * the token arithmetic returns `0.00` for a month that was paid for. One
+     * request is one picture because [ModelImageClient] asks for exactly one.
      */
     private fun cost(model: LlmModel, totals: Totals): BigDecimal? =
-        ModelPricing.cost(model, totals.inputTokens, totals.outputTokens, ModelPricing.WINDOW_SCALE)
+        if (model.kind == ModelKind.IMAGE) {
+            ModelPricing.imageCost(model, totals.requests.toLong())
+        } else {
+            ModelPricing.cost(model, totals.inputTokens, totals.outputTokens, ModelPricing.WINDOW_SCALE)
+        }
 
     /**
      * What one call cost, for a caller holding the counts a model reported.
@@ -455,6 +467,19 @@ class ModelService(
     fun costOf(modelId: Long, inputTokens: Long, outputTokens: Long): BigDecimal? {
         val model = models.findByIdOrNull(modelId) ?: return null
         return ModelPricing.cost(model, inputTokens, outputTokens)
+    }
+
+    /**
+     * What a number of pictures cost, for the chat that has just drawn one.
+     *
+     * The twin of [costOf], and separate from it because the question is a
+     * different one: that asks what tokens cost, and an image model has none.
+     * Null for a removed model as well as for one carrying no per-image price,
+     * since a caller that shows nothing either way need not tell them apart.
+     */
+    fun imageCostOf(modelId: Long, images: Long): BigDecimal? {
+        val model = models.findByIdOrNull(modelId) ?: return null
+        return ModelPricing.imageCost(model, images)
     }
 
     /** The change from one window to the next, as a fraction. Null when there was nothing to compare with. */
@@ -540,6 +565,8 @@ data class CreateModelInput(
     val outputCostPerMillion: Double? = null,
     /** Only meaningful for a SPEECH model; the names belong to the provider. */
     val voice: String? = null,
+    /** Only meaningful for an IMAGE model, which is billed per picture rather than per token. */
+    val imageCostPerImage: Double? = null,
 )
 
 /** The model's own details, all of them, as the form that edits them sends them. */
@@ -553,6 +580,8 @@ data class UpdateModelInput(
     val outputCostPerMillion: Double? = null,
     /** Only meaningful for a SPEECH model; the names belong to the provider. */
     val voice: String? = null,
+    /** Only meaningful for an IMAGE model, which is billed per picture rather than per token. */
+    val imageCostPerImage: Double? = null,
 )
 
 /** The Quotas and Limits card, which saves its fields together. Null is no limit. */
@@ -639,6 +668,8 @@ data class LlmModelView(
     val outputCostPerMillion: Double?,
     /** Which voice a SPEECH model reads in; null sends none. */
     val voice: String?,
+    /** What one picture costs on an IMAGE model; null is not recorded, which is not free. */
+    val imageCostPerImage: Double?,
 ) {
     constructor(model: LlmModel, provider: ModelProvider) : this(
         id = requireNotNull(model.id),
@@ -657,6 +688,7 @@ data class LlmModelView(
         inputCostPerMillion = model.inputCostPerMillion?.toDouble(),
         outputCostPerMillion = model.outputCostPerMillion?.toDouble(),
         voice = model.voice,
+        imageCostPerImage = model.imageCostPerImage?.toDouble(),
     )
 }
 

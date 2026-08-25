@@ -23,6 +23,16 @@ interface AttachmentStore {
 
     fun open(location: String): InputStream
 
+    /**
+     * Whether the bytes are still there.
+     *
+     * Asked before serving, so a row whose file has gone is a 404 rather than
+     * an exception thrown while the response body was already being written.
+     * On the interface it is the difference between one line saying the picture
+     * is gone and a broken-image icon saying the page is.
+     */
+    fun exists(location: String): Boolean
+
     fun remove(location: String)
 
     /**
@@ -67,6 +77,9 @@ class FilesystemAttachmentStore(private val settings: InstallationSettings) : At
     }
 
     override fun open(location: String): InputStream = Files.newInputStream(resolve(location))
+
+    override fun exists(location: String): Boolean =
+        runCatching { Files.isRegularFile(resolve(location)) }.getOrDefault(false)
 
     override fun remove(location: String) {
         runCatching { Files.deleteIfExists(resolve(location)) }

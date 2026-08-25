@@ -688,6 +688,38 @@ class ChatService(
     }
 
     /**
+     * Writes a drawn picture into the chat, as the two lines it is.
+     *
+     * [beginSend] and [finishSend] one after the other would be the obvious way
+     * and would be wrong twice over: they are for a turn a chat model answered,
+     * so between them they choose a model this chat may not even have, budget a
+     * context window nobody is filling, and hand the description to the chat
+     * model as a question it never gets to answer. A picture is a complete
+     * exchange by the time it arrives here.
+     *
+     * What goes in is what was asked for and a markdown image pointing at the
+     * attachment. In the thread rather than in a table of its own, which is the
+     * whole reason a picture survives being drawn: the history is what the chat
+     * is read back out of, and a second record of which message carried which
+     * file is a second record to keep in step.
+     *
+     * Into the LLM session as well where this chat records into one, under the
+     * same two names the ordinary path uses - a transcript that stops at the
+     * picture cannot explain the conversation around it.
+     */
+    @Transactional
+    fun recordPicture(id: Long, prompt: String, said: String) {
+        val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
+        val thread = history.findByConversationId(session.conversationId)
+        history.saveAll(session.conversationId, thread + UserMessage(prompt) + AssistantMessage(said))
+        session.lastMessageAt = OffsetDateTime.now()
+
+        val into = recording(session)
+        recordSaid(session, into, prompt)
+        into?.let { recorder.agentSaid(it, PICTURE_ACTOR, said) }
+    }
+
+    /**
      * The session this chat records into, opened the first time it needs one.
      *
      * Two ways a chat comes to have one. It was opened from a session's page,
@@ -781,6 +813,15 @@ class ChatService(
 
         /** What a bare model's answer is signed with once the model it named is gone. */
         const val FALLBACK_ACTOR = "model"
+
+        /**
+         * Who a drawn picture is signed by in a transcript.
+         *
+         * Not the chat's model: the chat's model did not draw it, and a
+         * transcript that says it did is a transcript that would have somebody
+         * looking for the picture in the wrong provider's bill.
+         */
+        const val PICTURE_ACTOR = "image model"
 
         /**
          * What a chat's own session is namespaced under.

@@ -7,12 +7,14 @@ import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.LlmModel
 import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelChatClient
+import io.mszymanski.orknux.connector.model.ModelImageClient
 import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelProvider
 import io.mszymanski.orknux.connector.model.ModelProviderRepository
 import io.mszymanski.orknux.connector.model.ModelSpeechClient
 import io.mszymanski.orknux.connector.model.ModelTranscriptionClient
 import io.mszymanski.orknux.connector.model.ModelUsageRepository
+import io.mszymanski.orknux.connector.model.Picture
 import io.mszymanski.orknux.connector.model.Speech
 import io.mszymanski.orknux.connector.model.Transcription
 import io.mszymanski.orknux.server.workspace.Workspace
@@ -35,8 +37,8 @@ import java.util.concurrent.CopyOnWriteArrayList
  * API key goes out on every call made to it - so the question of whether that
  * host may be called belongs on the calls themselves, not only behind the "Test
  * provider" button. A check that only happens when a button is pressed is a
- * check that mostly does not happen, and the chat, the reading and the dictation
- * all reach a provider without ever pressing it.
+ * check that mostly does not happen, and the chat, the reading, the dictation
+ * and the drawing all reach a provider without ever pressing it.
  *
  * The stub is a real server on the loopback address and it records what it was
  * asked. The refused endpoint is `0.0.0.0` on that same port: a host the guard
@@ -48,6 +50,7 @@ class ModelEndpointGuardTest(
     @Autowired val chat: ModelChatClient,
     @Autowired val speech: ModelSpeechClient,
     @Autowired val transcription: ModelTranscriptionClient,
+    @Autowired val drawing: ModelImageClient,
     @Autowired val providers: ModelProviderRepository,
     @Autowired val models: LlmModelRepository,
     @Autowired val usage: ModelUsageRepository,
@@ -87,6 +90,14 @@ class ModelEndpointGuardTest(
             asked += exchange.requestURI.path
             answer(exchange, """{"text":"Hello."}""".toByteArray(StandardCharsets.UTF_8), "application/json")
         }
+        server.createContext("/images/generations") { exchange ->
+            asked += exchange.requestURI.path
+            answer(
+                exchange,
+                """{"data":[{"b64_json":"aGk="}]}""".toByteArray(StandardCharsets.UTF_8),
+                "application/json",
+            )
+        }
         server.start()
     }
 
@@ -120,6 +131,25 @@ class ModelEndpointGuardTest(
         assertThat(asked).isEmpty()
     }
 
+    /**
+     * And the fourth client, which carries the same key to the same host.
+     *
+     * Its own test rather than a line in the one below, because it is the only
+     * one of the four that refuses some providers outright: the guard has to be
+     * shown refusing an endpoint on a provider type that would otherwise have
+     * been called, or the assertion is satisfied by the wrong refusal.
+     */
+    @Test
+    fun `drawing refuses the same endpoint`() {
+        val providerId = provider("Local", refusedEndpoint())
+
+        val drawn = drawing.draw(model(providerId, ModelKind.IMAGE), "A red square")
+
+        assertThat(drawn).isInstanceOf(Picture.Failed::class.java)
+        assertThat((drawn as Picture.Failed).reason).startsWith("Local cannot be called:")
+        assertThat(asked).isEmpty()
+    }
+
     @Test
     fun `reading aloud and dictation refuse the same endpoint`() {
         val providerId = provider("Local", refusedEndpoint())
@@ -147,7 +177,7 @@ class ModelEndpointGuardTest(
      * test above and break every installation.
      */
     @Test
-    fun `an ordinary endpoint is still called by all three`() {
+    fun `an ordinary endpoint is still called by all four`() {
         val providerId = provider("Local", "http://${server.address.hostString}:${server.address.port}")
 
         val answered = chat.complete(model(providerId, ModelKind.CHAT), listOf(ChatTurn("user", "Hi")))
@@ -164,7 +194,14 @@ class ModelEndpointGuardTest(
         assertThat(spoken).isInstanceOf(Speech.Spoke::class.java)
         assertThat(heard).isInstanceOf(Transcription.Heard::class.java)
         assertThat((heard as Transcription.Heard).text).isEqualTo("Hello.")
-        assertThat(asked).containsExactlyInAnyOrder("/chat/completions", "/audio/speech", "/audio/transcriptions")
+        val drawn = drawing.draw(model(providerId, ModelKind.IMAGE), "A red square")
+        assertThat(drawn).isInstanceOf(Picture.Drawn::class.java)
+        assertThat(asked).containsExactlyInAnyOrder(
+            "/chat/completions",
+            "/audio/speech",
+            "/audio/transcriptions",
+            "/images/generations",
+        )
     }
 
     /**

@@ -171,7 +171,14 @@ class ChatAPI(
                 throw ChatModelUnusableException("The model asked for a tool that could not be run")
             is ChatCompletion.Answered -> said
         }
-        chats.finishSend(id, answer.content, answer.reasoning, answer.reasoningMillis)
+        chats.finishSend(
+            id,
+            answer.content,
+            answer.reasoning,
+            answer.reasoningMillis,
+            answer.inputTokens,
+            answer.outputTokens,
+        )
         // Same as the streaming path: a first exchange earns the chat a name.
         runCatching { titles.nameFrom(id, text, answer.content) }
         val named = chats.session(id) ?: session
@@ -204,6 +211,9 @@ class ChatAPI(
             llmSessionId = session.llmSessionId,
             createdAt = session.createdAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
             lastMessageAt = session.lastMessageAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+            spentInputTokens = session.spentInputTokens,
+            spentOutputTokens = session.spentOutputTokens,
+            spentPictures = session.spentPictures,
         )
     }
 
@@ -267,6 +277,19 @@ data class ChatSessionView(
     val llmSessionId: Long?,
     val createdAt: String,
     val lastMessageAt: String?,
+    /**
+     * What the whole chat has read and written, which is what survives a
+     * reload. The last answer's own numbers are on [ChatAnswerView] and are
+     * gone the moment the page is left.
+     *
+     * Nought means nothing was recorded rather than that nothing was spent, and
+     * the screen draws nothing for it — the same rule the per-answer line
+     * follows.
+     */
+    val spentInputTokens: Long,
+    val spentOutputTokens: Long,
+    /** How many pictures were drawn here; a picture reports no tokens at all. */
+    val spentPictures: Int,
 )
 
 data class ChatMessageView(

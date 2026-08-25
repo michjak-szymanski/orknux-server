@@ -215,6 +215,7 @@ class LlmSessionAPI(
         actor = event.actor,
         content = event.content,
         result = event.result,
+        millis = event.millis,
         at = event.at.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
@@ -257,6 +258,16 @@ data class LlmSessionEventView(
      * that was asked for and never came back.
      */
     val result: String?,
+    /**
+     * How long a THINKING line's reasoning went on for, and null on every other
+     * kind.
+     *
+     * Null also means it is still arriving, on a thinking line - the duration is
+     * written once, when the model stops thinking. So a page reading a session
+     * after the fact can tell a block that was finished from one whose process
+     * died in the middle of it, which are two different things to draw.
+     */
+    val millis: Long?,
     /** ISO-8601 offset date-time. */
     val at: String,
 )

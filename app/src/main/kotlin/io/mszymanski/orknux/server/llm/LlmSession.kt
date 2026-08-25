@@ -18,9 +18,12 @@ import java.time.OffsetDateTime
 /**
  * What one line of a session is.
  *
- * Four, taken from the four things there are to record and stopping there. A
- * fifth would have to be something that is neither the agent, a tool, whoever
- * asked, nor the machinery, and there is no such speaker.
+ * Four of these are speakers - the agent, a tool, whoever asked, the machinery -
+ * and there is no fifth speaker. [THINKING] is the one that is not a speaker at
+ * all, and it is here rather than folded into [AGENT] for the reason V207 gives
+ * about the chat: reasoning is not something the agent said. Nothing puts it in
+ * front of a model, nothing copies it with an answer, and the one thing that
+ * reads it is a screen.
  */
 enum class LlmSessionEventKind {
     /** The agent's answer, as the model finally gave it. */
@@ -54,6 +57,24 @@ enum class LlmSessionEventKind {
      * stopping.
      */
     SYSTEM,
+
+    /**
+     * What a reasoning model thought on its way to a turn.
+     *
+     * Written while it is still arriving rather than once the turn is over,
+     * which is the whole of why it is here. A task takes minutes a turn and
+     * nothing between two turns was ever written down, so its page read as dead
+     * for the part of the work there was most to see. The line is opened on the
+     * first frame of reasoning, grown as the rest arrives, and settled with
+     * [LlmSessionEvent.millis] when the model stops thinking - so a page that
+     * reconnects mid-thought is handed a line that is still going, and one
+     * opened next week is handed the same reasoning with the time it took.
+     *
+     * Never said to a model. It is not in [LlmSessionRecorder.remembered]'s
+     * kinds and never will be: reasoning replayed as something the agent said
+     * is the same lie V207 refused to write into the chat's own thread.
+     */
+    THINKING,
 }
 
 /**
@@ -196,9 +217,18 @@ class LlmSessionEvent(
     @Column(nullable = false, length = ACTOR_LENGTH)
     val actor: String,
 
-    /** The words, the call's arguments, or the note. */
+    /**
+     * The words, the call's arguments, the note, or the reasoning so far.
+     *
+     * A `var` because two kinds of line are written before they are finished. A
+     * call is recorded before its tool runs and fills in [result] afterwards;
+     * a [LlmSessionEventKind.THINKING] line is opened on the first frame of
+     * reasoning and *replaced* as more arrives, because what a reader wants is
+     * one block of thinking rather than a line per frame - a model emits
+     * hundreds of those for one turn.
+     */
     @Column(columnDefinition = "text")
-    val content: String? = null,
+    var content: String? = null,
 
     /**
      * What a tool gave back, and null on every line that is not a call.
@@ -216,9 +246,56 @@ class LlmSessionEvent(
     @Column(columnDefinition = "text")
     var result: String? = null,
 
+    /**
+     * How long a [LlmSessionEventKind.THINKING] line's reasoning went on for,
+     * and null on every other kind.
+     *
+     * Null also means *still going*, on a thinking line: it is set once, when
+     * the model stops thinking, so there is one fact saying both how long it
+     * took and whether it is over. Two would be two that could disagree, and
+     * the one that mattered - is it still thinking - would be the one nothing
+     * checked.
+     *
+     * Measured the way the chat's is and for the reason written on
+     * `ModelChatClient.stream`: from the request going out to the last frame of
+     * reasoning, which is the wait somebody actually sat through, rather than
+     * between the first and last frames - a model that emits its whole
+     * reasoning in one frame has those at the same instant and would report
+     * nothing at all.
+     */
+    @Column(name = "millis")
+    var millis: Long? = null,
+
     @Column(nullable = false)
     val at: OffsetDateTime = OffsetDateTime.now(),
-)
+) {
+
+    /**
+     * Whether this line may still change after it was handed to a reader.
+     *
+     * Two kinds are written before they are finished, and a live view has to
+     * know which so it can look at them again: a call is recorded before its
+     * tool runs, and thinking is recorded while the model is still doing it.
+     * Everything else is written once and is done.
+     */
+    val unfinished: Boolean
+        get() = when (kind) {
+            LlmSessionEventKind.TOOL -> result == null
+            LlmSessionEventKind.THINKING -> millis == null
+            else -> false
+        }
+
+    /**
+     * What a follower compares to notice that a line it already holds has moved.
+     *
+     * Lengths and the duration rather than the text, because this is compared
+     * on every pass over every outstanding line and the text can be a
+     * workspace's entire issue list. Nothing this application writes shortens a
+     * line in place, so a length that has not moved is a line that has not.
+     */
+    val revision: String
+        get() = "${content?.length ?: -1}/${result?.length ?: -1}/${millis ?: -1}"
+}
 
 interface LlmSessionRepository : JpaRepository<LlmSession, Long> {
 

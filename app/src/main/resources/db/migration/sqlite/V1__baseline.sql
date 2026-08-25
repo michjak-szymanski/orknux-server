@@ -416,6 +416,9 @@ CREATE TABLE llm_session_event
     actor                        varchar(200) not null,
     content                      text,
     result                       text,
+    -- How long a THINKING line's reasoning went on for, and null while it is
+    -- still going. See V209 for why one column says both.
+    millis                       integer,
     at                           timestamp not null default CURRENT_TIMESTAMP,
     constraint llm_session_event_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE CASCADE
 );

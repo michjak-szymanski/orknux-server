@@ -132,6 +132,49 @@ class SessionTailTest(
     }
 
     /**
+     * A block of thinking arrives while it is still being thought, and again
+     * every time it has grown.
+     *
+     * The other half of what makes a tail more than forward-only, and the half
+     * a task's page was missing entirely: a turn is minutes long and most of
+     * that is a reasoning model thinking, so a page shown only lines it had not
+     * seen before had nothing at all to draw for the stretch there was most to
+     * watch.
+     *
+     * Three handings for one line, and each is a different fact: it started, it
+     * has more on it, it stopped. The last one is the one a page reads as the
+     * model having finished, because the duration is what settles the line.
+     */
+    @Test
+    fun `thinking arrives as it grows and again when it settles`() {
+        val watch = tail.follow(session, 0)
+        try {
+            val line = recorder.thinking(session, "Ada", "Let me look")
+
+            val opened = waitFor(watch)
+            assertThat(opened?.kind).isEqualTo(LlmSessionEventKind.THINKING)
+            assertThat(opened?.content).isEqualTo("Let me look")
+            // No duration is what "still thinking" is: one fact, so nothing can
+            // disagree with it.
+            assertThat(opened?.millis).isNull()
+            assertThat(opened?.unfinished).isTrue()
+
+            recorder.thinkingGrew(line, "Let me look at what failed last week")
+            val grew = waitFor(watch)
+            assertThat(grew?.id).isEqualTo(line)
+            assertThat(grew?.content).isEqualTo("Let me look at what failed last week")
+
+            recorder.thoughtFor(line, "Let me look at what failed last week", 4_200)
+            val settled = waitFor(watch)
+            assertThat(settled?.id).isEqualTo(line)
+            assertThat(settled?.millis).isEqualTo(4_200)
+            assertThat(settled?.unfinished).isFalse()
+        } finally {
+            tail.unfollow(watch)
+        }
+    }
+
+    /**
      * Two people watching one task cost what one does.
      *
      * The cost decision, pinned. Both followers are attached at different

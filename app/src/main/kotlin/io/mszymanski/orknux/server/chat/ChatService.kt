@@ -6,6 +6,7 @@ import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
+import io.mszymanski.orknux.server.llm.LlmSessionKey
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import io.mszymanski.orknux.server.llm.RememberedTurn
@@ -131,17 +132,25 @@ class ChatService(
      * goes to the model is [ChatMemoryRepository]'s thread and is untouched by
      * any of this, and what goes on the page is assembled here.
      *
-     * Only the stretch that was carried, though. An agent answering *in* this
-     * chat records its calls in the same session, and they are deliberately not
-     * put back: there is nowhere to put them. The thread keeps a role, some
-     * text and an order and no clock at all, so a later call could only be
-     * placed by matching words again - and a session is shared by key, so what
-     * was written in it after this chat opened may have been written by a run
-     * that has nothing to do with this chat. A lookup drawn under an answer
-     * that did not make it is a worse lie than the one this fixes, and unlike
-     * the carried stretch there is somewhere it is already right: the session's
-     * own page, which has every line of the conversation this chat is one end
-     * of.
+     * **And the calls this chat's own agent made, which used to be left out.**
+     * The reason they were is worth keeping, because it still holds for the
+     * other case: a session is shared by key, so a line written into somebody
+     * else's session after this chat opened may have been written by a run that
+     * has nothing to do with this chat, and a lookup drawn under an answer that
+     * did not make it is a worse lie than the one this fixes.
+     *
+     * A chat's own session is the one shape that argument does not cover. It is
+     * opened by [recording] under this chat's conversation id, which nothing
+     * else can compute and nothing else writes into - so every line in it was
+     * written by this chat, and there is no other run to confuse it with. That
+     * is the whole of why [ownSession] is asked, and why it is asked of the key
+     * rather than of a flag somebody would have to keep true.
+     *
+     * The placing is [carried]'s and is unchanged: the thread keeps a role,
+     * some text and an order and no clock at all, so the calls are put back by
+     * matching words and only inside the stretch that lined up. A chat whose
+     * thread does not line up shows the calls it can be sure of, which for a
+     * chat that has drifted is none - the same safe wrong answer as before.
      */
     fun messages(session: ChatSession): List<ChatMessage> {
         /*
@@ -156,9 +165,40 @@ class ChatService(
         val thread = history.findByConversationId(session.conversationId)
             .mapIndexed { at, message -> ChatMessage(message).copy(takes = earlier[at]?.map { it.content }.orEmpty()) }
         val llmSessionId = session.llmSessionId ?: return thread
-        // The same budget the copy was taken under, so the page shows the
-        // stretch that was actually carried rather than one merely like it.
-        return carried(thread, recorder.readBefore(llmSessionId, session.createdAt, budget(session)))
+        /*
+         * How far into the session to read, which is two different questions.
+         *
+         * A chat continuing somebody else's session reads it as it stood when
+         * this chat opened, under the same budget the copy was taken under, so
+         * the page shows the stretch that was actually carried rather than one
+         * merely like it.
+         *
+         * A chat that opened a session of its own reads the whole of it. There
+         * was no copy and so no boundary: every line in that session was
+         * written by this chat, and `createdAt` is before all of them - which
+         * is why an agent's lookups were on the screen while it made them and
+         * gone the moment somebody reloaded the page.
+         */
+        val upTo = if (ownSession(session)) OffsetDateTime.now() else session.createdAt
+        return carried(thread, recorder.readBefore(llmSessionId, upTo, budget(session)))
+    }
+
+    /**
+     * Whether the session this chat is bound to is one it opened itself.
+     *
+     * Asked of the key rather than kept in a column, because the key is already
+     * the answer: [recording] opens a chat's own session under [CHAT_PREFIX]
+     * and this chat's conversation id, which nothing else can compute. A
+     * session bound by [start] was named by whoever opened the chat and carries
+     * whatever key its own work chose.
+     *
+     * A column saying the same thing would be a second answer to a question the
+     * data already answers, and one that could be wrong.
+     */
+    private fun ownSession(session: ChatSession): Boolean {
+        val id = session.llmSessionId ?: return false
+        val mine = runCatching { LlmSessionKey.of(CHAT_PREFIX, session.conversationId) }.getOrNull() ?: return false
+        return llmSessions.findByIdOrNull(id)?.sessionKey == mine
     }
 
     /**

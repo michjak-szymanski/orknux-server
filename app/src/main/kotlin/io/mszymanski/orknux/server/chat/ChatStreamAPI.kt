@@ -7,6 +7,7 @@ import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.attachment.ChatAttachments
 import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.stream.ServerSentEvents
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.PathVariable
@@ -122,13 +123,16 @@ class ChatStreamAPI(
         giveUp: () -> Unit = {},
     ): StreamingResponseBody {
         return StreamingResponseBody { out ->
-            fun send(event: String, payload: Any) {
-                // One frame: the event name, the JSON, and the blank line that
-                // ends it. Flushed each time, or the answer arrives all at once
-                // anyway and the whole exercise is pointless.
-                out.write("event: $event\ndata: ${mapper.writeValueAsString(payload)}\n\n".toByteArray())
-                out.flush()
-            }
+            /*
+             * The frames themselves are [ServerSentEvents]'. They used to be
+             * written here by hand, and the task page's stream would have been a
+             * second copy of the same four lines - which is one more place for
+             * the flush to be left out, and leaving it out does not break
+             * anything visibly: the answer simply arrives all at once at the end,
+             * which looks like a slow model.
+             */
+            val stream = ServerSentEvents(out, mapper)
+            fun send(event: String, payload: Any) = stream.send(event, payload)
 
             // Set the moment the answer is safely in the history, so the
             // rescue below cannot run on top of one that did arrive.

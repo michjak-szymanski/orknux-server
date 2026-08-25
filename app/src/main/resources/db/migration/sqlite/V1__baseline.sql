@@ -340,7 +340,7 @@ CREATE TABLE issue_news
     actor                        varchar(120) not null,
     says                         text,
     -- Which comment `says` is a copy of, so a comment removed from the tracker
-    -- can be removed from the bells it was announced to. See V207.
+    -- can be removed from the bells it was announced to. See V208.
     comment_id                   integer,
     audience_kind                varchar(16) not null,
     audience_id                  varchar(120),

@@ -194,6 +194,18 @@ CREATE TABLE chat_answer_take
     constraint chat_answer_take_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE
 );
 
+CREATE TABLE chat_message_thinking
+(
+    id                           integer not null primary key autoincrement,
+    chat_session_id              integer not null,
+    message_index                integer not null,
+    content                      text not null,
+    millis                       integer not null default 0,
+    thought_at                   timestamp not null default CURRENT_TIMESTAMP,
+    constraint chat_message_thinking_at_uq UNIQUE (chat_session_id, message_index),
+    constraint chat_message_thinking_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE
+);
+
 CREATE TABLE chat_attachment
 (
     id                           integer not null primary key autoincrement,

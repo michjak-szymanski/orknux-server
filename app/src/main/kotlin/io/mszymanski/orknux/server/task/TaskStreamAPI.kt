@@ -31,12 +31,35 @@ import java.util.concurrent.ConcurrentHashMap
  * conversion nobody remembers to update.
  */
 data class TaskStepView(
-    val id: Long,
+    /**
+     * The line's id, as text.
+     *
+     * Text because that is what the page is already holding. `llmSessionEvents`
+     * types it `ID!`, which GraphQL puts on the wire as a string, so a page that
+     * drew the tail from there holds `"53"` - and a step frame carrying the
+     * number `53` beside it does not match on `===`. The page merges by id, so
+     * what that produced was a *second* copy of every line the stream sent
+     * again: the lookup drawn once running and once returned, and the block of
+     * reasoning drawn once frozen at its first sentence and once growing. The
+     * paragraph above this class always said the two had to be the same kind of
+     * thing; this is the half of it that was not.
+     */
+    val id: String,
     val kind: LlmSessionEventKind,
     val actor: String,
     val content: String?,
     /** What a call gave back. Null while its tool has not answered yet. */
     val result: String?,
+    /**
+     * How long a THINKING line thought for, and null while it is still
+     * thinking.
+     *
+     * The one field on a step that means two things, and deliberately: a page
+     * watching a task has to know both how long the model has been at it and
+     * whether it has stopped, and a second field saying the second thing would
+     * be one that could disagree with this.
+     */
+    val millis: Long?,
     val at: String,
 )
 
@@ -254,8 +277,12 @@ class TaskStreamAPI(
              * database and nothing further will be written, so holding the
              * connection open would be a thread spent on a page that will never
              * change - and the browser, told `end`, stops asking.
+             *
+             * Which is exactly why what is still owed has to go first. `end` is
+             * the one frame this connection cannot come back from.
              */
             if (state.status.over) {
+                lastWords(id, watch, sse)
                 sse.send("end", mapOf("reason" to "over"))
                 return
             }
@@ -270,6 +297,44 @@ class TaskStreamAPI(
         // this was the arrangement rather than a failure and comes back without
         // backing off.
         sse.send("again", mapOf("reason" to "stint"))
+    }
+
+    /**
+     * Everything still owed, before the one frame there is no coming back from.
+     *
+     * A task's last few lines and its ending are written within milliseconds of
+     * each other, and this loop notices the ending in a different way from how
+     * it notices a line: lines come off a queue the tail fills on a thread of
+     * its own, while the state is a row read here. So the order they are learnt
+     * in is not the order they happened in - the state can be read as finished
+     * while the lines that finished it are still on their way to the queue, and
+     * the connection would then say `end` with a call and a summary still owed
+     * and the browser told to stop asking. That is not a stint ending, which the
+     * cursor repairs; it is the account being wrong for ever, on a page whose
+     * whole promise is that it reads the same afterwards.
+     *
+     * Found by `task-live-check`: the page that watched a task held eight lines
+     * and one opened afterwards held eleven.
+     *
+     * The tail is stirred first, so this waits on a pass that is already running
+     * rather than on the two-second backstop, and it gives up after
+     * [QUIET_SLICES] slices with nothing on them - the task has stopped, so
+     * silence here means everything is delivered rather than that more is
+     * coming.
+     */
+    private fun lastWords(id: Long, watch: SessionWatch, sse: ServerSentEvents) {
+        tail.stirred(watch.session)
+        var quiet = 0
+        while (quiet < QUIET_SLICES) {
+            val line = watch.next(SLICE_MILLIS)
+            if (line == null) {
+                quiet += 1
+                continue
+            }
+            quiet = 0
+            sse.send(requireNotNull(line.id), "step", describe(line))
+            log.debug("Task {} was still owed a line when it ended", id)
+        }
     }
 
     /**
@@ -299,11 +364,12 @@ class TaskStreamAPI(
         task.requests.lastOrNull { it.decision == null }
 
     private fun describe(event: LlmSessionEvent) = TaskStepView(
-        id = requireNotNull(event.id),
+        id = requireNotNull(event.id).toString(),
         kind = event.kind,
         actor = event.actor,
         content = event.content,
         result = event.result,
+        millis = event.millis,
         at = event.at.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
@@ -327,6 +393,16 @@ class TaskStreamAPI(
 
         /** How long a connection may say nothing before it says nothing loudly. */
         const val QUIET_MILLIS = 20_000L
+
+        /**
+         * How many silent slices end the last drain of a finished task.
+         *
+         * Three, which is a second and a half after a stir that has already
+         * gone out - long enough for a pass in flight to land its rows, and
+         * short enough that a finished task is not a thread held open while
+         * nobody is owed anything.
+         */
+        const val QUIET_SLICES = 3
 
         val log = LoggerFactory.getLogger(TaskStreamAPI::class.java)
     }

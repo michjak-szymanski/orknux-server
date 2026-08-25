@@ -2204,6 +2204,14 @@ enum LlmSessionEventKind {
     that could not answer leaves one, so a transcript that goes quiet says why.
     """
     SYSTEM
+    """
+    What a reasoning model thought on its way to a turn.
+
+    Not something the agent said, and never put in front of a model. Written
+    while it is still arriving, so a page following a task draws it as it
+    happens; `millis` is null until the model stops thinking.
+    """
+    THINKING
 }
 
 "What a transcript is ordered by."
@@ -2230,6 +2238,12 @@ type LlmSessionEvent {
     whose tool has not answered, since the call is written before the tool runs.
     """
     result: String
+    """
+    How long a THINKING line's reasoning went on for, in milliseconds, and null
+    on every other kind - or on a thinking line the model has not finished, since
+    the duration is what settles it.
+    """
+    millis: Float
     "ISO-8601 offset date-time."
     at: String!
 }

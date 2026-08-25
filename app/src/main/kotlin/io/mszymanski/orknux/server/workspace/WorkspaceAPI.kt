@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.issue.IssueType
 import io.mszymanski.orknux.server.issue.IssueTypeAPI
 import io.mszymanski.orknux.server.issue.IssueTypeRepository
+import io.mszymanski.orknux.server.task.TaskProperties
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleNotFoundException
@@ -34,6 +35,8 @@ class WorkspaceAPI(
     private val models: ModelService,
     private val budgets: SessionMemoryBudgets,
     private val issueTypes: IssueTypeRepository,
+    /** Only to say what a task gets where the workspace has not said. */
+    private val taskProperties: TaskProperties,
 ) {
 
     /**
@@ -233,6 +236,18 @@ class WorkspaceAPI(
      */
     @SchemaMapping(typeName = "Workspace")
     fun administered(workspace: Workspace): Boolean = access.canAdminister(workspace)
+
+    /**
+     * What a task here gets when the workspace has said nothing.
+     *
+     * Sent so the field can *show* the number rather than describe where it
+     * comes from. "The installation's own" is a true sentence and a useless
+     * placeholder - it tells somebody looking at an empty box that a value
+     * exists somewhere and not what it is, which is the only thing they wanted
+     * to know. The box says 40, and typing over it is how you disagree.
+     */
+    @SchemaMapping(typeName = "Workspace")
+    fun taskMaxTurnsDefault(workspace: Workspace): Int = taskProperties.maxTurns
 
     /**
      * Chooses the model the workspace uses for its own small jobs.

@@ -144,7 +144,9 @@ class IssueTaskTest(
         ).execute()
             .path("workspaceIssue.comments[2].author").entity(String::class.java).isEqualTo("Responder")
             .path("workspaceIssue.comments[2].content").entity(String::class.java)
-            .isEqualTo("Started by AI. alice set me to work on this.")
+            // The task is linked, because this comment is the only place the
+            // issue mentions it and the work is happening on that page, live.
+            .isEqualTo("Started by AI. alice set me to work on this — [follow it](/workspace/$workspaceId/tasks/$taskId).")
 
         val lines = audit.findAll()
         assertThat(lines.filter { it.category == WorkspaceAuditCategory.TASK }.map { it.message })

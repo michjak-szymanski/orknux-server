@@ -330,6 +330,68 @@ class SlackReplyTriggerTest(
         assertThat(started()).hasSize(2)
     }
 
+    /**
+     * One Slack app is often several connection rows, and Slack chooses which of
+     * an app's sockets an event goes to.
+     *
+     * A workspace holding a row for sending and a row for listening opens two
+     * Socket Mode connections on the same app; Slack load-balances across them
+     * and stamps the winner's id on the event. A trigger bound to the other row
+     * then fired on some fraction of the messages it was set up for and was
+     * silent on the rest, with nothing anywhere to say why. Matching is on the
+     * Slack user behind the token, so which socket won stops mattering.
+     */
+    @Test
+    fun `a trigger on another row of the same Slack app still fires`() {
+        // The same token, so `auth.test` answers with the same Slack user - which
+        // is what makes these two rows one app rather than two.
+        val second = connection("The Same App Again", LISTENING_TOKEN)
+        botUsers.forget(second)
+
+        val trigger = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Answered In Thread",
+                type: INCOMING_CONNECTION, connectionId: $second, action: REPLY,
+                watchedConnectionIds: [$watchedId]
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+        instance(trigger)
+
+        // Delivered on the *other* row, which is Slack's choice and not ours.
+        publisher.publishEvent(reply(parentUserId = WATCHED_BOT))
+
+        assertThat(started()).hasSize(1)
+    }
+
+    /** And a row that is a different Slack app hears nothing of it. */
+    @Test
+    fun `a trigger on a different Slack app is left alone`() {
+        val other = connection("A Different App", SECOND_TOKEN)
+        botUsers.forget(other)
+        perToken[SECOND_TOKEN] = ok("second", SECOND_BOT)
+
+        val trigger = graphQlTester.document(
+            """
+            mutation {
+              createTrigger(input: {
+                workspaceId: $workspaceId, name: "Answered In Thread",
+                type: INCOMING_CONNECTION, connectionId: $other, action: REPLY,
+                watchedConnectionIds: [$watchedId]
+              }) { id }
+            }
+            """.trimIndent(),
+        ).execute().path("createTrigger.id").entity(Long::class.java).get()
+        instance(trigger)
+
+        publisher.publishEvent(reply(parentUserId = WATCHED_BOT))
+
+        assertThat(started()).isEmpty()
+    }
+
     private fun started() = runs.executions(workspaceId, null, null, null, null, null, null).content
 
     private fun reply(parentUserId: String?) = IncomingEvent(

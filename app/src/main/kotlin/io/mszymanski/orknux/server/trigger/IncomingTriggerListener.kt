@@ -2,7 +2,10 @@ package io.mszymanski.orknux.server.trigger
 
 import io.mszymanski.orknux.connector.connection.IncomingAction
 import io.mszymanski.orknux.connector.connection.IncomingEvent
+import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.connector.connection.SlackBotUsers
+import io.mszymanski.orknux.connector.connection.WorkspaceConnectionRepository
+import org.springframework.data.domain.Sort
 import org.slf4j.LoggerFactory
 import org.springframework.context.event.EventListener
 import org.springframework.stereotype.Component
@@ -27,12 +30,14 @@ class IncomingTriggerListener(
     private val botUsers: SlackBotUsers,
     /** Only to ask whether a trigger has ever fired. See [FiringOutcome.NOT_WATCHED]. */
     private val firings: TriggerFiringRepository,
+    /** To find the other rows that are the same Slack app. See [deliveredTo]. */
+    private val connections: WorkspaceConnectionRepository,
 ) {
 
     @EventListener
     fun onIncomingEvent(event: IncomingEvent) {
         val action = event.action.asTriggerAction()
-        val waiting = triggers.findByConnectionIdAndActionAndEnabledTrue(event.connectionId, action)
+        val waiting = triggers.findByConnectionIdInAndActionAndEnabledTrue(deliveredTo(event), action)
         if (waiting.isEmpty()) {
             log.debug("A {} on connection {} matched no trigger", action, event.connectionId)
             return
@@ -53,8 +58,67 @@ class IncomingTriggerListener(
                 continue
             }
             if (!toOneOfOurs(trigger, event)) continue
-            runs.fire(trigger, context)
+            /*
+             * One at a time, and one failing does not take the rest with it.
+             *
+             * Two triggers on one event are two separate decisions somebody
+             * made, and the second has done nothing wrong. Without this a
+             * condition that could not be evaluated, or a workflow whose start
+             * threw, ended the loop - so which triggers ran depended on the
+             * order the query happened to return them in, and nothing said so.
+             * `fire` records what it did, so a failure here is one this could
+             * not even write down: it is logged and the next trigger is asked.
+             */
+            runCatching { runs.fire(trigger, context) }
+                .onFailure { log.error("Trigger {} could not be fired", trigger.name, it) }
         }
+    }
+
+    /**
+     * Every connection an event could have been meant for, not only the one it
+     * arrived on.
+     *
+     * **One Slack app is often several connection rows.** A workspace may hold
+     * a row for sending and a row for listening, and the same app can be added
+     * to more than one workspace; each row with an app-level token opens its own
+     * Socket Mode connection. Slack load-balances an app's events across its
+     * open sockets and delivers each one to exactly *one* of them, of its own
+     * choosing - so the connection id stamped on an arriving message is a
+     * lottery between rows that are, to Slack, the same app.
+     *
+     * Matching on that id alone meant a trigger fired on some fraction of the
+     * messages it was set up for and was silent on the rest, with nothing
+     * anywhere to say why. This asks the question Slack is actually answering:
+     * which rows *are* this bot? The comparison is the Slack user id behind each
+     * bot token, which is what `SlackBotUsers` already caches for the reply
+     * guard, so the widening costs a lookup and no call.
+     *
+     * **The workspace is still the boundary.** Only rows in the workspace the
+     * event was delivered to are considered, so the same Slack app added to two
+     * workspaces does not let a trigger in one hear traffic recorded against
+     * the other - a workspace is who may see what, and Slack's routing is not a
+     * reason to widen that.
+     *
+     * Falls back to the single connection whenever the bot behind it cannot be
+     * resolved, which is the behaviour this replaces.
+     *
+     * **What a dead row costs.** Asking about every Slack row in the workspace
+     * means asking about the ones whose token Slack refuses, and a refusal is
+     * cached for thirty seconds rather than the full period a good answer is.
+     * So a workspace carrying an abandoned connection pays one `auth.test` per
+     * thirty seconds however busy the channel is - bounded, and the same shape
+     * the reply guard already had. It is not per message, which is the thing
+     * that would matter.
+     */
+    private fun deliveredTo(event: IncomingEvent): Set<Long> {
+        val arrived = setOf(event.connectionId)
+        return runCatching {
+            val bot = botUsers.identify(event.connectionId).userId ?: return arrived
+            val here = connections.findByWorkspaceId(event.workspaceId, Sort.unsorted())
+                .filter { it.type == ConnectionType.SLACK }
+                .mapNotNull { it.id }
+            arrived + botUsers.identify(here).filter { it.userId == bot }.map { it.connectionId }
+        }.getOrElse { arrived }
     }
 
     /**

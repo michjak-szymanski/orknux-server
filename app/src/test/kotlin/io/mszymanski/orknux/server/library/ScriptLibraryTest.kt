@@ -142,6 +142,44 @@ class ScriptLibraryTest(
     }
 
     /**
+     * UMD, which is what a great many small packages are actually published as.
+     *
+     * Under the wrapper `module` and `exports` are defined and `define` is not,
+     * so the file takes its CommonJS branch. The AMD branch is left dead on
+     * purpose: defining `define` would mean standing up a loader this sandbox
+     * does not have, and a package that only ever registers through AMD leaves
+     * nothing on `module.exports` and is refused for having no default export —
+     * which is a sentence, at the moment somebody chose the file.
+     *
+     * `this` is asserted through, and it is the reason the wrapper uses `.call`.
+     * A UMD head passes `this` as its global object, and at the top of an ES
+     * module `this` is `undefined`; leaving it so would break the branch that
+     * reads `root` for no reason at all.
+     */
+    @Test
+    fun `a UMD bundle takes its CommonJS branch and is read for what it exports`() {
+        load(
+            "cased",
+            """
+            (function (root, factory) {
+              if (typeof define === 'function' && define.amd) { define([], factory); }
+              else if (typeof module === 'object' && module.exports) { module.exports = factory(); }
+              else { root.cased = factory(); }
+            }(this, function () {
+              return { upper: function (t) { return String(t).toUpperCase(); }, tag: 'cased' };
+            }));
+            """.trimIndent(),
+        )
+
+        graphQlTester.document("""query { scriptLibraries { format callable members { name callable } } }""")
+            .execute()
+            .path("scriptLibraries[0].format").entity(String::class.java).isEqualTo("COMMONJS")
+            .path("scriptLibraries[0].callable").entity(Boolean::class.java).isEqualTo(false)
+            .path("scriptLibraries[0].members[*].name").entityList(String::class.java)
+            .containsExactly("tag", "upper")
+    }
+
+    /**
      * The same rule a package is held to, at the other door.
      *
      * A file being run as CommonJS that calls `require` names a second package.

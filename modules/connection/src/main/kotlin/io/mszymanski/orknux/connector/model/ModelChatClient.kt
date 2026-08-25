@@ -70,6 +70,16 @@ sealed interface ChatCompletion {
         /** What the provider said it charged for; zero when it said nothing. */
         val inputTokens: Long = 0,
         val outputTokens: Long = 0,
+        /**
+         * What the model thought on the way, where it emitted any.
+         *
+         * Empty for every model that is not a reasoning one, and for a
+         * reasoning model whose provider does not hand the thinking over — see
+         * [ThinkTags] for the three shapes it arrives in. Never part of
+         * [content]: it is not what the model said, and a caller that puts the
+         * two together has undone the whole of the separation.
+         */
+        val reasoning: String = "",
     ) : ChatCompletion
 
     /**
@@ -84,6 +94,12 @@ sealed interface ChatCompletion {
         val millis: Long,
         val inputTokens: Long = 0,
         val outputTokens: Long = 0,
+        /**
+         * What it thought before deciding to look something up. A reasoning
+         * model does most of its thinking here rather than in the round that
+         * finally answers, which is why this is on both shapes.
+         */
+        val reasoning: String = "",
     ) : ChatCompletion
 
     /**
@@ -181,8 +197,23 @@ class ModelChatClient(
      * without it the screen is blank for that minute.
      *
      * [onChunk] runs on the calling thread, between reads.
+     *
+     * @param onThinking the same, for a reasoning model's thinking, which
+     *   arrives in frames of its own and is handed over in frames of its own.
+     *   Split here rather than by the caller because this is the layer that
+     *   knows the provider's shape, and because a caller that had to do the
+     *   splitting would be a caller that could forget to — which is the answer
+     *   with the thinking read out as part of it.
+     *
+     *   Default does nothing, which is right for every caller that has nowhere
+     *   to put it: the thinking is dropped rather than folded into the answer.
      */
-    fun stream(modelId: Long, turns: List<ChatTurn>, onChunk: (String) -> Unit): ChatCompletion {
+    fun stream(
+        modelId: Long,
+        turns: List<ChatTurn>,
+        onThinking: (String) -> Unit = {},
+        onChunk: (String) -> Unit,
+    ): ChatCompletion {
         val call = prepare(modelId, turns, streaming = true)
         if (call is Prepared.Failed) return ChatCompletion.Failed(call.reason)
         val ready = call as Prepared.Call
@@ -199,8 +230,28 @@ class ModelChatClient(
             }
 
             val whole = StringBuilder()
+            val thinking = StringBuilder()
             var input = 0L
             var output = 0L
+            /*
+             * One splitter for the whole stream, because a tag arrives in
+             * pieces. See [ThinkTags]: a provider is free to send `<thi` and
+             * `nk>` in two frames, and a splitter built per frame would put
+             * both of them on screen.
+             */
+            val tags = ThinkTags()
+
+            fun hand(piece: ModelPiece) {
+                if (piece.thought.isNotEmpty()) {
+                    thinking.append(piece.thought)
+                    onThinking(piece.thought)
+                }
+                if (piece.said.isNotEmpty()) {
+                    whole.append(piece.said)
+                    onChunk(piece.said)
+                }
+            }
+
             response.body().bufferedReader().use { reader ->
                 reader.lineSequence().forEach { line ->
                     // The counts come in a frame of their own, usually the last
@@ -211,19 +262,35 @@ class ModelChatClient(
                         if (frameInput > 0) input = frameInput
                         if (frameOutput > 0) output = frameOutput
                     }
-                    val piece = chunkOf(line, ready.anthropic) ?: return@forEach
-                    whole.append(piece)
-                    onChunk(piece)
+                    val frame = pieceOf(line, ready.anthropic) ?: return@forEach
+                    // Thinking the provider named is thinking: it does not go
+                    // through the tag splitter, which is only for the shape
+                    // where nobody named it.
+                    if (frame.thought.isNotEmpty()) hand(ModelPiece(thought = frame.thought))
+                    if (frame.said.isNotEmpty()) hand(tags.feed(frame.said))
                 }
             }
+            hand(tags.finish())
             val millis = (System.nanoTime() - started) / 1_000_000
-            if (whole.isEmpty()) {
-                // A stream that carried no text is a round that produced
-                // nothing, not a request the provider objected to - the same
-                // question asked again is as likely to be answered as not.
+            if (whole.isBlank()) {
+                /*
+                 * A stream that carried no text is a round that produced
+                 * nothing, not a request the provider objected to - the same
+                 * question asked again is as likely to be answered as not.
+                 *
+                 * Thinking does not count as text, and deliberately: a model
+                 * that thought and then said nothing has not answered, and
+                 * showing its reasoning under a silence would read as an answer
+                 * somebody has to interpret. Blank rather than empty for the
+                 * same reason, since a closing tag usually leaves a newline
+                 * behind it.
+                 */
                 ChatCompletion.Failed("The provider answered with no message", permanent = false)
             } else {
-                counted(modelId, ChatCompletion.Answered(whole.toString(), millis, input, output))
+                counted(
+                    modelId,
+                    ChatCompletion.Answered(whole.toString(), millis, input, output, thinking.toString()),
+                )
             }
         } catch (failure: Exception) {
             // Nothing came back at all: a socket that closed, a name that did
@@ -241,9 +308,20 @@ class ModelChatClient(
      *
      * Anthropic sends the text on `content_block_delta` and other things on
      * other events, so the field is read rather than the event name: a delta
-     * with no `text` is a delta about something else.
+     * with no `text` is a delta about something else. Its thinking arrives on
+     * the same event under `delta.thinking`, which is why reading the field is
+     * the right rule for both halves rather than a shortcut for one.
+     *
+     * The OpenAI shape has no thinking in the specification and two spellings
+     * in practice. `reasoning_content` is DeepSeek's, which vLLM, SGLang and
+     * llama.cpp copied; `reasoning` is what a handful of gateways send instead.
+     * Both are read, in that order, because a server that sends neither sends
+     * nothing and a server that sends one does not send the other. OpenAI's own
+     * chat-completions endpoint sends no reasoning text at all — only a token
+     * count — so a model behind it thinks in silence, and that is the
+     * provider's decision rather than something this can recover.
      */
-    private fun chunkOf(line: String, anthropic: Boolean): String? {
+    private fun pieceOf(line: String, anthropic: Boolean): ModelPiece? {
         if (!line.startsWith(DATA_PREFIX)) return null
         val payload = line.removePrefix(DATA_PREFIX).trim()
         if (payload.isEmpty() || payload == DONE) return null
@@ -251,11 +329,20 @@ class ModelChatClient(
         return runCatching {
             val tree = mapper.readTree(payload)
             if (anthropic) {
-                tree.path("delta").path("text").stringValue()
+                val delta = tree.path("delta")
+                ModelPiece(
+                    said = delta.path("text").stringValue().orEmpty(),
+                    thought = delta.path("thinking").stringValue().orEmpty(),
+                )
             } else {
-                tree.path("choices").firstOrNull()?.path("delta")?.path("content")?.stringValue()
+                val delta = tree.path("choices").firstOrNull()?.path("delta") ?: return@runCatching null
+                ModelPiece(
+                    said = delta.path("content").stringValue().orEmpty(),
+                    thought = delta.path("reasoning_content").stringValue()
+                        ?: delta.path("reasoning").stringValue().orEmpty(),
+                )
             }
-        }.getOrNull()?.ifEmpty { null }
+        }.getOrNull()?.takeIf { it.said.isNotEmpty() || it.thought.isNotEmpty() }
     }
 
     /**
@@ -279,28 +366,45 @@ class ModelChatClient(
                 )
             }
             val (input, output) = tokensOf(response.body())
+            val named = if (ready.anthropic) anthropicReasoning(response.body()) else openAiReasoning(response.body())
 
             // A model that asked for tools has not answered yet, and its text —
             // if it sent any — is thinking aloud rather than a reply.
             val asked = if (ready.anthropic) anthropicCalls(response.body()) else openAiCalls(response.body())
             if (asked.isNotEmpty()) {
-                val said = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
+                val raw = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
                     .orEmpty()
+                val split = split(raw, named)
                 return counted(
                     modelId,
                     ChatCompletion.CalledTools(
                         calls = asked,
-                        turn = ChatTurn("assistant", said, asked = asked),
+                        /*
+                         * The turn handed back carries what the model said and
+                         * not what it thought. It goes into the next request as
+                         * the assistant turn that asked for these tools, and a
+                         * provider handed back its own reasoning as ordinary
+                         * assistant text either rejects it - Anthropic checks a
+                         * signature on a thinking block - or reads it as the
+                         * model's words, which is exactly the confusion between
+                         * thinking and saying that this whole change is about.
+                         */
+                        turn = ChatTurn("assistant", split.said, asked = asked),
                         millis = millis,
                         inputTokens = input,
                         outputTokens = output,
+                        reasoning = split.thought,
                     ),
                 )
             }
 
-            val content = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
+            val raw = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
                 ?: return ChatCompletion.Failed("The provider answered with no message", permanent = false)
-            counted(modelId, ChatCompletion.Answered(content, millis, input, output))
+            val split = split(raw, named)
+            if (split.said.isBlank()) {
+                return ChatCompletion.Failed("The provider answered with no message", permanent = false)
+            }
+            counted(modelId, ChatCompletion.Answered(split.said, millis, input, output, split.thought))
         } catch (failure: Exception) {
             // Nothing came back at all: a socket that closed, a name that did
             // not resolve, the request timeout running out on a model still
@@ -680,6 +784,52 @@ class ModelChatClient(
             )
         }
     }.getOrDefault(emptyList())
+
+    /**
+     * What a whole answer said and what it thought, once both are in hand.
+     *
+     * @param named the reasoning the provider put in a field of its own, which
+     *   is authoritative where there is any: a provider that named it does not
+     *   also wrap it in tags. Only where there is none does the leading
+     *   `<think>` block get looked for, which is the shape a local server
+     *   passing a chat template through produces. See [ThinkTags].
+     */
+    private fun split(content: String, named: String): ModelPiece {
+        if (named.isNotBlank()) return ModelPiece(said = content, thought = named)
+        val tags = ThinkTags()
+        val piece = tags.feed(content)
+        val rest = tags.finish()
+        return ModelPiece(said = piece.said + rest.said, thought = piece.thought + rest.thought)
+    }
+
+    /**
+     * The thinking the OpenAI shape names, under either of the two spellings
+     * that exist in the wild. See [pieceOf] for which servers send which.
+     */
+    private fun openAiReasoning(body: String): String = runCatching {
+        val message = mapper.readTree(body).path("choices").firstOrNull()?.path("message")
+            ?: return@runCatching ""
+        message.path("reasoning_content").stringValue()
+            ?: message.path("reasoning").stringValue().orEmpty()
+    }.getOrDefault("")
+
+    /**
+     * And Anthropic's, which is a content block beside the text ones rather
+     * than a field.
+     *
+     * Read even though nothing here asks for it. Extended thinking is only
+     * emitted when the request carries a `thinking` budget, and this does not
+     * send one - that is a per-model setting with a token cost attached and is
+     * not something to turn on for everybody from here. So this is the half
+     * that costs nothing and is correct the day somebody adds the other half,
+     * rather than a second place that would then have to be found.
+     */
+    private fun anthropicReasoning(body: String): String = runCatching {
+        val blocks = mapper.readTree(body).path("content") as? ArrayNode ?: return@runCatching ""
+        blocks.filter { it.path("type").stringValue() == "thinking" }
+            .mapNotNull { it.path("thinking").stringValue() }
+            .joinToString("")
+    }.getOrDefault("")
 
     private fun openAiContent(body: String): String? = runCatching {
         mapper.readTree(body).path("choices").firstOrNull()

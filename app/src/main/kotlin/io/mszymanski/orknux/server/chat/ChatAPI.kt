@@ -75,24 +75,28 @@ class ChatAPI(
                 workspaceId = input.workspaceId,
                 userId = currentUser(),
                 title = input.title ?: "New chat",
-                modelId = input.modelId ?: defaultModel(input.workspaceId),
+                /*
+                 * Passed through as it arrived, null and all.
+                 *
+                 * There used to be a default worked out here - the first
+                 * enabled model in the workspace - and because it was never
+                 * null where the workspace had any model at all, it shadowed
+                 * the one in `ChatService.start`, which is the one that knows
+                 * what this person last chatted with. So a new chat always
+                 * opened on whichever model sorted first, whatever anybody had
+                 * been talking to (issue #273). It also did not check the
+                 * model's kind, so a workspace whose alphabetically first model
+                 * transcribes audio opened chats on a model the picker itself
+                 * refuses to offer.
+                 *
+                 * Deciding it here was wrong twice over: this is a controller,
+                 * and the decision needs the person and their chats.
+                 */
+                modelId = input.modelId,
                 llmSessionId = input.llmSessionId,
             ),
         )
     }
-
-    /**
-     * What a new chat talks to when nobody said.
-     *
-     * A chat with no model cannot be sent to, so opening one and typing gets an
-     * error instead of an answer — for no reason, when the workspace has a model
-     * sitting right there. The first active one, in the order the picker shows
-     * them, so the choice is at least the obvious one. Still null when the
-     * workspace has none, which is a thing to fix by adding a model rather than
-     * by guessing.
-     */
-    private fun defaultModel(workspaceId: Long): Long? =
-        models.models(workspaceId).firstOrNull { it.enabled }?.id
 
     @MutationMapping
     fun renameChat(@Argument id: Long, @Argument title: String): ChatSessionView {

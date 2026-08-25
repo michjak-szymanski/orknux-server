@@ -66,10 +66,12 @@ class ChatStreamAPI(
     /**
      * Says something, and streams the answer back.
      *
-     * Three events are sent: `chunk` for each piece as it lands, `done` with
-     * what the turn took and what it cost, and `error` when it could not answer.
-     * The whole answer is written to the history when the stream ends, so a chat
-     * reloaded afterwards reads exactly as it did live.
+     * Six events are sent: `chunk` for each piece of the answer as it lands,
+     * `thinking` for each piece of a reasoning model's thinking, `call` for a
+     * lookup the moment an agent makes one, `called` for what that lookup gave
+     * back, `done` with what the turn took and what it cost, and `error` when it
+     * could not answer. The whole answer is written to the history when the
+     * stream ends, so a chat reloaded afterwards reads exactly as it did live.
      *
      * Access is checked before anything is written, because after the first byte
      * the status code has already been sent and there is no way to say no.
@@ -158,16 +160,28 @@ class ChatStreamAPI(
 
             try {
                 /*
-                 * An agent answers through the tool loop, which cannot stream:
-                 * a round that asks for a lookup produces no text worth showing,
-                 * and what to say is only settled once the loop ends. So its
-                 * answer arrives as one chunk. The screen is the same either
-                 * way; what differs is that an agent thinks before it types.
+                 * An agent's answer still arrives as one chunk, and its working
+                 * does not.
+                 *
+                 * The tool loop cannot stream text: a round that asks for a
+                 * lookup produces no answer worth showing, and what to say is
+                 * only settled once the loop ends. What it *can* report is what
+                 * it is doing - which lookup it just made, what came back, and
+                 * what it thought on the way - and those are the things
+                 * somebody watching a minute of silence wanted. So the answer
+                 * lands whole and the working lands as it happens.
+                 *
+                 * A bare model calls no tools; what it can have is thinking,
+                 * and that streams beside the answer.
                  */
                 val answer = if (start.agentId == null) {
-                    client.stream(start.modelId, start.turns) { piece -> send("chunk", mapOf("text" to piece)) }
+                    client.stream(
+                        start.modelId,
+                        start.turns,
+                        onThinking = { piece -> send("thinking", mapOf("text" to piece)) },
+                    ) { piece -> send("chunk", mapOf("text" to piece)) }
                 } else {
-                    chats.ask(start).also { whole ->
+                    chats.ask(start, watching { event, payload -> send(event, payload) }).also { whole ->
                         if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                     }
                 }
@@ -219,6 +233,32 @@ class ChatStreamAPI(
                 if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
             }
         }
+    }
+
+    /**
+     * The agent's round, turned into frames for whoever is reading.
+     *
+     * A thin adapter and deliberately nothing more: [RoundWatch] is told these
+     * things beside the [io.mszymanski.orknux.server.llm.LlmSessionRecorder]
+     * calls that keep them, so nothing here decides what is recorded and
+     * nothing here can lose a record by failing. What it does decide is the
+     * vocabulary, which is the chat's own — a task's stream says `step` about
+     * the same facts, because a task page is following a durable log and this
+     * is following one answer being composed.
+     *
+     * `call` carries `at`, which is where the call came in the round. `called`
+     * carries the same `at` and is how the browser finds the line to fill in.
+     * See [RoundWatch] for why it is a counter rather than the provider's own
+     * call id or the session line's.
+     */
+    private fun watching(send: (String, Any) -> Unit) = object : RoundWatch {
+        override fun thinking(text: String) = send("thinking", mapOf("text" to text))
+
+        override fun called(at: Int, tool: String, arguments: String) =
+            send("call", mapOf("at" to at, "tool" to tool, "arguments" to arguments))
+
+        override fun returned(at: Int, result: String, failed: Boolean) =
+            send("called", mapOf("at" to at, "result" to result, "failed" to failed))
     }
 
     private fun requireOwn(session: ChatSession) = ownership.requireOwn(session)

@@ -204,7 +204,30 @@ class AgentTools(
         parameters = descriptor.parameters.map { ToolParameterSpec(it.name, it.description, it.required) },
     )
 
-    private companion object {
-        val log = LoggerFactory.getLogger(AgentTools::class.java)
+    companion object {
+        private val log = LoggerFactory.getLogger(AgentTools::class.java)
+
+        /** Its own, because this is asked of text rather than of a running tool. */
+        private val reader = ObjectMapper()
+
+        /**
+         * Whether what came back is this class saying the tool could not be
+         * run, rather than the tool's own answer.
+         *
+         * Every refusal above is written as `{"error": …}` and nothing else
+         * here writes that shape, so the question is answerable from the text —
+         * which is what a caller has. Asked here rather than spelled out again
+         * by whoever wants to know, so there is one description of a failed
+         * call and it sits beside the four places that produce one.
+         *
+         * A tool of the workspace's own that chooses to answer `{"error": …}`
+         * reads as a failure too. That is the right answer rather than a
+         * limitation: a tool saying that is a tool reporting it could not do
+         * what was asked, and the reader wants to know either way.
+         */
+        fun failed(result: String): Boolean = runCatching {
+            val tree = reader.readTree(result)
+            tree.isObject && tree.size() == 1 && tree.has("error")
+        }.getOrDefault(false)
     }
 }

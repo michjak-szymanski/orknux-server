@@ -197,7 +197,7 @@ class ChatStreamAPI(
                         send("error", mapOf("reason" to "The model asked for a tool that could not be run"))
                     }
                     is ChatCompletion.Answered -> {
-                        chats.finishSend(id, answer.content)
+                        chats.finishSend(id, answer.content, answer.reasoning, answer.reasoningMillis)
                         kept = true
                         // Naming it is not part of the answer, so a companion
                         // model that will not answer costs the chat nothing.

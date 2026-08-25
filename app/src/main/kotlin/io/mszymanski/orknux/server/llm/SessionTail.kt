@@ -108,10 +108,32 @@ class SessionWatch(val session: Long, from: Long) {
         return had != event.revision
     }
 
+    /**
+     * Watch a line the reader already drew for itself, behind the cursor.
+     *
+     * The cursor only ever moves forwards, so a line older than it is never
+     * offered - which is right for a line that is finished and wrong for one
+     * that is not. A page drawing a task reads the tail with `llmSessionEvents`
+     * and follows on from the newest line it holds, and the newest line of a
+     * task being worked on is very often exactly the unfinished one: a lookup
+     * still running, or the block of reasoning the model is in the middle of.
+     * Without this the page would hold that line frozen at whatever it said
+     * when the page loaded, for ever, while every line after it arrived
+     * perfectly.
+     *
+     * Registered as never having been seen rather than at its current version,
+     * so the first pass hands it over. The reader's copy is older than the row
+     * by definition - it was read in a different query at a different moment -
+     * and one line sent again is cheaper than working out whether it had to be.
+     */
+    fun expect(id: Long) {
+        if (outstanding.size < OUTSTANDING) outstanding[id] = UNSEEN
+    }
+
     /** The next line owed, or null when nothing arrived in that long. */
     fun next(millis: Long): LlmSessionEvent? = waiting.poll(millis, TimeUnit.MILLISECONDS)
 
-    private companion object {
+    internal companion object {
         /**
          * How far a follower may fall behind.
          *
@@ -122,6 +144,16 @@ class SessionWatch(val session: Long, from: Long) {
         const val DEPTH = 512
 
         const val OUTSTANDING = 64
+
+        /**
+         * The version of a line this follower has never actually been handed.
+         *
+         * No real [LlmSessionEvent.revision] is empty - it is three fields with
+         * separators between them - so nothing can collide with it, and
+         * anything registered under it differs from whatever the row says and
+         * is therefore sent on the next pass.
+         */
+        const val UNSEEN = ""
     }
 }
 
@@ -179,6 +211,21 @@ class SessionTail(private val events: LlmSessionEventRepository) : DisposableBea
      */
     fun follow(session: Long, from: Long): SessionWatch {
         val watch = SessionWatch(session, from)
+        // Anything already written that has not finished saying what it will
+        // say. See [SessionWatch.expect]: the newest line of a task being
+        // worked on is usually the unfinished one, so a reader that followed on
+        // from it would hold it frozen for ever.
+        if (from > 0) {
+            try {
+                events.unfinished(session, from, PageRequest.of(0, SessionWatch.OUTSTANDING))
+                    .forEach { line -> line.id?.let(watch::expect) }
+            } catch (failure: Exception) {
+                // The follower still gets everything written from here on. What
+                // is lost is one line's later versions, which is the state this
+                // was in before any of it existed.
+                log.warn("What was unfinished in session {} could not be read", session, failure)
+            }
+        }
         watched.computeIfAbsent(session) { ConcurrentHashMap.newKeySet() }.add(watch)
         stirred(session)
         return watch

@@ -1028,6 +1028,8 @@ type Mutation {
     setWorkspaceTranscriptionModel(workspaceId: ID!, modelId: ID): Workspace!
     "Chooses the model the workspace speaks with; null takes the speaker away."
     setWorkspaceSpeechModel(workspaceId: ID!, modelId: ID): Workspace!
+    "Chooses the model the workspace draws with; null takes the picture button away."
+    setWorkspaceImageModel(workspaceId: ID!, modelId: ID): Workspace!
     "Chooses the model behind the quick chat; null takes the button away."
     setWorkspaceQuickChatModel(workspaceId: ID!, modelId: ID): Workspace!
     "Whether the quick chat may start things, or only look them up."
@@ -1120,6 +1122,24 @@ type Mutation {
     deleteChat(id: ID!): Boolean!
     "Says something and answers it, with the whole thread as context."
     sendChatMessage(id: ID!, text: String!): ChatAnswer!
+    """
+    Draws a picture from a description, and puts it in the chat.
+
+    A door of its own rather than a flag on `sendChatMessage`, because it is a
+    different model at a different endpoint: the chat model does not draw, and
+    the image model does not converse.
+
+    The picture is filed as an attachment on this chat and the exchange is
+    written into the history as two lines - the description, and a markdown
+    image pointing at `/api/attachments/{id}`. So it is there when the chat is
+    opened again, with nothing else to keep in step.
+
+    Refused in a sentence when the workspace has chosen no image model, when
+    attachments are turned off - a drawn picture would have nowhere to live -
+    and when the provider would not or could not draw it, in its own words where
+    it gave any.
+    """
+    drawChatPicture(chatId: ID!, prompt: String!): ChatPicture!
     "Defines a default connection, assigned to workspaces created from now on."
     createConnection(input: ConnectionInput!): Connection!
     "Also updates the copy held by every workspace provisioned with this default."
@@ -1305,6 +1325,12 @@ type Workspace {
     not offered, which is right where there is nothing to read it with.
     """
     speechModelId: ID
+    """
+    The model that draws a picture for the picture button in a chat. Null means
+    the button is not offered, which is right where there is nothing to draw
+    with.
+    """
+    imageModelId: ID
     """
     The model behind the quick chat beside the page. Null means the button is
     not offered.
@@ -2441,6 +2467,30 @@ One conversation. The messages are not here: they live in Spring AI's chat
 memory store, keyed by a conversation id, which is what lets a workflow run
 key one the same way and have every agent in it share a single thread.
 """
+"""
+What was drawn, and what it cost.
+
+The bytes are not here: `attachmentId` is asked for at `/api/attachments/{id}`,
+exactly as a file somebody uploaded is, and it is refused to anybody but the
+person whose chat this is.
+"""
+type ChatPicture {
+    "The attachment the picture was filed as."
+    attachmentId: ID!
+    "What was asked for, trimmed."
+    prompt: String!
+    "The line written into the chat as the answer: a markdown image."
+    said: String!
+    "How long the provider took to draw it."
+    millis: Float!
+    """
+    What it cost at the per-image price recorded on the model, or null when it
+    carries none. Null rather than zero: no price recorded is not a price of
+    nothing, and an image model has no tokens to be costed the ordinary way.
+    """
+    cost: Float
+}
+
 type ChatSession {
     id: ID!
     workspaceId: ID!
@@ -3375,6 +3425,13 @@ enum ModelKind {
     TRANSCRIPTION
     "Text in, speech out: what reads an answer aloud."
     SPEECH
+    """
+    Text in, a picture out: what the picture button in a chat draws with.
+
+    Its own endpoint rather than chat completions under another path, which is
+    why a provider that has none is refused in a sentence rather than called.
+    """
+    IMAGE
 }
 
 "How often a token quota starts again; NEVER makes it a total rather than a rate."
@@ -3467,6 +3524,13 @@ type Model {
     outputCostPerMillion: Float
     "Which voice a SPEECH model reads in; null sends none and takes the provider's."
     voice: String
+    """
+    What one picture costs on an IMAGE model. Null means nobody recorded it,
+    which is not the same as free - these models are billed per picture and
+    report no tokens, so the per-million prices beside this would cost a month
+    of drawing at nothing.
+    """
+    imageCostPerImage: Float
 }
 
 "One day of the usage chart."
@@ -3581,6 +3645,8 @@ input CreateModelInput {
     outputCostPerMillion: Float
     "Which voice a SPEECH model reads in; the names are the provider's own."
     voice: String
+    "What one picture costs on an IMAGE model; null is not recorded, which is not free."
+    imageCostPerImage: Float
 }
 
 input UpdateModelInput {
@@ -3593,6 +3659,8 @@ input UpdateModelInput {
     outputCostPerMillion: Float
     "Which voice a SPEECH model reads in; the names are the provider's own."
     voice: String
+    "What one picture costs on an IMAGE model; null is not recorded, which is not free."
+    imageCostPerImage: Float
 }
 
 "The Quotas and Limits card. Null is no limit, which is what an emptied box means."

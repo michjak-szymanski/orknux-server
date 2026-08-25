@@ -28,6 +28,19 @@ enum class ModelKind {
 
     /** Text in, speech out: what reads an answer aloud. */
     SPEECH,
+
+    /**
+     * Text in, a picture out: what the picture button in a chat draws with.
+     *
+     * The fourth kind beyond the ordinary one, and the odd one of the four in
+     * one respect: it is not the chat completions API under another path. Image
+     * generation is its own endpoint with its own body, which is why
+     * [ModelImageClient] exists beside the chat, speech and transcription
+     * clients rather than inside one of them, and why a provider type that has
+     * no such endpoint is refused in a sentence rather than called and left to
+     * answer 404.
+     */
+    IMAGE,
 }
 
 /** How often a token quota starts again. */
@@ -312,6 +325,22 @@ class LlmModel(
      */
     @Column(length = 80)
     var voice: String? = null,
+
+    /**
+     * What one picture costs on a [ModelKind.IMAGE] model; null is not recorded.
+     *
+     * Its own price rather than the two beside it because these models are not
+     * billed per token — they are billed per image, at a size — and an image
+     * call reports no tokens at all. Costing one with [inputCostPerMillion]
+     * would multiply a price by nought and report a month of drawing as free,
+     * which is the one number this must never print.
+     *
+     * Null rather than zero for the reason [ModelPricing] gives throughout: no
+     * price recorded is not a price of nothing, and a caller shows nothing where
+     * it gets null.
+     */
+    @Column(name = "image_cost_per_image", precision = 12, scale = 4)
+    var imageCostPerImage: BigDecimal? = null,
 )
 
 /**

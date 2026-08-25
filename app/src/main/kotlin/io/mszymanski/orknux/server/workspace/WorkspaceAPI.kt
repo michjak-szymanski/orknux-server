@@ -318,6 +318,35 @@ class WorkspaceAPI(
     }
 
     /**
+     * Chooses the model the workspace draws with.
+     *
+     * The third of the trio, refused the same way: only an image model will do,
+     * since a chat model handed a prompt writes about the picture instead of
+     * drawing it and there is no endpoint on it that would. Null takes the
+     * picture button out of the composer.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceImageModel(@Argument workspaceId: Long, @Argument modelId: Long?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        val chosen = modelId?.let { models.model(it) ?: throw ModelNotFoundForWorkspaceException(it) }
+        if (chosen != null && chosen.workspaceId != workspaceId) throw ModelNotFoundForWorkspaceException(modelId)
+        if (chosen != null && chosen.kind != ModelKind.IMAGE) {
+            throw ModelNotImageException(chosen.name)
+        }
+
+        workspace.imageModelId = chosen?.id
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (chosen == null) "Image model cleared" else "Image model set to ${chosen.name}",
+        )
+        return workspace
+    }
+
+    /**
      * Chooses the model behind the quick chat.
      *
      * A chat model, unlike the two above: this one is asked questions and calls
@@ -603,6 +632,11 @@ class ModelNotChatException(name: String) : RuntimeException(
 class ModelNotSpeechException(name: String) : RuntimeException(
     "$name is not a speech model. Reading an answer aloud needs one that turns text into speech; " +
         "add one under Models with the speech kind.",
+)
+
+class ModelNotImageException(name: String) : RuntimeException(
+    "$name is not an image model. Drawing a picture needs one that turns text into an image; " +
+        "add one under Models with the image kind.",
 )
 
 class ModelNotFoundForWorkspaceException(id: Long) :

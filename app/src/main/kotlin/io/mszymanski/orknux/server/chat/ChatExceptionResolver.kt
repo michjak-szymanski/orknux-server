@@ -24,6 +24,14 @@ class ChatExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ChatLlmSessionUnusableException,
             is ChatDisabledException,
             is ChatNothingToRegenerateException,
+            // A picture that could not be drawn is the caller's to act on -
+            // choose a model, turn attachments on, describe something else - and
+            // it must arrive as a sentence with a code beside it. The picture is
+            // the whole of the request, so an INTERNAL_ERROR here is a blank
+            // screen where the answer was meant to be.
+            is ChatPictureModelNotChosenException,
+            is ChatPictureUnstorableException,
+            is ChatPictureFailedException,
             -> ErrorType.BAD_REQUEST
 
             is ChatSessionNotFoundException -> ErrorType.NOT_FOUND

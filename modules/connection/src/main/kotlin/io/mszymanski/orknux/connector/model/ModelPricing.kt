@@ -57,4 +57,25 @@ object ModelPricing {
         }
         return perMillion(inputTokens, inputCostPerMillion).add(perMillion(outputTokens, outputCostPerMillion))
     }
+
+    /**
+     * What a number of pictures costs, at what an image model is recorded as
+     * charging.
+     *
+     * Here rather than in a caller for the reason everything above is here: the
+     * metrics card costs a window and the chat costs one drawing, and the moment
+     * those are worked out separately somebody's month stops adding up.
+     *
+     * Null means nobody recorded a per-image price, which is not free — and it
+     * is the only honest answer for an image model, because the token arithmetic
+     * above would return `0.00` for one. An image call reports no tokens at all,
+     * so a per-million price multiplied by its counts is nought, and nought is
+     * the number this whole arrangement exists not to print.
+     *
+     * Reported at [WINDOW_SCALE] by default rather than at [ANSWER_SCALE]: one
+     * picture at any of these providers' prices is cents rather than a fraction
+     * of a cent, so two places is the truth about it and four are noise.
+     */
+    fun imageCost(model: LlmModel, images: Long, scale: Int = WINDOW_SCALE): BigDecimal? =
+        model.imageCostPerImage?.multiply(BigDecimal(images))?.setScale(scale, RoundingMode.HALF_UP)
 }

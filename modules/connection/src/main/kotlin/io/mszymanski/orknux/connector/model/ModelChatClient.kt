@@ -268,21 +268,30 @@ class ModelChatClient(
             val asked = sortedMapOf<Int, StreamedCall>()
 
             /*
-             * When the thinking started and when it stopped, so the screen can
-             * say how long it went on for.
+             * When the thinking stopped, so the screen can say how long it went
+             * on for.
              *
-             * Measured over the reasoning frames alone rather than taken from
-             * the round's own stopwatch, which also covers the answer being
-             * written and the request going out. "Thought for four seconds"
-             * under a block of reasoning has to be about the reasoning, or it
-             * is a number that looks like an explanation and is not one.
+             * **From the request going out, not from the first reasoning
+             * frame.** Measuring between the first and last reasoning frames is
+             * what this did first, and it reported nothing on most real
+             * providers: a model that emits its whole reasoning in one frame
+             * has a first frame and a last frame at the same instant, so the
+             * answer was nought and the screen drew no time at all. It was only
+             * ever non-zero here because a stub deliberately paused between
+             * frames.
+             *
+             * Time to the end of the thinking is also the more honest number.
+             * What somebody waited through is the request going out, the model
+             * loading the prompt, and then the reasoning being produced - all
+             * of it before there was a word of answer to read. That is the wait
+             * the block is explaining.
              */
-            var thoughtFrom = 0L
+            var sawThought = false
             var thoughtTo = 0L
 
             fun hand(piece: ModelPiece) {
                 if (piece.thought.isNotEmpty()) {
-                    if (thoughtFrom == 0L) thoughtFrom = System.nanoTime()
+                    sawThought = true
                     thoughtTo = System.nanoTime()
                     thinking.append(piece.thought)
                     onThinking(piece.thought)
@@ -314,7 +323,7 @@ class ModelChatClient(
                 }
             }
             hand(tags.finish())
-            val thoughtFor = if (thoughtFrom == 0L) 0L else (thoughtTo - thoughtFrom) / 1_000_000
+            val thoughtFor = if (!sawThought) 0L else (thoughtTo - started) / 1_000_000
 
             /*
              * A round that asked for tools has not answered, whichever way it

@@ -4,6 +4,8 @@ import org.slf4j.LoggerFactory
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.OffsetDateTime
 import io.mszymanski.orknux.connector.model.ChatTurn
 import org.springframework.data.domain.PageRequest
@@ -30,6 +32,16 @@ import org.springframework.data.domain.PageRequest
 class LlmSessionRecorder(
     private val sessions: LlmSessionRepository,
     private val events: LlmSessionEventRepository,
+    /**
+     * Whoever is watching this conversation happen, told that it did.
+     *
+     * Here rather than at the call sites for the reason the rest of this class
+     * is here: a transcript somebody has to remember to announce is a live view
+     * with holes exactly where somebody was busy. Every line goes through
+     * [write], so every line is announced, and nothing that records has to know
+     * that watching is a thing that exists.
+     */
+    private val tail: SessionTail,
 ) {
 
     /**
@@ -112,6 +124,10 @@ class LlmSessionRecorder(
             events.findByIdOrNull(line)?.let {
                 it.result = result
                 events.save(it)
+                // The line was already handed to anybody watching, with nothing
+                // on it. This is what turns a lookup that is running into one
+                // that answered, on a page nobody reloaded.
+                announce(it.sessionId)
             }
         } catch (failure: Exception) {
             log.warn("What {} returned could not be recorded", line, failure)
@@ -414,10 +430,43 @@ class LlmSessionRecorder(
                 it.lastEventAt = at
                 sessions.save(it)
             }
+            announce(session)
             return written.id
         } catch (failure: Exception) {
             log.warn("A {} line could not be recorded in session {}", kind, session, failure)
             return null
+        }
+    }
+
+    /**
+     * Tells whoever is watching, once the line is actually there to be read.
+     *
+     * The wait for the commit is the whole of this method. Most of what records
+     * here is outside a transaction - a turn calls a model for minutes and holds
+     * no connection while it does - and for those this fires at once. But a task
+     * writes its prompt inside `TaskService.start`, and a reader told to go and
+     * look during that transaction reads on its own connection and finds
+     * nothing: the page would then draw an empty log for two seconds at exactly
+     * the moment somebody pressed Start and was watching to see whether anything
+     * happened.
+     *
+     * Announcing is never allowed to cost the recording. A failure here means a
+     * step arrives on the next pass instead of in the moment, which is the same
+     * bargain the rest of this class makes about a lost line.
+     */
+    private fun announce(session: Long) {
+        try {
+            if (TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(
+                    object : TransactionSynchronization {
+                        override fun afterCommit() = tail.stirred(session)
+                    },
+                )
+            } else {
+                tail.stirred(session)
+            }
+        } catch (failure: Exception) {
+            log.debug("Session {} could not be announced", session, failure)
         }
     }
 

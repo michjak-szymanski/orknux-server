@@ -14,6 +14,7 @@ import org.springframework.graphql.data.method.annotation.Argument
 import org.springframework.graphql.data.method.annotation.MutationMapping
 import org.springframework.graphql.data.method.annotation.QueryMapping
 import org.springframework.security.core.context.SecurityContextHolder
+import org.springframework.stereotype.Component
 import org.springframework.stereotype.Controller
 import org.springframework.transaction.annotation.Transactional
 import java.time.format.DateTimeFormatter
@@ -34,8 +35,6 @@ import java.time.format.DateTimeFormatter
 class TaskAPI(
     private val tasks: TaskRepository,
     private val requests: TaskRequestRepository,
-    private val grants: TaskGrantRepository,
-    private val agents: AgentRepository,
     private val sessions: LlmSessionRepository,
     private val events: LlmSessionEventRepository,
     private val service: TaskService,
@@ -43,6 +42,7 @@ class TaskAPI(
     private val fromIssues: IssueTaskStarter,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val views: TaskViews,
 ) {
 
     @QueryMapping
@@ -232,9 +232,36 @@ class TaskAPI(
         request.subject?.let { append(' ').append(it) }
     }
 
-    private fun describe(task: Task): TaskView {
+    private fun describe(task: Task): TaskView = views.of(task)
+
+    private fun whoever(): String = SecurityContextHolder.getContext().authentication?.name.orEmpty()
+
+    private companion object {
+        const val PAGE = 20
+        const val BIGGEST_PAGE = 100
+    }
+}
+
+/**
+ * A task as anything that shows one describes it.
+ *
+ * Its own component because there are now two doors onto the same fact. The
+ * GraphQL query above is one; the live stream beside it is the other, and it
+ * sends a whole task rather than a status string precisely so that a page
+ * watching a task and a page that has just loaded one are looking at the same
+ * shape. Two copies of this assembly would be two answers to "what is this task
+ * doing", and the one that drifted would be the one nobody reloads - the live
+ * one.
+ */
+@Component
+class TaskViews(
+    private val requests: TaskRequestRepository,
+    private val grants: TaskGrantRepository,
+    private val agents: AgentRepository,
+) {
+
+    fun of(task: Task): TaskView {
         val id = requireNotNull(task.id)
-        val asked = requests.findByTaskIdOrderByAskedAtAscIdAsc(id)
         return TaskView(
             id = id,
             workspaceId = task.workspaceId,
@@ -257,12 +284,12 @@ class TaskAPI(
             waitingUntil = task.waitingUntil?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
             outcome = task.outcome,
             endedBecause = task.endedBecause,
-            requests = asked.map(::describe),
-            grants = grants.findByTaskIdOrderByGrantedAtAscIdAsc(id).map(::describe),
+            requests = requests.findByTaskIdOrderByAskedAtAscIdAsc(id).map(::of),
+            grants = grants.findByTaskIdOrderByGrantedAtAscIdAsc(id).map(::of),
         )
     }
 
-    private fun describe(request: TaskRequest) = TaskRequestView(
+    fun of(request: TaskRequest) = TaskRequestView(
         id = requireNotNull(request.id),
         kind = request.kind,
         capability = request.capability,
@@ -275,20 +302,13 @@ class TaskAPI(
         decidedAt = request.decidedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
-    private fun describe(grant: TaskGrant) = TaskGrantView(
+    fun of(grant: TaskGrant) = TaskGrantView(
         id = requireNotNull(grant.id),
         capability = grant.capability,
         subject = grant.subject,
         grantedBy = grant.grantedBy,
         grantedAt = grant.grantedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
-
-    private fun whoever(): String = SecurityContextHolder.getContext().authentication?.name.orEmpty()
-
-    private companion object {
-        const val PAGE = 20
-        const val BIGGEST_PAGE = 100
-    }
 }
 
 /** What starting a task needs. See [NewTask] for what each of these means. */

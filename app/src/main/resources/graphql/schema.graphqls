@@ -1382,6 +1382,11 @@ type Workspace {
     """
     taskMaxTurns: Int
     """
+    What a task here gets when `taskMaxTurns` is null: the installation's own
+    number. Sent so a field can show it rather than describe where it lives.
+    """
+    taskMaxTurnsDefault: Int!
+    """
     How long a pause has to run, after somebody has been talking, before their
     turn ends and what they said is sent.
 

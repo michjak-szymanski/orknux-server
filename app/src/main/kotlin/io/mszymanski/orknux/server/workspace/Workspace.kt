@@ -99,6 +99,18 @@ class Workspace(
     var speechModelId: Long? = null,
 
     /**
+     * The model that draws a picture, for the picture button in a chat.
+     *
+     * The third of the three that sit on the Chat card, chosen the same way and
+     * for the same reason: which image server this installation can reach is a
+     * fact about the installation, not a choice to be made per message. Null
+     * means the button is not offered, which is better than one that fails on
+     * every press.
+     */
+    @Column(name = "image_model_id")
+    var imageModelId: Long? = null,
+
+    /**
      * The model behind the quick chat, the panel that opens beside the page.
      *
      * Kept apart from the companion model because the jobs are not the same one:

@@ -23,8 +23,18 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is WorkspaceAdminRoleNotAssignedException,
             is WorkspaceMemoryShareUnusableException,
             is WorkspaceVoiceTurnTakingUnusableException,
+            // The Chat card's four model pickers, each of which will take only
+            // one kind. Unmapped these arrived as INTERNAL_ERROR - a sentence
+            // written to be read by whoever picked the wrong model, delivered as
+            // "the server broke" and with no code for the interface to translate.
+            is ModelNotTranscriptionException,
+            is ModelNotSpeechException,
+            is ModelNotImageException,
+            is ModelNotChatException,
             -> ErrorType.BAD_REQUEST
-            is WorkspaceNotFoundException -> ErrorType.NOT_FOUND
+            is WorkspaceNotFoundException,
+            is ModelNotFoundForWorkspaceException,
+            -> ErrorType.NOT_FOUND
             else -> return null
         }
 

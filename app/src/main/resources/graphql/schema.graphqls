@@ -711,10 +711,16 @@ type Mutation {
     The sandbox gains no network, and an installation configured without a
     registry refuses this and keeps the upload.
 
-    Refused, with a sentence saying why, when: the package ships no ES module;
-    the module it ships imports anything at all, because a library has to be one
-    self-contained file and this installation does not bundle; the file does not
-    hash to what the registry said it would; or the registry cannot be reached.
+    Either spelling. An ES module is run as it stands; a CommonJS entry — `main`,
+    the `require` condition of `exports`, a UMD bundle — is given its `module` and
+    `exports` as it runs, and the file is stored as the registry served it so the
+    hash on the row stays a claim anybody can check.
+
+    Refused, with a sentence saying why, when: nothing the package's `exports`,
+    `module` or `main` names is actually in it; its entry imports or requires a
+    second package, because a library has to be one self-contained file and this
+    installation does not bundle; the file does not hash to what the registry said
+    it would; or the registry cannot be reached.
     """
     installScriptLibrary(spec: String!): ScriptLibrary!
     """

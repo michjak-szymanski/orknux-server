@@ -11,37 +11,6 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 
 /**
- * Asking an agent something, and letting it use its tools before it answers.
- *
- * A model with tools does not answer in one round: it asks for a lookup, is told
- * what came back, and either asks again or answers. This runs that to a
- * conclusion and hands back the one thing the caller wanted — what the agent
- * finally said.
- *
- * The intermediate turns are deliberately not written to the history. What is
- * kept is the conversation somebody had; that an agent read three skills on the
- * way to an answer is how it worked, not what was said, and putting it in the
- * thread would mean every later round re-reads it and pays for it again.
- *
- * No transaction is held while this runs. It calls a model repeatedly and can
- * take minutes; a database connection held for that long is one nobody else has.
- *
- * A caller that named an LLM session gets the round written down as it happens —
- * the tools that were called, what each of them gave back, and what was finally
- * said. That is not the same record as the chat history and does not contradict
- * the paragraph above: the history is the conversation somebody had, while a
- * session is the conversation the agent had, working included. A caller that
- * named no session pays for a null check and touches no table at all.
- *
- * The results are in that record because nothing else keeps them. They are
- * threaded into this round and the round is thrown away; what reaches the
- * history is the text the model wrote out of them. Kept only there, the next
- * turn is answered from what the model said about a lookup rather than from the
- * lookup — which is how two models running one conversation came to insist that
- * labelled issues were unlabelled, each correcting itself only when it called
- * the tool again.
- */
-/**
  * Somebody watching a round happen, rather than reading it afterwards.
  *
  * The round already writes everything down — into an LLM session, where a task's
@@ -87,6 +56,37 @@ interface RoundWatch {
     fun returned(at: Int, result: String, failed: Boolean) = Unit
 }
 
+/**
+ * Asking an agent something, and letting it use its tools before it answers.
+ *
+ * A model with tools does not answer in one round: it asks for a lookup, is told
+ * what came back, and either asks again or answers. This runs that to a
+ * conclusion and hands back the one thing the caller wanted — what the agent
+ * finally said.
+ *
+ * The intermediate turns are deliberately not written to the history. What is
+ * kept is the conversation somebody had; that an agent read three skills on the
+ * way to an answer is how it worked, not what was said, and putting it in the
+ * thread would mean every later round re-reads it and pays for it again.
+ *
+ * No transaction is held while this runs. It calls a model repeatedly and can
+ * take minutes; a database connection held for that long is one nobody else has.
+ *
+ * A caller that named an LLM session gets the round written down as it happens —
+ * the tools that were called, what each of them gave back, and what was finally
+ * said. That is not the same record as the chat history and does not contradict
+ * the paragraph above: the history is the conversation somebody had, while a
+ * session is the conversation the agent had, working included. A caller that
+ * named no session pays for a null check and touches no table at all.
+ *
+ * The results are in that record because nothing else keeps them. They are
+ * threaded into this round and the round is thrown away; what reaches the
+ * history is the text the model wrote out of them. Kept only there, the next
+ * turn is answered from what the model said about a lookup rather than from the
+ * lookup — which is how two models running one conversation came to insist that
+ * labelled issues were unlabelled, each correcting itself only when it called
+ * the tool again.
+ */
 @Service
 class AgentConversation(
     private val models: ModelChatClient,
@@ -139,9 +139,19 @@ class AgentConversation(
     ): ChatCompletion {
         val offered = tools.specsFor(agent) + shed?.specs().orEmpty()
         if (offered.isEmpty()) {
-            return models.complete(modelId, turns)
-                .also { told(watch, it) }
-                .also { record(into, agent, it) }
+            /*
+             * An agent granted nothing answers in one call, and it streams for
+             * a watcher on the same rule as the loop below: what it thinks
+             * should appear while it is thinking it, not once it has finished.
+             * Told at the end only where it was not streamed, or the thinking
+             * would be drawn twice.
+             */
+            val once = if (watch == null) {
+                models.complete(modelId, turns).also { told(watch, it) }
+            } else {
+                models.stream(modelId, turns, onThinking = { watch.thinking(it) }) {}
+            }
+            return once.also { record(into, agent, it) }
         }
 
         val conversation = turns.toMutableList()
@@ -175,25 +185,64 @@ class AgentConversation(
          */
         val thinking = StringBuilder()
 
-        fun thought(reasoning: String) {
+        /* And how long it went on for, added up the same way. */
+        var thoughtFor = 0L
+
+        /*
+         * Kept, but not always announced.
+         *
+         * A streamed round has already handed every piece of its reasoning to
+         * the watcher as it arrived — that is the whole point of streaming it —
+         * so saying it again at the end of the round would draw the thinking
+         * twice. A blocking round hands over nothing on the way, and this is
+         * the only chance it gets, which is why the choice is a parameter
+         * rather than a rule.
+         */
+        fun thought(reasoning: String, millis: Long, announce: Boolean) {
             if (reasoning.isBlank()) return
             if (thinking.isNotEmpty()) thinking.append("\n\n")
             thinking.append(reasoning)
-            watch?.thinking(reasoning)
+            thoughtFor += millis
+            if (announce) watch?.thinking(reasoning)
         }
 
         repeat(MAX_ROUNDS) {
-            when (val answer = models.complete(modelId, conversation, offered)) {
+            /*
+             * Streamed when somebody is watching, asked for whole when nobody
+             * is.
+             *
+             * Only how the response is read differs: the same request, the same
+             * tools, and the same rule about what a round that asked for tools
+             * means. A reasoning model does most of its thinking *before* it
+             * decides to look something up, and read as one blocking call that
+             * thinking cannot appear until the round is over — a block of
+             * reasoning arriving complete, seconds after the model finished
+             * having it. Watching a model think is most of the reason for
+             * showing the thinking at all, so a round with a reader is read a
+             * frame at a time.
+             *
+             * A round nobody is watching stays blocking. Streaming to no
+             * listener buys nothing, and it keeps every caller that is not a
+             * chat — a task's loop, a workflow's agent — on the path they were
+             * already on.
+             */
+            val answer = if (watch == null) {
+                models.complete(modelId, conversation, offered)
+            } else {
+                models.stream(modelId, conversation, offered, onThinking = { watch.thinking(it) }) {}
+            }
+            when (answer) {
                 is ChatCompletion.Failed -> return answer.also { record(into, agent, it) }
 
                 is ChatCompletion.Answered -> {
-                    thought(answer.reasoning)
+                    thought(answer.reasoning, answer.reasoningMillis, announce = watch == null)
                     return answer
                         .copy(
                             millis = spent + answer.millis,
                             inputTokens = input + answer.inputTokens,
                             outputTokens = output + answer.outputTokens,
                             reasoning = thinking.toString(),
+                            reasoningMillis = thoughtFor,
                         )
                         .also { record(into, agent, it) }
                 }
@@ -203,7 +252,7 @@ class AgentConversation(
                     input += answer.inputTokens
                     output += answer.outputTokens
                     conversation += answer.turn
-                    thought(answer.reasoning)
+                    thought(answer.reasoning, answer.reasoningMillis, announce = watch == null)
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
                         val here = at++

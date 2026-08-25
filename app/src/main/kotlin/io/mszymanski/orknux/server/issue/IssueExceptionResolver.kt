@@ -54,6 +54,13 @@ class IssueExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is IssueTypeNameTakenException,
             is IssueTypeUnknownException,
             is IssueTypeInUseException,
+            /*
+             * Not theirs to remove, which is the caller's to understand rather
+             * than a failure: the sentence names both ways somebody could be
+             * allowed to, so a reader who was refused knows which of the two
+             * they are missing.
+             */
+            is IssueCommentNotYoursToRemoveException,
             -> ErrorType.BAD_REQUEST
 
             is IssueLinkNotFoundException,

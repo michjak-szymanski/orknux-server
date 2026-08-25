@@ -194,6 +194,18 @@ CREATE TABLE chat_answer_take
     constraint chat_answer_take_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE
 );
 
+CREATE TABLE chat_message_thinking
+(
+    id                           integer not null primary key autoincrement,
+    chat_session_id              integer not null,
+    message_index                integer not null,
+    content                      text not null,
+    millis                       integer not null default 0,
+    thought_at                   timestamp not null default CURRENT_TIMESTAMP,
+    constraint chat_message_thinking_at_uq UNIQUE (chat_session_id, message_index),
+    constraint chat_message_thinking_chat_session_id_fkey FOREIGN KEY (chat_session_id) REFERENCES chat_session(id) ON DELETE CASCADE
+);
+
 CREATE TABLE chat_attachment
 (
     id                           integer not null primary key autoincrement,
@@ -339,6 +351,9 @@ CREATE TABLE issue_news
     kind                         varchar(16) not null,
     actor                        varchar(120) not null,
     says                         text,
+    -- Which comment `says` is a copy of, so a comment removed from the tracker
+    -- can be removed from the bells it was announced to. See V208.
+    comment_id                   integer,
     audience_kind                varchar(16) not null,
     audience_id                  varchar(120),
     audience_name                varchar(120) not null,

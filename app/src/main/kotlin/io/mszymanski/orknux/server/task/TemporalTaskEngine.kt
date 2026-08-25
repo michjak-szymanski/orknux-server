@@ -33,6 +33,7 @@ class TemporalTaskEngine(
     private val client: WorkflowClient,
     private val temporal: TemporalProperties,
     private val properties: TaskProperties,
+    private val activities: TaskActivities,
 ) : TaskEngine, TemporalRegistrar {
 
     /**
@@ -62,6 +63,21 @@ class TemporalTaskEngine(
                 .build(),
             TaskWorkflowImpl::class.java,
         )
+        /*
+         * And the activity the workflow calls, which is the half that was
+         * missing.
+         *
+         * Registering the workflow alone is enough for Temporal to accept the
+         * start and enough for the worker to begin running it - so a task went
+         * to Temporal, came back, and failed on its first turn with "Activity
+         * Type \"AdvanceTask\" is not registered with a worker". The row was
+         * left at QUEUED, because nothing had got as far as saying otherwise:
+         * a task that never worked, on an installation where nothing looked
+         * wrong. `registerActivitiesImplementations` is what the execution
+         * module does two lines after its own workflow, and this is the same
+         * pairing.
+         */
+        worker.registerActivitiesImplementations(activities)
     }
 
     override fun begin(taskId: Long) {

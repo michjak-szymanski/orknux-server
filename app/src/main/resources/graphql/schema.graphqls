@@ -2543,6 +2543,31 @@ type ChatMessage {
     of a model.
     """
     takes: [String!]!
+    """
+    What the model thought on its way to this answer, for a reasoning model.
+
+    Null where it thought nothing anybody kept, which is every ordinary model
+    and every kind of line that is not an answer. Null rather than empty on
+    purpose: the screen draws no container at all for a message with none,
+    rather than an empty one asserting there was thinking to see.
+
+    Never part of `content`, and that is the whole arrangement rather than a
+    detail. The copy control, the speech model and the next turn's prompt all
+    read the content, and they are correct because the string they read does
+    not hold this - not because each of them remembers to strip it. It is never
+    put in front of a model.
+    """
+    thinking: String
+    """
+    How long that thinking went on for, in milliseconds.
+
+    Null where nobody measured it - a round read whole rather than as a stream
+    hands the reasoning over complete and there is no duration in it. Never the
+    turn's own time standing in: the turn is already reported on the answer's
+    disclosure, and two numbers on one screen that look like the same
+    measurement and are not is worse than one number missing.
+    """
+    thinkingMillis: Float
 }
 
 type ChatAnswer {

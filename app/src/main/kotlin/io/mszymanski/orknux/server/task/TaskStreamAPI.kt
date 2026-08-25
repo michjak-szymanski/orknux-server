@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.llm.SessionTail
 import io.mszymanski.orknux.server.llm.SessionWatch
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.stream.ServerSentEvents
+import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.http.MediaType
@@ -145,6 +146,7 @@ class TaskStreamAPI(
         @PathVariable id: Long,
         @RequestParam(required = false) after: Long?,
         @RequestHeader(name = "Last-Event-ID", required = false) lastEventId: Long?,
+        response: HttpServletResponse,
     ): StreamingResponseBody {
         val task = tasks.findByIdOrNull(id) ?: throw TaskNotFoundException(id)
         access.requireVisible(task.workspaceId)
@@ -153,8 +155,21 @@ class TaskStreamAPI(
         val from = (after ?: lastEventId ?: 0L).coerceAtLeast(0L)
         val opening = views.of(task)
 
-        return StreamingResponseBody { out ->
-            val sse = ServerSentEvents(out, mapper)
+        /*
+         * Nothing between here and the browser may hold a frame back.
+         *
+         * `no-cache` because a proxy that caches a stream serves the first
+         * reader's account to the second one for ever, and `no` to nginx's
+         * buffering because the deployed interface is served through nginx -
+         * which, left to itself, collects a response until it has enough of it
+         * to be worth forwarding. That is the correct thing to do to a page and
+         * the wrong thing to do to this.
+         */
+        response.setHeader("Cache-Control", "no-cache, no-transform")
+        response.setHeader("X-Accel-Buffering", "no")
+
+        return StreamingResponseBody { _ ->
+            val sse = ServerSentEvents(response, mapper)
             /*
              * The state first, always, and before anything is followed.
              *

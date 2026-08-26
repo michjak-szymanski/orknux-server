@@ -27,6 +27,12 @@ have failed.
   to the repository. Nothing about GitHub is in the server: a host that changes
   its signature scheme is a new version of that file, not a release.
 
+- 💬 **A working task can be told something.** A box on its page takes a message
+  while the agent is mid-turn; the agent reads it at the top of its next turn as
+  the newest word on what is wanted, and carries on from there — so a report can
+  become a table without the task being stopped and started again with a better
+  prompt. Until it has been read the page says so, because a turn is minutes.
+
 ### 🔧 Changed
 
 - 📨 **A webhook run is handed the request's headers**, under `webhook`, beside

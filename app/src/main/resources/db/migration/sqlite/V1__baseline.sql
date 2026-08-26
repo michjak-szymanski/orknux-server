@@ -779,6 +779,17 @@ CREATE TABLE task_grant
     constraint task_grant_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
 );
 
+CREATE TABLE task_message
+(
+    id                           integer not null primary key autoincrement,
+    task_id                      integer not null,
+    said_by                      varchar(120) not null,
+    body                         text not null,
+    sent_at                      timestamp not null default CURRENT_TIMESTAMP,
+    delivered_at                 timestamp,
+    constraint task_message_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
+);
+
 CREATE TABLE task_request
 (
     id                           integer not null primary key autoincrement,
@@ -1440,6 +1451,7 @@ CREATE INDEX spring_ai_chat_memory_conversation_id_timestamp_idx ON spring_ai_ch
 CREATE UNIQUE INDEX spring_session_ix1 ON spring_session (session_id);
 CREATE INDEX spring_session_ix2 ON spring_session (expiry_time);
 CREATE INDEX spring_session_ix3 ON spring_session (principal_name);
+CREATE INDEX task_message_task_idx ON task_message (task_id, sent_at, id);
 CREATE INDEX idx_trigger_firing_trigger ON trigger_firing (trigger_id, at DESC);
 CREATE INDEX idx_variable_catalog_workspace ON variable_catalog (workspace_id);
 CREATE INDEX idx_workflow_action_workspace ON workflow_action (workspace_id);

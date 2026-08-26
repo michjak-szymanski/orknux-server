@@ -302,6 +302,62 @@ class TaskGrant(
     val grantedAt: OffsetDateTime = OffsetDateTime.now(),
 )
 
+/**
+ * Something a person said to a task while it was working.
+ *
+ * The other direction from [TaskRequest]. A request is the agent stopping to ask
+ * and somebody answering; this is nobody having asked - the work is going,
+ * somebody watching it wants it shaped differently, and they say so without
+ * stopping the task and starting it again.
+ *
+ * **This is a doorstep and not a second transcript.** The row holds the words
+ * only until the loop picks them up: at the top of its next turn [TaskLoop]
+ * writes them into the task's LLM session as a turn from whoever typed them -
+ * the same thing [TaskService] already does with the answer to a question - and
+ * stamps [deliveredAt] here. From that moment the session is the account of what
+ * was said and this row is the receipt.
+ *
+ * Held rather than written straight into the session because of ordering. A turn
+ * is minutes long and the agent's answer is written when it ends, so a message
+ * dropped in mid-turn lands *before* an answer composed without it, and the next
+ * turn reads a conversation in which the agent appears to have already replied
+ * to something it never saw.
+ */
+@Entity
+@Table(name = "task_message")
+class TaskMessage(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    val id: Long? = null,
+
+    @Column(name = "task_id", nullable = false)
+    val taskId: Long,
+
+    /** Whoever typed it, by username. The transcript carries their name. */
+    @Column(name = "said_by", nullable = false, length = 120)
+    val saidBy: String,
+
+    @Column(nullable = false, columnDefinition = "text")
+    val body: String,
+
+    @Column(name = "sent_at", nullable = false)
+    val sentAt: OffsetDateTime = OffsetDateTime.now(),
+
+    /**
+     * When the loop put it in front of the agent, and null until it did.
+     *
+     * What lets the page be honest. A message typed while the model is mid-turn
+     * has not been read yet, and a message typed at a task that finishes before
+     * its next turn is never read at all - which somebody should be told rather
+     * than left to assume.
+     */
+    @Column(name = "delivered_at")
+    var deliveredAt: OffsetDateTime? = null,
+) {
+    /** Whether the agent has seen it, which is what the page draws. */
+    val read: Boolean get() = deliveredAt != null
+}
+
 interface TaskRepository : JpaRepository<Task, Long> {
 
     /**
@@ -345,6 +401,20 @@ interface TaskGrantRepository : JpaRepository<TaskGrant, Long> {
     fun findByTaskIdOrderByGrantedAtAscIdAsc(taskId: Long): List<TaskGrant>
 }
 
+interface TaskMessageRepository : JpaRepository<TaskMessage, Long> {
+
+    fun findByTaskIdOrderBySentAtAscIdAsc(taskId: Long): List<TaskMessage>
+
+    /**
+     * What the agent has not been shown yet, oldest first.
+     *
+     * The read the loop makes at the top of every turn. Oldest first because two
+     * messages typed in a row are one person changing their mind, and the second
+     * only means what it means after the first.
+     */
+    fun findByTaskIdAndDeliveredAtIsNullOrderBySentAtAscIdAsc(taskId: Long): List<TaskMessage>
+}
+
 class TaskNotFoundException(val id: Long) : RuntimeException("No task with id $id"), Refusal {
 
     override val arguments get() = mapOf("id" to id)
@@ -371,6 +441,15 @@ class TaskNotRunnableException(val what: String) : RuntimeException(what), Refus
 }
 
 class TaskPromptMissingException : RuntimeException("A task needs something to work on")
+
+/**
+ * An empty message.
+ *
+ * Its own refusal rather than a silent no-op, because the box it comes from is
+ * beside a working agent: somebody who presses send and is told nothing assumes
+ * the agent has been told something.
+ */
+class TaskMessageMissingException : RuntimeException("A message needs something in it")
 
 class TaskWorkerMissingException :
     RuntimeException("A task needs an agent or a model to do it")

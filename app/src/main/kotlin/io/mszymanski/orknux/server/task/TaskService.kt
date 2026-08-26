@@ -51,6 +51,7 @@ class TaskService(
     private val tasks: TaskRepository,
     private val requests: TaskRequestRepository,
     private val grants: TaskGrantRepository,
+    private val messages: TaskMessageRepository,
     private val agents: AgentRepository,
     private val models: ModelService,
     private val sessions: LlmSessionRecorder,
@@ -167,6 +168,49 @@ class TaskService(
         if (words.isEmpty()) throw TaskRequestSettledException()
         settle(request, TaskDecision.ANSWERED, by, answer = words)
         return resume(task, words)
+    }
+
+    /**
+     * Tells a working task something nobody asked it for.
+     *
+     * The third way a person reaches a task, and the only one that does not
+     * require the agent to have stopped first. An approval and an answer are
+     * replies to a question the agent asked; this is somebody watching the work
+     * go past and changing what is wanted - "make it a table", "leave the
+     * January runs out" - which is the ordinary way a piece of work is steered
+     * and, until now, the one thing that meant stopping the task and starting a
+     * new one with a better prompt.
+     *
+     * **Nothing here reaches the run.** The row is written and that is the whole
+     * of the delivery: the loop reads its task's row and its session at the top
+     * of every turn, so a message written while a turn is in flight is in front
+     * of the model on the next one. There is no signal, because a signal is a
+     * second way for a task to move and one that can be delivered to a workflow
+     * that is not there - the same argument [TaskWorkflow] makes about not
+     * waking a parked task. It is also what makes this work identically on the
+     * inline engine and on Temporal, and what makes a message sent a second
+     * before a process dies still arrive at whichever process picks the task up.
+     *
+     * The nudge afterwards is what an approval's is: a hint that costs one query
+     * and buys nothing that correctness depends on. A task the inline engine has
+     * just let go of is picked back up by it rather than waiting for something
+     * else to happen.
+     *
+     * @throws TaskMessageMissingException when there is nothing in it.
+     * @throws TaskNotRunnableException when the task has already ended - there
+     *   is no next turn to read it on, and saying so is better than writing a
+     *   row nobody will ever pick up.
+     */
+    @Transactional
+    fun say(taskId: Long, said: String, by: String): Task {
+        val task = tasks.findByIdOrNull(taskId) ?: throw TaskNotFoundException(taskId)
+        val words = said.trim()
+        if (words.isEmpty()) throw TaskMessageMissingException()
+        if (task.status.over) throw TaskNotRunnableException("That task has ended, so nothing will read this")
+
+        messages.save(TaskMessage(taskId = taskId, saidBy = by, body = words))
+        engine.nudge(taskId)
+        return task
     }
 
     /**

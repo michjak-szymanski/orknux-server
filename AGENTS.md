@@ -434,6 +434,20 @@ the same process. Watch out for:
   (`ExecutionWorkflowTest`).
 - A stale `target/test-classes/application.yml` shadows the real config; if the
   datasource suddenly cannot be determined, run `clean`.
+- **A test the suite leaves out is tagged `slow`, and says why it is skipped.**
+  Surefire excludes that tag by default - `orknux.test.excluded-groups` in
+  `app/pom.xml` - and `./mvnw test -Dorknux.test.excluded-groups=` runs them.
+  There is one, `ShellCodingTaskTest`: it builds a JDK image, brings up three
+  containers and asks a real model to write a Spring application, push it to a
+  gitea in Docker and have a clone of it answer an HTTP request. Two rules come
+  with the tag. A tagged test still refuses to run without what it needs -
+  `@EnabledIfEnvironmentVariable` on `ORKNUX_TEST_MODEL_KEY` there, with a
+  `disabledReason` a surefire report prints - so clearing the exclusion on a
+  machine that has no key skips rather than fails. And it must not be made to
+  pass by standing something in for its subject: the point of that test is
+  whether a model can do the work over this product's three shell tools, and a
+  stub returning the commands a working agent would have run proves only that
+  the commands work.
 - **The suite has its own database.** `TestDatabase` is a JUnit
   `LauncherSessionListener`, found through `META-INF/services`, that starts a
   Postgres container and points `spring.datasource.*` at it before the first

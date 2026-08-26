@@ -2391,7 +2391,15 @@ type Task {
     secondsAllowed: Int!
     "When a parked task gives up on being answered. Null unless it is waiting."
     waitingUntil: String
-    "What the agent finally said, on a task that finished."
+    """
+    What the agent finally said, in markdown, with whatever it drew.
+
+    A task can call a text-to-image model, and a picture it drew is part of what
+    it produced rather than something to go looking for: every one is shown here
+    as a markdown image, beneath the summary, unless the summary already places
+    it somewhere itself. A task that drew and then ran out of turns still has
+    them, which is why this can be set on a task that never said anything.
+    """
     outcome: String
     "Why it stopped, in the words the page shows. Null while it is still going."
     endedBecause: String

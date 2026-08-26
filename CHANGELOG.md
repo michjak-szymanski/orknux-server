@@ -42,6 +42,12 @@ have failed.
   be reachable from Microsoft, and the Graph token lives in a workspace variable
   that has to be refreshed about hourly. The README has the setup.
 
+- 🖼 **A task can draw.** Where the workspace has chosen a text-to-image model,
+  an agent working a task is offered a tool that draws from a description, and
+  every picture it drew is shown under the task's outcome — including on a task
+  that ran out of turns before it finished. The picture opens larger when it is
+  clicked.
+
 ### 🔧 Changed
 
 - 📨 **A webhook run is handed the request's headers**, under `webhook`, beside
@@ -50,7 +56,6 @@ have failed.
   tell one apart from another. The body still wins where both name a field, and
   the headers HTTP has names for carrying a credential are left out of the row,
   so nothing changes for a workflow already written against a webhook.
-
 
 ## 0.9.4
 

@@ -525,6 +525,60 @@ it makes every stored credential unreadable; the Doctor page under Admin is wher
 to find out whether the key is set, the right length, and able to read what is
 already there.
 
+### Microsoft Teams
+
+**Teams is a plugin, not a connection type.** `plugins/teams/teams.js` in this
+repository is loaded on the Plugins screen like any other, and everything it
+needs already exists: a webhook trigger to arrive at, an HTTP request action to
+leave by, a workspace variable to keep the credentials in and the proxy rules to
+go out through. Nothing under `app/` or `modules/` knows the word Teams, which is
+the point — an integration that widens the product is one every installation
+carries whether it uses it or not.
+
+**Receiving is a Teams outgoing webhook, because Teams has no socket.** Slack's
+Socket Mode is what lets an installation behind a firewall hear about a message
+without publishing a port, and Microsoft has nothing that does the same job: the
+two ways Teams delivers a message — an Azure Bot messaging endpoint and a Graph
+change notification — are both Microsoft calling a URL of ours. Of those, an
+outgoing webhook is the one that needs no Azure application, no admin consent and
+no subscription to renew: a team owner creates it under *Team settings → Apps →
+Create an outgoing webhook*, gives it this installation's
+`/api/webhooks/<path>`, and Teams answers with a security token. Mentioning the
+webhook by name in a channel is then what posts the message here.
+
+What makes that safe to point at the open internet is the header it arrives with.
+Teams signs every request `Authorization: HMAC <signature>`, where the signature
+is HMAC-SHA256 of the exact bytes of the body keyed by that token — so the
+trigger's authentication is set to **Function** and pointed at `teams_verify`,
+which is handed the headers and the raw body and answers yes or no. The token
+reaches it as the plugin's `webhookSecret` parameter, declared `secret`, which
+refuses a typed-in value and can only be answered by pointing at one of the
+workspace's variables: the encrypted column. A signature over the raw bytes and
+not over the parsed body is deliberate, and pinned — re-serialising the JSON
+would reorder a key and refuse every real request.
+
+The other three functions read what arrived: `teams_text` gives what was said
+with the webhook's own mention and any markup taken off, and `teams_sender` gives
+who said it and where, as the team, channel, conversation and message ids a reply
+has to be addressed with.
+
+**Sending is Graph, through a connection.** A plugin has no network — no files,
+no sockets, no host — so it could not call Graph even if it wanted to, and it
+should not: a call made from inside the sandbox would go round the proxy rules
+that every other outgoing request here obeys. So a message is sent by an **HTTP
+request** action, with `teams_message` shaping the body and `teams_channelUrl` or
+`teams_replyUrl` naming the address, and the bearer token supplied as a header
+row pointing at a workspace variable rather than typed onto the action. That is
+read at the moment of the call, never logged, and the call goes out through
+whatever proxy rule matches `graph.microsoft.com`.
+
+Two things this does not do. A Graph application token expires in about an hour
+and nothing here renews it, so the variable holding it is something an operator
+or a scheduled workflow has to refresh. And an outgoing webhook is a push, which
+means Microsoft has to be able to reach this installation — there is no polling
+alternative, because a poll of Graph's message delta needs somewhere to keep the
+delta link between runs and a workflow has nowhere to write one.
+
 ### Networking
 
 Where this installation has to go out through a proxy is one list of **rules**,

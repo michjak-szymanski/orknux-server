@@ -33,6 +33,15 @@ have failed.
   become a table without the task being stopped and started again with a better
   prompt. Until it has been read the page says so, because a turn is minutes.
 
+- 💼 **Microsoft Teams, as a plugin** — `plugins/teams/teams.js`, loaded on the
+  Plugins screen. A message in Teams starts a workflow by way of a Teams outgoing
+  webhook pointed at a webhook trigger, with the plugin checking the signature
+  Teams sends; a workflow answers with an HTTP request action against Graph. No
+  new connection type, and nothing to upgrade the server for. Teams has no
+  equivalent of Slack's socket, so the receiving half needs this installation to
+  be reachable from Microsoft, and the Graph token lives in a workspace variable
+  that has to be refreshed about hourly. The README has the setup.
+
 ### 🔧 Changed
 
 - 📨 **A webhook run is handed the request's headers**, under `webhook`, beside
@@ -41,6 +50,7 @@ have failed.
   tell one apart from another. The body still wins where both name a field, and
   the headers HTTP has names for carrying a credential are left out of the row,
   so nothing changes for a workflow already written against a webhook.
+
 
 ## 0.9.4
 

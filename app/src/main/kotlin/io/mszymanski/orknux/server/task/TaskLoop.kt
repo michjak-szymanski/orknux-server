@@ -137,7 +137,7 @@ class TaskLoop(
 
         val begun = System.nanoTime()
         val answer = try {
-            conversation.answer(working.modelId, agent, turns, session, tools.shed(), watching)
+            conversation.answer(working.modelId, agent, turns, session, tools.shed(task), watching)
         } finally {
             // Before the turn is counted, and whatever the turn did. A line
             // left open is one a page reads as still being thought, and on a

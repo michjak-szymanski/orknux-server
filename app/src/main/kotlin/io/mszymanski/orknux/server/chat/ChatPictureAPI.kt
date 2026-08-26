@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.attachment.AttachmentStore
 import io.mszymanski.orknux.server.attachment.ChatAttachment
 import io.mszymanski.orknux.server.attachment.ChatAttachmentRepository
 import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.attachment.PictureFilenames
 import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
@@ -112,7 +113,7 @@ class ChatPictureAPI(
             is Picture.Drawn -> picture
         }
 
-        val filename = filenameFor(asked, drawn.contentType)
+        val filename = PictureFilenames.of(asked, drawn.contentType)
         val attachmentId = file(session, filename, drawn.image, drawn.contentType)
 
         val said = "![${asked.take(ALT_LENGTH)}](/api/attachments/$attachmentId)"
@@ -166,26 +167,6 @@ class ChatPictureAPI(
         return requireNotNull(saved.id)
     }
 
-    /**
-     * What the file is called, which is what a download names it.
-     *
-     * Out of the description rather than a bare id, so a picture saved to a
-     * desktop still says what it is. Only letters, digits and dashes survive:
-     * the rest is somebody's prose and a filename is not the place for it.
-     */
-    private fun filenameFor(prompt: String, contentType: String): String {
-        val stem = prompt.lowercase()
-            .map { if (it.isLetterOrDigit()) it else '-' }
-            .joinToString("")
-            .split('-')
-            .filter { it.isNotEmpty() }
-            .take(FILENAME_WORDS)
-            .joinToString("-")
-            .ifEmpty { "picture" }
-        val extension = contentType.substringAfter('/', "png").takeIf { it.all(Char::isLetterOrDigit) } ?: "png"
-        return "$stem.$extension"
-    }
-
     private companion object {
         /**
          * As long a description as is worth sending.
@@ -198,9 +179,6 @@ class ChatPictureAPI(
 
         /** As much of the description as belongs in the alt text of one image. */
         const val ALT_LENGTH = 120
-
-        /** Enough of the description to recognise the file by. */
-        const val FILENAME_WORDS = 6
     }
 }
 

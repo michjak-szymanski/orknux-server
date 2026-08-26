@@ -15,6 +15,16 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### ✨ Added
+
+- 🖼 **A task can draw.** Where the workspace has chosen a text-to-image model,
+  an agent working a task is offered a tool that draws from a description, and
+  every picture it drew is shown under the task's outcome — including on a task
+  that ran out of turns before it finished. The picture opens larger when it is
+  clicked.
+
 ## 0.9.4
 
 ### ✨ Added

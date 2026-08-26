@@ -779,6 +779,21 @@ CREATE TABLE task_grant
     constraint task_grant_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE
 );
 
+CREATE TABLE task_picture
+(
+    id                           integer not null primary key autoincrement,
+    task_id                      integer not null,
+    workspace_id                 integer not null,
+    prompt                       text not null,
+    filename                     varchar(255) not null,
+    content_type                 varchar(120) not null,
+    size_bytes                   integer not null,
+    location                     varchar(1000) not null,
+    drawn_at                     timestamp not null default CURRENT_TIMESTAMP,
+    constraint task_picture_task_id_fkey FOREIGN KEY (task_id) REFERENCES task(id) ON DELETE CASCADE,
+    constraint task_picture_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
 CREATE TABLE task_request
 (
     id                           integer not null primary key autoincrement,

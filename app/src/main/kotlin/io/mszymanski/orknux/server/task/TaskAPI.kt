@@ -258,6 +258,7 @@ class TaskViews(
     private val requests: TaskRequestRepository,
     private val grants: TaskGrantRepository,
     private val agents: AgentRepository,
+    private val pictures: TaskPictures,
 ) {
 
     fun of(task: Task): TaskView {
@@ -282,7 +283,18 @@ class TaskViews(
             workedSeconds = task.workedSeconds.toInt(),
             secondsAllowed = task.secondsAllowed.toInt(),
             waitingUntil = task.waitingUntil?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
-            outcome = task.outcome,
+            /*
+             * What the agent said, and what it drew.
+             *
+             * Put together here rather than written into the column, so the row
+             * keeps saying exactly one thing - the agent's own last words - and
+             * both doors onto a task show the pictures without either of them
+             * having to remember to. It is also what covers a task that never
+             * reached a summary: one stopped by somebody, or out of turns, has
+             * a null outcome and may still have drawn three pictures that were
+             * paid for.
+             */
+            outcome = pictures.outcomeOf(id, task.outcome),
             endedBecause = task.endedBecause,
             requests = requests.findByTaskIdOrderByAskedAtAscIdAsc(id).map(::of),
             grants = grants.findByTaskIdOrderByGrantedAtAscIdAsc(id).map(::of),

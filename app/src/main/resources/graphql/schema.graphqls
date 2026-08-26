@@ -985,6 +985,23 @@ type Mutation {
     "Answers the question a parked task stopped to ask."
     answerTaskRequest(id: ID!, said: String!): Task!
     """
+    Says something to a task that is still working.
+
+    The other direction from a request. A request is the agent stopping to ask
+    and somebody answering; this is nobody having asked - the work is going,
+    somebody watching it wants it shaped differently, and they say so without
+    stopping the task and starting a new one with a better prompt.
+
+    It is read at the top of the agent's next turn, as a turn from whoever typed
+    it, and the agent is told to treat it as the newest word on what is wanted.
+    So it is not instant: a message sent while the model is mid-turn is read when
+    that turn ends, which is what `TaskMessage.readAt` says and why it is there.
+
+    Refused on a task that has already ended - there is no next turn to read it
+    on - and on an empty message.
+    """
+    sendTaskMessage(id: ID!, said: String!): Task!
+    """
     Stops it where it stands.
 
     The turn in flight finishes and no other is taken. Nothing a turn already did
@@ -2382,6 +2399,34 @@ type Task {
     requests: [TaskRequest!]!
     "What has been approved for it, and by whom."
     grants: [TaskGrant!]!
+    "What people have said to it while it worked, oldest first."
+    messages: [TaskMessage!]!
+}
+
+"""
+Something a person said to a working task.
+
+The other direction from TaskRequest, and the only way to reach a task that has
+not stopped. What was said is written into the task's transcript under the name
+of whoever said it once the agent reads it, so this type is the receipt rather
+than the record.
+"""
+type TaskMessage {
+    id: ID!
+    "Whoever typed it, by username."
+    saidBy: String!
+    body: String!
+    sentAt: String!
+    """
+    When the agent was shown it, and null while it has not been.
+
+    A message is read at the top of the next turn, so one sent while the model
+    is mid-turn sits unread for as long as that turn takes. A page that drew it
+    as delivered would be saying a correction had landed when it had not - and a
+    task that ends before its next turn never reads it at all, which this is the
+    only thing that says.
+    """
+    readAt: String
 }
 
 type TaskRequest {

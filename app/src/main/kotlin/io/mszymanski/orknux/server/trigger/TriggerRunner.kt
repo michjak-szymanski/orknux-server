@@ -58,8 +58,15 @@ class TriggerRunner(
      * A webhook's body is the thing the workflow was written against, so it is
      * carried in with its shape intact: a nested object stays an object, and a
      * reference to `order.total` finds a number rather than the text of one.
+     *
+     * @param delivery what arrived besides the body, when anything did. It goes
+     *   in under `webhook`, between the trigger's own payload and the body: it
+     *   describes this call, which a payload written once cannot, and the body is
+     *   still what the workflow was written against, so a sender with a field of
+     *   that name keeps it.
      */
-    fun fire(trigger: WorkflowTrigger, body: JsonNode): Int = fire(trigger) { input ->
+    fun fire(trigger: WorkflowTrigger, body: JsonNode, delivery: WebhookDelivery? = null): Int = fire(trigger) { input ->
+        delivery?.let { input.set(WEBHOOK, it.asJson(mapper)) }
         if (body.isObject) {
             body.properties().forEach { (name, value) -> input.set(name, value) }
         }
@@ -286,5 +293,8 @@ class TriggerRunner(
 
     private companion object {
         val log = LoggerFactory.getLogger(TriggerRunner::class.java)
+
+        /** Where a webhook's own description of the call sits in the run's input. */
+        const val WEBHOOK = "webhook"
     }
 }

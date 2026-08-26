@@ -15,6 +15,19 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### ✨ Added
+
+- 💼 **Microsoft Teams, as a plugin** — `plugins/teams/teams.js`, loaded on the
+  Plugins screen. A message in Teams starts a workflow by way of a Teams outgoing
+  webhook pointed at a webhook trigger, with the plugin checking the signature
+  Teams sends; a workflow answers with an HTTP request action against Graph. No
+  new connection type, and nothing to upgrade the server for. Teams has no
+  equivalent of Slack's socket, so the receiving half needs this installation to
+  be reachable from Microsoft, and the Graph token lives in a workspace variable
+  that has to be refreshed about hourly. The README has the setup.
+
 ## 0.9.4
 
 ### ✨ Added

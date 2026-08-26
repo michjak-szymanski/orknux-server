@@ -13,6 +13,11 @@ cp.txt
 compose.yaml
 logs
 
+# Plugins are loaded into a running installation through the Plugins screen,
+# never compiled into the image. Sending them to the daemon would copy files no
+# stage reads.
+plugins
+
 # The interface, which Dockerfile.one builds from source in this same context.
 # Its installed dependency tree and its last local build are megabytes the
 # daemon would copy and the build would then overwrite anyway - `npm ci` in the

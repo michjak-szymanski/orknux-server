@@ -144,7 +144,15 @@ class WebhookAPI(
             return notFound()
         }
 
-        val started = runner.fire(trigger, sent)
+        /*
+         * The headers go with it, because for a good many senders the body does
+         * not say what happened: GitHub names the event in `X-GitHub-Event` and a
+         * workflow handed only the JSON cannot tell a push from a pull request.
+         * What the run is handed is narrower than what the gatekeeper above was
+         * asked with — see [WebhookDelivery] — since one is checking a signature
+         * and the other is written into a row people read.
+         */
+        val started = runner.fire(trigger, sent, WebhookDelivery(path, headers))
         return ResponseEntity.accepted().body(mapOf("started" to started))
     }
 

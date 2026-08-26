@@ -15,6 +15,27 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### ✨ Added
+
+- 🐙 **GitHub, as a plugin rather than as a connection type.**
+  `plugins/github/github.js` guards a webhook trigger with GitHub's HMAC
+  signature and names what arrived, so pull requests, review comments and
+  pushes start workflows. Load it, accept `TEXT_ENCODING`, point its
+  `webhookSecret` at one of the workspace's variables, and add the trigger's URL
+  to the repository. Nothing about GitHub is in the server: a host that changes
+  its signature scheme is a new version of that file, not a release.
+
+### 🔧 Changed
+
+- 📨 **A webhook run is handed the request's headers**, under `webhook`, beside
+  what the body brought — because several senders say which event a delivery is
+  in a header and not in the JSON, and a workflow given only the body could not
+  tell one apart from another. The body still wins where both name a field, and
+  the headers HTTP has names for carrying a credential are left out of the row,
+  so nothing changes for a workflow already written against a webhook.
+
 ## 0.9.4
 
 ### ✨ Added

@@ -15,6 +15,16 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### ✨ Added
+
+- 💬 **A working task can be told something.** A box on its page takes a message
+  while the agent is mid-turn; the agent reads it at the top of its next turn as
+  the newest word on what is wanted, and carries on from there — so a report can
+  become a table without the task being stopped and started again with a better
+  prompt. Until it has been read the page says so, because a turn is minutes.
+
 ## 0.9.4
 
 ### ✨ Added

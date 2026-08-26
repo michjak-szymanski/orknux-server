@@ -242,6 +242,7 @@ class TaskStreamAPI(
         val until = System.currentTimeMillis() + STINT.toMillis()
         var shown = opening.status
         var waiting = openRequestOf(opening)
+        var unread = unreadOf(opening)
         var lastWord = System.currentTimeMillis()
 
         while (System.currentTimeMillis() < until) {
@@ -265,10 +266,11 @@ class TaskStreamAPI(
                 sse.send("end", mapOf("reason" to "gone"))
                 return
             }
-            if (state.status != shown || openRequestOf(state) != waiting) {
+            if (state.status != shown || openRequestOf(state) != waiting || unreadOf(state) != unread) {
                 sse.send("state", state)
                 shown = state.status
                 waiting = openRequestOf(state)
+                unread = unreadOf(state)
                 lastWord = System.currentTimeMillis()
             }
 
@@ -362,6 +364,18 @@ class TaskStreamAPI(
     /** What it is standing still for, or null. Compared to notice an answer landing. */
     private fun openRequestOf(task: TaskView): TaskRequestView? =
         task.requests.lastOrNull { it.decision == null }
+
+    /**
+     * How many messages the agent has been sent and not yet read.
+     *
+     * Watched for the reason the open request is. A message is read at a turn
+     * boundary and neither sending it nor reading it changes the task's status,
+     * so a page following one would otherwise draw "not read yet" beside a
+     * message the agent read ten minutes ago - until somebody reloaded, which is
+     * the thing this page exists not to need. What it costs is a comparison on a
+     * snapshot that was already being taken.
+     */
+    private fun unreadOf(task: TaskView): Int = task.messages.count { it.readAt == null }
 
     private fun describe(event: LlmSessionEvent) = TaskStepView(
         id = requireNotNull(event.id).toString(),

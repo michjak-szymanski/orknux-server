@@ -40,6 +40,7 @@ class TaskAPITest(
     @Autowired val tasks: TaskRepository,
     @Autowired val requests: TaskRequestRepository,
     @Autowired val grants: TaskGrantRepository,
+    @Autowired val messages: TaskMessageRepository,
     @Autowired val recorder: LlmSessionRecorder,
     @Autowired val sessions: LlmSessionRepository,
     @Autowired val events: LlmSessionEventRepository,
@@ -57,6 +58,7 @@ class TaskAPITest(
     @BeforeEach
     fun reset() {
         grants.deleteAll()
+        messages.deleteAll()
         requests.deleteAll()
         tasks.deleteAll()
         news.deleteAll()
@@ -160,6 +162,48 @@ class TaskAPITest(
         graphQlTester.document("""mutation { refuseTaskRequest(id: $requestId) { status } }""").execute()
         graphQlTester.document("""mutation { approveTaskRequest(id: $requestId) { status } }""")
             .execute().errors().expect { it.message?.contains("already been decided") == true }.verify()
+    }
+
+    /**
+     * The door onto #280: saying something to a task nobody stopped.
+     *
+     * What the surface has to get right is that it is honest about *when* the
+     * agent hears it. The message is read at the top of the next turn, so
+     * `readAt` is null the moment it is sent - a page drawing it as delivered
+     * would be telling somebody their correction had landed when it had not.
+     */
+    @Test
+    fun `a working task can be told something and the page can see it has not been read`() {
+        val taskId = parked("Needs a shell")
+
+        graphQlTester.document(
+            """mutation { sendTaskMessage(id: $taskId, said: "  Make it a table.  ")
+               { status messages { saidBy body readAt } } }""",
+        ).execute()
+            .path("sendTaskMessage.status").entity(TaskStatus::class.java).isEqualTo(TaskStatus.WAITING)
+            .path("sendTaskMessage.messages[0].saidBy").entity(String::class.java).isEqualTo("alice")
+            // Trimmed, so a stray newline from a textarea is not a different message.
+            .path("sendTaskMessage.messages[0].body").entity(String::class.java).isEqualTo("Make it a table.")
+            .path("sendTaskMessage.messages[0].readAt").valueIsNull()
+
+        // The audit line says a message was given, and not what was in it: the
+        // words are in the task's transcript, where somebody reading the account
+        // of the work will look for them.
+        assertThat(audit.findAll().map { it.message })
+            .anyMatch { it.contains("Needs a shell") && it.contains("given a message") }
+    }
+
+    @Test
+    fun `an empty message is refused, and so is one to a task that has ended`() {
+        val taskId = parked("Needs a shell")
+
+        graphQlTester.document("""mutation { sendTaskMessage(id: $taskId, said: "   ") { id } }""")
+            .execute().errors().expect { it.message?.contains("needs something in it") == true }.verify()
+
+        graphQlTester.document("""mutation { stopTask(id: $taskId) { id } }""").execute()
+
+        graphQlTester.document("""mutation { sendTaskMessage(id: $taskId, said: "One more thing.") { id } }""")
+            .execute().errors().expect { it.message?.contains("has ended") == true }.verify()
     }
 
     /** A running task is stopped deliberately, not as a side effect of tidying up. */

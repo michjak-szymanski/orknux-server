@@ -184,6 +184,33 @@ class TaskAPI(
         return describe(service.answer(requireNotNull(request.id), said, whoever()))
     }
 
+    /**
+     * Says something to a task that is still working.
+     *
+     * The same bar as starting one and as approving what it asks for: whoever
+     * can see the workspace. What is being changed is what one agent is working
+     * on for one task, by somebody who can already start that task with any
+     * prompt at all, and it is recorded against their name.
+     *
+     * The audit line does not carry the words. What was said is in the task's
+     * transcript under the name of whoever said it, which is where somebody
+     * reading the account of the work will look for it; a copy in the audit log
+     * would be the same thing in a second place, cut to fit a column.
+     */
+    @MutationMapping
+    @Transactional
+    fun sendTaskMessage(@Argument id: Long, @Argument said: String): TaskView {
+        val task = tasks.findByIdOrNull(id) ?: throw TaskNotFoundException(id)
+        access.requireVisible(task.workspaceId)
+        val told = service.say(id, said, whoever())
+        auditRecorder.record(
+            task.workspaceId,
+            WorkspaceAuditCategory.TASK,
+            "Task ${task.title} given a message",
+        )
+        return describe(told)
+    }
+
     @MutationMapping
     @Transactional
     fun stopTask(@Argument id: Long): TaskView {
@@ -257,6 +284,7 @@ class TaskAPI(
 class TaskViews(
     private val requests: TaskRequestRepository,
     private val grants: TaskGrantRepository,
+    private val messages: TaskMessageRepository,
     private val agents: AgentRepository,
 ) {
 
@@ -286,6 +314,7 @@ class TaskViews(
             endedBecause = task.endedBecause,
             requests = requests.findByTaskIdOrderByAskedAtAscIdAsc(id).map(::of),
             grants = grants.findByTaskIdOrderByGrantedAtAscIdAsc(id).map(::of),
+            messages = messages.findByTaskIdOrderBySentAtAscIdAsc(id).map(::of),
         )
     }
 
@@ -300,6 +329,14 @@ class TaskViews(
         answer = request.answer,
         decidedBy = request.decidedBy,
         decidedAt = request.decidedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+    )
+
+    fun of(message: TaskMessage) = TaskMessageView(
+        id = requireNotNull(message.id),
+        saidBy = message.saidBy,
+        body = message.body,
+        sentAt = message.sentAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        readAt = message.deliveredAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
     )
 
     fun of(grant: TaskGrant) = TaskGrantView(
@@ -348,6 +385,24 @@ data class TaskView(
     /** Everything it has stopped to ask, oldest first. The last is the open one. */
     val requests: List<TaskRequestView>,
     val grants: List<TaskGrantView>,
+    /** What people have said to it while it worked, oldest first. */
+    val messages: List<TaskMessageView>,
+)
+
+data class TaskMessageView(
+    val id: Long,
+    val saidBy: String,
+    val body: String,
+    val sentAt: String,
+    /**
+     * When the agent was shown it, and null while it has not been.
+     *
+     * The one field on this type worth having. A message is read at the top of
+     * the next turn, so one typed while the model is mid-turn sits here unread
+     * for as long as that turn takes - and a page that drew it as delivered
+     * would be telling somebody their correction had landed when it had not.
+     */
+    val readAt: String?,
 )
 
 data class TaskRequestView(

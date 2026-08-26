@@ -19,6 +19,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import java.io.BufferedReader
 import java.net.Socket
+import java.time.OffsetDateTime
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,7 @@ import java.util.concurrent.TimeUnit
 class TaskStreamAPITest(
     @LocalServerPort val port: Int,
     @Autowired val tasks: TaskRepository,
+    @Autowired val messages: TaskMessageRepository,
     @Autowired val recorder: LlmSessionRecorder,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val users: AppUserRepository,
@@ -199,6 +201,46 @@ class TaskStreamAPITest(
             val step = nextOf(frames, "step")
             assertThat(step).contains("the third thing")
             assertThat(step).doesNotContain("the first thing")
+        } finally {
+            frames.close()
+        }
+    }
+
+    /**
+     * A message reaches a page that is already watching, and so does its being
+     * read.
+     *
+     * Neither of those moves the task's status, which is the whole point of the
+     * test. The state is followed rather than pushed - it is a row, read on a
+     * timer and shared between everybody watching - so it is sent again only
+     * when something on it has changed, and "something" used to mean the status
+     * and the open request and nothing else. A message sent to a task that goes
+     * on running for another twenty minutes would have sat on the page saying
+     * "not read yet" for those twenty minutes, and then for ever on the ones
+     * where the reader never reloads. Which is the one thing this page exists
+     * not to need.
+     */
+    @Test
+    fun `a message and its being read reach a page without the status moving`() {
+        val frames = follow(after = 0)
+        try {
+            assertThat(nextOf(frames, "state")).contains("\"messages\":[]")
+
+            val said = messages.save(
+                TaskMessage(taskId = taskId, saidBy = WATCHER, body = "Make it a table rather than prose."),
+            )
+            val sent = nextOf(frames, "state")
+            assertThat(sent).contains("Make it a table rather than prose.")
+            assertThat(sent).contains("\"readAt\":null")
+            // Still working. Nothing about being told something ends a task.
+            assertThat(sent).contains("\"status\":\"RUNNING\"")
+
+            said.deliveredAt = OffsetDateTime.now()
+            messages.save(said)
+
+            val read = nextOf(frames, "state")
+            assertThat(read).doesNotContain("\"readAt\":null")
+            assertThat(read).contains("\"status\":\"RUNNING\"")
         } finally {
             frames.close()
         }

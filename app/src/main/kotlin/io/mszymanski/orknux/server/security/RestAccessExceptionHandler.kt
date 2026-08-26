@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.security
 import io.mszymanski.orknux.server.attachment.AttachmentNotFoundException
 import io.mszymanski.orknux.server.attachment.AttachmentTooLargeException
 import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
+import io.mszymanski.orknux.server.task.TaskPictureNotFoundException
 import io.mszymanski.orknux.server.workspace.WorkspaceNotFoundException
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
@@ -39,11 +40,17 @@ class RestAccessExceptionHandler {
      * on a chat that is not the caller's is refused as one that is not there -
      * and it was arriving as a 500, which says the server broke when what
      * happened is that somebody asked for a document of somebody else's.
+     *
+     * A picture a task drew is here too, and there the status is what the page
+     * reads: the outcome's markdown asks for it in an `<img>`, and a 404 is
+     * what the interface turns into one line saying the picture is gone rather
+     * than into the browser's broken-image icon.
      */
     @ExceptionHandler(
         WorkspaceNotFoundException::class,
         WorkspaceForbiddenException::class,
         AttachmentNotFoundException::class,
+        TaskPictureNotFoundException::class,
     )
     fun notFound(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.status(HttpStatus.NOT_FOUND)

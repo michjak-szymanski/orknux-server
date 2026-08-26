@@ -57,6 +57,7 @@ sealed interface TaskTurn {
 class TaskLoop(
     private val tasks: TaskRepository,
     private val requests: TaskRequestRepository,
+    private val messages: TaskMessageRepository,
     private val conversation: AgentConversation,
     private val briefings: AgentBriefing,
     private val sessions: LlmSessionRecorder,
@@ -113,6 +114,8 @@ class TaskLoop(
         val working = worker.of(task)
         val agent = working.agent
         val budget = budgets.budget(agent.memoryShare, task.workspaceId, working.modelId)
+
+        deliver(taskId, session)
 
         val turns = buildList {
             add(ChatTurn("system", briefing(agent.let(briefings::of), task)))
@@ -180,6 +183,42 @@ class TaskLoop(
     }
 
     /**
+     * Puts anything a person said while the last turn ran in front of the agent.
+     *
+     * This is the whole of how a message reaches a task, and it is a read rather
+     * than a delivery. Nothing pushes: the row was written by [TaskService.say]
+     * whenever somebody pressed send, and the run comes past here at the top of
+     * every turn and picks up what is there. Which is why it works the same on
+     * the inline engine and on Temporal, why a message sent to a task whose
+     * process then died is still read by whichever process picks it up, and why
+     * there is no signal to be delivered to a workflow that has moved on.
+     *
+     * Here rather than at the moment somebody typed, because a turn is minutes
+     * long and the agent's answer is written when it ends. A line dropped into
+     * the session mid-turn would sit *before* an answer composed without it, and
+     * the next turn would read a conversation in which the agent had apparently
+     * already replied to something it never saw.
+     *
+     * Written down first and marked delivered second. A process that dies
+     * between the two says the same thing twice, which the agent can read; the
+     * other order loses it silently, which nobody can.
+     */
+    private fun deliver(taskId: Long, session: Long) {
+        val waiting = messages.findByTaskIdAndDeliveredAtIsNullOrderBySentAtAscIdAsc(taskId)
+        if (waiting.isEmpty()) return
+
+        val now = OffsetDateTime.now()
+        waiting.forEach { message ->
+            // Under the name of whoever typed it, so the transcript says who
+            // changed the work rather than attributing it to the machinery.
+            sessions.userSaid(session, message.saidBy, message.body)
+            message.deliveredAt = now
+            messages.save(message)
+        }
+        log.debug("Task {} was told {} thing(s) while it worked", taskId, waiting.size)
+    }
+
+    /**
      * What the model is told about being a task, on top of its agent's briefing.
      *
      * Said every turn rather than once at the start, because it is a system turn
@@ -190,8 +229,13 @@ class TaskLoop(
     private fun briefing(agentBriefing: String?, task: Task): String = buildString {
         agentBriefing?.let { appendLine(it).appendLine() }
         appendLine(
-            "You are working on a task on your own. Nobody is watching between your turns, so do the work " +
+            "You are working on a task on your own. Nobody is answering between your turns, so do the work " +
                 "rather than describing what you would do, and use your tools to actually carry it out.",
+        )
+        appendLine(
+            "Somebody may leave you a message while you work, and it appears as a turn from them. It is the " +
+                "newest word on what is wanted, so follow it even where it contradicts the original task, say " +
+                "what you are doing differently, and carry on.",
         )
         appendLine(
             "When the work is finished, call task_done with a summary. Until you do, whatever you write is " +

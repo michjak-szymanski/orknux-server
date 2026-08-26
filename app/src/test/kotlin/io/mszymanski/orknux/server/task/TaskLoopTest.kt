@@ -14,6 +14,7 @@ import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -27,6 +28,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A task's loop, driven a turn at a time.
@@ -50,6 +52,7 @@ class TaskLoopTest(
     @Autowired val tasks: TaskRepository,
     @Autowired val requests: TaskRequestRepository,
     @Autowired val grants: TaskGrantRepository,
+    @Autowired val messages: TaskMessageRepository,
     @Autowired val recorder: LlmSessionRecorder,
     @Autowired val sessions: LlmSessionRepository,
     @Autowired val events: LlmSessionEventRepository,
@@ -70,6 +73,7 @@ class TaskLoopTest(
     @BeforeEach
     fun reset() {
         grants.deleteAll()
+        messages.deleteAll()
         requests.deleteAll()
         tasks.deleteAll()
         news.deleteAll()
@@ -270,6 +274,109 @@ class TaskLoopTest(
             .noneMatch { it.contains("Last week had three runs") }
     }
 
+    /**
+     * The whole of #280, and the hard half of it: the message is sent while the
+     * turn is *already running*.
+     *
+     * `service.say` is called from inside the stub's own handler, which is the
+     * thread serving the model call the loop is at that moment blocked on. So
+     * there is a real run in flight and no seam anywhere near it - nothing is
+     * signalled, nothing is handed in, and the loop does not know the message
+     * exists until it comes past and reads its task's rows at the top of the
+     * next turn.
+     *
+     * What is asserted is that it reached the *model*, off the request body the
+     * stub was actually sent, rather than that a row somewhere changed. A
+     * message written into a session nobody puts in front of the agent would
+     * pass every other check and be worth nothing.
+     */
+    @Test
+    fun `a message sent while a turn is running is in front of the model on the next one`() {
+        val running = AtomicLong()
+        val taskId = taskFor(
+            serve { body ->
+                when {
+                    body.contains(MESSAGE) -> finishing("Wrote it up as a table.")
+                    // The turn the loop is on right now, being answered. This
+                    // is what "while it is still working" means.
+                    else -> {
+                        service.say(running.get(), MESSAGE, "alice")
+                        saying("Reading the runs.")
+                    }
+                }
+            },
+        )
+        running.set(taskId)
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
+
+        // Not read yet. The turn it arrived during was already composed without
+        // it, and saying otherwise would be a page lying to whoever typed it.
+        val sent = messages.findByTaskIdOrderBySentAtAscIdAsc(taskId).single()
+        assertThat(sent.saidBy).isEqualTo("alice")
+        assertThat(sent.read).isFalse()
+
+        received.clear()
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+
+        assertThat(received).isNotEmpty()
+        assertThat(received.last()).contains(MESSAGE)
+
+        val task = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(task.status).isEqualTo(TaskStatus.DONE)
+        assertThat(task.outcome).isEqualTo("Wrote it up as a table.")
+
+        // And it is in the account of the work, under the name of whoever said
+        // it, rather than attributed to the machinery.
+        val said = events.findAll().filter { it.sessionId == task.sessionId }
+        assertThat(said.filter { it.kind == LlmSessionEventKind.USER })
+            .anyMatch { it.actor == "alice" && it.content == MESSAGE }
+
+        assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId).single().read).isTrue()
+    }
+
+    /**
+     * Two of them, in the order they were typed.
+     *
+     * Somebody who says one thing and then changes their mind means the second,
+     * and the second only means what it means after the first - so both are
+     * carried and neither is collapsed into the other.
+     */
+    @Test
+    fun `messages are read oldest first and none is dropped`() {
+        val taskId = taskFor(serve { body ->
+            if (body.contains("leave January out")) finishing("Done.") else saying("Still going.")
+        })
+
+        service.say(taskId, "Make it a table.", "alice")
+        service.say(taskId, "Actually, leave January out.", "bob")
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+
+        val asked = requireNotNull(received.lastOrNull())
+        assertThat(asked.indexOf("Make it a table.")).isGreaterThan(0)
+        assertThat(asked.indexOf("Make it a table."))
+            .isLessThan(asked.indexOf("Actually, leave January out."))
+        assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId)).allMatch { it.read }
+    }
+
+    /**
+     * A task that has ended is not a task anybody can still talk to.
+     *
+     * Said rather than accepted quietly: there is no next turn to read it on, so
+     * a row written here would sit unread for the life of the installation while
+     * whoever typed it believed the agent had been told.
+     */
+    @Test
+    fun `a message to a task that is over is refused`() {
+        val taskId = taskFor(serve { finishing("Done.") })
+        loop.advance(taskId)
+
+        assertThatThrownBy { service.say(taskId, "One more thing.", "alice") }
+            .isInstanceOf(TaskNotRunnableException::class.java)
+        assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId)).isEmpty()
+    }
+
     /** A finished task is not started again by a second delivery of the same turn. */
     @Test
     fun `advancing a task that is over does nothing`() {
@@ -402,5 +509,8 @@ class TaskLoopTest(
 
     private companion object {
         const val PROMPT = "Write a report of last week's failed runs."
+
+        /** What somebody says to the task while it is already working. */
+        const val MESSAGE = "Make it a table rather than prose."
     }
 }

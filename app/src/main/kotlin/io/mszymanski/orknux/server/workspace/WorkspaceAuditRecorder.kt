@@ -8,6 +8,18 @@ import java.time.OffsetDateTime
 /**
  * Writes the audit trail. The user id is the LDAP uid of the authenticated
  * caller, so every entry is attributable.
+ *
+ * **Every message passes through [AuditRedaction] on the way in.** One of the
+ * things this log carries is the shell commands agents run, and a command line
+ * is where a live credential most often ends up in the clear — a token in a git
+ * remote, a password after `curl -u`. Redacting here rather than at each caller
+ * is the point: this is the only place rows are written, so a caller added
+ * later cannot forget, and redacting here rather than when the log is read
+ * means the secret is never on disk or in a backup in the first place. Read the
+ * [AuditRedaction] documentation for what that does and does not find; it is a
+ * list of patterns, not a guarantee.
+ *
+ * Rows written before this existed are left exactly as they are.
  */
 @Service
 class WorkspaceAuditRecorder(
@@ -24,7 +36,7 @@ class WorkspaceAuditRecorder(
         WorkspaceAudit(
             workspaceId = workspaceId,
             category = WorkspaceAuditCategory.WORKSPACE,
-            message = workspaceMessage(operationType, oldWorkspaceName, newWorkspaceName),
+            message = AuditRedaction.redact(workspaceMessage(operationType, oldWorkspaceName, newWorkspaceName)),
             oldWorkspaceName = oldWorkspaceName,
             newWorkspaceName = newWorkspaceName,
             operationType = operationType,
@@ -41,7 +53,7 @@ class WorkspaceAuditRecorder(
         WorkspaceAudit(
             workspaceId = workspaceId,
             category = category,
-            message = message,
+            message = AuditRedaction.redact(message),
             date = OffsetDateTime.now(),
             userId = currentUserId(),
         ),
@@ -62,7 +74,7 @@ class WorkspaceAuditRecorder(
         WorkspaceAudit(
             workspaceId = workspaceId,
             category = category,
-            message = message,
+            message = AuditRedaction.redact(message),
             date = OffsetDateTime.now(),
             userId = actor,
         ),

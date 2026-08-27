@@ -57,6 +57,16 @@ have failed.
   the headers HTTP has names for carrying a credential are left out of the row,
   so nothing changes for a workflow already written against a webhook.
 
+- ⏱ **A shell command is no longer stopped after a minute, and its output no
+  longer loses the end.** The command timeout ships at ten minutes and the kept
+  output at 256 KiB, and both can be set per machine on Admin → Shell, where
+  leaving a box empty means the installation's own default. Output over the
+  allowance keeps **both ends** now rather than the first bytes only, with a line
+  between them saying how much went — so a build that fails after a long
+  download shows the error rather than the download. An installation that was
+  relying on the old minute will find commands running longer before they are
+  stopped.
+
 - 🔒 **A credential on a shell command line is no longer audited in the clear.**
   A password in a git remote, a `curl -u`, an `Authorization` header, a
   `--token=` or an exported `…_TOKEN` is replaced by `***` before the row is

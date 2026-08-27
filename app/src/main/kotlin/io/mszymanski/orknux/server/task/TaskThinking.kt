@@ -32,12 +32,22 @@ import io.mszymanski.orknux.server.llm.LlmSessionRecorder
  *
  * ## When a round's thinking is over
  *
- * Two things end it, and both are the model doing something other than
- * thinking: asking for a tool, and finishing the turn. [called] closes the line
- * because a model that has decided what to look up has stopped reasoning about
- * whether to; [settle] is called by the loop when the turn ends however it
- * ended, including by an exception. Until one of those the line carries no
- * duration, which is what a page reads as "still thinking".
+ * Three things end it, and all three are the model doing something other than
+ * thinking: asking for a tool, starting to answer, and the turn finishing.
+ * [called] closes the line because a model that has decided what to look up has
+ * stopped reasoning about whether to; [answering] closes it because a model
+ * that has begun writing has equally stopped; [settle] is called by the loop
+ * when the turn ends however it ended, including by an exception. Until one of
+ * those the line carries no duration, which is what a page reads as "still
+ * thinking".
+ *
+ * [answering] is the one that was missing, and the turn it matters on is the
+ * ordinary one - a round that answers rather than looking something up. Left to
+ * [settle] alone, a task asked for a thousand words thought for ten seconds and
+ * then wrote for two minutes with the reasoning still open the whole time: the
+ * page counted up, said *Thinking*, and held the reasoning at whatever the last
+ * flush had written, which is a sentence that stops in the middle. That is
+ * issue #290.
  *
  * ## What the duration means
  *
@@ -101,6 +111,27 @@ class TaskThinking(
      * sitting above a lookup.
      */
     override fun called(at: Int, tool: String, arguments: String) = settle()
+
+    /**
+     * The model began writing its answer, so this round has stopped thinking.
+     *
+     * The same rule [called] follows, for the other way a round's reasoning
+     * ends - and it is the ordinary way, because most rounds answer rather than
+     * look something up. It was missing, and what that cost is issue #290: a
+     * task asked to write at length thought for a few seconds and then wrote
+     * for two minutes, and for the whole of those two minutes the page said
+     * *Thinking*, counted up, and showed the reasoning cut off wherever the
+     * last flush had fallen. Nothing closed the line until [settle] at the end
+     * of the turn, so the only way to see the rest was to reload after it.
+     *
+     * Idempotent: this arrives on every piece of the answer, and only the first
+     * has a line to close.
+     */
+    @Synchronized
+    override fun answering() {
+        if (line == null) return
+        settle()
+    }
 
     /**
      * A tool answered, which is the last thing to happen before the next round

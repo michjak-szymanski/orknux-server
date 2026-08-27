@@ -15,6 +15,14 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### 🔧 Changed
+
+- 🧠 **A task's thinking closes when the model starts answering**, rather than
+  staying open until the turn ends — a long answer no longer leaves the block
+  counting up with the reasoning stopped mid-sentence.
+
 ## 0.9.4
 
 ### ✨ Added

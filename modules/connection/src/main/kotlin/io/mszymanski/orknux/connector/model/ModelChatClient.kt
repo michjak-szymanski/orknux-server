@@ -19,11 +19,16 @@ import tools.jackson.databind.node.ObjectNode
 /**
  * One turn of a conversation, as the caller has it. Framework-free on purpose.
  *
- * A turn is usually text. Two kinds are not: an assistant turn that asked for
- * tools carries [asked] and no content worth showing, and the turn answering one
- * carries [respondingTo] — the id of the call it answers. Both shapes need those
+ * A turn is usually text. Two kinds are more than that: an assistant turn that
+ * asked for tools carries [asked], and the turn answering one carries
+ * [respondingTo] — the id of the call it answers. Both shapes need those
  * threaded back on the next request or the model cannot match its own question
  * to the answer.
+ *
+ * A turn that asked for tools may carry [content] as well, and usually does not.
+ * Providers are entitled to answer with a message and calls in one reply and
+ * several do it habitually, so the text is kept rather than dropped: it is what
+ * the model said, and whoever records the round writes it down beside the calls.
  */
 data class ChatTurn(
     val role: String,

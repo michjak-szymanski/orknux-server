@@ -144,6 +144,115 @@ class LlmSessionRecordingTest(
     }
 
     /**
+     * A round that said something *and* asked for a tool keeps both.
+     *
+     * Providers are entitled to answer with a message and tool calls in one
+     * reply, and several do it habitually. That text was kept only in the round
+     * itself: the model read its own remark until the round ended and then it
+     * was gone - off the page, out of what the session can hand back, and out
+     * of any account of how the answer was arrived at.
+     *
+     * Before the call and not after, because that is the order it happened in.
+     * The model wrote the sentence and asked for the tool in the same message,
+     * so a transcript that puts the sentence under the lookup has the agent
+     * speaking about something it had not yet looked up.
+     */
+    @Test
+    fun `what an agent said before it called a tool is written down, before the call`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val agentId = agent("Reviewer", model(serveSaying(REMARK)), granted = "Reviews")
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+
+        val lines = events.findAll().sortedBy { it.id }
+        assertThat(lines.map { it.kind }).containsExactly(
+            LlmSessionEventKind.USER,
+            LlmSessionEventKind.AGENT,
+            LlmSessionEventKind.TOOL,
+            LlmSessionEventKind.AGENT,
+        )
+        // Under the agent's own name, and word for word: what is being recorded
+        // is what the model said, so nothing here trims or reflows it.
+        assertThat(lines[1].actor).isEqualTo("Reviewer")
+        assertThat(lines[1].content).isEqualTo(REMARK)
+        assertThat(lines[3].content).isEqualTo("Read the diff twice.")
+    }
+
+    /**
+     * And the ordinary round writes no line of its own, which is the part that
+     * had to be got right.
+     *
+     * Nearly every tool-calling round carries no text at all. A line for each
+     * of them would put an empty speech bubble under every lookup on every page
+     * in the product, on every round, for ever.
+     */
+    @Test
+    fun `a round that called a tool and said nothing writes no line for it`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val agentId = agent("Reviewer", model(serveSaying(null)), granted = "Reviews")
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+
+        assertThat(events.findAll().sortedBy { it.id }.map { it.kind }).containsExactly(
+            LlmSessionEventKind.USER,
+            LlmSessionEventKind.TOOL,
+            LlmSessionEventKind.AGENT,
+        )
+    }
+
+    /**
+     * Blank counts as nothing, and it has to: a closing `</think>` routinely
+     * leaves a newline behind it, so a round whose whole text is that newline
+     * is a round that said nothing. The same test the client makes when it
+     * decides whether a stream carried an answer at all.
+     */
+    @Test
+    fun `a round whose only text is what a reasoning tag left behind writes no line`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val agentId = agent("Reviewer", model(serveSaying("<think>the skill first</think>\\n  ")), granted = "Reviews")
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+
+        assertThat(events.findAll().sortedBy { it.id }.map { it.kind }).containsExactly(
+            LlmSessionEventKind.USER,
+            LlmSessionEventKind.TOOL,
+            LlmSessionEventKind.AGENT,
+        )
+    }
+
+    /**
+     * And the next run hears it, which is the consequence that mattered most.
+     *
+     * [LlmSessionRecorder.remembered] reads what was *said*, so a remark that
+     * was never written down was gone from the agent's own memory the moment
+     * the round ended. It is what the agent actually said and belongs in its
+     * history for the same reason its answer does; a task whose progress was
+     * reported in one of those remarks had the only copy of it thrown away.
+     *
+     * Asserted on the first request of the second run, before any tool has run
+     * in it: what is in that body was remembered rather than said again.
+     */
+    @Test
+    fun `what an agent said before a call is in front of it on the next run`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val agentId = agent("Reviewer", model(serveSaying(REMARK)), granted = "Reviews")
+        graph(agentId, prefix = "issue", key = "42")
+
+        start()
+        val first = received.size
+        start()
+
+        assertThat(received[first]).contains(REMARK)
+    }
+
+    /**
      * The feature, stated: a second run joins the first one's conversation.
      *
      * Two runs are two executions with two logs and nothing in common. The
@@ -450,6 +559,29 @@ class LlmSessionRecordingTest(
         }
     }
 
+    /**
+     * The same round, with whatever the model chose to say alongside the call.
+     *
+     * @param said the message content of the tool-calling reply, already
+     *   escaped for JSON, or null for the `"content":null` every other stub
+     *   here sends. The point of the parameter is that the two are one shape:
+     *   a provider decides per reply whether to put words beside the calls.
+     */
+    private fun serveSaying(said: String?): String = serve { body ->
+        if (body.contains("tool_call_id")) {
+            """{"choices":[{"message":{"role":"assistant","content":"Read the diff twice."}}],
+               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
+        } else {
+            """
+            {"choices":[{"message":{"role":"assistant","content":${said?.let { "\"$it\"" } ?: "null"},
+             "tool_calls":[
+              {"id":"call_1","type":"function",
+               "function":{"name":"skill_load","arguments":"{\"name\":\"codeReview\"}"}}
+            ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
+            """.trimIndent()
+        }
+    }
+
     /** Never answers, only ever asks for another lookup - which is stopped. */
     private fun serveAlwaysCallingTools(): String = serve {
         """
@@ -588,4 +720,9 @@ $content
 ${'"'}${'"'}${'"'}
            }) { id } }""",
     ).execute().path("createSkill.id").entity(Long::class.java).get()
+
+    private companion object {
+        /** What a model says alongside the call, in the reply that makes it. */
+        const val REMARK = "Let me read the review skill first."
+    }
 }

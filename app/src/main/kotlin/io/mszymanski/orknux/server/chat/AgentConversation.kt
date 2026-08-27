@@ -73,8 +73,11 @@ interface RoundWatch {
  * take minutes; a database connection held for that long is one nobody else has.
  *
  * A caller that named an LLM session gets the round written down as it happens —
- * the tools that were called, what each of them gave back, and what was finally
- * said. That is not the same record as the chat history and does not contradict
+ * the tools that were called, what each of them gave back, anything the agent
+ * said on the way, and what was finally said. A round is allowed to be both:
+ * providers answer with a message and tool calls in one reply, and [record] says
+ * what happens to that text and why the blank case is not written down. That is
+ * not the same record as the chat history and does not contradict
  * the paragraph above: the history is the conversation somebody had, while a
  * session is the conversation the agent had, working included. A caller that
  * named no session pays for a null check and touches no table at all.
@@ -253,6 +256,17 @@ class AgentConversation(
                     output += answer.outputTokens
                     conversation += answer.turn
                     thought(answer.reasoning, answer.reasoningMillis, announce = watch == null)
+                    /*
+                     * Before the calls, because that is the order it happened
+                     * in: the model wrote the text and then asked for the
+                     * tools, in one message. Written after the thinking for the
+                     * same reason - a round reads think, speak, look up - and
+                     * recorded at all because until this it was not: the model
+                     * saw its own remark for the rest of the round and nobody
+                     * else ever did. See [record] for what is written and what
+                     * is not.
+                     */
+                    record(into, agent, answer)
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
                         val here = at++
@@ -308,18 +322,6 @@ class AgentConversation(
     }
 
     /**
-     * The round's outcome, written into the session that asked for one.
-     *
-     * A failure becomes a system note rather than an answer, because it is not
-     * something the agent said — it is something that happened to the
-     * conversation. A transcript that simply stopped would leave whoever reads
-     * it looking for words that were never spoken.
-     *
-     * A round that asked for tools is not an outcome and is not recorded here;
-     * those lines are written as the calls are dispatched, and the round is not
-     * over.
-     */
-    /**
      * The thinking off a round that took no tools at all, handed to a watcher.
      *
      * An agent with no tools granted answers in one call, so there is no loop
@@ -337,12 +339,50 @@ class AgentConversation(
         if (reasoning.isNotBlank()) watch.thinking(reasoning)
     }
 
+    /**
+     * What the agent said in a round, written into the session that asked for
+     * one.
+     *
+     * A failure becomes a system note rather than an answer, because it is not
+     * something the agent said — it is something that happened to the
+     * conversation. A transcript that simply stopped would leave whoever reads
+     * it looking for words that were never spoken.
+     *
+     * **A round can carry text and calls at once, and both are written down.**
+     * Providers are entitled to answer with a message and tool calls in the
+     * same reply, and several do it habitually - "Let me check the open issues
+     * first" alongside the call that checks them. [ModelChatClient] keeps that
+     * text on [ChatCompletion.CalledTools.turn], so the model reads its own
+     * remark for the rest of the round; until this recorded it, nobody else
+     * ever did. It was off the task page and off the chat page,
+     * [LlmSessionRecorder.remembered] reads what was *said* so it was gone from
+     * the agent's own memory by the next turn, and a task whose outcome was
+     * written in one of those remarks described work whose only copy had been
+     * thrown away.
+     *
+     * **Nothing is written where there is no text**, which is the overwhelming
+     * majority of tool-calling rounds. A blank line recorded for each of them
+     * would put an empty speech bubble under every lookup on every page in the
+     * product, for ever. Blank rather than empty, and for the reason
+     * [ModelChatClient] gives where it makes the same test: a closing reasoning
+     * tag routinely leaves a newline behind it.
+     *
+     * What is written is what the model wrote, untrimmed and unreformatted
+     * beyond that test. Reformatting it would be this deciding what the model
+     * meant.
+     *
+     * The caller places the call, and the placing matters: the text was written
+     * before the tools were asked for, so it has to be recorded before the
+     * lines for those calls or the transcript reads as though the agent spoke
+     * after looking things up.
+     */
     private fun record(into: Long?, agent: Agent, answer: ChatCompletion) {
         val session = into ?: return
         when (answer) {
             is ChatCompletion.Answered -> sessions.agentSaid(session, agent.name, answer.content)
             is ChatCompletion.Failed -> sessions.note(session, "${agent.name} could not answer: ${answer.reason}")
-            is ChatCompletion.CalledTools -> Unit
+            is ChatCompletion.CalledTools ->
+                if (answer.turn.content.isNotBlank()) sessions.agentSaid(session, agent.name, answer.turn.content)
         }
     }
 

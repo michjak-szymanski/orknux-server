@@ -99,6 +99,10 @@ have failed.
   Anthropic request is built; every other provider is sent exactly what it was
   sent before.
 
+- 🧠 **A task's thinking closes when the model starts answering**, rather than
+  staying open until the turn ends — a long answer no longer leaves the block
+  counting up with the reasoning stopped mid-sentence.
+
 ## 0.9.4
 
 ### ✨ Added

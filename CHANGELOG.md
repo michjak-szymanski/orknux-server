@@ -57,6 +57,12 @@ have failed.
   the headers HTTP has names for carrying a credential are left out of the row,
   so nothing changes for a workflow already written against a webhook.
 
+- 🔒 **A credential on a shell command line is no longer audited in the clear.**
+  A password in a git remote, a `curl -u`, an `Authorization` header, a
+  `--token=` or an exported `…_TOKEN` is replaced by `***` before the row is
+  written — rows written before this are left as they are, and any credential
+  already in them should be treated as disclosed.
+
 ## 0.9.4
 
 ### ✨ Added

@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
 import io.mszymanski.orknux.connector.shell.ShellSessionService
 import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.workspace.AuditRedaction
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import org.slf4j.LoggerFactory
@@ -37,6 +38,13 @@ import tools.jackson.databind.ObjectMapper
  * that the machine is the boundary and the administrator secures it, and that is
  * only a fair bargain if the administrator can afterwards read every command
  * that was run.
+ *
+ * **Minus its credentials.** A command line is where a live password most often
+ * ends up in the clear - a token in a git remote, a `curl -u`, an exported
+ * `…_TOKEN` - and the audit log is read on a page any administrator can open and
+ * copied into every backup. What is written down is the command with everything
+ * that reads like a credential replaced by `***`; `AuditRedaction` says what it
+ * finds and, more usefully, what it does not.
  */
 @Service
 class ShellTools(
@@ -157,11 +165,20 @@ class ShellTools(
          * The command is trimmed to fit the column; the point of the entry is
          * that somebody can see what was done, and a command longer than this
          * is a script, which the entry says by being cut.
+         *
+         * Redacted before it is trimmed, and trimmed after. The recorder redacts
+         * everything it writes and would catch this anyway, but only what it is
+         * given: a credential lying across the 300th character would be cut in
+         * half first, and half a token in the audit log is still half a token
+         * that should not be there. Doing it in this order means the marker
+         * replaces the whole of it and the trim falls on ordinary text.
          */
+        val written = AuditRedaction.redact(command).take(COMMAND_IN_AUDIT)
+
         auditRecorder.recordAutomated(
             agent.workspaceId,
             WorkspaceAuditCategory.SHELL,
-            "${agent.name} ran on ${outcome.shellName}: ${command.take(COMMAND_IN_AUDIT)} " +
+            "${agent.name} ran on ${outcome.shellName}: $written " +
                 "(${describeExit(outcome.run.exitCode, outcome.run.timedOut)})",
             agent.name,
         )

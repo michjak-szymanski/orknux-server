@@ -15,6 +15,16 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## Unreleased
+
+### 🔧 Changed
+
+- 🔒 **A credential on a shell command line is no longer audited in the clear.**
+  A password in a git remote, a `curl -u`, an `Authorization` header, a
+  `--token=` or an exported `…_TOKEN` is replaced by `***` before the row is
+  written — rows written before this are left as they are, and any credential
+  already in them should be treated as disclosed.
+
 ## 0.9.4
 
 ### ✨ Added

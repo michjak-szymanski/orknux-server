@@ -627,12 +627,23 @@ class ChatService(
      * either side of it: [beginSend] before, [finishSend] after. It is the shape
      * `ChatStreamAPI` was already composed in, said once for both callers.
      */
-    fun ask(start: ChatSendStart, watch: RoundWatch? = null): ChatCompletion =
+    /**
+     * @param shed what the door is lending the agent for this round - the chat's
+     *   own tools, which are not the agent's and are gone when the round ends.
+     *   Built by the caller rather than here, because [ChatTools] has to reach
+     *   this service to file what it draws and a bean that reached back would be
+     *   a cycle. It is also where `TaskLoop` builds one, and for the same
+     *   reason: the thing running the loop is the thing that knows where what
+     *   the model makes has to be filed.
+     */
+    fun ask(start: ChatSendStart, watch: RoundWatch? = null, shed: ToolShed? = null): ChatCompletion =
         if (start.agentId == null) {
+            // A bare model is offered nothing: no tools of its own, and nothing
+            // lent either - there is no round to lend into.
             models.complete(start.modelId, start.turns)
         } else {
             // An agent may need its tools before it can answer; a bare model cannot.
-            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId, watch = watch)
+            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId, shed, watch)
         }
 
     /**
@@ -826,39 +837,44 @@ class ChatService(
     }
 
     /**
-     * Writes a drawn picture into the chat, as the two lines it is.
+     * Writes a drawn picture into the chat, as the one line it is.
      *
      * [beginSend] and [finishSend] one after the other would be the obvious way
      * and would be wrong twice over: they are for a turn a chat model answered,
      * so between them they choose a model this chat may not even have, budget a
      * context window nobody is filling, and hand the description to the chat
-     * model as a question it never gets to answer. A picture is a complete
-     * exchange by the time it arrives here.
+     * model as a question it never gets to answer. A picture is complete by the
+     * time it arrives here.
      *
-     * What goes in is what was asked for and a markdown image pointing at the
-     * attachment. In the thread rather than in a table of its own, which is the
-     * whole reason a picture survives being drawn: the history is what the chat
-     * is read back out of, and a second record of which message carried which
-     * file is a second record to keep in step.
+     * What goes in is a markdown image pointing at the attachment. In the thread
+     * rather than in a table of its own, which is the whole reason a picture
+     * survives being drawn: the history is what the chat is read back out of,
+     * and a second record of which message carried which file is a second record
+     * to keep in step.
+     *
+     * **The description does not go in with it, and used to.** While a person
+     * pressed a button to draw, what they typed was a turn they had taken and
+     * belonged in the thread as one. #294 made the drawing something the agent
+     * decides on inside its own round, so the description is the model's - and
+     * writing it as a user turn would put words in somebody's mouth and then
+     * hand them back to the model on the next send as though they had said them.
      *
      * Into the LLM session as well where this chat records into one, under the
-     * same two names the ordinary path uses - a transcript that stops at the
-     * picture cannot explain the conversation around it.
+     * name a drawing is signed with - a transcript that stops at the picture
+     * cannot explain the conversation around it.
      */
     @Transactional
-    fun recordPicture(id: Long, prompt: String, said: String) {
+    fun recordPicture(id: Long, said: String) {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val thread = history.findByConversationId(session.conversationId)
-        history.saveAll(session.conversationId, thread + UserMessage(prompt) + AssistantMessage(said))
+        history.saveAll(session.conversationId, thread + AssistantMessage(said))
         // Counted, and counted as a picture. An image model reports no tokens,
         // so a drawing that only touched the two token columns would leave them
         // where they were and read as a turn that cost nothing.
         session.spentPictures += 1
         session.lastMessageAt = OffsetDateTime.now()
 
-        val into = recording(session)
-        recordSaid(session, into, prompt)
-        into?.let { recorder.agentSaid(it, PICTURE_ACTOR, said) }
+        recording(session)?.let { recorder.agentSaid(it, PICTURE_ACTOR, said) }
     }
 
     /**

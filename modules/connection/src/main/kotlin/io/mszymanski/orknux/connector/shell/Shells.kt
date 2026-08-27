@@ -285,25 +285,33 @@ data class ShellProperties(
      *
      * A command that prints a gigabyte would otherwise be a gigabyte in this
      * process's heap and then a gigabyte in a model's context, and neither is
-     * survivable. The reader stops accepting past this and says so, rather than
-     * failing the command, and being told it was cut is enough for a caller to
-     * pipe it through `head` next time.
+     * survivable. What goes when this is reached is the *middle*: [BoundedBuffer]
+     * keeps the first third of the allowance and the last two thirds and writes
+     * a sentence between them saying how much was removed.
      *
      * **256 KiB, and it was 64.** 64 KiB is generous for a command that
      * answers and much too small for one that fails, which is the case that
      * matters: a build that works prints a line, and a build that breaks prints
-     * the download log, the reactor summary and the compile error. Cut at 64 KiB
-     * the model gets the downloads and loses the error, and cannot tell "the
-     * build failed" from "the output stopped" - so it has nothing to act on and
-     * says so. 256 KiB is the allowance the coding task was proved with on that
-     * box, and it is still a fraction of a model's context rather than a
-     * multiple of it, which is the ceiling that matters: these bytes are not
-     * bound for a log file, they are bound for something that has to read them.
+     * the download log, the reactor summary and the compile error. 256 KiB is
+     * the allowance the coding task was proved with on the coder box, and it is
+     * still a fraction of a model's context rather than a multiple of it, which
+     * is the ceiling that matters: these bytes are not bound for a log file,
+     * they are bound for something that has to read them.
      *
-     * What is kept is the *beginning*, which is worth knowing before raising
-     * this further: a tool whose interesting line is its last one is helped by a
-     * bigger allowance only until the allowance is smaller than the whole
-     * output, and after that it is `2>&1 | tail` that helps.
+     * **Raising this is now a comfort rather than a rescue.** It was the other
+     * way round while the buffer kept only the beginning, because then a long
+     * enough preamble pushed the answer out however large the number was, and
+     * the number was the only defence. Both ends survive now at any size, so
+     * this decides how much context comes with the answer rather than whether
+     * the answer arrives.
+     *
+     * What a two-ended buffer still cannot save is a single line longer than the
+     * allowance - one line is cut in the middle of itself, and there is no end
+     * of it to keep separately - and anything whose meaning is genuinely in the
+     * middle: the one warning among four thousand, the middle frames of a very
+     * deep stack. Those want `grep` on the far side rather than a larger number
+     * here, and the marker's byte count is what tells a reader to go and get
+     * them.
      */
     val maxOutputBytes: Int = 256 * 1024,
 

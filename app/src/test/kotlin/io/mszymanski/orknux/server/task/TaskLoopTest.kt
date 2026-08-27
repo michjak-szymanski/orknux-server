@@ -6,6 +6,7 @@ import io.mszymanski.orknux.connector.model.ModelProviderRepository
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.issue.IssueNewsKind
 import io.mszymanski.orknux.server.issue.IssueNewsRepository
+import io.mszymanski.orknux.server.llm.LlmSessionEvent
 import io.mszymanski.orknux.server.llm.LlmSessionEventKind
 import io.mszymanski.orknux.server.llm.LlmSessionEventRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
@@ -29,6 +30,8 @@ import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A task's loop, driven a turn at a time.
@@ -412,6 +415,61 @@ class TaskLoopTest(
         assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId)).isEmpty()
     }
 
+    /**
+     * And it settles when the model starts answering, not when the turn ends.
+     *
+     * Issue #290, and the whole of it is the word *when*. The test above asks
+     * the question after the round is over, and every build this has ever had
+     * passes it: [TaskThinking.settle] runs in the loop's `finally` and writes
+     * the duration and whatever reasoning had not been flushed. What nobody
+     * asked was what the line looks like *while the model is writing*, and for
+     * a prompt whose answer is long - "write 1000 words, split it into
+     * chapters" is the one that was reported - that is nearly the whole turn.
+     *
+     * It looked like this: the reasoning cut off wherever the last flush fell,
+     * which is a sentence stopping in the middle, and no duration on the line -
+     * so the page said *Thinking*, counted up on its own clock for two minutes,
+     * and moved only when somebody reloaded it after the turn had ended. It was
+     * read as the live view having stopped delivering; it was the record having
+     * nothing more to deliver.
+     *
+     * So the stub holds the answer open. The assertion is made at a moment when
+     * the round is provably still in flight - the model has written a piece of
+     * its answer and nothing has released it - which is the only moment that
+     * can tell a line closed by [TaskThinking.answering] from one closed by the
+     * `finally` afterwards.
+     */
+    @Test
+    fun `the thinking settles when the model starts answering rather than when the turn ends`() {
+        val answering = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val taskId = taskFor(serveHolding(answering, release))
+
+        val turn = Thread({ loop.advance(taskId) }, "held-turn")
+        turn.start()
+        try {
+            assertThat(answering.await(HELD_SECONDS, TimeUnit.SECONDS))
+                .describedAs("the stub got as far as writing its answer")
+                .isTrue()
+
+            val sessionId = requireNotNull(requireNotNull(tasks.findByIdOrNull(taskId)).sessionId)
+            val settled = thinkingSettledWithin(sessionId, WHILE_WRITING_MILLIS)
+
+            assertThat(settled)
+                .describedAs("the reasoning is closed while the model is still writing its answer")
+                .isNotNull()
+            // The whole of it, including the frames that arrived inside the last
+            // flush window - which is the half of the line a reader could see
+            // was missing, because it stops mid-sentence.
+            assertThat(settled?.content)
+                .isEqualTo("Let me look at what failed. Last week had three runs.")
+            assertThat(settled?.unfinished).isFalse()
+        } finally {
+            release.countDown()
+            turn.join(HELD_SECONDS * 1_000)
+        }
+    }
+
     /** A finished task is not started again by a second delivery of the same turn. */
     @Test
     fun `advancing a task that is over does nothing`() {
@@ -527,6 +585,70 @@ class TaskLoopTest(
         return "http://${server.address.hostString}:${server.address.port}"
     }
 
+    /**
+     * A round that thinks, writes the first of its answer, and then stops there.
+     *
+     * Chunked rather than sent whole, because what is being watched is a round
+     * *in flight*: a response with a length on it is one the client has already
+     * finished reading by the time anything can be asserted about it. The two
+     * reasoning frames go out back to back on purpose - that is what leaves the
+     * second of them inside [TaskThinking.FLUSH_EVERY_MILLIS] and unwritten,
+     * which is the state the reported line was found in.
+     *
+     * @param answering counted down once a piece of the answer is on the wire.
+     * @param release awaited before the round is allowed to finish, so the
+     *   caller decides how long the model is still writing for.
+     */
+    private fun serveHolding(answering: CountDownLatch, release: CountDownLatch): String {
+        server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/chat/completions") { exchange ->
+            val body = exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            received += body
+            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+            // Nought is chunked, which is what lets this write a piece and wait.
+            exchange.sendResponseHeaders(200, 0)
+            exchange.responseBody.use { out ->
+                fun write(frame: String) {
+                    out.write("data: $frame\n\n".toByteArray(StandardCharsets.UTF_8))
+                    out.flush()
+                }
+                write("""{"choices":[{"delta":{"reasoning_content":"Let me look at what failed. "}}]}""")
+                write("""{"choices":[{"delta":{"reasoning_content":"Last week had three runs."}}]}""")
+                write("""{"choices":[{"delta":{"content":"Three runs failed, "}}]}""")
+                answering.countDown()
+                release.await(HELD_SECONDS, TimeUnit.SECONDS)
+                write("""{"choices":[{"delta":{"content":"all of them on the same step."}}]}""")
+                write("""{"choices":[{"delta":{}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}""")
+                out.write("data: [DONE]\n\n".toByteArray(StandardCharsets.UTF_8))
+                out.flush()
+            }
+            exchange.close()
+        }
+        server.start()
+        return "http://${server.address.hostString}:${server.address.port}"
+    }
+
+    /**
+     * The session's one block of reasoning, once it has been closed, or null.
+     *
+     * Polled rather than read once: the assertion is being made from another
+     * thread while the round runs, so "has it been closed yet" is a question
+     * about a moment that arrives shortly after the answer starts. Bounded, and
+     * the bound is what makes a failure a failure - the stub holds the round
+     * open for far longer, so a line that is not closed inside this was not
+     * closed by the answer beginning at all.
+     */
+    private fun thinkingSettledWithin(sessionId: Long, millis: Long): LlmSessionEvent? {
+        val until = System.currentTimeMillis() + millis
+        while (System.currentTimeMillis() < until) {
+            val line = events.findAll()
+                .singleOrNull { it.sessionId == sessionId && it.kind == LlmSessionEventKind.THINKING }
+            if (line?.millis != null) return line
+            Thread.sleep(POLL_MILLIS)
+        }
+        return null
+    }
+
     private fun agent(name: String, modelId: Long): Long {
         val id = graphQlTester.document(
             """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
@@ -555,5 +677,20 @@ class TaskLoopTest(
 
         /** What somebody says to the task while it is already working. */
         const val MESSAGE = "Make it a table rather than prose."
+
+        /**
+         * How long the reasoning is given to close, once the answer has begun.
+         *
+         * Generous against the machine and tiny against the thing it is telling
+         * apart: the stub holds the round open for thirty seconds, so a line
+         * that is still open after this was not closed by the answer starting
+         * and will not be closed until the turn ends.
+         */
+        const val WHILE_WRITING_MILLIS = 5_000L
+
+        const val POLL_MILLIS = 100L
+
+        /** How long the stub goes on writing if nothing releases it. */
+        const val HELD_SECONDS = 30L
     }
 }

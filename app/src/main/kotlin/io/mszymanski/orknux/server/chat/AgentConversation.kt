@@ -41,6 +41,24 @@ interface RoundWatch {
     /** What the model thought before it did anything. Empty is never sent. */
     fun thinking(text: String) = Unit
 
+    /**
+     * The model has begun writing its answer, so it has stopped thinking.
+     *
+     * The other way a round's reasoning ends, and the one nothing used to say.
+     * [called] covers the model that decided to look something up; this covers
+     * the model that decided to answer - and for a prompt whose answer is long,
+     * that is the whole of the round. Without it a watcher drawing the thinking
+     * has no way to know it is over until the round is, so a block of reasoning
+     * sat unfinished on the screen for however many minutes the answer took,
+     * counting up and cut off wherever the last flush happened to fall. See
+     * [io.mszymanski.orknux.server.task.TaskThinking].
+     *
+     * Sent on the first piece of the answer and on every one after it, because
+     * it is a fact about the round rather than an event to be counted - a
+     * watcher acts on the first and ignores the rest.
+     */
+    fun answering() = Unit
+
     /** A call, the moment it is dispatched and before its tool has run. */
     fun called(at: Int, tool: String, arguments: String) = Unit
 
@@ -152,7 +170,7 @@ class AgentConversation(
             val once = if (watch == null) {
                 models.complete(modelId, turns).also { told(watch, it) }
             } else {
-                models.stream(modelId, turns, onThinking = { watch.thinking(it) }) {}
+                models.stream(modelId, turns, onThinking = { watch.thinking(it) }) { watch.answering() }
             }
             return once.also { record(into, agent, it) }
         }
@@ -232,7 +250,12 @@ class AgentConversation(
             val answer = if (watch == null) {
                 models.complete(modelId, conversation, offered)
             } else {
-                models.stream(modelId, conversation, offered, onThinking = { watch.thinking(it) }) {}
+                models.stream(
+                    modelId,
+                    conversation,
+                    offered,
+                    onThinking = { watch.thinking(it) },
+                ) { watch.answering() }
             }
             when (answer) {
                 is ChatCompletion.Failed -> return answer.also { record(into, agent, it) }

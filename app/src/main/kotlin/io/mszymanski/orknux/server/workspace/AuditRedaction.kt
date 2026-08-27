@@ -29,7 +29,11 @@ package io.mszymanski.orknux.server.workspace
  *    `Authentication`, `X-Api-Key`, `X-Auth-Token`, `X-Access-Token`,
  *    `X-Amz-Security-Token`, `Private-Token`, `Api-Key`, `Auth-Token`, `Cookie`
  *    and `Set-Cookie`, wherever one appears;
- *  - `Bearer …` and `Basic …` anywhere, header or not;
+ *  - `Bearer …` and `Basic …` anywhere, header or not, when what follows is
+ *    eight characters or more and at least one of them is not a lowercase
+ *    letter — a digit, a capital, or one of `._~+/=-`. Every base64 or JWT
+ *    value has one; `Basic authentication redesign` is a workflow title and
+ *    keeps its words;
  *  - `name=value` and `--name value`, quoted or bare, where the name reads like
  *    a credential — it contains `pass`, `pwd`, `secret`, `token`, `key`,
  *    `credential` or `auth` and does not end in something that names a file, a
@@ -64,9 +68,14 @@ package io.mszymanski.orknux.server.workspace
  *  - **an unusual flag spelling.** `--pw`, `-k`, `--cred`, a program whose
  *    password flag is `--identity` or `--seed`: none of those read as a
  *    credential by name, and the value goes in as typed;
- *  - **a lowercase-letters-only password written against `-p`** (`-pS3cr3t` is
- *    caught, `-psecret` is not), because `tar -pxzf` and `find -printf` are
- *    real commands and mangling them would cost more than it saves;
+ *  - **a value of nothing but lowercase letters**, in the two places that is
+ *    what tells a credential from a word: `-psecret` written against the
+ *    flag (`-pS3cr3t` is caught), and `Bearer` or `Basic` followed by one
+ *    (`Bearer abcdefgh` is not caught, and neither is a header-less
+ *    `Basic dXNlcg` — though inside an `Authorization:` header both are,
+ *    because the header names itself). `tar -pxzf`, `find -printf` and
+ *    `Basic authentication` are all real, and mangling them would cost more
+ *    than it saves;
  *  - **anything past the length an audit message is cut to.** A long command is
  *    trimmed to fit the column, and a credential in the part that was cut was
  *    never at risk — but a credential straddling the cut leaves its first few
@@ -168,11 +177,24 @@ object AuditRedaction {
     private fun headerValues(text: String): String =
         text.replace(HEADER_VALUE) { "${it.groupValues[1]}${it.groupValues[2]}$MARKER" }
 
-    /** The scheme on its own, for the lines that carry it without a header name. */
+    /**
+     * The scheme on its own, for the lines that carry it without a header name.
+     *
+     * The word after it has to look like a credential rather than like a word.
+     * Most of what this recorder writes is English — a workflow saved, an issue
+     * opened, and the title somebody typed on it — and `Basic authentication
+     * redesign` is a title this product's own tracker collects. A rule that took
+     * any eight characters would turn that into `Basic ***` and lose the audit
+     * line without a credential anywhere near it. Every real base64 or JWT value
+     * carries a digit, a capital or one of `._~+/=-`; `authentication`,
+     * `credentials` and `permissions` do not.
+     */
     private val BEARER = Regex("""(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=\-]{8,})""")
 
-    private fun bearerTokens(text: String): String =
-        text.replace(BEARER) { "${it.groupValues[1]} $MARKER" }
+    private fun bearerTokens(text: String): String = text.replace(BEARER) { match ->
+        val value = match.groupValues[2]
+        if (value.all { it in 'a'..'z' }) match.value else "${match.groupValues[1]} $MARKER"
+    }
 
     // ---- user:password against a flag ----------------------------------
 

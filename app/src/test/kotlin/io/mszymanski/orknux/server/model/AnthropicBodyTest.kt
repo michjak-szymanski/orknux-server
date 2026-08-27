@@ -7,6 +7,7 @@ import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelProviderRepository
 import io.mszymanski.orknux.connector.model.ModelUsageRepository
+import io.mszymanski.orknux.connector.model.ToolCall
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -19,6 +20,7 @@ import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureG
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
+import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -26,23 +28,30 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * A picture sent to an Anthropic model actually arrives.
+ * What `anthropicBody` actually puts on the wire.
  *
- * It did not. `openAiBody` carried a turn's images as `image_url` parts and
- * `anthropicBody` had no branch for them at all, so a turn with a picture
- * reached an Anthropic provider as words alone. Nothing failed and nothing was
- * logged - the model simply answered, plausibly and at length, about something
- * it had never been shown. An agent whose entire purpose was reading a
- * screenshot appeared to work.
+ * Every test here asserts the bytes of the request rather than that the call
+ * succeeded, because succeeding was never what was in doubt. The stub records
+ * the request body and the assertions are about what is in it.
  *
- * That is why this test asserts the bytes on the wire rather than that the call
- * succeeded: succeeding was never the problem. The stub records the request body
- * and the assertions are about what is in it.
+ * **Pictures**, which is where this began. `openAiBody` carried a turn's images
+ * as `image_url` parts and `anthropicBody` had no branch for them at all, so a
+ * turn with a picture reached an Anthropic provider as words alone. Nothing
+ * failed and nothing was logged - the model simply answered, plausibly and at
+ * length, about something it had never been shown. An agent whose entire
+ * purpose was reading a screenshot appeared to work.
+ *
+ * **Alternation**, which fails the opposite way. Anthropic rejects two messages
+ * of one role in a row, so a run of them is a 400 and no answer at all. The
+ * shapes that produce one are ordinary - an agent that said something on its
+ * way to a lookup and then answered, a round that threaded back three tool
+ * results - and they are joined here rather than anywhere upstream, for the
+ * reasons `anthropicBody` gives.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester
 @WithMockUser(username = "alice", roles = ["ADMINS"])
-class AnthropicImageTest(
+class AnthropicBodyTest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val providers: ModelProviderRepository,
     @Autowired val models: LlmModelRepository,
@@ -164,6 +173,120 @@ class AnthropicImageTest(
         assertThat(image.path("type").asString()).isEqualTo("image_url")
         assertThat(image.path("image_url").path("url").asString()).isEqualTo(png)
     }
+
+    /**
+     * The shape a session now hands back, and the one that would be refused.
+     *
+     * An agent may answer with a message and tool calls in the same reply, so
+     * what it said on the way to a lookup is recorded beside what it finally
+     * answered. Read back as memory those are two assistant turns with nothing
+     * between them - which Anthropic rejects outright, and which every other
+     * provider accepts, so the joining belongs to this body and not to the
+     * session that keeps them apart.
+     *
+     * Two parts rather than one string: two things the agent said are two
+     * things, and gluing them together would put a sentence in its mouth.
+     */
+    @Test
+    fun `two assistant turns in a row become one message of two parts`() {
+        val modelId = anthropicModel()
+
+        chat.complete(
+            modelId,
+            listOf(
+                ChatTurn(role = "user", content = "What does the review skill say?"),
+                ChatTurn(role = "assistant", content = "Let me read the review skill first."),
+                ChatTurn(role = "assistant", content = "Read the diff twice."),
+                ChatTurn(role = "user", content = "Are you sure?"),
+            ),
+        )
+
+        val messages = mapper.readTree(sent.single()).path("messages")
+        assertThat(messages.size()).describedAs("the two must not be sent as two").isEqualTo(3)
+        assertThat(roles(messages)).containsExactly("user", "assistant", "user")
+
+        val said = messages[1].path("content")
+        assertThat(said.isArray).isTrue()
+        assertThat(said.size()).isEqualTo(2)
+        assertThat(each(said) { it.path("type").asString() }).containsOnly("text")
+        // In the order they were said in, which is the order the round had them.
+        assertThat(said[0].path("text").asString()).isEqualTo("Let me read the review skill first.")
+        assertThat(said[1].path("text").asString()).isEqualTo("Read the diff twice.")
+    }
+
+    /**
+     * And the results of one round arrive as one turn, which was already true
+     * of the round and never of the request.
+     *
+     * A round that called three tools threads three results back as three
+     * turns, all of them user turns by the time they reach here. That predates
+     * anything about what an agent says beside a call; it is the same wire rule
+     * and the same join.
+     */
+    @Test
+    fun `several tool results in a row become one message of several parts`() {
+        val modelId = anthropicModel()
+
+        chat.complete(
+            modelId,
+            listOf(
+                ChatTurn(role = "user", content = "Which builds failed?"),
+                ChatTurn(role = "assistant", content = "", asked = listOf(ToolCall("call_1", "builds", "{}"))),
+                ChatTurn(role = "user", content = "build 12 failed", respondingTo = "call_1"),
+                ChatTurn(role = "user", content = "build 13 failed", respondingTo = "call_2"),
+            ),
+        )
+
+        val messages = mapper.readTree(sent.single()).path("messages")
+        assertThat(roles(messages)).containsExactly("user", "assistant", "user")
+
+        val results = messages[2].path("content")
+        assertThat(results.size()).isEqualTo(2)
+        assertThat(each(results) { it.path("type").asString() }).containsOnly("tool_result")
+        assertThat(each(results) { it.path("tool_use_id").asString() }).containsExactly("call_1", "call_2")
+        assertThat(each(results) { it.path("content").asString() })
+            .containsExactly("build 12 failed", "build 13 failed")
+    }
+
+    /**
+     * And an ordinary conversation is sent exactly as it was before.
+     *
+     * The join must be invisible where there is nothing to join. A turn of
+     * plain words stays a plain string rather than becoming a one-item array,
+     * because that is what this sent before any of it existed and a request
+     * that changed shape for every caller would be a wider change than the bug.
+     */
+    @Test
+    fun `alternating turns are sent one for one, as plain strings`() {
+        val modelId = anthropicModel()
+
+        chat.complete(
+            modelId,
+            listOf(
+                ChatTurn(role = "user", content = "Why did it fall over?"),
+                ChatTurn(role = "assistant", content = "The pool was exhausted."),
+                ChatTurn(role = "user", content = "So what do we do?"),
+            ),
+        )
+
+        val messages = mapper.readTree(sent.single()).path("messages")
+        assertThat(messages.size()).isEqualTo(3)
+        assertThat(roles(messages)).containsExactly("user", "assistant", "user")
+        assertThat(each(messages) { it.path("content").isTextual })
+            .describedAs("plain words stay a string").containsOnly(true)
+        assertThat(messages[1].path("content").asString()).isEqualTo("The pool was exhausted.")
+    }
+
+    /**
+     * Every element of a JSON array, read out.
+     *
+     * Indexed rather than iterated because a `JsonNode` is not the `Iterable`
+     * Kotlin's `map` wants, and the assertions here are all about a sequence.
+     */
+    private fun <T> each(array: JsonNode, of: (JsonNode) -> T): List<T> =
+        (0 until array.size()).map { of(array[it]) }
+
+    private fun roles(messages: JsonNode): List<String> = each(messages) { it.path("role").asString() }
 
     private fun anthropicModel(): Long = modelOn(newProvider("Anthropic", "ANTHROPIC"))
 

@@ -191,6 +191,49 @@ class ShellSessionTest(
     }
 
     @Test
+    fun `a machine given a timeout of its own is held to that one, not the installation's`() {
+        /*
+         * Both directions in one test, because a fallback has two halves and a
+         * test that only drove one of them would pass on a build that ignored
+         * the column entirely.
+         *
+         * The installation allows five seconds here. `sleep 3` is chosen to sit
+         * between that and the second this machine is given, so the same command
+         * has to come back two different ways depending on nothing but the row.
+         */
+        shells.save(shells.findById(shellId).orElseThrow().apply { commandTimeoutSeconds = 1 })
+
+        val stopped = mapper.readTree(run(granted, openSession(granted), "sleep 3"))
+        assertThat(stopped.path("exitCode").isNull).isTrue()
+        assertThat(stopped.path("timedOut").stringValue()).contains("may still be running")
+
+        // And with the column back to null the machine is on the installation's
+        // five seconds again, where the same command finishes. Null has to keep
+        // meaning "whatever the installation says" rather than "nothing".
+        shells.save(shells.findById(shellId).orElseThrow().apply { commandTimeoutSeconds = null })
+
+        val finished = mapper.readTree(run(granted, openSession(granted), "sleep 3"))
+        assertThat(finished.path("timedOut").isMissingNode).isTrue()
+        assertThat(finished.path("exitCode").intValue()).isEqualTo(0)
+    }
+
+    @Test
+    fun `a machine given an output allowance of its own keeps what the installation would have cut`() {
+        // 400 lines of `orknux` is 2800 bytes, which the installation's 512
+        // cuts and this machine's 8 KiB does not. The same command again, and
+        // the only thing that differs is the row.
+        shells.save(shells.findById(shellId).orElseThrow().apply { maxOutputBytes = 8 * 1024 })
+
+        val kept = mapper.readTree(run(granted, openSession(granted), "yes orknux | head -n 400"))
+
+        assertThat(kept.path("exitCode").intValue()).isEqualTo(0)
+        assertThat(kept.path("stdout").stringValue().length).isGreaterThan(512)
+        // Not cut at all, which is the difference between an allowance that was
+        // raised and one that was merely reported.
+        assertThat(kept.path("truncated").isMissingNode).isTrue()
+    }
+
+    @Test
     fun `an agent without the switch cannot reach the shells`() {
         // Not offered them, which is the first half: an agent handed a tool it
         // may not call spends a round trip finding out.

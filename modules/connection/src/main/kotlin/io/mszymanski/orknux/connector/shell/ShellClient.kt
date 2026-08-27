@@ -145,18 +145,34 @@ class ShellClient(private val properties: ShellProperties) {
      * whoever asked decide what it means.
      *
      * The two things that can go wrong on our side are bounded rather than
-     * fatal. A command that never returns has its channel closed after
-     * [ShellProperties.commandTimeout] and comes back with [ShellRun.timedOut]
-     * set. Closing a channel is not killing a process on the far side, and the
-     * wording says so rather than claiming a kill that did not happen - killing
-     * it would mean following a process id through a login shell that never gave
-     * us one. A command that prints more than [ShellProperties.maxOutputBytes]
-     * has the rest dropped and comes back truncated, because the alternative is
-     * a gigabyte in this heap and then a gigabyte in a model's context.
+     * fatal. A command that never returns has its channel closed after the
+     * timeout and comes back with [ShellRun.timedOut] set. Closing a channel is
+     * not killing a process on the far side, and the wording says so rather than
+     * claiming a kill that did not happen - killing it would mean following a
+     * process id through a login shell that never gave us one. A command that
+     * prints more than the output limit has the rest dropped and comes back
+     * truncated, because the alternative is a gigabyte in this heap and then a
+     * gigabyte in a model's context.
+     *
+     * Both bounds come from [shell] when it has been given them and from
+     * [ShellProperties] when it has not, which is what makes an installation
+     * default a default: raise the property and every machine that never asked
+     * for anything different moves with it.
+     *
+     * [shell] is null only for the three commands this application runs on its
+     * own behalf - the `mkdir` that makes a session's directory, the `uname`
+     * that says what answered, and the `rm -rf` that tidies the directory away.
+     * Those are ours rather than an agent's and each of them finishes at once,
+     * so the machine's own numbers have nothing to say about them: a build box
+     * allowed half an hour for a build has not thereby asked for half an hour
+     * of `uname`.
      */
-    fun run(session: ClientSession, command: String, directory: String?): ShellRun {
-        val stdout = BoundedBuffer(properties.maxOutputBytes)
-        val stderr = BoundedBuffer(properties.maxOutputBytes)
+    fun run(session: ClientSession, command: String, directory: String?, shell: Shell? = null): ShellRun {
+        val timeout = shell?.commandTimeout ?: properties.commandTimeout
+        val limit = shell?.maxOutputBytes ?: properties.maxOutputBytes
+
+        val stdout = BoundedBuffer(limit)
+        val stderr = BoundedBuffer(limit)
 
         return session.createExecChannel(withDirectory(command, directory)).use { exec ->
             exec.out = stdout
@@ -167,7 +183,7 @@ class ShellClient(private val properties: ShellProperties) {
             exec.setIn(ByteArrayInputStream(ByteArray(0)))
 
             exec.open().verify(properties.connectTimeout)
-            val finished = exec.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), properties.commandTimeout)
+            val finished = exec.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), timeout)
                 .contains(ClientChannelEvent.CLOSED)
 
             ShellRun(

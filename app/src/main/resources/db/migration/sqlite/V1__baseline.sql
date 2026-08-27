@@ -670,6 +670,11 @@ CREATE TABLE shell
     key_passphrase               varchar(4000),
     enabled                      boolean not null default true,
     host_key                     varchar(500),
+    -- Null means "whatever this installation says", which is ShellProperties.
+    -- See postgresql/V215__shell_limits.sql for why null rather than a copy of
+    -- the default.
+    command_timeout_seconds      integer,
+    max_output_bytes             integer,
     status                       varchar(20) not null default 'NOT_CHECKED',
     last_check_message           varchar(500),
     last_checked_at              timestamp,

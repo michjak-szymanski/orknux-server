@@ -33,11 +33,24 @@ class ShellService(
     private val sessions: ShellSessionRepository,
     private val client: ShellClient,
     private val probe: ConnectionProbe,
+    private val properties: ShellProperties,
 ) {
 
-    fun shells(): List<ShellView> = shells.findAllByOrderByNameAsc().map(::ShellView)
+    fun shells(): List<ShellView> = shells.findAllByOrderByNameAsc().map(::view)
 
-    fun shell(id: Long): ShellView? = shells.findByIdOrNull(id)?.let(::ShellView)
+    fun shell(id: Long): ShellView? = shells.findByIdOrNull(id)?.let(::view)
+
+    /**
+     * One shell as a screen may see it, with the installation's own limits
+     * alongside it.
+     *
+     * The defaults travel on every view for the reason `account` does: a shell
+     * that has not been given a timeout of its own is running on a number the
+     * screen has no way to know, and a form that showed an empty box and said
+     * nothing would be hiding the value actually in force. See
+     * [ShellView.defaultCommandTimeoutSeconds].
+     */
+    private fun view(shell: Shell): ShellView = ShellView(shell, properties)
 
     @Transactional
     fun create(input: ShellInput): ShellView {
@@ -54,10 +67,12 @@ class ShellService(
                 privateKey = validKey(input.privateKey, input.keyPassphrase),
                 keyPassphrase = input.keyPassphrase?.trim()?.ifEmpty { null },
                 enabled = input.enabled ?: true,
+                commandTimeoutSeconds = validTimeout(input.commandTimeoutSeconds),
+                maxOutputBytes = validOutputBytes(input.maxOutputBytes),
             ),
         )
         shell.status = if (shell.configured) ShellStatus.NOT_CHECKED else ShellStatus.NOT_CONFIGURED
-        return ShellView(shell)
+        return view(shell)
     }
 
     /**
@@ -89,6 +104,17 @@ class ShellService(
         input.enabled?.let { shell.enabled = it }
 
         /*
+         * The limits follow the account's rule rather than the key's: absent
+         * means "this machine has no limit of its own", not "leave whatever is
+         * stored". There is nothing secret about a timeout, so the form always
+         * has the current value to send back, and clearing one has to be sayable
+         * - an empty box is how an administrator says "go back to the
+         * installation's number", and it is the only way they could say it.
+         */
+        shell.commandTimeoutSeconds = validTimeout(input.commandTimeoutSeconds)
+        shell.maxOutputBytes = validOutputBytes(input.maxOutputBytes)
+
+        /*
          * A shell pointed at a different machine has no business carrying the
          * old one's host key: the first connection to the new address would be
          * refused for a mismatch that is not a mismatch, and the message would
@@ -98,7 +124,7 @@ class ShellService(
 
         shell.status = if (shell.configured) shell.status else ShellStatus.NOT_CONFIGURED
         shell.lastModifiedAt = OffsetDateTime.now()
-        return ShellView(shell)
+        return view(shell)
     }
 
     /** The switch on the row, without opening the shell to edit it. */
@@ -107,7 +133,7 @@ class ShellService(
         val shell = shells.findByIdOrNull(id) ?: throw ShellNotFoundException(id)
         shell.enabled = enabled
         shell.lastModifiedAt = OffsetDateTime.now()
-        return ShellView(shell)
+        return view(shell)
     }
 
     /**
@@ -159,7 +185,7 @@ class ShellService(
     fun check(id: Long): ShellView {
         val shell = shells.findByIdOrNull(id) ?: throw ShellNotFoundException(id)
         checkShell(shell)
-        return ShellView(shells.save(shell))
+        return view(shells.save(shell))
     }
 
     /**
@@ -264,6 +290,47 @@ class ShellService(
     private fun validUsername(username: String?): String? = username?.trim()?.ifEmpty { null }
 
     /**
+     * A per-shell command timeout in seconds, or null for the installation's.
+     *
+     * The bounds are what the number can usefully mean rather than what the
+     * column can hold. Under a second is not a timeout, it is a refusal dressed
+     * as one - nothing survives an SSH handshake and a `cd` in less. A day is
+     * the other end: past that the thing being waited on is not a command, it is
+     * a job, and something that runs for a day needs `nohup` and a log file
+     * rather than a channel held open across every deployment in between.
+     */
+    private fun validTimeout(seconds: Int?): Int? {
+        val given = seconds ?: return null
+        if (given !in MIN_TIMEOUT_SECONDS..MAX_TIMEOUT_SECONDS) {
+            throw ShellLimitInvalidException(
+                "A command timeout between $MIN_TIMEOUT_SECONDS and $MAX_TIMEOUT_SECONDS seconds is required, " +
+                    "or none at all to use this installation's",
+            )
+        }
+        return given
+    }
+
+    /**
+     * A per-shell output allowance in bytes, or null for the installation's.
+     *
+     * A kibibyte at the bottom because less than that cuts the answer out of
+     * every command worth running, and 16 MiB at the top because that is where
+     * one command's output stops being a string and starts being a fraction of
+     * this process's heap - held twice over, once per stream, for every command
+     * running at that moment.
+     */
+    private fun validOutputBytes(bytes: Int?): Int? {
+        val given = bytes ?: return null
+        if (given !in MIN_OUTPUT_BYTES..MAX_OUTPUT_BYTES) {
+            throw ShellLimitInvalidException(
+                "An output limit between $MIN_OUTPUT_BYTES and $MAX_OUTPUT_BYTES bytes is required, " +
+                    "or none at all to use this installation's",
+            )
+        }
+        return given
+    }
+
+    /**
      * Parsed where somebody can still fix it.
      *
      * A key that will not open is a shell that can never work, and the moment it
@@ -296,6 +363,11 @@ class ShellService(
         val log = LoggerFactory.getLogger(ShellService::class.java)
 
         const val MESSAGE_LENGTH = 400
+
+        const val MIN_TIMEOUT_SECONDS = 1
+        const val MAX_TIMEOUT_SECONDS = 24 * 60 * 60
+        const val MIN_OUTPUT_BYTES = 1024
+        const val MAX_OUTPUT_BYTES = 16 * 1024 * 1024
     }
 }
 
@@ -316,6 +388,18 @@ data class ShellInput(
     /** Same rule as the key. */
     val keyPassphrase: String? = null,
     val enabled: Boolean? = null,
+    /**
+     * How long one command on this machine may run, in seconds, or null to use
+     * this installation's own limit.
+     *
+     * Absent and null are the same thing here, the way they are for the account
+     * and unlike the key: there is nothing secret about a timeout, so the screen
+     * always has the current value to send back and an empty box is how somebody
+     * says "whatever the installation says".
+     */
+    val commandTimeoutSeconds: Int? = null,
+    /** How much of a command's output to keep, per stream. Same rule as above. */
+    val maxOutputBytes: Int? = null,
     /**
      * Forgets the host key this shell was first seen with, so the next
      * connection trusts whatever answers and records that instead. What somebody
@@ -352,13 +436,32 @@ data class ShellView(
     /** The fingerprint this host was first seen with, for reading by eye. */
     val hostKey: String?,
     val enabled: Boolean,
+    /**
+     * This machine's own command timeout in seconds, or null when it has none
+     * and runs on [defaultCommandTimeoutSeconds].
+     */
+    val commandTimeoutSeconds: Int?,
+    /** This machine's own output allowance per stream, or null for the default. */
+    val maxOutputBytes: Int?,
+    /**
+     * What a shell with no limit of its own actually runs on.
+     *
+     * Here for the same reason [account] is: nothing outside this process can
+     * work it out. The number lives in configuration, is changed by an
+     * environment variable at deployment time, and a screen that showed an empty
+     * box beside it would be showing an administrator that no limit applies -
+     * which is the one thing that is never true.
+     */
+    val defaultCommandTimeoutSeconds: Int,
+    /** The same, for the output allowance. */
+    val defaultMaxOutputBytes: Int,
     val status: ShellStatus,
     val lastCheckMessage: String?,
     val lastCheckedAt: String?,
     val createdAt: String,
     val lastModifiedAt: String,
 ) {
-    constructor(shell: Shell) : this(
+    constructor(shell: Shell, properties: ShellProperties) : this(
         id = requireNotNull(shell.id),
         name = shell.name,
         host = shell.host,
@@ -369,6 +472,13 @@ data class ShellView(
         passphraseSet = !shell.keyPassphrase.isNullOrBlank(),
         hostKey = shell.hostKey,
         enabled = shell.enabled,
+        commandTimeoutSeconds = shell.commandTimeoutSeconds,
+        maxOutputBytes = shell.maxOutputBytes,
+        // Seconds rather than the ISO-8601 a Duration prints, because the field
+        // beside it on the page is a number of seconds and two spellings of one
+        // limit is a screen that has to explain itself.
+        defaultCommandTimeoutSeconds = properties.commandTimeout.seconds.toInt(),
+        defaultMaxOutputBytes = properties.maxOutputBytes,
         status = shell.status,
         lastCheckMessage = shell.lastCheckMessage,
         lastCheckedAt = shell.lastCheckedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),

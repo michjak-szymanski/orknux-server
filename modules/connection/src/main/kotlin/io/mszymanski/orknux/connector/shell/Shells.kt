@@ -105,6 +105,39 @@ class Shell(
     @Column(nullable = false, length = 20)
     var status: ShellStatus = ShellStatus.NOT_CHECKED,
 
+    /**
+     * How long one command on this machine may run, in seconds, or null for the
+     * installation's own limit in [ShellProperties.commandTimeout].
+     *
+     * Here because the limit is a property of the machine rather than of the
+     * installation. A container built to compile things and a router that
+     * answers `show interfaces` want opposite numbers, and an installation that
+     * has both has to choose one - which meant, before this, choosing the number
+     * that lets a build finish and applying it to the box where a command that
+     * hangs should have been noticed in a minute.
+     *
+     * Null rather than the default copied in when the row is written. A copy
+     * would be a promise made on the day the shell was added: raise the
+     * installation's limit afterwards and every machine that never asked for
+     * anything different would stay on the old number, and nobody would be able
+     * to tell those apart from the ones somebody chose deliberately.
+     */
+    @Column(name = "command_timeout_seconds")
+    var commandTimeoutSeconds: Int? = null,
+
+    /**
+     * How much of a command's output this machine keeps, per stream, in bytes,
+     * or null for [ShellProperties.maxOutputBytes].
+     *
+     * Same argument as the timeout above, and the same reason for null. What
+     * makes it worth setting per machine is that the cost is not paid here: the
+     * bytes go into a model's context, and a machine whose commands are `df` and
+     * `systemctl status` has no business being allowed the allowance a build
+     * machine needs.
+     */
+    @Column(name = "max_output_bytes")
+    var maxOutputBytes: Int? = null,
+
     @Column(name = "last_check_message", length = 500)
     var lastCheckMessage: String? = null,
 
@@ -135,6 +168,19 @@ class Shell(
      */
     val account: String
         get() = username?.trim()?.ifEmpty { null } ?: localAccount()
+
+    /**
+     * [commandTimeoutSeconds] as a duration, or null when this machine has not
+     * been given one.
+     *
+     * Stored as seconds and read as a [Duration] because those are two different
+     * audiences. A column of seconds is a number an administrator can read in a
+     * database dump and a form can put in a box; a [Duration] is what the thing
+     * that waits actually takes, and converting it at every call site would be
+     * the same line written four times.
+     */
+    val commandTimeout: Duration?
+        get() = commandTimeoutSeconds?.let { Duration.ofSeconds(it.toLong()) }
 
     /** Whether there is anything to connect with. */
     val configured: Boolean
@@ -198,7 +244,8 @@ data class ShellProperties(
     val connectTimeout: Duration = Duration.ofSeconds(10),
 
     /**
-     * How long one command may run before the channel is closed under it.
+     * How long one command may run before the channel is closed under it, on a
+     * shell that has not been given a limit of its own.
      *
      * A command that never returns must not take the thread that started it with
      * it, and the same argument the script runner's watchdog makes applies here
@@ -209,20 +256,56 @@ data class ShellProperties(
      * command was still running when we stopped waiting, which is the true
      * statement. Killing it would mean tracking a process id through a shell
      * that may not have given us one.
+     *
+     * **Ten minutes, and it was sixty seconds.** Sixty was chosen against the
+     * commands somebody types by hand - `df`, `systemctl status`, `tail` - and
+     * it is right for those. It is wrong for the thing this product ships a box
+     * for: `docker/coder` arrives with an empty Maven repository, so the first
+     * build an agent runs on it downloads Spring Boot before it compiles a line,
+     * and every machine's repository is empty exactly once. The old default did
+     * not make that slow, it made it impossible - the agent was handed a failure
+     * it did not cause and could not fix, and no message anywhere said the
+     * number was ours. Ten minutes is what the coding task was given on that
+     * box and finished inside; it is not a measurement of the worst build
+     * anybody will ever run, and a shell that hosts one of those should be
+     * given a limit of its own.
+     *
+     * What ten minutes costs is that a command which hangs holds its channel for
+     * ten minutes rather than one. That is the trade, taken deliberately: the
+     * agent is waiting either way, and a wait that ends in an answer is worth
+     * more than one that ends on time. A machine where a hang should be noticed
+     * in a minute, and one where a build wants half an hour, are both what
+     * [Shell.commandTimeoutSeconds] is for.
      */
-    val commandTimeout: Duration = Duration.ofSeconds(60),
+    val commandTimeout: Duration = Duration.ofMinutes(10),
 
     /**
-     * How much of a command's output is kept, per stream.
+     * How much of a command's output is kept, per stream, on a shell that has
+     * not been given a limit of its own.
      *
      * A command that prints a gigabyte would otherwise be a gigabyte in this
      * process's heap and then a gigabyte in a model's context, and neither is
      * survivable. The reader stops accepting past this and says so, rather than
-     * failing the command: the first 64 KiB of the output is usually the answer,
-     * and being told it was cut is enough for a caller to pipe it through `head`
-     * next time.
+     * failing the command, and being told it was cut is enough for a caller to
+     * pipe it through `head` next time.
+     *
+     * **256 KiB, and it was 64.** 64 KiB is generous for a command that
+     * answers and much too small for one that fails, which is the case that
+     * matters: a build that works prints a line, and a build that breaks prints
+     * the download log, the reactor summary and the compile error. Cut at 64 KiB
+     * the model gets the downloads and loses the error, and cannot tell "the
+     * build failed" from "the output stopped" - so it has nothing to act on and
+     * says so. 256 KiB is the allowance the coding task was proved with on that
+     * box, and it is still a fraction of a model's context rather than a
+     * multiple of it, which is the ceiling that matters: these bytes are not
+     * bound for a log file, they are bound for something that has to read them.
+     *
+     * What is kept is the *beginning*, which is worth knowing before raising
+     * this further: a tool whose interesting line is its last one is helped by a
+     * bigger allowance only until the allowance is smaller than the whole
+     * output, and after that it is `2>&1 | tail` that helps.
      */
-    val maxOutputBytes: Int = 64 * 1024,
+    val maxOutputBytes: Int = 256 * 1024,
 
     /**
      * How long a session may sit unused before it is swept and its directory
@@ -288,3 +371,12 @@ class ShellNameInvalidException : RuntimeException("A shell name is required")
 class ShellAddressInvalidException(reason: String) : RuntimeException(reason)
 
 class ShellKeyInvalidException(reason: String) : RuntimeException("That private key cannot be used: $reason")
+
+/**
+ * A per-shell limit outside what a limit can usefully be.
+ *
+ * Refused rather than clamped. A number silently moved to the nearest one this
+ * will accept is a form that says it saved what somebody typed and did not, and
+ * the next person to read the page has no way to tell which of the two it is.
+ */
+class ShellLimitInvalidException(reason: String) : RuntimeException(reason)

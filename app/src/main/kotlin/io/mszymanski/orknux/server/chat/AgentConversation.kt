@@ -6,6 +6,7 @@ import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
+import io.mszymanski.orknux.server.workspace.AuditRedaction
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -35,6 +36,18 @@ import org.springframework.stereotype.Service
  *
  * Every method does nothing by default, so a watcher implements the part it has
  * a place to put.
+ *
+ * **What arrives here has had its credentials taken out**, by the same
+ * [io.mszymanski.orknux.server.workspace.AuditRedaction] and in the same two
+ * strengths the session is written with: the full rule set over a call's
+ * arguments, which are a command line, and only what is a credential on sight
+ * over a result, which is arbitrary output a model has to be able to read. It
+ * is the *same string* the recorder is handed, computed once where the round
+ * forks - not a second redaction that could come to a different answer. So a
+ * lookup reads the same on a screen watching it happen as it does on the page
+ * that reads it back tomorrow, which is issue #291. A watcher does not redact
+ * again and must not put any of this in front of a model: what the model is
+ * given is the round's own `conversation`, unredacted, and that is deliberate.
  */
 interface RoundWatch {
 
@@ -294,19 +307,60 @@ class AgentConversation(
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
                         val here = at++
+                        /*
+                         * One string, told to both, and that is the whole of
+                         * issue #291.
+                         *
+                         * The call's arguments are a command line - the shell
+                         * tool's literally so - and they leave this loop by two
+                         * roads: into the session, where [LlmSessionRecorder]
+                         * strips the credentials before the row is saved, and
+                         * to the watcher, which the chat's stream forwards
+                         * straight to a browser. Only the first was stripped,
+                         * so one `git push https://alice:s3cr3t@host/repo.git`
+                         * read `alice:***@host` after a reload and
+                         * `alice:s3cr3t@host` while it was being watched - the
+                         * password on the screen, and a difference that makes
+                         * somebody doubt the redaction works at all.
+                         *
+                         * Redacted here rather than in either road. Doing it in
+                         * the watcher that serves the browser would fix the one
+                         * watcher that exists today and leave the next to
+                         * rediscover it, and it would leave two independent
+                         * decisions about what a credential looks like free to
+                         * drift apart - which is the bug, not a consequence of
+                         * it. Computed once at the fork, there is one string
+                         * and the two cannot disagree. [LlmSessionRecorder]
+                         * still redacts what it is handed, because it is the
+                         * one door into `llm_session_event` and that is what
+                         * makes it worth anything; [AuditRedaction] says
+                         * applying it twice gives the same answer as applying
+                         * it once, so passing it the redacted form costs a pass
+                         * over the text and changes nothing.
+                         *
+                         * The model is not shown this. `conversation` keeps
+                         * `call.arguments` on [ChatCompletion.CalledTools.turn]
+                         * and the result goes back below as the tool sent it,
+                         * because the agent has to be able to do the work. What
+                         * is redacted is the account of the work.
+                         */
+                        val asked = AuditRedaction.redact(call.arguments)
                         // Written before the tool runs, so one that hangs still
                         // leaves the transcript saying what was asked of it -
                         // and told to anybody watching for the same reason.
-                        val line = into?.let { sessions.toolCalled(it, call.name, call.arguments) }
-                        watch?.called(here, call.name, call.arguments)
+                        val line = into?.let { sessions.toolCalled(it, call.name, asked) }
+                        watch?.called(here, call.name, asked)
                         val got = try {
                             if (shed != null && shed.handles(call.name)) shed.run(call) else tools.run(agent, call)
                         } catch (halted: AgentRoundHalted) {
                             // The lent tool ended the round. What it did is
                             // still written down, or the transcript would stop
-                            // on a call that never came back.
-                            sessions.toolReturned(line, halted.message.orEmpty())
-                            watch?.returned(here, halted.message.orEmpty(), failed = false)
+                            // on a call that never came back. The halt itself
+                            // is rethrown untouched: the summary a task ends on
+                            // is the product's, not an account of it.
+                            val ended = AuditRedaction.redactObvious(halted.message.orEmpty())
+                            sessions.toolReturned(line, ended)
+                            watch?.returned(here, ended, failed = false)
                             throw halted
                         }
                         /*
@@ -318,9 +372,29 @@ class AgentConversation(
                          * a later turn asking about the same data had the
                          * model's summary of it and not the data, and answered
                          * out of the summary. The session is where it survives.
+                         *
+                         * The narrow pass, and the difference from the
+                         * arguments above is the whole of the decision.
+                         * Arguments are a command line and take the full rule
+                         * set; this is arbitrary output - a build log, a
+                         * `--help`, a config dump - where that rule set would
+                         * replace every `key=`, `--token` and `password` the
+                         * model has to read. `[ERROR] cannot find symbol ***`
+                         * is a functional regression, and a live view that
+                         * showed it while the stored copy read correctly would
+                         * be this bug with the sides swapped. See
+                         * [AuditRedaction.redactObvious] for what that leaves
+                         * in a transcript, which is most secrets.
+                         *
+                         * Whether the call failed is asked of the raw text.
+                         * [AgentTools.failed] reads a JSON shape rather than
+                         * words, so nothing turns on it here - but it is a
+                         * question about what the tool answered, and the
+                         * answer is `got`.
                          */
-                        sessions.toolReturned(line, got)
-                        watch?.returned(here, got, failed = AgentTools.failed(got))
+                        val gave = AuditRedaction.redactObvious(got)
+                        sessions.toolReturned(line, gave)
+                        watch?.returned(here, gave, failed = AgentTools.failed(got))
                         conversation += ChatTurn(
                             role = "user",
                             content = got,

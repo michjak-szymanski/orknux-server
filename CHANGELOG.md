@@ -105,6 +105,13 @@ have failed.
   output with no recognisable shape is still stored, and rows written before
   this are left as they are.
 
+- 🔒 **A chat watched live now shows the same redacted lookup a reload does.**
+  The stored copy of a tool call was stripped of its credentials and the frames
+  streamed to the chat window were not, so one `git push` read `alice:***@host`
+  after a reload and `alice:s3cr3t@host` while it was running; both are now the
+  one redacted string, under the same two strengths, and the agent goes on being
+  handed the command as it was written.
+
 - 💬 **What an agent says on its way to a lookup is kept.** A model may answer
   with a message and tool calls in the same reply — "let me read the skill
   first" — and that message was thrown away: off the task and chat pages, and

@@ -228,6 +228,24 @@ class ShellSessionTest(
     }
 
     @Test
+    fun `a credential on the command line is not what gets written down`() {
+        // The whole path, against a real machine: the command runs as typed and
+        // the row it leaves behind has the password out of it. Asserted on what
+        // the table holds, because a filter on the way out would leave the
+        // plaintext here, in every backup of here, and in front of anyone with a
+        // database client.
+        val sessionId = openSession(granted)
+        run(granted, sessionId, "echo pushing to https://alice:s3cr3t@github.com/acme/repo.git")
+
+        val written = audit.findAll().filter { it.category.name == "SHELL" }.map { it.message }
+
+        assertThat(written).allSatisfy { assertThat(it).doesNotContain("s3cr3t") }
+        assertThat(written).anySatisfy {
+            assertThat(it).contains("sre ran on box: echo pushing to https://alice:***@github.com/acme/repo.git")
+        }
+    }
+
+    @Test
     fun `two sessions on the same shell get directories of their own`() {
         val first = openSession(granted)
         val second = openSession(granted)

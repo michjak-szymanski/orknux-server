@@ -56,6 +56,14 @@ have failed.
 
 ### 🔧 Changed
 
+- 🏁 **A task started on an installation without Temporal now actually runs.**
+  Every task started from the Tasks page or from an issue sat at Queued doing
+  nothing until the server was restarted: the work was handed to a worker a
+  moment before the task itself was written down, so the worker went looking for
+  it and found nothing. Nothing is handed over now until the task is there to be
+  read — which also covers an approval, an answer or a message, all of which
+  reached a task the same way.
+
 - 🖌 **The picture button is gone from the chat composer**, replaced by the
   agent's own drawing tool above. Asking for a picture is now something said in
   the conversation rather than a mode the composer is switched into and the

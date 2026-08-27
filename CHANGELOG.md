@@ -91,6 +91,14 @@ have failed.
   session above the calls it came with, under the agent's name. A round that
   said nothing writes nothing, which is nearly all of them.
 
+- 🔌 **An Anthropic model no longer refuses a turn that put two of a role
+  together.** That API takes its messages strictly alternating, and a round that
+  called several tools threaded a result back per message — so the request was
+  refused outright and the agent got a provider error rather than an answer.
+  Consecutive turns are now joined into one message, as separate parts, when the
+  Anthropic request is built; every other provider is sent exactly what it was
+  sent before.
+
 ## 0.9.4
 
 ### ✨ Added

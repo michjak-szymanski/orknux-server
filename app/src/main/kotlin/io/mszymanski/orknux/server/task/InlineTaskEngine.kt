@@ -6,6 +6,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.SmartLifecycle
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import org.springframework.transaction.support.TransactionSynchronization
+import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -77,6 +79,10 @@ class InlineTaskEngine(
      * A task that was mid-turn is asked again from what it wrote down; a task
      * that was parked is put back on the clock, so its patience still runs out
      * even though the callback that would have noticed died with the process.
+     *
+     * Nothing is committing here, so the hand-over below fires straight
+     * through: this is a lifecycle callback on the way up and there is no
+     * transaction anywhere near it.
      */
     override fun start() {
         running = true
@@ -93,7 +99,43 @@ class InlineTaskEngine(
 
     override fun isRunning(): Boolean = running
 
+    /**
+     * Hands the task over, once the row a worker will read is actually there.
+     *
+     * The wait for the commit is the whole of this method. A worker reads the
+     * task by its id on a thread and a connection of its own, so it can only
+     * see what has been committed - and both ways in here are called from
+     * inside a transaction that has not. `TaskService.start` writes the row and
+     * asks for the task to begin as its last act, so the worker read by id,
+     * found nothing, and returned [TaskTurn.Over]: the task sat at QUEUED and
+     * nothing looked at it again until the process restarted. `say`, `approve`,
+     * `refuse` and `answer` are the same shape - the nudge went out before the
+     * message or the decision it was announcing was readable, so the task read
+     * the state it was already in and parked again.
+     *
+     * Not visible on Temporal, where `begin` hands the id to a server across
+     * the network and the first turn is a worker polling for the workflow
+     * afterwards - wide enough that the commit has always won. Which is why
+     * this was every task an all-in-one installation started, and no task
+     * anywhere else.
+     *
+     * Deferring also drops the hand-over when the transaction rolls back, which
+     * is right: there is no row to work on, and nothing was asked for.
+     */
     private fun submit(taskId: Long) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                object : TransactionSynchronization {
+                    override fun afterCommit() = pickUp(taskId)
+                },
+            )
+        } else {
+            pickUp(taskId)
+        }
+    }
+
+    /** Puts it on a worker, unless it is already on one. */
+    private fun pickUp(taskId: Long) {
         if (!inHand.add(taskId)) return
         try {
             workers.execute { work(taskId) }

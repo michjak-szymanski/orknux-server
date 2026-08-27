@@ -52,6 +52,11 @@ class AuditRedactionTest {
             "curl https://api.example.com/v1/keys -o keys.json",
             // A host to reach, not a thing to hide.
             "ssh://root@box",
+            // Most rows in this table are English, and a lot of them carry a
+            // title somebody typed. `Basic authentication` is a workflow name.
+            "Workflow Basic authentication redesign created",
+            "Issue #14 opened: Basic auth for the proxy",
+            "Skill Bearer tokens are explained on the settings page created",
         ],
     )
     fun `an ordinary command line comes through untouched`(command: String) {
@@ -142,6 +147,13 @@ class AuditRedactionTest {
             // Quoted, which is how anything with a space in it has to be written.
             row("deploy --password \"s3cr3t value\" --host prod", "deploy --password \"***\" --host prod"),
             row("deploy --password='s3cr3t value' --host prod", "deploy --password='***' --host prod"),
+            // The scheme with no header naming it, where what follows still has to
+            // look like a value rather than like a word.
+            row("hook called with Basic dXNlcjpwYXNz", "hook called with Basic ***"),
+            row(
+                "hook called with Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdef",
+                "hook called with Bearer ***",
+            ),
             // No flag in front of it at all — only the shapes with a known prefix.
             row("./deploy.sh " + SLACK_PREFIX + "123456789012-abcdefghijklmnop", "./deploy.sh ***"),
             row("aws configure set key AKIAIOSFODNN7EXAMPLE", "aws configure set key ***"),

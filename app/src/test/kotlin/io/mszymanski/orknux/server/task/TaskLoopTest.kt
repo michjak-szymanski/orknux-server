@@ -117,6 +117,41 @@ class TaskLoopTest(
     }
 
     /**
+     * A round that said something *and* called a tool keeps both, streamed.
+     *
+     * The task loop is the one caller that always streams, so it is the path
+     * this has to hold on: a provider is entitled to send text frames and tool
+     * call frames in one reply, and the words used to be read by the model for
+     * the rest of the round and by nobody afterwards. A task reporting its own
+     * progress that way had the only copy of the report thrown away.
+     */
+    @Test
+    fun `what an agent said in the round it called a tool in is written down first`() {
+        val taskId = taskFor(
+            serve {
+                sayingWhileCalling(
+                    "The report is written; filing it now.",
+                    "task_done",
+                    """{\"summary\":\"The report is in /tmp/report.md\"}""",
+                )
+            },
+        )
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+
+        val task = requireNotNull(tasks.findByIdOrNull(taskId))
+        val log = events.findAll().filter { it.sessionId == task.sessionId }.sortedBy { it.id }
+        val said = log.single { it.kind == LlmSessionEventKind.AGENT }
+        assertThat(said.actor).isEqualTo("Worker")
+        assertThat(said.content).isEqualTo("The report is written; filing it now.")
+        // Before the call, because the model wrote it before asking - and it is
+        // in the agent's own memory, which is where it was lost from.
+        assertThat(log.indexOf(said)).isLessThan(log.indexOfFirst { it.kind == LlmSessionEventKind.TOOL })
+        assertThat(recorder.remembered(requireNotNull(task.sessionId)).map { it.content })
+            .contains("The report is written; filing it now.")
+    }
+
+    /**
      * Progress is not an ending.
      *
      * A model that writes what it has done and stops has not finished, and the
@@ -430,6 +465,14 @@ class TaskLoopTest(
 
     private fun finishing(summary: String) =
         calling("task_done", """{\"summary\":\"$summary\"}""")
+
+    /** A round that says something and asks for a tool in the same reply. */
+    private fun sayingWhileCalling(said: String, tool: String, arguments: String) = streamed(
+        """{"choices":[{"delta":{"content":"$said"}}]}""",
+        """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function",""" +
+            """"function":{"name":"$tool","arguments":"$arguments"}}]}}]}""",
+        """{"choices":[{"delta":{}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}""",
+    )
 
     /**
      * A round the stub streams, because a task's rounds are streamed.

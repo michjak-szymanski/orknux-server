@@ -19,11 +19,16 @@ import tools.jackson.databind.node.ObjectNode
 /**
  * One turn of a conversation, as the caller has it. Framework-free on purpose.
  *
- * A turn is usually text. Two kinds are not: an assistant turn that asked for
- * tools carries [asked] and no content worth showing, and the turn answering one
- * carries [respondingTo] — the id of the call it answers. Both shapes need those
+ * A turn is usually text. Two kinds are more than that: an assistant turn that
+ * asked for tools carries [asked], and the turn answering one carries
+ * [respondingTo] — the id of the call it answers. Both shapes need those
  * threaded back on the next request or the model cannot match its own question
  * to the answer.
+ *
+ * A turn that asked for tools may carry [content] as well, and usually does not.
+ * Providers are entitled to answer with a message and calls in one reply and
+ * several do it habitually, so the text is kept rather than dropped: it is what
+ * the model said, and whoever records the round writes it down beside the calls.
  */
 data class ChatTurn(
     val role: String,
@@ -776,7 +781,44 @@ class ModelChatClient(
         }
     }
 
-    /** Anthropic takes the system turn beside the messages rather than among them. */
+    /**
+     * Anthropic takes the system turn beside the messages rather than among
+     * them - and takes its messages strictly alternating.
+     *
+     * ## Why consecutive turns are joined here
+     *
+     * Anthropic's Messages API rejects two messages of the same role in a row.
+     * It is a 400 on the request, not a worse answer: the round never reaches
+     * the model, so the failure is total and arrives as a provider error rather
+     * than as anything a reader could connect to the conversation. The OpenAI
+     * shape has no such rule and every other provider this talks to speaks it,
+     * which is exactly why the rule cannot live upstream.
+     *
+     * And there are two ordinary ways a caller produces such a run, neither of
+     * them a mistake:
+     *
+     * - **Two assistant turns.** A round may answer with a message and tool
+     *   calls together, so a session holds what the agent said on its way to a
+     *   lookup and then what it finally answered. Read back as memory those are
+     *   two assistant turns with nothing between them.
+     * - **Two or more user turns.** A round that called three tools threads
+     *   three results back, each its own turn, and a task's prompt puts what
+     *   was recalled after what was remembered. Both are user turns by the time
+     *   they get here, and this shape predates any of the above.
+     *
+     * So the joining is done where the wire rule is, and only for the provider
+     * that has it. **Nothing upstream is bent to suit it**: the session is a
+     * record of what happened and keeps the turns apart, because an agent that
+     * said two things said two things, and a transcript that merged them to
+     * please one provider's request format would be lying about the round for
+     * the sake of a body it is not even part of. It is the same argument this
+     * body already makes for spelling a tool result as a user turn - the shape
+     * is the provider's, so the translation is the provider's.
+     *
+     * Joined as separate parts rather than as concatenated text, so two things
+     * the agent said stay two things and are not run together into one
+     * sentence that was never spoken.
+     */
     private fun anthropicBody(
         model: LlmModel,
         turns: List<ChatTurn>,
@@ -792,56 +834,31 @@ class ModelChatClient(
         if (system.isNotBlank()) root.put("system", system)
 
         val messages = root.putArray("messages")
-        turns.filter { it.role != "system" }.forEach { turn ->
+        val talking = turns.filter { it.role != "system" }
+        var at = 0
+        while (at < talking.size) {
+            val speaking = anthropicRole(talking[at])
+            var next = at + 1
+            while (next < talking.size && anthropicRole(talking[next]) == speaking) next++
+            val run = talking.subList(at, next)
+
             val message = messages.addObject()
-            when {
-                // A tool result is a user turn holding a result block, which is
-                // most of how this shape differs from the other one.
-                turn.respondingTo != null -> {
-                    message.put("role", "user")
-                    message.putArray("content").addObject()
-                        .put("type", "tool_result")
-                        .put("tool_use_id", turn.respondingTo)
-                        .put("content", turn.content)
-                }
-
-                turn.asked.isNotEmpty() -> {
-                    message.put("role", turn.role)
-                    val blocks = message.putArray("content")
-                    if (turn.content.isNotEmpty()) {
-                        blocks.addObject().put("type", "text").put("text", turn.content)
-                    }
-                    turn.asked.forEach { asked ->
-                        val block = blocks.addObject()
-                        block.put("type", "tool_use").put("id", asked.id).put("name", asked.name)
-                        block.set("input", argumentsOf(asked.arguments))
-                    }
-                }
-
-                /*
-                 * The same turn openAiBody sends as text and image_url parts,
-                 * in the shape Anthropic reads: content blocks, with the
-                 * picture carried as a source rather than as a URL.
-                 *
-                 * This branch is the whole of issue #151. Without it a turn
-                 * carrying a picture reached the model as words alone - nothing
-                 * failed, nothing was logged, and an agent whose entire purpose
-                 * was reading a screenshot appeared to work.
-                 */
-                turn.images.isNotEmpty() -> {
-                    message.put("role", turn.role)
-                    val blocks = message.putArray("content")
-                    if (turn.content.isNotEmpty()) {
-                        blocks.addObject().put("type", "text").put("text", turn.content)
-                    }
-                    turn.images.forEach { image ->
-                        val block = blocks.addObject().put("type", "image")
-                        block.set("source", anthropicImageSource(image))
-                    }
-                }
-
-                else -> message.put("role", turn.role).put("content", turn.content)
+            message.put("role", speaking)
+            /*
+             * One turn of plain words is plain words, which is what this sent
+             * before any of the merging existed and what the overwhelming
+             * majority of messages still are. Blocks only where there is
+             * something a string cannot hold, or more than one turn to hold.
+             */
+            val alone = run.singleOrNull()
+                ?.takeIf { it.respondingTo == null && it.asked.isEmpty() && it.images.isEmpty() }
+            if (alone != null) {
+                message.put("content", alone.content)
+            } else {
+                val blocks = message.putArray("content")
+                run.forEach { anthropicParts(it, blocks) }
             }
+            at = next
         }
 
         if (tools.isNotEmpty()) {
@@ -862,6 +879,56 @@ class ModelChatClient(
             }
         }
         return mapper.writeValueAsString(root)
+    }
+
+    /**
+     * Who a turn speaks as on this wire.
+     *
+     * A tool result is a user turn holding a result block, which is most of how
+     * this shape differs from the other one - and it is asked here rather than
+     * read off [ChatTurn.role] so that the run-joining above groups it with the
+     * turns it will actually be sent beside.
+     */
+    private fun anthropicRole(turn: ChatTurn) = if (turn.respondingTo != null) "user" else turn.role
+
+    /**
+     * One turn, as the content blocks it is made of, appended to a message that
+     * may be carrying more than one turn's worth.
+     *
+     * The order within a turn is the order it was said in: the words first and
+     * then whatever they were about, because a picture with the question after
+     * it reads as a different question, and a tool call above the sentence
+     * introducing it reads as a model that spoke afterwards.
+     */
+    private fun anthropicParts(turn: ChatTurn, blocks: ArrayNode) {
+        if (turn.respondingTo != null) {
+            blocks.addObject()
+                .put("type", "tool_result")
+                .put("tool_use_id", turn.respondingTo)
+                .put("content", turn.content)
+            return
+        }
+        if (turn.content.isNotEmpty()) {
+            blocks.addObject().put("type", "text").put("text", turn.content)
+        }
+        turn.asked.forEach { asked ->
+            val block = blocks.addObject()
+            block.put("type", "tool_use").put("id", asked.id).put("name", asked.name)
+            block.set("input", argumentsOf(asked.arguments))
+        }
+        /*
+         * The same turn openAiBody sends as text and image_url parts, in the
+         * shape Anthropic reads: a source rather than a URL.
+         *
+         * This is the whole of issue #151. Without it a turn carrying a picture
+         * reached the model as words alone - nothing failed, nothing was
+         * logged, and an agent whose entire purpose was reading a screenshot
+         * appeared to work.
+         */
+        turn.images.forEach { image ->
+            val block = blocks.addObject().put("type", "image")
+            block.set("source", anthropicImageSource(image))
+        }
     }
 
     /**

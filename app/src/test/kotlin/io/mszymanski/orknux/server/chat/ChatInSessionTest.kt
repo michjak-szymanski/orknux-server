@@ -410,6 +410,48 @@ class ChatInSessionTest(
     }
 
     /**
+     * And what the agent said on its way to the lookup is on the page too.
+     *
+     * A provider may answer with a message and tool calls in one reply, and
+     * several do it habitually. That message is the agent's, so it is written
+     * into the session before the call it came with - and the thread never held
+     * it, because the thread keeps only what the round finally answered.
+     *
+     * Which is the whole reason this is a test of the *page*. The page is
+     * assembled by matching the thread against the session, and a said line
+     * with no turn opposite it used to knock that alignment out: the run broke
+     * at the aside, and the lookup it was about disappeared from the chat along
+     * with it.
+     */
+    @Test
+    fun `what the agent said before a lookup is drawn above the lookup`() {
+        val catalogId = catalog("Reviews")
+        skill("codeReview", catalogId, "Read the diff twice before commenting.")
+        val chatId = startChat(llmSessionId = null, modelId = model(serveRemarkingThenToolThenAnswer()))
+        val agentId = agent("Reviewer", chats.findAll().single().modelId!!, granted = "Reviews")
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
+            .execute()
+
+        send(chatId, "What does the review skill say?")
+
+        graphQlTester.document("""{ chatMessages(id: $chatId) { role content actor } }""")
+            .execute()
+            .path("chatMessages[0].role").entity(String::class.java).isEqualTo("user")
+            .path("chatMessages[0].content").entity(String::class.java)
+            .isEqualTo("What does the review skill say?")
+            // The aside, under the agent's own name, above the call it came with.
+            .path("chatMessages[1].role").entity(String::class.java).isEqualTo("assistant")
+            .path("chatMessages[1].actor").entity(String::class.java).isEqualTo("Reviewer")
+            .path("chatMessages[1].content").entity(String::class.java)
+            .isEqualTo("Let me read the review skill first.")
+            .path("chatMessages[2].role").entity(String::class.java).isEqualTo("tool")
+            .path("chatMessages[2].actor").entity(String::class.java).isEqualTo("skill_load")
+            .path("chatMessages[3].role").entity(String::class.java).isEqualTo("assistant")
+            .path("chatMessages[3].content").entity(String::class.java).isEqualTo("Read the diff twice.")
+            .path("chatMessages").entityList(Any::class.java).hasSize(4)
+    }
+
+    /**
      * And a chat with a bare model still opens nothing.
      *
      * The rule being bent above is that a chat computes no key, and it is bent
@@ -505,6 +547,22 @@ ${'"'}${'"'}${'"'}
         } else {
             """
             {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+              {"id":"call_1","type":"function",
+               "function":{"name":"skill_load","arguments":"{\"name\":\"codeReview\"}"}}
+            ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
+            """.trimIndent()
+        }
+    }
+
+    /** The same round, with a word about it in the reply that asks for the skill. */
+    private fun serveRemarkingThenToolThenAnswer(): String = serve { body ->
+        if (body.contains("tool_call_id")) {
+            """{"choices":[{"message":{"role":"assistant","content":"Read the diff twice."}}],
+               "usage":{"prompt_tokens":9,"completion_tokens":4}}"""
+        } else {
+            """
+            {"choices":[{"message":{"role":"assistant","content":"Let me read the review skill first.",
+             "tool_calls":[
               {"id":"call_1","type":"function",
                "function":{"name":"skill_load","arguments":"{\"name\":\"codeReview\"}"}}
             ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}

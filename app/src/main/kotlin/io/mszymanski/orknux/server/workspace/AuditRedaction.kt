@@ -104,6 +104,12 @@ package io.mszymanski.orknux.server.workspace
  *
  * Applying this twice gives the same answer as applying it once, so a caller
  * that redacts a command before it builds a message does no harm.
+ *
+ * **There are two doors in, and [redactObvious] is the narrow one.** Everything
+ * above describes [redact], which is for text that is a command line: an audit
+ * message, or a tool call's arguments. [redactObvious] is for text that is a
+ * command's *output*, where the full rule set would do more damage than the
+ * leak it prevents — see its own documentation for what it keeps and why.
  */
 object AuditRedaction {
 
@@ -114,6 +120,52 @@ object AuditRedaction {
     fun redact(text: String): String {
         var out = text
         RULES.forEach { rule -> out = rule(out) }
+        return out
+    }
+
+    /**
+     * The same text, with only what is a credential beyond argument removed.
+     *
+     * For arbitrary output rather than for a command line, and it deliberately
+     * catches **less** than [redact] does. A Maven build log, a `--help` dump, a
+     * `docker inspect` or a config listing is full of `key=`, `--token` and the
+     * word `password` that are not credentials — they are the option a program
+     * documents, the field a JSON object has, the line a compiler failed on.
+     * [redact] would turn all of them into `***`, and output is not an audit row
+     * that nothing reads back: it is handed to the model as the answer to the
+     * lookup it just made, and put in front of it again by
+     * `LlmSessionRecorder.recalled`. A model whose build log says
+     * `[ERROR] cannot find symbol ***` cannot fix the build. That is a
+     * functional regression, and it is the reason this exists as a second
+     * method rather than [redact] being called everywhere.
+     *
+     * **What it catches**: only the two rules that need no flag, no name and no
+     * context to be sure — a value that is a credential on sight and is
+     * essentially never anything else. The known token shapes (GitHub
+     * `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` and `github_pat_`, Slack `xox…`,
+     * OpenAI and Anthropic `sk-`, GitLab `glpat-`, AWS `AKIA`/`ASIA`, Google
+     * `AIza`, and a JWT) and a PEM private key block. Those are what leaks from
+     * `cat ~/.ssh/id_rsa`, `env | grep TOKEN` and a `gh auth status`, which is
+     * the shape this is here for.
+     *
+     * **What it does not catch is everything else, and that is the honest
+     * half.** A secret in command output that does not match one of those
+     * shapes stays in the transcript, in full: a password a script echoed, a
+     * credential inside a JSON blob or a YAML dump, a base64 or hex value, a
+     * database URL with a password in it, a self-issued token with no prefix on
+     * it, anything a `--help` text calls a default. None of those are
+     * distinguishable from ordinary output, and guessing at them is what
+     * [redact] does and what output cannot afford. Whoever runs an installation
+     * should read this as: a tool that prints a secret puts that secret in the
+     * session transcript.
+     *
+     * The rules are the same functions [redact] runs, so a token prefix added to
+     * `KNOWN_TOKEN_SHAPES` is added to both at once and neither can drift from
+     * the other.
+     */
+    fun redactObvious(text: String): String {
+        var out = text
+        OBVIOUS_RULES.forEach { rule -> out = rule(out) }
         return out
     }
 
@@ -134,6 +186,20 @@ object AuditRedaction {
         ::spacedLongFlags,
         ::attachedShortPassword,
         ::spacedShortPassword,
+        ::knownTokenShapes,
+    )
+
+    /**
+     * The two of those rules that are safe to run over arbitrary output.
+     *
+     * The same function references, not copies of them: there is one definition
+     * of what a known token looks like and one of what a key block looks like,
+     * and both entry points reach them through here. A list of its own rather
+     * than a flag on [redact], because the difference between the two doors is
+     * which rules run and saying that as a list is saying it exactly once.
+     */
+    private val OBVIOUS_RULES: List<(String) -> String> = listOf(
+        ::pemBlocks,
         ::knownTokenShapes,
     )
 

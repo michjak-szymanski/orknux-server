@@ -8,6 +8,7 @@ import org.springframework.transaction.support.TransactionSynchronization
 import org.springframework.transaction.support.TransactionSynchronizationManager
 import java.time.OffsetDateTime
 import io.mszymanski.orknux.connector.model.ChatTurn
+import io.mszymanski.orknux.server.workspace.AuditRedaction
 import org.springframework.data.domain.PageRequest
 
 /**
@@ -27,6 +28,12 @@ import org.springframework.data.domain.PageRequest
  * No transaction is held across a turn. Each write is its own, because the
  * caller is in the middle of talking to a model and may be there for minutes -
  * a connection held for that long is one nobody else has.
+ *
+ * Being the one door in is also what makes the credential stripping in
+ * [toolCalled] and [toolReturned] worth anything: there is no second way for a
+ * tool call to reach `llm_session_event`, so there is no path around them. What
+ * they take out, and the two different amounts they take, is written on each of
+ * them - and neither claims to be complete.
  */
 @Service
 class LlmSessionRecorder(
@@ -90,9 +97,34 @@ class LlmSessionRecorder(
     /**
      * A tool the agent called, under the tool's name, with what it was passed.
      *
-     * The arguments as the model sent them - unparsed and unprettied. What is
-     * being recorded is what the agent asked for, and reformatting it would be
-     * this deciding what the model meant.
+     * The arguments as the model sent them - unparsed and unprettied, with the
+     * credentials taken out. What is being recorded is what the agent asked
+     * for, and reformatting it would be this deciding what the model meant.
+     *
+     * **Why anything is taken out.** A tool's arguments are a command line: the
+     * shell tool's are literally one, and the rest are flags and values. So
+     * `git push https://alice:s3cr3t@github.com/acme/repo.git` used to be
+     * written into this transcript verbatim, where the chat and task pages
+     * display it, everyone who can reach the database can read it, and every
+     * backup of the table keeps it. A secret that has been in a backup has to
+     * be treated as disclosed, so it cannot be fixed on the way out: it is
+     * fixed here, before the row is saved, with the same
+     * [io.mszymanski.orknux.server.workspace.AuditRedaction] the audit log uses
+     * and under exactly the trade-offs written there - including that it
+     * over-redacts on purpose, and including the list of what it does not find.
+     *
+     * **The model is shown the redacted form of its own history.** [recalled]
+     * puts past calls and their results back in front of the model, so an agent
+     * that ran that push is later recalled `https://alice:***@…`. That is the
+     * intended reading: the marker says a value was removed rather than
+     * pretending a different command was run, and a model that needs the
+     * credential again gets it the way it got it the first time - out of the
+     * variable or the task that held it. Nothing re-executes a stored call, so
+     * nothing is broken by the substitution.
+     *
+     * **Rows written before this are untouched.** What is already in
+     * `llm_session_event` still holds whatever it held; a credential sitting in
+     * there should be treated as disclosed and rotated.
      *
      * @return the line it was written on, to hand back to [toolReturned] when
      *   the tool answers, or null if it could not be written. Null rather than
@@ -100,7 +132,7 @@ class LlmSessionRecorder(
      *   not a reason to fail the work that was being transcribed.
      */
     fun toolCalled(session: Long, tool: String, arguments: String): Long? =
-        write(session, LlmSessionEventKind.TOOL, tool, arguments)
+        write(session, LlmSessionEventKind.TOOL, tool, AuditRedaction.redact(arguments))
 
     /**
      * And what that call gave back, onto the line the call was written on.
@@ -110,9 +142,28 @@ class LlmSessionRecorder(
      * saying what was asked of it, and a line written only once the answer
      * existed would say nothing at all.
      *
-     * Kept whole. What a model may be shown of it again is bounded in
-     * [recalled], because that bound is about a prompt; the record holds what
-     * came back.
+     * Kept whole, apart from what is a credential on sight. What a model may be
+     * shown of it again is bounded in [recalled], because that bound is about a
+     * prompt; the record holds what came back.
+     *
+     * **A narrow pass rather than the one [toolCalled] takes**, and the
+     * difference is the whole of the decision. Arguments are a command line and
+     * get the full rule set. This is arbitrary output - a build log, a
+     * `--help`, a config dump - and the full rule set would replace every
+     * `key=`, `--token` and `password` in it, which is the very text the model
+     * has to read to do its work. So only
+     * [io.mszymanski.orknux.server.workspace.AuditRedaction.redactObvious]
+     * runs: the known token shapes and a PEM private key block, which is what
+     * `cat ~/.ssh/id_rsa` and `env | grep TOKEN` put in a transcript.
+     *
+     * **A secret in output that does not match a known shape stays in the
+     * transcript**, in full and unmarked - a password a script echoed, a
+     * credential inside a JSON blob, a base64 value, a connection URL. That is
+     * not an oversight to be closed later; it is the price of output the model
+     * can still use, and anyone deciding what a tool may be pointed at should
+     * read it as: a command that prints a secret has stored that secret.
+     *
+     * **Rows written before this are untouched**, as with [toolCalled].
      *
      * @param event the line [toolCalled] returned. Null is accepted and does
      *   nothing, so a caller that could not record the call does not have to
@@ -122,7 +173,7 @@ class LlmSessionRecorder(
         val line = event ?: return
         try {
             events.findByIdOrNull(line)?.let {
-                it.result = result
+                it.result = AuditRedaction.redactObvious(result)
                 events.save(it)
                 // The line was already handed to anybody watching, with nothing
                 // on it. This is what turns a lookup that is running into one

@@ -287,6 +287,20 @@ class ChatService(
      * stretch that did line up - outside it there is nothing to be sure they
      * belong between.
      *
+     * **And the asides, which the thread never held either.** A round can
+     * answer with a message and tool calls in the same reply, and
+     * [io.mszymanski.orknux.server.chat.AgentConversation] writes that message
+     * into the session before the calls it came with. The thread keeps only
+     * what the round finally answered, so an aside is a said line with no turn
+     * opposite it - and matched one for one it would knock every comparison
+     * after it a line out, which is exactly what a call would have done. So it
+     * is stepped over the same way and drawn off the session the same way,
+     * under the agent's own name.
+     *
+     * Only an agent's line is ever stepped over. A person's turn that does not
+     * match ends the run, because a thread missing something somebody said is
+     * a thread that has drifted rather than one missing an aside.
+     *
      * @param read the session as it stood when this chat opened, calls and all.
      */
     private fun carried(thread: List<ChatMessage>, read: List<RememberedTurn>): List<ChatMessage> {
@@ -297,19 +311,13 @@ class ChatService(
         if (said.isEmpty()) return thread
 
         var found = 0
+        var spans = 0
         var from = 0
         for (start in said.indices.reversed()) {
-            var run = 0
-            while (
-                run < thread.size &&
-                start + run < said.size &&
-                thread[run].role == said[start + run].role &&
-                thread[run].content == said[start + run].content
-            ) {
-                run++
-            }
-            if (run > found) {
-                found = run
+            val run = aligned(thread, said, start)
+            if (run.first > found) {
+                found = run.first
+                spans = run.second
                 from = start
             }
         }
@@ -320,20 +328,55 @@ class ChatService(
          * Walked over the session rather than over the thread, because the
          * session is the one that has the calls in it. Every line between the
          * two ends that matched is either a turn the thread holds - taken in
-         * order, which is what matching them established - or a call, which
-         * only the session ever held.
+         * order, which is what matching them established - a call, or an aside,
+         * and the last two only the session ever held.
+         *
+         * The same test [aligned] made, in the same order over the same lines,
+         * so this walk retraces that alignment rather than guessing at one.
          */
         var turn = 0
-        val head = (where[from]..where[from + found - 1]).map { at ->
+        val head = (where[from]..where[from + spans - 1]).map { at ->
             val line = read[at]
-            if (line.called) {
-                ChatMessage(role = RememberedTurn.CALL, content = line.content, actor = line.actor)
-            } else {
-                thread[turn++].copy(actor = line.actor)
+            when {
+                line.called -> ChatMessage(role = RememberedTurn.CALL, content = line.content, actor = line.actor)
+                turn < thread.size && same(thread[turn], line) -> thread[turn++].copy(actor = line.actor)
+                else -> ChatMessage(role = line.role, content = line.content, actor = line.actor)
             }
         }
         return head + thread.drop(found)
     }
+
+    /**
+     * How far the thread lines up with the session read from [start].
+     *
+     * @return how many of the thread's turns matched, and how many of the
+     *   session's said lines that stretch covers - the second being the larger
+     *   of the two wherever the agent said something the thread never kept. The
+     *   stretch ends at the last match, so a run is never padded with asides
+     *   that lead nowhere.
+     */
+    private fun aligned(thread: List<ChatMessage>, said: List<RememberedTurn>, start: Int): Pair<Int, Int> {
+        var found = 0
+        var spans = 0
+        var step = 0
+        while (found < thread.size && start + step < said.size) {
+            val line = said[start + step]
+            when {
+                same(thread[found], line) -> {
+                    found++
+                    step++
+                    spans = step
+                }
+
+                line.role == AGENT_ROLE -> step++
+                else -> return found to spans
+            }
+        }
+        return found to spans
+    }
+
+    private fun same(message: ChatMessage, line: RememberedTurn) =
+        message.role == line.role && message.content == line.content
 
     /**
      * Opens a chat, optionally continuing an LLM session.
@@ -914,6 +957,13 @@ class ChatService(
 
         /** What a bare model's answer is signed with once the model it named is gone. */
         const val FALLBACK_ACTOR = "model"
+
+        /**
+         * The role an agent's own lines read under, in both a thread and a
+         * session. Named because [carried] steps over one and never over
+         * anybody else's.
+         */
+        const val AGENT_ROLE = "assistant"
 
         /**
          * Who a drawn picture is signed by in a transcript.

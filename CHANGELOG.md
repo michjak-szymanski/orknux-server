@@ -83,6 +83,22 @@ have failed.
   output with no recognisable shape is still stored, and rows written before
   this are left as they are.
 
+- 💬 **What an agent says on its way to a lookup is kept.** A model may answer
+  with a message and tool calls in the same reply — "let me read the skill
+  first" — and that message was thrown away: off the task and chat pages, and
+  gone from the agent's own memory by its next turn, so a task whose progress
+  was reported that way lost the only copy of it. It is now written into the
+  session above the calls it came with, under the agent's name. A round that
+  said nothing writes nothing, which is nearly all of them.
+
+- 🔌 **An Anthropic model no longer refuses a turn that put two of a role
+  together.** That API takes its messages strictly alternating, and a round that
+  called several tools threaded a result back per message — so the request was
+  refused outright and the agent got a provider error rather than an answer.
+  Consecutive turns are now joined into one message, as separate parts, when the
+  Anthropic request is built; every other provider is sent exactly what it was
+  sent before.
+
 ## 0.9.4
 
 ### ✨ Added

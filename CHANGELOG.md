@@ -83,6 +83,14 @@ have failed.
   output with no recognisable shape is still stored, and rows written before
   this are left as they are.
 
+- 💬 **What an agent says on its way to a lookup is kept.** A model may answer
+  with a message and tool calls in the same reply — "let me read the skill
+  first" — and that message was thrown away: off the task and chat pages, and
+  gone from the agent's own memory by its next turn, so a task whose progress
+  was reported that way lost the only copy of it. It is now written into the
+  session above the calls it came with, under the agent's name. A round that
+  said nothing writes nothing, which is nearly all of them.
+
 ## 0.9.4
 
 ### ✨ Added

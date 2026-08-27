@@ -180,14 +180,107 @@ class ShellSessionTest(
     }
 
     @Test
-    fun `output longer than the limit is cut, and says so`() {
+    fun `output longer than the limit loses its middle and keeps the last thing printed`() {
         val sessionId = openSession(granted)
 
-        val answer = mapper.readTree(run(granted, sessionId, "yes orknux | head -n 400"))
+        /*
+         * Issue #287, over a real connection. The sentinel is printed last on
+         * purpose, because that is where every tool worth running on one of
+         * these machines puts its verdict - `cannot find symbol`, the failed
+         * assertion, the package that conflicts - and the buffer used to keep
+         * the beginning and throw exactly that away. A model handed the
+         * beginning cannot tell a command that failed from one whose output
+         * stopped, which are opposite conclusions.
+         */
+        val answer = mapper.readTree(run(granted, sessionId, "seq 1 200000; echo THE-ANSWER-IS-HERE"))
+        val stdout = answer.path("stdout").stringValue()
 
         assertThat(answer.path("exitCode").intValue()).isEqualTo(0)
-        assertThat(answer.path("stdout").stringValue().length).isLessThanOrEqualTo(512)
-        assertThat(answer.path("truncated").stringValue()).contains("the rest was dropped")
+        assertThat(stdout).endsWith("THE-ANSWER-IS-HERE\n")
+        // And the front is still there, which is what makes this a middle
+        // removed rather than a tail kept.
+        assertThat(stdout).startsWith("1\n2\n3\n")
+
+        // The marker names an amount. That number is the difference between
+        // "some of this is missing" and "this is all there was".
+        assertThat(stdout).containsPattern("… [0-9.]+ (KiB|MiB) of output removed from the middle\\.")
+
+        // Still bounded: what came from the far side is inside the installation's
+        // 512 bytes, and the marker is this application's own sentence on top of
+        // it rather than something the command printed.
+        assertThat(stdout.length).isLessThanOrEqualTo(512 + MARKER_ROOM)
+
+        assertThat(answer.path("truncated").stringValue()).contains("its middle was removed")
+    }
+
+    @Test
+    fun `output that fits is handed back exactly as the command printed it`() {
+        val sessionId = openSession(granted)
+
+        // The common case, and it has to be untouched: no marker, nothing said
+        // about truncation, and the bytes the command wrote. A short answer that
+        // looked cut would make every short answer suspect.
+        val answer = mapper.readTree(run(granted, sessionId, "printf 'one\\ntwo\\nthree\\n'"))
+
+        assertThat(answer.path("stdout").stringValue()).isEqualTo("one\ntwo\nthree\n")
+        assertThat(answer.path("truncated").isMissingNode).isTrue()
+    }
+
+    @Test
+    fun `a machine given a timeout of its own is held to that one, not the installation's`() {
+        /*
+         * Both directions in one test, because a fallback has two halves and a
+         * test that only drove one of them would pass on a build that ignored
+         * the column entirely.
+         *
+         * The installation allows five seconds here. `sleep 3` is chosen to sit
+         * between that and the second this machine is given, so the same command
+         * has to come back two different ways depending on nothing but the row.
+         */
+        shells.save(shells.findById(shellId).orElseThrow().apply { commandTimeoutSeconds = 1 })
+
+        val stopped = mapper.readTree(run(granted, openSession(granted), "sleep 3"))
+        assertThat(stopped.path("exitCode").isNull).isTrue()
+        assertThat(stopped.path("timedOut").stringValue()).contains("may still be running")
+
+        // And with the column back to null the machine is on the installation's
+        // five seconds again, where the same command finishes. Null has to keep
+        // meaning "whatever the installation says" rather than "nothing".
+        shells.save(shells.findById(shellId).orElseThrow().apply { commandTimeoutSeconds = null })
+
+        val finished = mapper.readTree(run(granted, openSession(granted), "sleep 3"))
+        assertThat(finished.path("timedOut").isMissingNode).isTrue()
+        assertThat(finished.path("exitCode").intValue()).isEqualTo(0)
+    }
+
+    @Test
+    fun `a machine given an output allowance of its own keeps what the installation would have cut`() {
+        // 400 lines of `orknux` is 2800 bytes, which the installation's 512
+        // cuts and this machine's 8 KiB does not. The same command again, and
+        // the only thing that differs is the row.
+        shells.save(shells.findById(shellId).orElseThrow().apply { maxOutputBytes = 8 * 1024 })
+
+        val kept = mapper.readTree(run(granted, openSession(granted), "yes orknux | head -n 400"))
+
+        assertThat(kept.path("exitCode").intValue()).isEqualTo(0)
+        assertThat(kept.path("stdout").stringValue().length).isGreaterThan(512)
+        // Not cut at all, which is the difference between an allowance that was
+        // raised and one that was merely reported.
+        assertThat(kept.path("truncated").isMissingNode).isTrue()
+
+        /*
+         * And it is still an allowance rather than a licence. A machine given a
+         * bigger number is bounded by that number, not by nothing - the whole
+         * reason the column exists is that these bytes are read by a model, and
+         * an override that stopped bounding anything would be a way to hand one
+         * a gigabyte.
+         */
+        val cut = mapper.readTree(run(granted, openSession(granted), "seq 1 200000; echo STILL-BOUNDED"))
+        val stdout = cut.path("stdout").stringValue()
+
+        assertThat(stdout).endsWith("STILL-BOUNDED\n")
+        assertThat(stdout.length).isLessThanOrEqualTo(8 * 1024 + MARKER_ROOM)
+        assertThat(cut.path("truncated").stringValue()).contains("its middle was removed")
     }
 
     @Test
@@ -376,6 +469,17 @@ class ShellSessionTest(
 
         private const val SSH_PORT = 2222
         private const val ACCOUNT = "orknux"
+
+        /**
+         * How much longer than its allowance an answer may be.
+         *
+         * The marker the buffer writes where the middle was is this
+         * application's own sentence rather than anything the command printed,
+         * so it sits on top of the allowance. The allowance governs what is kept
+         * from the far side, which is the number worth asserting; this is only
+         * the room the sentence takes.
+         */
+        private const val MARKER_ROOM = 200
 
         /** Ed25519 has one size; sshd wants it said anyway. */
         private const val ED25519_BITS = 256

@@ -73,17 +73,19 @@ import java.util.Base64
  * `./mvnw test -Dorknux.test.excluded-groups=` runs it, with the key in the
  * environment.
  *
- * **The command timeout is raised, and that is the finding.** A shell command
- * may run for a minute by default. `docker/coder` is the box this product
- * offers for exactly this work and it ships with an empty Maven repository, so
- * the first `mvn package` an agent runs on it downloads Spring Boot before it
- * compiles anything - minutes, not a minute. Every machine's repository is
- * empty once. So an installation that gives an agent that box has to raise
- * `ORKNUX_SHELL_COMMAND_TIMEOUT` before the box can do the job it was built
- * for, and nothing in the product or its documentation says so. The output
- * limit is raised on the same argument: a build that fails says a great deal
- * more than a build that works, and a model handed the middle of it cannot tell
- * a compile error from a cut.
+ * **This runs on the limits the product ships, and it did not always.** It was
+ * written overriding two of them, and the overrides were the finding: a shell
+ * command could run for a minute and keep 64 KiB of what it printed.
+ * `docker/coder` is the box this product offers for exactly this work and it
+ * ships with an empty Maven repository, so the first `mvn package` an agent
+ * runs on it downloads Spring Boot before it compiles anything - minutes, not a
+ * minute - and every machine's repository is empty once. An agent was handed a
+ * timeout it did not cause and could not fix, and a failing build was cut before
+ * the compile error, which left a model unable to tell a failure from a cut.
+ * Both defaults moved for it, and one machine can now be given numbers of its
+ * own; see `ShellProperties` and `Shell.commandTimeoutSeconds`. The overrides
+ * are gone from here on purpose - a test that raises the limits it needs proves
+ * the product works for whoever raises them, which is nobody.
  */
 @Tag("slow")
 @EnabledIfEnvironmentVariable(
@@ -94,10 +96,6 @@ import java.util.Base64
 )
 @SpringBootTest(
     properties = [
-        // A build is not a command that answers in a minute.
-        "orknux.shell.command-timeout=10m",
-        // Maven says more about a build than the shipped 64 KiB.
-        "orknux.shell.max-output-bytes=262144",
         // Nothing sweeps a session out from under a build that is still running.
         "orknux.shell.sweep-initial-delay=1h",
         "orknux.shell.session-idle-timeout=4h",

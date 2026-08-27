@@ -17,6 +17,7 @@ import io.mszymanski.orknux.connector.proxy.ProxyRuleProxyInvalidException
 import io.mszymanski.orknux.connector.shell.NoShellAvailableException
 import io.mszymanski.orknux.connector.shell.ShellAddressInvalidException
 import io.mszymanski.orknux.connector.shell.ShellKeyInvalidException
+import io.mszymanski.orknux.connector.shell.ShellLimitInvalidException
 import io.mszymanski.orknux.connector.shell.ShellNameInvalidException
 import io.mszymanski.orknux.connector.shell.ShellNameTakenException
 import io.mszymanski.orknux.connector.shell.ShellSessionNotFoundException
@@ -53,6 +54,7 @@ class IntegrationExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ShellNameInvalidException,
             is ShellAddressInvalidException,
             is ShellKeyInvalidException,
+            is ShellLimitInvalidException,
             -> ErrorType.BAD_REQUEST
 
             // A machine that will not answer is not the caller's mistake, and

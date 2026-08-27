@@ -145,18 +145,36 @@ class ShellClient(private val properties: ShellProperties) {
      * whoever asked decide what it means.
      *
      * The two things that can go wrong on our side are bounded rather than
-     * fatal. A command that never returns has its channel closed after
-     * [ShellProperties.commandTimeout] and comes back with [ShellRun.timedOut]
-     * set. Closing a channel is not killing a process on the far side, and the
-     * wording says so rather than claiming a kill that did not happen - killing
-     * it would mean following a process id through a login shell that never gave
-     * us one. A command that prints more than [ShellProperties.maxOutputBytes]
-     * has the rest dropped and comes back truncated, because the alternative is
-     * a gigabyte in this heap and then a gigabyte in a model's context.
+     * fatal. A command that never returns has its channel closed after the
+     * timeout and comes back with [ShellRun.timedOut] set. Closing a channel is
+     * not killing a process on the far side, and the wording says so rather than
+     * claiming a kill that did not happen - killing it would mean following a
+     * process id through a login shell that never gave us one. A command that
+     * prints more than the output limit comes back with its middle removed and a
+     * sentence in its place saying how much went - both ends are kept, because
+     * the answer is at one of them and never in between; see [BoundedBuffer].
+     * Something has to go, because the alternative is a gigabyte in this heap
+     * and then a gigabyte in a model's context.
+     *
+     * Both bounds come from [shell] when it has been given them and from
+     * [ShellProperties] when it has not, which is what makes an installation
+     * default a default: raise the property and every machine that never asked
+     * for anything different moves with it.
+     *
+     * [shell] is null only for the three commands this application runs on its
+     * own behalf - the `mkdir` that makes a session's directory, the `uname`
+     * that says what answered, and the `rm -rf` that tidies the directory away.
+     * Those are ours rather than an agent's and each of them finishes at once,
+     * so the machine's own numbers have nothing to say about them: a build box
+     * allowed half an hour for a build has not thereby asked for half an hour
+     * of `uname`.
      */
-    fun run(session: ClientSession, command: String, directory: String?): ShellRun {
-        val stdout = BoundedBuffer(properties.maxOutputBytes)
-        val stderr = BoundedBuffer(properties.maxOutputBytes)
+    fun run(session: ClientSession, command: String, directory: String?, shell: Shell? = null): ShellRun {
+        val timeout = shell?.commandTimeout ?: properties.commandTimeout
+        val limit = shell?.maxOutputBytes ?: properties.maxOutputBytes
+
+        val stdout = BoundedBuffer(limit)
+        val stderr = BoundedBuffer(limit)
 
         return session.createExecChannel(withDirectory(command, directory)).use { exec ->
             exec.out = stdout
@@ -167,7 +185,7 @@ class ShellClient(private val properties: ShellProperties) {
             exec.setIn(ByteArrayInputStream(ByteArray(0)))
 
             exec.open().verify(properties.connectTimeout)
-            val finished = exec.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), properties.commandTimeout)
+            val finished = exec.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), timeout)
                 .contains(ClientChannelEvent.CLOSED)
 
             ShellRun(
@@ -318,43 +336,250 @@ data class ShellRun(
 class ShellUnreachableException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 /**
- * A stream that stops accepting after a while and remembers that it did.
+ * A stream that keeps both ends of what it is given and says what it dropped.
  *
  * Bounded here rather than trimmed afterwards, because trimming afterwards means
  * the whole gigabyte was in memory first, and the process that dies for it is
  * this one rather than the one that printed it.
+ *
+ * **It used to keep the beginning, and that was the bug.** Dropping everything
+ * past the limit is the obvious way to bound a stream and the wrong way to bound
+ * *this* one, because the thing worth keeping is almost never at the front. A
+ * build prints its plugin banners, its dependency downloads and its reactor
+ * summary first and `cannot find symbol` last; a test run prints the suite and
+ * then the failure; `apt-get` prints two hundred packages and then the conflict.
+ * So the old buffer threw away precisely the bytes somebody asked the question
+ * for, and a model reading the result could not tell a build that failed from a
+ * build whose output stopped - which are opposite conclusions with opposite next
+ * moves. Raising the limit only moved the threshold: a long enough download
+ * still pushed the error out.
+ *
+ * So both ends are kept and the middle goes. What is lost is now the part
+ * nothing usually asks about, and a marker in its place says how much went and
+ * that the end is whole, which is the sentence that lets a reader trust the last
+ * line they can see.
+ *
+ * **A third to the head and two thirds to the tail.** Not half and half: the two
+ * ends are not worth the same. The head only has to establish what ran and how
+ * it was invoked, which is a few lines; the tail carries the answer, and an
+ * error with a stack under it is longer than a command line. Two thirds is the
+ * smallest split that reliably holds a Maven failure summary together, and the
+ * remaining third is more head than any of these tools spend on saying hello.
+ *
+ * **Memory is exactly [limit] bytes**, which is the whole point of the class:
+ * the head grows to at most its share, the tail is a ring of a fixed size that
+ * overwrites itself, and nothing else is retained. A command printing a gigabyte
+ * costs this what a command printing the limit costs it. The ring is allocated
+ * on the first byte that goes past the head, so the ordinary command that prints
+ * two lines allocates nothing for it at all. The marker is this application's
+ * own words rather than the command's, so it is built at [text] time and sits on
+ * top of [limit] rather than inside it - a constant hundred bytes or so, which
+ * is why the bound that matters is stated in terms of what was *kept from the
+ * command*.
+ *
+ * **Under the limit, nothing happens.** No ring is ever allocated, no marker is
+ * written, and [text] hands back exactly the bytes that arrived. The common case
+ * has to be untouched, or every reader of this output has to wonder whether a
+ * short answer was really short.
+ *
+ * Not thread-safe by accident: the writes are synchronised. MINA hands one
+ * stream to one I/O thread, so this is insurance rather than a requirement, but
+ * a ring whose two indices disagree would be a corruption nobody could read back
+ * to a cause.
+ *
+ * Internal rather than private so that a test can reach it directly. What it
+ * does is arithmetic over a wrapping array, and the cases worth pinning - a
+ * write that spans the wrap, a single write larger than the whole ring, a
+ * character split across the leading edge - are ones it takes a container and a
+ * command that prints a megabyte to reach from outside.
  */
-private class BoundedBuffer(private val limit: Int) : OutputStream() {
+internal class BoundedBuffer(private val limit: Int) : OutputStream() {
 
-    private val bytes = ByteArrayOutputStream()
+    /**
+     * The head's share, and the tail's, adding up to exactly [limit].
+     *
+     * Worked out once. A head of zero is allowed and is what a limit of one or
+     * two bytes produces - a degenerate setting no configuration this ships will
+     * reach, and one that still behaves rather than dividing by nothing.
+     */
+    private val headLimit: Int = (limit / HEAD_SHARE).coerceAtLeast(0)
+    private val tailLimit: Int = limit - headLimit
 
-    var truncated = false
-        private set
+    private val head = ByteArrayOutputStream()
 
+    /**
+     * The last [tailLimit] bytes, as a ring, or null while nothing has needed
+     * one. [tailStart] is where the oldest surviving byte is and [tailSize] how
+     * many there are; once the ring is full those two say the whole of it.
+     */
+    private var tail: ByteArray? = null
+    private var tailStart = 0
+    private var tailSize = 0
+
+    /** How many bytes fell out of the middle. A Long because a command can print more than two gigabytes. */
+    private var dropped: Long = 0
+
+    /** Somewhere for the one-byte write to land without allocating per byte. */
+    private val single = ByteArray(1)
+
+    /**
+     * Whether anything was removed.
+     *
+     * Unchanged in meaning - it still says "what you are reading is not all of
+     * it". What changed is that the answer is now specific, and it is specific
+     * *in the output itself*, where the marker names the amount. A caller
+     * reporting on this should say what is missing is the middle and leave the
+     * number to the marker, rather than printing a second, vaguer version of the
+     * same fact beside it.
+     */
+    val truncated: Boolean
+        get() = dropped > 0
+
+    @Synchronized
     override fun write(b: Int) {
-        if (bytes.size() >= limit) {
-            truncated = true
+        if (head.size() < headLimit) {
+            head.write(b)
             return
         }
-        bytes.write(b)
+        single[0] = b.toByte()
+        intoTail(single, 0, 1)
     }
 
+    @Synchronized
     override fun write(source: ByteArray, offset: Int, length: Int) {
-        val room = limit - bytes.size()
-        if (room <= 0) {
-            truncated = true
-            return
+        if (length <= 0) return
+
+        var from = offset
+        var left = length
+
+        val room = headLimit - head.size()
+        if (room > 0) {
+            val run = minOf(left, room)
+            head.write(source, from, run)
+            from += run
+            left -= run
         }
-        if (length > room) truncated = true
-        bytes.write(source, offset, minOf(length, room))
+        if (left > 0) intoTail(source, from, left)
     }
 
     /**
-     * Decoded as UTF-8, with whatever the far side sent that is not, replaced.
+     * Puts bytes into the ring, evicting the oldest, and counts what was evicted.
      *
-     * A command's output is not promised to be text - somebody will `cat` a
-     * binary sooner or later - and the answer to that is a replacement character
-     * rather than an exception thrown halfway through reporting a result.
+     * A write longer than the whole ring is skipped forward to its last
+     * [tailLimit] bytes rather than copied through: the earlier bytes could only
+     * be overwritten by the later ones in the same call, and copying a megabyte
+     * into a buffer in order to overwrite it is the cost this class exists to
+     * avoid.
      */
-    fun text(): String = String(bytes.toByteArray(), Charsets.UTF_8)
+    private fun intoTail(source: ByteArray, offset: Int, length: Int) {
+        if (tailLimit <= 0) {
+            dropped += length.toLong()
+            return
+        }
+        val ring = tail ?: ByteArray(tailLimit).also { tail = it }
+
+        var from = offset
+        var left = length
+        if (left > tailLimit) {
+            dropped += (left - tailLimit).toLong()
+            from += left - tailLimit
+            left = tailLimit
+        }
+
+        while (left > 0) {
+            val writeAt = (tailStart + tailSize) % tailLimit
+            val run = minOf(left, tailLimit - writeAt)
+            System.arraycopy(source, from, ring, writeAt, run)
+            from += run
+            left -= run
+
+            val room = tailLimit - tailSize
+            if (run > room) {
+                val evicted = run - room
+                dropped += evicted.toLong()
+                tailStart = (tailStart + evicted) % tailLimit
+                tailSize = tailLimit
+            } else {
+                tailSize += run
+            }
+        }
+    }
+
+    /**
+     * Both ends, with the marker between them, decoded as UTF-8.
+     *
+     * Assembled as bytes and decoded once rather than decoded in three pieces
+     * and joined, and that is not tidiness. The head ends at a byte offset the
+     * command did not choose, and so does the ring's leading edge, so either
+     * boundary can fall inside a multi-byte character. Decoding the whole thing
+     * in one pass means the two boundaries are the only places that can suffer,
+     * and it means that when nothing was dropped - when head and ring are simply
+     * the stream in order - the result is byte-for-byte what arrived, which a
+     * three-piece decode could not promise.
+     *
+     * What a split character costs is one replacement character. `String(bytes,
+     * UTF_8)` decodes with REPLACE rather than REPORT, so malformed input
+     * becomes U+FFFD and never an exception - which is also the answer to the
+     * other case this has always had to survive, somebody running `cat` on a
+     * binary. A result reported half way through would be worse than a result
+     * with a `` in it.
+     */
+    @Synchronized
+    fun text(): String {
+        val kept = ByteArrayOutputStream(head.size() + MARKER_BOUND + tailSize)
+        head.writeTo(kept)
+        if (dropped > 0) kept.write(marker(dropped).toByteArray(Charsets.UTF_8))
+        tail?.let { ring ->
+            val first = minOf(tailSize, tailLimit - tailStart)
+            kept.write(ring, tailStart, first)
+            if (tailSize > first) kept.write(ring, 0, tailSize - first)
+        }
+        return String(kept.toByteArray(), Charsets.UTF_8)
+    }
+
+    /**
+     * The sentence that stands where the middle was.
+     *
+     * It states the amount, because "the output was cut" and "the output ended"
+     * are the two readings this is here to separate and only a number separates
+     * them. And it says the end is whole, because the reader's next question
+     * after "some of this is missing" is "so is the last line real", and the
+     * answer is yes - the ring holds the final bytes of the stream, whatever
+     * else went.
+     *
+     * Ordinary words rather than a machine-readable token. What reads this is a
+     * model, and a model does better with a sentence than with `<TRUNCATED
+     * bytes=1467321/>`.
+     */
+    private fun marker(bytes: Long): String =
+        "\n… ${size(bytes)} of output removed from the middle. " +
+            "What is above is where it started and what is below is where it ended, complete. …\n"
+
+    /** A byte count in the units the rest of this product says limits in. */
+    private fun size(bytes: Long): String = when {
+        bytes < KIB -> "$bytes bytes"
+        bytes < KIB * KIB -> "${round(bytes.toDouble() / KIB)} KiB"
+        bytes < KIB * KIB * KIB -> "${round(bytes.toDouble() / (KIB * KIB))} MiB"
+        else -> "${round(bytes.toDouble() / (KIB * KIB * KIB))} GiB"
+    }
+
+    /** One decimal place, and no trailing `.0` on a round number. */
+    private fun round(value: Double): String {
+        val tenths = Math.round(value * 10)
+        return if (tenths % 10 == 0L) "${tenths / 10}" else "${tenths / 10}.${tenths % 10}"
+    }
+
+    private companion object {
+        /** The head gets one part in this many; the tail gets the rest. */
+        const val HEAD_SHARE = 3
+
+        const val KIB = 1024
+
+        /**
+         * Room set aside when sizing the assembly buffer, not a limit on
+         * anything: the marker is a fixed sentence and a number, and this is
+         * comfortably longer than the longest one of those.
+         */
+        const val MARKER_BOUND = 160
+    }
 }

@@ -3166,6 +3166,29 @@ type Shell {
     """
     hostKey: String
     enabled: Boolean!
+    """
+    How long one command on this machine may run, in seconds, or null when it
+    has no limit of its own and runs on `defaultCommandTimeoutSeconds`.
+
+    Per machine because the right number is a property of the machine. A
+    container built to compile things and a router that answers `show
+    interfaces` want opposite answers, and an installation with both had to pick
+    one.
+    """
+    commandTimeoutSeconds: Int
+    "How much of a command's output this machine keeps, per stream, in bytes. Null for the default."
+    maxOutputBytes: Int
+    """
+    What a shell with no limit of its own actually runs on.
+
+    Here for the same reason `account` is: the number lives in this
+    installation's configuration and nothing outside the process can work it
+    out. A screen showing an empty box and nothing beside it would be telling an
+    administrator that no limit applies, which is never true.
+    """
+    defaultCommandTimeoutSeconds: Int!
+    "The same, for the output allowance."
+    defaultMaxOutputBytes: Int!
     status: ShellStatus!
     "What the last check found, in words worth showing."
     lastCheckMessage: String
@@ -3203,6 +3226,22 @@ input ShellInput {
     keyPassphrase: String
     "Defaults to on for a new shell; omitting it on an update leaves it as it is."
     enabled: Boolean
+    """
+    How long one command on this machine may run, in seconds, or null to use
+    this installation's own limit.
+
+    Absent and null are the same thing, the way they are for `username` and
+    unlike the key: there is nothing secret about a timeout, so the screen always
+    has the current value to send back and an empty box is how somebody says
+    "whatever the installation says".
+
+    Between 1 and 86400. Outside that it is refused rather than clamped: a
+    number quietly moved to the nearest one this accepts is a form claiming to
+    have saved something it did not.
+    """
+    commandTimeoutSeconds: Int
+    "How much of a command's output to keep, per stream, in bytes. Between 1024 and 16777216. Same rule as above."
+    maxOutputBytes: Int
     """
     Forgets the host key this shell was first seen with, so the next connection
     trusts whatever answers and records that instead.

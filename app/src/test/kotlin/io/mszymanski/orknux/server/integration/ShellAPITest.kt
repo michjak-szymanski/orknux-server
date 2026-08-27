@@ -13,6 +13,7 @@ import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.security.test.context.support.WithMockUser
+import java.time.Duration
 
 /**
  * The shells as an administrator edits them.
@@ -194,6 +195,91 @@ class ShellAPITest(
     }
 
     @Test
+    fun `the limits an agent runs under are the shipped ones, and the screen is told what they are`() {
+        create("build box", privateKey = KEY)
+
+        graphQlTester.document(
+            "{ shells { commandTimeoutSeconds maxOutputBytes defaultCommandTimeoutSeconds defaultMaxOutputBytes } }",
+        ).execute()
+            // Nothing was asked for, so this machine has no limit of its own.
+            .path("shells[0].commandTimeoutSeconds").valueIsNull()
+            .path("shells[0].maxOutputBytes").valueIsNull()
+            /*
+             * And these are the numbers it is actually running on, which is the
+             * one thing about a shell no screen could work out for itself.
+             *
+             * Pinned rather than left to configuration because they were sixty
+             * seconds and 64 KiB, and against the box this product ships for
+             * building things that was a timeout an agent could not have caused
+             * and a failing build cut before its compile error. Lowering either
+             * again is a decision, not a tidy-up.
+             */
+            .path("shells[0].defaultCommandTimeoutSeconds").entity(Int::class.java).isEqualTo(600)
+            .path("shells[0].defaultMaxOutputBytes").entity(Int::class.java).isEqualTo(262_144)
+    }
+
+    @Test
+    fun `a machine can be given limits of its own, and an empty box puts it back on the installation's`() {
+        val id = graphQlTester.document(
+            """
+            mutation {
+              createShell(input: {
+                name: "build box", host: "127.0.0.1", port: 22, username: "runner",
+                commandTimeoutSeconds: 1800, maxOutputBytes: 1048576
+              }) { id commandTimeoutSeconds maxOutputBytes }
+            }
+            """,
+        ).execute()
+            .path("createShell.commandTimeoutSeconds").entity(Int::class.java).isEqualTo(1800)
+            .path("createShell.maxOutputBytes").entity(Int::class.java).isEqualTo(1_048_576)
+            .path("createShell.id").entity(Long::class.java).get()
+
+        // Seconds in the column and a Duration where the waiting happens, and
+        // the entity is where those two meet.
+        assertThat(shells.findAll().single().commandTimeout).isEqualTo(Duration.ofMinutes(30))
+
+        /*
+         * Left out of the update entirely, which is what the form sends when
+         * somebody empties the box. Absent has to mean "no limit of its own"
+         * here and not "leave what is stored", the way it does for the account
+         * and unlike the key - otherwise there is no way at all to say "go back
+         * to whatever the installation says".
+         */
+        graphQlTester.document(
+            """
+            mutation { updateShell(id: $id, input: {
+              name: "build box", host: "127.0.0.1", port: 22, username: "runner"
+            }) { commandTimeoutSeconds maxOutputBytes defaultCommandTimeoutSeconds } }
+            """,
+        ).execute()
+            .path("updateShell.commandTimeoutSeconds").valueIsNull()
+            .path("updateShell.maxOutputBytes").valueIsNull()
+            .path("updateShell.defaultCommandTimeoutSeconds").entity(Int::class.java).isEqualTo(600)
+
+        assertThat(shells.findAll().single().commandTimeout).isNull()
+    }
+
+    @Test
+    fun `a limit outside what a limit can usefully be is refused rather than quietly moved`() {
+        // Under a second is not a timeout, it is a refusal dressed as one:
+        // nothing survives a handshake and a `cd` in less.
+        refused("commandTimeoutSeconds: 0", "A command timeout between")
+        // And past a day the thing being waited on is a job rather than a
+        // command, and wants nohup and a log file.
+        refused("commandTimeoutSeconds: 86401", "A command timeout between")
+
+        // A kibibyte is the floor because less than that cuts the answer out of
+        // every command worth running.
+        refused("maxOutputBytes: 512", "An output limit between")
+        refused("maxOutputBytes: 16777217", "An output limit between")
+
+        // Refused where somebody can still see what they typed, and nothing
+        // stored in the meantime. A number silently moved to the nearest one
+        // this accepts is a form claiming to have saved what it did not.
+        assertThat(shells.findAll()).isEmpty()
+    }
+
+    @Test
     fun `a shell that is removed is written down, and takes its sessions with it`() {
         val id = create("build box", privateKey = KEY)
 
@@ -245,6 +331,22 @@ class ShellAPITest(
             }
             """,
         ).execute().path("createShell.id").entity(Long::class.java).get()
+    }
+
+    /** One limit this will not take, and the sentence it is turned down with. */
+    private fun refused(limit: String, saying: String) {
+        graphQlTester.document(
+            """
+            mutation {
+              createShell(input: { name: "Overreach", host: "127.0.0.1", port: 22, $limit }) { id }
+            }
+            """,
+        ).execute()
+            .errors()
+            .satisfy { errors ->
+                assertThat(errors).singleElement().extracting<String> { it.message }
+                    .asString().contains(saying)
+            }
     }
 
     /** GraphQL string literals, with the newlines a key is full of. */

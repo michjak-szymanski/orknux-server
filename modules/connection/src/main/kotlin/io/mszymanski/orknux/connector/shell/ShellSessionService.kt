@@ -96,7 +96,10 @@ class ShellSessionService(
         val shell = shells.findByIdOrNull(session.shellId)
             ?: throw ShellUnreachableException("The shell this session was opened on has been removed")
 
-        val outcome = client.connected(shell) { open, _ -> client.run(open, command, session.directory) }
+        // The shell goes in because it carries the limits this command is run
+        // under: the machine's own timeout and output allowance when it has
+        // them, and the installation's when it has not.
+        val outcome = client.connected(shell) { open, _ -> client.run(open, command, session.directory, shell) }
 
         session.lastUsedAt = OffsetDateTime.now()
         session.commandCount += 1

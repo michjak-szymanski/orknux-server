@@ -73,6 +73,16 @@ have failed.
   written — rows written before this are left as they are, and any credential
   already in them should be treated as disclosed.
 
+- 🔒 **A credential in a tool call is no longer kept in the session
+  transcript.** What an agent passed a tool is redacted the same way an audit
+  line is, so a password in a `git push` URL is `***` on the chat and task
+  pages and in the table behind them; what a tool *returned* is stripped only of
+  the things that are a credential on sight — GitHub, Slack, AWS and similar
+  tokens, and private keys — because replacing every `password` and `--token` in
+  a build log would cost the agent the output it works from. A secret in command
+  output with no recognisable shape is still stored, and rows written before
+  this are left as they are.
+
 ## 0.9.4
 
 ### ✨ Added

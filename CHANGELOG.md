@@ -48,7 +48,21 @@ have failed.
   that ran out of turns before it finished. The picture opens larger when it is
   clicked.
 
+- 🎨 **A chat agent can draw.** Ask for a diagram in the conversation and the
+  agent draws one, where the workspace has chosen a text-to-image model. The
+  picture is filed as an attachment on the chat and appears in the thread, so it
+  is still there when the chat is reopened. A workspace with no image model
+  chosen offers no such tool, and no agent is told it could have drawn.
+
 ### 🔧 Changed
+
+- 🖌 **The picture button is gone from the chat composer**, replaced by the
+  agent's own drawing tool above. Asking for a picture is now something said in
+  the conversation rather than a mode the composer is switched into and the
+  description retyped in. Pictures drawn before it went are untouched: they are
+  attachments with a line in the thread, and they still show. A chat on a bare
+  model rather than an agent can no longer draw at all — a bare model is offered
+  no tools.
 
 - 📨 **A webhook run is handed the request's headers**, under `webhook`, beside
   what the body brought — because several senders say which event a delivery is

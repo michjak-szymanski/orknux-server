@@ -104,11 +104,12 @@ class AgentConversation(
         agentId: Long,
         turns: List<ChatTurn>,
         into: Long? = null,
+        shed: ToolShed? = null,
         watch: RoundWatch? = null,
     ): ChatCompletion {
         val agent = agents.findByIdOrNull(agentId)
             ?: return ChatCompletion.Failed("That agent no longer exists")
-        return answer(modelId, agent, turns, into, watch = watch)
+        return answer(modelId, agent, turns, into, shed, watch)
     }
 
     /**

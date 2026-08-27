@@ -1157,24 +1157,6 @@ type Mutation {
     deleteChat(id: ID!): Boolean!
     "Says something and answers it, with the whole thread as context."
     sendChatMessage(id: ID!, text: String!): ChatAnswer!
-    """
-    Draws a picture from a description, and puts it in the chat.
-
-    A door of its own rather than a flag on `sendChatMessage`, because it is a
-    different model at a different endpoint: the chat model does not draw, and
-    the image model does not converse.
-
-    The picture is filed as an attachment on this chat and the exchange is
-    written into the history as two lines - the description, and a markdown
-    image pointing at `/api/attachments/{id}`. So it is there when the chat is
-    opened again, with nothing else to keep in step.
-
-    Refused in a sentence when the workspace has chosen no image model, when
-    attachments are turned off - a drawn picture would have nowhere to live -
-    and when the provider would not or could not draw it, in its own words where
-    it gave any.
-    """
-    drawChatPicture(chatId: ID!, prompt: String!): ChatPicture!
     "Defines a default connection, assigned to workspaces created from now on."
     createConnection(input: ConnectionInput!): Connection!
     "Also updates the copy held by every workspace provisioned with this default."
@@ -2563,30 +2545,6 @@ type SkillPage {
     size: Int!
     totalElements: Int!
     totalPages: Int!
-}
-
-"""
-What was drawn, and what it cost.
-
-The bytes are not here: `attachmentId` is asked for at `/api/attachments/{id}`,
-exactly as a file somebody uploaded is, and it is refused to anybody but the
-person whose chat this is.
-"""
-type ChatPicture {
-    "The attachment the picture was filed as."
-    attachmentId: ID!
-    "What was asked for, trimmed."
-    prompt: String!
-    "The line written into the chat as the answer: a markdown image."
-    said: String!
-    "How long the provider took to draw it."
-    millis: Float!
-    """
-    What it cost at the per-image price recorded on the model, or null when it
-    carries none. Null rather than zero: no price recorded is not a price of
-    nothing, and an image model has no tokens to be costed the ordinary way.
-    """
-    cost: Float
 }
 
 """

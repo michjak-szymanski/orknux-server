@@ -174,11 +174,19 @@ class ShellTools(
                 put("exitCode", outcome.run.exitCode)
                 put("stdout", outcome.run.stdout)
                 put("stderr", outcome.run.stderr)
+                /*
+                 * What is missing is the middle, and the output itself says how
+                 * much - so this says where the gap is and what is still whole,
+                 * and leaves the number to the marker rather than printing a
+                 * second, vaguer version of the same fact beside it.
+                 */
                 if (outcome.run.stdoutTruncated || outcome.run.stderrTruncated) {
                     put(
                         "truncated",
-                        "The output was longer than this can carry and the rest was dropped. Run it again " +
-                            "through head, tail or grep if you need the part that is missing.",
+                        "This output was longer than this can carry, so its middle was removed and a line in " +
+                            "its place says how much. The beginning and the end are both complete, so the " +
+                            "last line you can see is the last line the command printed. Run it again " +
+                            "through grep if you need what was in between.",
                     )
                 }
                 if (outcome.run.timedOut) {

@@ -32,6 +32,7 @@ class ChatAPI(
     private val agents: AgentRepository,
     private val settings: InstallationSettings,
     private val ownership: ChatOwnership,
+    private val chatTools: ChatTools,
 ) {
 
     @QueryMapping
@@ -163,7 +164,10 @@ class ChatAPI(
         requireOwn(session)
 
         val start = chats.beginSend(id, text)
-        val answer = when (val said = chats.ask(start)) {
+        // The chat's own tools, lent for this round only. The same shed the
+        // streaming door lends, so what an agent may do does not depend on
+        // which of the two the browser happened to use.
+        val answer = when (val said = chats.ask(start, shed = chatTools.shed(session))) {
             is ChatCompletion.Failed -> throw ChatModelUnusableException(said.reason)
             // The loop runs tools to a conclusion, so nothing reaching here is
             // still asking for one.

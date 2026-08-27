@@ -61,6 +61,7 @@ class ChatStreamAPI(
     private val attachments: ChatAttachments,
     private val settings: InstallationSettings,
     private val mapper: ObjectMapper,
+    private val chatTools: ChatTools,
 ) {
 
     /**
@@ -88,7 +89,13 @@ class ChatStreamAPI(
 
         // Tied to the chat here, and read for anything the model can look at.
         val sent = attachments.attach(session, request.attachmentIds)
-        return answering(id, chats.beginSend(id, request.text, attachments.imagesOf(sent)), request.text, response)
+        return answering(
+            id,
+            chats.beginSend(id, request.text, attachments.imagesOf(sent)),
+            request.text,
+            response,
+            chatTools.shed(session),
+        )
     }
 
     /**
@@ -110,7 +117,8 @@ class ChatStreamAPI(
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        return answering(id, chats.beginRegenerate(id), said = null, response = response) {
+        val shed = chatTools.shed(session)
+        return answering(id, chats.beginRegenerate(id), said = null, response = response, shed = shed) {
             chats.abandonRegenerate(id)
         }
     }
@@ -124,12 +132,16 @@ class ChatStreamAPI(
      *   already taken the old answer off the thread by this point, so a
      *   provider that refuses would otherwise leave the chat ending on the
      *   question - the one outcome worse than the answer somebody did not like.
+     * @param shed the chat's own tools, lent to the agent for this round. The
+     *   same shed the blocking door lends: what an agent may do must not depend
+     *   on which of the two the browser used.
      */
     private fun answering(
         id: Long,
         start: ChatSendStart,
         said: String?,
         response: HttpServletResponse,
+        shed: ToolShed,
         giveUp: () -> Unit = {},
     ): StreamingResponseBody {
         // Nothing between here and the browser may hold a piece of the answer
@@ -181,7 +193,7 @@ class ChatStreamAPI(
                         onThinking = { piece -> send("thinking", mapOf("text" to piece)) },
                     ) { piece -> send("chunk", mapOf("text" to piece)) }
                 } else {
-                    chats.ask(start, watching { event, payload -> send(event, payload) }).also { whole ->
+                    chats.ask(start, watching { event, payload -> send(event, payload) }, shed).also { whole ->
                         if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                     }
                 }

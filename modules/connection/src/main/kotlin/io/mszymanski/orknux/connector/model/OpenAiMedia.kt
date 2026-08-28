@@ -3,6 +3,7 @@ package io.mszymanski.orknux.connector.model
 import com.openai.models.audio.speech.SpeechCreateParams
 import com.openai.models.audio.transcriptions.TranscriptionCreateParams
 import com.openai.models.images.ImageGenerateParams
+import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import org.springframework.stereotype.Component
 
 /**
@@ -26,7 +27,11 @@ import org.springframework.stereotype.Component
  * application should follow it.
  */
 @Component
-class OpenAiMedia(private val clients: ModelClients, private val probe: ModelProviderProbe) {
+class OpenAiMedia(
+    private val clients: ModelClients,
+    private val probe: ModelProviderProbe,
+    private val properties: ConnectionProperties,
+) {
 
     /** A picture, as bytes or as a URL to fetch - whichever the provider gave. */
     fun draw(provider: ModelProvider, model: LlmModel, prompt: String): Drawn {
@@ -77,10 +82,12 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
      * left the field out when nobody had configured one, so each server used
      * its own default - the providers disagree about which voices exist, and
      * naming one that a server has never heard of is a refusal. The SDK makes
-     * the field required, so there is a default here instead: `alloy`, which is
-     * OpenAI's own and the name the compatible servers copied. An installation
-     * running something with its own voice set should name one; this is the
-     * value that gets used when it has not.
+     * the field required, so something is always sent. What that something is
+     * belongs to the installation rather than to this file: `alloy` is OpenAI's
+     * own name and the one the compatible servers copied, so it is the default,
+     * and an installation running a server with a voice set of its own points
+     * `ORKNUX_SPEECH_DEFAULT_VOICE` at one of those. A model that names its own
+     * voice is unaffected either way.
      */
     fun speak(provider: ModelProvider, model: LlmModel, text: String, voice: String?): Spoken {
         val client = when (val ready = ready(provider)) {
@@ -92,7 +99,7 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
             .model(model.modelId)
             .input(text)
             .responseFormat(SpeechCreateParams.ResponseFormat.MP3)
-        params.voice(voice?.trim()?.ifBlank { null } ?: DEFAULT_VOICE)
+        params.voice(voice?.trim()?.ifBlank { null } ?: properties.speechDefaultVoice)
 
         return client.audio().speech().create(params.build()).use { answer ->
             Spoken.Audio(answer.body().readBytes())
@@ -136,11 +143,6 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
     private sealed interface Ready {
         data class Yes(val client: com.openai.client.OpenAIClient) : Ready
         data class No(val reason: String) : Ready
-    }
-
-    private companion object {
-        /** What a server is asked for when the installation has not said. */
-        const val DEFAULT_VOICE = "alloy"
     }
 
     private fun ready(provider: ModelProvider): Ready =

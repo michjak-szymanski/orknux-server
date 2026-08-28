@@ -24,6 +24,18 @@ data class ConnectionProperties(
     val allowLinkLocal: Boolean = false,
 
     /**
+     * Which voice reads aloud when a speech model does not name one.
+     *
+     * The model's own `voice` is the answer whenever it has been set, and this
+     * is only what happens when nobody has said. It exists because the field
+     * used to mean "send no voice at all and let the server pick its own",
+     * which the OpenAI SDK cannot express - the field is required there - so
+     * something has to be sent, and hard-coding OpenAI's own name would fail
+     * every installation running a server with a voice set of its own.
+     */
+    val speechDefaultVoice: String = "alloy",
+
+    /**
      * How long a workflow's own HTTP request may take.
      *
      * Longer than a probe's, which only asks whether anything is listening: a

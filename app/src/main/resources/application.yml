@@ -432,6 +432,11 @@ orknux:
     # Link-local addresses reach cloud instance metadata. Private and loopback
     # addresses stay reachable, since internal services are the point.
     allow-link-local: ${ORKNUX_CONNECTION_ALLOW_LINK_LOCAL:false}
+    # Which voice reads aloud when a speech model does not name one of its own.
+    # OpenAI's name, and the one the compatible servers copied. A server with a
+    # voice set of its own - Piper, Kokoro, anything self-hosted - is pointed at
+    # one of those here, and a model that names its own voice ignores this.
+    speech-default-voice: ${ORKNUX_SPEECH_DEFAULT_VOICE:alloy}
     # Where an Entra ID token is asked for. The worldwide cloud, which is where
     # all but a few tenants live - the sovereign clouds answer on addresses of
     # their own, and a tenant in one of those cannot reach this. Written down

@@ -10,6 +10,7 @@ import io.mszymanski.orknux.connector.security.HeldCredential
 import io.mszymanski.orknux.connector.security.SecretCipher
 import io.mszymanski.orknux.connector.security.SecretReferences
 import com.openai.credential.Credential as OpenAiCredential
+import com.openai.errors.OpenAIServiceException
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
@@ -41,6 +42,8 @@ class ModelProviderProbe(
     /** Reads the key, whether the provider keeps its own or points at a variable. */
     private val references: SecretReferences,
     private val proxies: ProxyRouter,
+    /** Builds the SDK client the listing is asked through; see [ModelClients]. */
+    private val clients: ModelClients,
 ) {
 
     /**
@@ -79,6 +82,56 @@ class ModelProviderProbe(
      * asking twice for something already in hand.
      */
     fun list(provider: ModelProvider): Listing {
+        /*
+         * The SDK asks first, for every provider that speaks the OpenAI shape.
+         *
+         * It knows where each of Azure's two surfaces keeps its listing, which
+         * is the thing this cannot work out for itself: an endpoint written
+         * through to `/openai/v1` lists at `{base}/models` with no version,
+         * while a bare resource host lists at `/openai/models?api-version=...`.
+         * Assembled here, the first of those came out as
+         * `/openai/v1/openai/models?...` and answered 404 - so a provider that
+         * served every chat perfectly sat on the Models screen saying it could
+         * not be reached, which is worse than saying nothing.
+         *
+         * A refusal is the SDK's answer and is returned. Anything else falls
+         * through to the request below, because two shapes exist that the SDK
+         * cannot read and this can: Anthropic, which has no OpenAI-shaped
+         * listing at all, and the self-hosted servers that answer
+         * `models[].name` instead of `data[].id`. Falling through costs one
+         * request against a provider that was going to answer nothing useful
+         * anyway.
+         */
+        if (provider.type != ProviderType.ANTHROPIC) {
+            when (val asked = listedBySdk(provider)) {
+                is Listing.Models -> {
+                    if (asked.ids.isNotEmpty()) return asked
+                    /*
+                     * Nothing parsed, but something answered. Ask again at the
+                     * same address with this file's own reader, because the
+                     * body may be in the shape the SDK cannot see: llama.cpp
+                     * and Ollama's own listing answer `models[].name` where the
+                     * SDK is looking for `data[].id`, and an empty list is
+                     * indistinguishable here from a list it could not read.
+                     */
+                }
+
+                is Listing.Failed -> {
+                    if (asked.refused) return asked
+                    /*
+                     * Not a refusal, so somewhere else is worth trying - but
+                     * only somewhere else. Where the fallback would send the
+                     * very same `GET {base}/models` that just failed, sending
+                     * it twice asks a provider that could not answer to fail
+                     * again, and reports the same sentence either way.
+                     */
+                    if (modelsUrl(provider) == "${provider.openAiBase()}/models") {
+                        return Listing.Failed("No model list at ${provider.openAiBase()}/models — check the endpoint")
+                    }
+                }
+            }
+        }
+
         val credential = when (val resolved = credentials(provider)) {
             is Credential.Failed -> return Listing.Failed(resolved.reason)
             is Credential.Header -> resolved.header
@@ -111,11 +164,54 @@ class ModelProviderProbe(
         }
     }
 
+    /**
+     * The listing as the SDK asks for it, or why it could not.
+     *
+     * Kept apart from [list] so that "the SDK had nothing to say" and "the
+     * provider refused us" stay different answers: the first is worth a second
+     * attempt in a shape the SDK does not read, and the second is not - a 401
+     * asked twice is a 401 twice, and the second one is a credential sent
+     * somewhere for no reason.
+     */
+    private fun listedBySdk(provider: ModelProvider): Listing {
+        val base = provider.openAiBase()
+        probe.vet(base)?.let { return Listing.Failed(it, refused = false) }
+
+        val credential = when (val resolved = sdkCredential(provider)) {
+            is SdkCredential.Failed -> return Listing.Failed(resolved.reason, refused = true)
+            is SdkCredential.Ready -> resolved.credential
+        }
+
+        return try {
+            Listing.Models(clients.clientFor(provider, credential).models().list().data().map { it.id() }.distinct())
+        } catch (refused: OpenAIServiceException) {
+            log.warn("{} answered {} when asked for its models", base, refused.statusCode())
+            when (refused.statusCode()) {
+                401, 403 -> Listing.Failed(
+                    "The provider rejected the credentials (${refused.statusCode()})",
+                    refused = true,
+                )
+                // Not a refusal: a surface that lists somewhere else, which the
+                // request below may still find.
+                else -> Listing.Failed("The provider answered ${refused.statusCode()}", refused = false)
+            }
+        } catch (failure: Exception) {
+            log.warn("Asking {} for its models through the SDK failed", base, failure)
+            Listing.Failed(failure.message ?: "The provider could not be reached", refused = false)
+        }
+    }
+
     /** What asking a provider for its models produced. */
     sealed interface Listing {
         /** What it offers. Empty is an answer too: a server with nothing loaded. */
         data class Models(val ids: List<String>) : Listing
-        data class Failed(val reason: String) : Listing
+
+        /**
+         * @param refused whether the provider itself said no - a credential it
+         *   would not take. Anything else is only "not here", and is worth
+         *   asking again somewhere else.
+         */
+        data class Failed(val reason: String, val refused: Boolean = true) : Listing
     }
 
     /**

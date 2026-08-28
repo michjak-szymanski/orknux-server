@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.connection.ConnectionProperties
 import io.mszymanski.orknux.connector.model.ModelProvider
+import io.mszymanski.orknux.connector.model.ModelClients
 import io.mszymanski.orknux.connector.model.ModelProviderProbe
 import io.mszymanski.orknux.connector.model.ProviderAuthMethod
 import io.mszymanski.orknux.connector.model.ProviderType
@@ -114,6 +115,7 @@ class EntraAuthorityGuardTest {
             // reads a workspace secret; each holds its own.
             SecretReferences(SecretVariables { _, _ -> null }, SecretCipher("")),
             proxies,
+            ModelClients(proxies)
         )
     }
 

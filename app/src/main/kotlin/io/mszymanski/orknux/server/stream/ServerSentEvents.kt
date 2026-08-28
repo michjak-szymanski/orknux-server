@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.stream
 
 import jakarta.servlet.http.HttpServletResponse
 import tools.jackson.databind.ObjectMapper
+import java.util.concurrent.locks.ReentrantLock
 
 /**
  * Writing server-sent events, in the one place that knows the wire format.
@@ -38,6 +39,21 @@ class ServerSentEvents(private val response: HttpServletResponse, private val ma
     private val out = response.outputStream
 
     /**
+     * One frame at a time, because a chat's stream is written by two threads.
+     *
+     * The thread composing the answer writes the frames and a second one pings
+     * the reader while the model is silent - see [ReaderWatch], which is how a
+     * browser that has gone away is noticed at all. A frame is several writes
+     * and a flush, so two threads writing without this would put a keep-alive
+     * through the middle of an event, and the browser's parser would drop the
+     * frame it landed in.
+     *
+     * A lock rather than `@Synchronized` so that a ping can decline to wait for
+     * it. See [keepAlive].
+     */
+    private val writing = ReentrantLock()
+
+    /**
      * One frame: the name, the JSON, and the blank line that ends it.
      *
      * Pushed every time. A servlet container buffers, so a frame that is only
@@ -65,8 +81,23 @@ class ServerSentEvents(private val response: HttpServletResponse, private val ma
      * is a connection with nothing on it. A colon and a newline is the protocol's
      * own way of saying "still here"; the browser's parser ignores it, and every
      * hop in between sees traffic.
+     *
+     * **It gives up rather than queue behind a frame.** On a chat's stream a
+     * ping is also how a reader that has gone is discovered, and the thread
+     * asking is shared between every stream in the process - so one congested
+     * socket must not hold it while every other conversation waits to find out
+     * whether anybody is still listening. Where another thread is already
+     * writing there is nothing to discover anyway: that write is the same
+     * question, asked by whoever got there first.
      */
-    fun keepAlive() = push(":\n\n")
+    fun keepAlive() {
+        if (!writing.tryLock()) return
+        try {
+            onto(":\n\n")
+        } finally {
+            writing.unlock()
+        }
+    }
 
     private fun write(id: Long?, event: String, payload: Any) = push(
         buildString {
@@ -76,7 +107,17 @@ class ServerSentEvents(private val response: HttpServletResponse, private val ma
         },
     )
 
+    /** Under the lock, so nothing is written through the middle of a frame. */
     private fun push(frame: String) {
+        writing.lock()
+        try {
+            onto(frame)
+        } finally {
+            writing.unlock()
+        }
+    }
+
+    private fun onto(frame: String) {
         out.write(frame.toByteArray())
         /*
          * Both, and in this order. The stream's own flush is what a wrapper

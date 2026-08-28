@@ -185,6 +185,7 @@ class OpenAiChatTest {
             ObjectMapper(),
             SecretReferences(SecretVariables { _, _ -> null }, SecretCipher(TEST_KEY)),
             router,
+            ModelClients(router)
         )
         return OpenAiChat(ModelClients(router), probe)
     }

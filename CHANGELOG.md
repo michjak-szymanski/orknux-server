@@ -19,6 +19,15 @@ have failed.
 
 ### ✨ Added
 
+- 🔌 **A provider is asked for its models where it actually keeps them.** The
+  check behind "Test Connection" built its own address, and for an Azure
+  endpoint written through to `/openai/v1` that came out one path too deep -
+  so a provider that answered every message reported that it could not be
+  reached, and the card sent you to check the one field that was right. The
+  listing goes through the model SDK now, which knows where each of Azure's two
+  surfaces keeps it; a server answering in a shape the SDK cannot read is still
+  read the old way.
+
 - 🧪 **A model becomes an agent in one press.** Beside every chat model on
   Models there is now a "Make an agent on this model" action: it creates an agent
   on that model, named after it, and takes you to its settings page. The agent is

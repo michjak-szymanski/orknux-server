@@ -1,9 +1,11 @@
 package io.mszymanski.orknux.connector.model
 
 import com.openai.models.audio.speech.SpeechCreateParams
+import com.openai.core.MultipartField
 import com.openai.models.audio.transcriptions.TranscriptionCreateParams
 import com.openai.models.images.ImageGenerateParams
 import org.springframework.stereotype.Component
+import java.io.InputStream
 
 /**
  * Drawing, reading aloud and listening, spoken through the official SDK.
@@ -114,16 +116,36 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
      * What was said in a recording.
      *
      * The multipart body this used to build by hand - boundary string and all -
-     * is the SDK's business now. The bytes go over as they arrived.
+     * is the SDK's business now. What is not the SDK's business is the name of
+     * the part: handed raw bytes and nothing else it sends them as an ordinary
+     * form field, and a Whisper server answers `Expected UploadFile, received
+     * str` - which is what happened when this was first migrated and the
+     * filename was left behind with the hand-written encoder.
+     *
+     * The name carries the extension, and the extension is how most of these
+     * servers decide what they have been given, so it is [filename] as the
+     * caller had it rather than something invented here.
      */
-    fun transcribe(provider: ModelProvider, model: LlmModel, audio: ByteArray): Heard {
+    fun transcribe(
+        provider: ModelProvider,
+        model: LlmModel,
+        audio: ByteArray,
+        filename: String,
+        contentType: String,
+    ): Heard {
         val client = when (val ready = ready(provider)) {
             is Ready.No -> return Heard.Failed(ready.reason)
             is Ready.Yes -> ready.client
         }
 
+        val recording = MultipartField.builder<InputStream>()
+            .value(audio.inputStream())
+            .filename(filename)
+            .contentType(contentType)
+            .build()
+
         val answer = client.audio().transcriptions().create(
-            TranscriptionCreateParams.builder().model(model.modelId).file(audio).build(),
+            TranscriptionCreateParams.builder().model(model.modelId).file(recording).build(),
         )
         return Heard.Words(answer.asTranscription().text())
     }

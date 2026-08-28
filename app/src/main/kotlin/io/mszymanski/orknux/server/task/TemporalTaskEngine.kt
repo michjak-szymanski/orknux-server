@@ -4,6 +4,7 @@ import io.mszymanski.orknux.workflow.temporal.TemporalProperties
 import io.mszymanski.orknux.workflow.temporal.TemporalRegistrar
 import io.temporal.activity.ActivityOptions
 import io.temporal.client.WorkflowClient
+import io.temporal.client.WorkflowExecutionAlreadyStarted
 import io.temporal.client.WorkflowOptions
 import io.temporal.common.RetryOptions
 import io.temporal.worker.Worker
@@ -112,6 +113,41 @@ class TemporalTaskEngine(
      * inline engine has to be correct without anyway.
      */
     override fun nudge(taskId: Long) = Unit
+
+    /**
+     * Starts the workflow again, and lets Temporal say whether that was allowed.
+     *
+     * This is the net the incident above went without. Registering the workflow
+     * and not its activity left a task that Temporal had accepted, started and
+     * then failed on its first turn - and the row stayed at QUEUED, because
+     * nothing had got as far as saying otherwise. Nothing would ever have
+     * looked at it again: `begin` is called once, `nudge` does nothing here,
+     * and a Temporal installation has no revival on the way up because there is
+     * nothing in this process to revive. A restart did not help either.
+     *
+     * **What makes it safe to ask is the workflow id.** It is the task's, so a
+     * task whose workflow is still running is refused by the Temporal server
+     * with [WorkflowExecutionAlreadyStarted] - a turn cannot be taken twice
+     * because there cannot be two live runs to take it. That is a stronger
+     * promise than the inline engine's set, and it is made by the same thing
+     * that already makes `begin` safe to call twice.
+     *
+     * A workflow that has *closed* while the row still says QUEUED is the case
+     * worth having: the id may be reused, so this starts a fresh run, which is
+     * the recovery. Nor does it re-run anything - the new run's first act is
+     * [TaskLoop.advance], which is written to be entered on a task in any state
+     * because a Temporal activity can be delivered twice anyway.
+     */
+    override fun recover(taskId: Long): Boolean = try {
+        begin(taskId)
+        log.info("Task {} was left queued and has been handed to Temporal again", taskId)
+        true
+    } catch (already: WorkflowExecutionAlreadyStarted) {
+        // The ordinary answer, and not a problem: the task is being carried,
+        // it is just slower to leave QUEUED than the sweep is to look.
+        log.debug("Task {} is already running on Temporal", taskId, already)
+        false
+    }
 
     companion object {
 

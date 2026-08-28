@@ -308,6 +308,10 @@
                              calls the sweep itself. The bean is still built, which is
                              what lets it. -->
                         <orknux.revision.sweep-enabled>false</orknux.revision.sweep-enabled>
+                        <!-- And no clock hands a task to a worker mid-suite;
+                             TaskSweepTest calls the sweep itself. Same bargain:
+                             the bean is still built, which is what lets it. -->
+                        <orknux.task.sweep.enabled>false</orknux.task.sweep.enabled>
                         <!-- The tick is called directly by the test that wants it. -->
                         <db-scheduler.enabled>false</db-scheduler.enabled>
                         <!--

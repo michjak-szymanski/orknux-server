@@ -4,10 +4,12 @@ import io.mszymanski.orknux.server.chat.ChatProperties
 import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.monitoring.MetricsProperties
 import io.mszymanski.orknux.server.revision.RevisionProperties
+import io.mszymanski.orknux.server.task.TaskSweepProperties
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.Id
 import jakarta.persistence.Table
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration
 import org.springframework.data.jpa.repository.JpaRepository
@@ -53,6 +55,7 @@ object SettingNames {
     const val CHAT_ENABLED = "chat.enabled"
     const val METRICS_ANONYMOUS = "metrics.anonymous"
     const val REVISION_RETENTION_DAYS = "revision.retention.days"
+    const val TASK_SWEEP_MINUTES = "task.sweep.minutes"
 }
 
 /**
@@ -70,6 +73,20 @@ class InstallationSettings(
     private val chat: ChatProperties,
     private val metrics: MetricsProperties,
     private val revisions: RevisionProperties,
+    private val tasks: TaskSweepProperties,
+    /**
+     * Which engine is carrying tasks, read as the container reads it.
+     *
+     * The property and not the bean. `TemporalProperties` only exists where
+     * Temporal is on - its configuration class carries the same condition - so
+     * asking for it here would leave an inline installation unable to build
+     * this class at all; and injecting `TaskEngine` would put the whole of the
+     * task machinery behind a setting the chat and the attachment store both
+     * need. This is the string `@ConditionalOnProperty` on `InlineTaskEngine`
+     * and `TemporalTaskEngine` is keyed on, with the same default, so it cannot
+     * come to disagree with which bean was built.
+     */
+    @Value("\${orknux.temporal.enabled:true}") private val temporalEnabled: Boolean,
 ) {
 
     /**
@@ -179,6 +196,66 @@ class InstallationSettings(
         settings.save(held)
     }
 
+    /**
+     * How many minutes a task may sit at QUEUED before something hands it over
+     * again.
+     *
+     * The same bargain the retention has: the file is where a fresh
+     * installation starts, and what an administrator stored is the answer from
+     * then on. A stored value that is not a number, or is outside what the
+     * screen would offer, reads as the configured one - so a row edited by hand
+     * cannot switch the net off by being nonsense.
+     *
+     * Read on every pass, on both engines. It is honoured wherever it is
+     * stored, including on an installation that has since moved to Temporal and
+     * no longer draws the field; the sweep needs an interval either way, and a
+     * number somebody chose is a better one than a number nobody did.
+     */
+    fun taskSweepMinutes(): Int {
+        val held = settings.findByIdOrNull(SettingNames.TASK_SWEEP_MINUTES) ?: return tasks.minutes
+        return held.value.toIntOrNull()?.takeIf { it in MIN_SWEEP_MINUTES..MAX_SWEEP_MINUTES } ?: tasks.minutes
+    }
+
+    /** What a fresh installation would wait - ORKNUX_TASK_SWEEP_MINUTES. */
+    fun taskSweepMinutesConfigured(): Int = tasks.minutes
+
+    /**
+     * Whether the screen may offer the field at all.
+     *
+     * Which engine is carrying tasks, asked of the one thing that decides it.
+     * `orknux.temporal.enabled` is what the `@ConditionalOnProperty` on
+     * `InlineTaskEngine` and `TemporalTaskEngine` is keyed on, so reading it
+     * here is reading the same fact the container read - not a second mechanism
+     * that could come to disagree with the first.
+     *
+     * Off on Temporal because the interval is not an administrator's decision
+     * there: what a Temporal installation is deciding about a stuck task is a
+     * Temporal question, and the sweep still runs with whatever the file says.
+     * The field would be a control whose effect nobody could see the shape of.
+     */
+    fun taskSweepConfigurable(): Boolean = !temporalEnabled
+
+    /**
+     * Both refusals are here rather than at the door.
+     *
+     * The chat and the attachment switches gate themselves in the resolver, and
+     * this one does not, because what it is gating on is not a policy the
+     * resolver could restate: `taskSweepConfigurable` is two lines up, and a
+     * copy of it in the controller would be a second place to remember when the
+     * engines change. What the screen will not offer, this will not hold.
+     */
+    @Transactional
+    fun setTaskSweepMinutes(minutes: Int, by: String) {
+        if (!taskSweepConfigurable()) throw TaskSweepNotConfigurableException()
+        if (minutes !in MIN_SWEEP_MINUTES..MAX_SWEEP_MINUTES) throw TaskSweepIntervalOutOfRangeException(minutes)
+        val held = settings.findByIdOrNull(SettingNames.TASK_SWEEP_MINUTES)
+            ?: InstallationSetting(name = SettingNames.TASK_SWEEP_MINUTES)
+        held.value = minutes.toString()
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = by
+        settings.save(held)
+    }
+
     private fun hold(name: String, enabled: Boolean, by: String) {
         val held = settings.findByIdOrNull(name) ?: InstallationSetting(name = name)
         held.value = enabled.toString()
@@ -199,6 +276,41 @@ class InstallationSettings(
  */
 const val MIN_RETENTION_DAYS = 1
 const val MAX_RETENTION_DAYS = 3650
+
+/**
+ * A minute and a day.
+ *
+ * The floor is a minute rather than nothing, because "sweep continuously" is
+ * not a thing anybody wants: a task leaves QUEUED in the time it takes to read
+ * its row, so a number below a minute buys no recovery and costs a query. The
+ * ceiling is a day, which is already longer than anybody should wait to find
+ * out a task never started - past that the net is not a net.
+ *
+ * Neither end is what makes the sweep safe. Handing the same task over twice is
+ * refused by the engine, not by the interval; these bound how long a stranded
+ * task is left, and nothing else.
+ */
+const val MIN_SWEEP_MINUTES = 1
+const val MAX_SWEEP_MINUTES = 1440
+
+class TaskSweepIntervalOutOfRangeException(val minutes: Int) : RuntimeException(
+    "$minutes is not a number of minutes a task can be left queued for. " +
+        "Choose between $MIN_SWEEP_MINUTES and $MAX_SWEEP_MINUTES.",
+), Refusal {
+
+    override val arguments get() = mapOf("minutes" to minutes)
+}
+
+/**
+ * The field, on an installation that does not draw it.
+ *
+ * Refused rather than stored quietly. A Temporal installation offers no control
+ * for this, so a value that arrived anyway came from somewhere that should be
+ * told - and storing one would leave a number in force that nobody can see.
+ */
+class TaskSweepNotConfigurableException : RuntimeException(
+    "This installation runs its tasks on Temporal, where how long a queued task waits is not set here",
+)
 
 class RetentionOutOfRangeException(val days: Int) : RuntimeException(
     "$days is not a number of days history can be kept for. " +

@@ -34,4 +34,25 @@ interface TaskEngine {
      * what makes an approval take effect now rather than at the next poll.
      */
     fun nudge(taskId: Long)
+
+    /**
+     * Take a task back that nothing is carrying any more.
+     *
+     * What [TaskSweeper] calls, and the one thing on this interface that is
+     * allowed to be asked about a task somebody else may already hold - so the
+     * whole of it is the answer to "am I about to run this twice". Both
+     * implementations refuse rather than start a second turn, and each has its
+     * own reason to be able to:
+     *
+     *  - inline, a task in flight is in `inHand` from before it reaches a
+     *    worker until after its last turn, so this is a set membership test;
+     *  - on Temporal, a task in flight is a running workflow whose id is the
+     *    task's, and the server refuses a second start of it. Neither answer
+     *    is a guess about timing.
+     *
+     * Returns true when this call is what put the task back to work, which is
+     * what the sweep counts and what a test asserts on. False means somebody
+     * already had it, and is the ordinary answer.
+     */
+    fun recover(taskId: Long): Boolean
 }

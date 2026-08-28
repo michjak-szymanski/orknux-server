@@ -159,6 +159,27 @@ is reported to the module rather than cascaded.
 
 ## Conventions
 
+- **Never hand-roll what a library already does.** Before writing a line of
+  protocol - an HTTP call to a vendor API, an auth handshake, a request or
+  response shape, a retry policy - find the official SDK and use it. Reach for
+  a hand-written client only when there is no library, and say in the commit
+  why.
+
+  This is not a style preference. Vendor APIs move: Azure OpenAI serves two URL
+  shapes from one resource, ships a new API version every few months, and
+  addresses a model by deployment on one surface and by name on another. A
+  hand-built URL encodes today's shape and silently 404s on tomorrow's, which
+  reads as a wrong configuration field and sends whoever is debugging to look
+  at something that was never wrong. The SDK knows all of it, is updated by the
+  people who change the API, and turns three of our bugs into a version bump.
+  `com.openai:openai-java` handles Azure, Entra credentials, the v1 and
+  deployment surfaces and API versions - `OpenAIOkHttpClient.builder()
+  .baseUrl(...).credential(BearerTokenCredential.create(...))`.
+
+  A library brought in this way must still come back under the proxy rules: see
+  `ProxyRouter`, which exposes `proxySelector()` for exactly the clients it
+  cannot build itself.
+
 - One `@Controller` per aggregate, with `@QueryMapping` / `@MutationMapping`
   methods and the DTOs, page wrapper and exceptions in the same file. An
   `…ExceptionResolver` maps those exceptions to GraphQL error types.

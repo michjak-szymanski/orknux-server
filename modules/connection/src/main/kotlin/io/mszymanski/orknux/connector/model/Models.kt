@@ -332,7 +332,11 @@ class LlmModel(
     var outputCostPerMillion: BigDecimal? = null,
 
     /**
-     * Which voice a [ModelKind.SPEECH] model reads in; null sends none.
+     * Which voice a [ModelKind.SPEECH] model reads in.
+     *
+     * Null falls back to the installation's `speech-default-voice` rather than
+     * sending no voice at all: the OpenAI SDK requires the field, so there is no
+     * longer a way to leave the choice to the server.
      *
      * The names belong to the provider — OpenAI knows `alloy`, a local server
      * knows its own — so this is text rather than a list of options this would

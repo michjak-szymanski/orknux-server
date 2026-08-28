@@ -26,6 +26,24 @@
             <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
+        <!--
+            Talking to a model provider.
+
+            The official OpenAI SDK rather than a hand-built client. Every
+            provider this application speaks to answers one of two shapes, and
+            the OpenAI one is the shape all but Anthropic use - including Azure,
+            which serves it two different ways from one resource and moves the
+            details every few months. A URL assembled here encodes whichever way
+            was true when it was written and 404s when a resource serves the
+            other, which reads as a wrong configuration field and sends whoever
+            is debugging to look at something that was never wrong. The SDK is
+            updated by the people who change the API; see AGENTS.md.
+        -->
+        <dependency>
+            <groupId>com.openai</groupId>
+            <artifactId>openai-java</artifactId>
+            <version>${openai.version}</version>
+        </dependency>
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>

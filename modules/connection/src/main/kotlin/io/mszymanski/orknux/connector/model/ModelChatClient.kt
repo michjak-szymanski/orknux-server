@@ -1,7 +1,9 @@
 package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
+import com.openai.errors.OpenAIServiceException
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.data.repository.findByIdOrNull
@@ -165,6 +167,7 @@ class ModelChatClient(
     private val properties: ModelChatProperties,
     private val usage: ModelUsageRecorder,
     private val proxies: ProxyRouter,
+    private val openAi: OpenAiChat,
 ) {
 
     /**
@@ -234,6 +237,12 @@ class ModelChatClient(
         onThinking: (String) -> Unit = {},
         onChunk: (String) -> Unit,
     ): ChatCompletion {
+        spoken(modelId)?.let { shape ->
+            return through(modelId, shape) {
+                openAi.stream(shape.provider, shape.model, turns, tools, onThinking, onChunk)
+            }
+        }
+
         val call = prepare(modelId, turns, streaming = true, tools = tools)
         if (call is Prepared.Failed) return ChatCompletion.Failed(call.reason)
         val ready = call as Prepared.Call
@@ -243,6 +252,7 @@ class ModelChatClient(
             val response = client.send(ready.request, HttpResponse.BodyHandlers.ofInputStream())
             if (response.statusCode() !in 200..299) {
                 val body = response.body().reader().use { it.readText() }
+                refused(ready.request, response.statusCode())
                 return ChatCompletion.Failed(
                     reason(response.statusCode(), body),
                     permanent = settled(response.statusCode()),
@@ -385,6 +395,7 @@ class ModelChatClient(
             // not resolve, the request timeout running out on a model still
             // thinking. None of it is the provider's answer to this request, so
             // none of it is settled.
+            log.warn("Calling {} failed", ready.request.uri(), failure)
             ChatCompletion.Failed(failure.message ?: "The provider could not be reached", permanent = false)
         }
     }
@@ -519,6 +530,10 @@ class ModelChatClient(
      *   which is every caller that is not running an agent.
      */
     fun complete(modelId: Long, turns: List<ChatTurn>, tools: List<ToolSpec> = emptyList()): ChatCompletion {
+        spoken(modelId)?.let { shape ->
+            return through(modelId, shape) { openAi.complete(shape.provider, shape.model, turns, tools) }
+        }
+
         val call = prepare(modelId, turns, streaming = false, tools = tools)
         if (call is Prepared.Failed) return ChatCompletion.Failed(call.reason)
         val ready = call as Prepared.Call
@@ -529,6 +544,7 @@ class ModelChatClient(
             val millis = (System.nanoTime() - started) / 1_000_000
 
             if (response.statusCode() !in 200..299) {
+                refused(ready.request, response.statusCode())
                 return ChatCompletion.Failed(
                     reason(response.statusCode(), response.body()),
                     permanent = settled(response.statusCode()),
@@ -579,8 +595,108 @@ class ModelChatClient(
             // not resolve, the request timeout running out on a model still
             // thinking. None of it is the provider's answer to this request, so
             // none of it is settled.
+            log.warn("Calling {} failed", ready.request.uri(), failure)
             ChatCompletion.Failed(failure.message ?: "The provider could not be reached", permanent = false)
         }
+    }
+
+    /**
+     * The provider and model, when this is a call the SDK makes.
+     *
+     * Null for Anthropic, which is a different wire format with a different
+     * library and keeps the hand-built path below; null too where the model or
+     * provider has gone, so the sentence about that is still said in one place.
+     */
+    private fun spoken(modelId: Long): Spoken? {
+        val model = models.findByIdOrNull(modelId) ?: return null
+        if (!model.enabled) return null
+        val provider = providers.findByIdOrNull(model.providerId) ?: return null
+        if (provider.type == ProviderType.ANTHROPIC) return null
+        return Spoken(provider, model)
+    }
+
+    private data class Spoken(val provider: ModelProvider, val model: LlmModel)
+
+    /**
+     * A call through the SDK, answered in this application's own words.
+     *
+     * The address is still vetted here. [OpenAiChat] is handed a provider rather
+     * than a URL and would happily call whatever was typed into the form, and
+     * "where is this request going" is a question this application answers for
+     * every outbound call it makes - see [ConnectionProbe]. Before the call
+     * rather than after, so one that will not be made fetches no token.
+     *
+     * The timing is taken here too, because it is what the caller shows and the
+     * SDK does not report it.
+     */
+    private fun through(modelId: Long, shape: Spoken, call: () -> OpenAiChat.Outcome): ChatCompletion {
+        val endpoint = shape.provider.openAiBase()
+        connections.vet(endpoint)?.let {
+            return ChatCompletion.Failed("${shape.provider.name} cannot be called: $it")
+        }
+
+        val started = System.nanoTime()
+        val outcome = try {
+            call()
+        } catch (refused: OpenAIServiceException) {
+            /*
+             * The provider answered, and what it answered decides whether asking
+             * again is worth anything. [settled] is the same rule the hand-built
+             * path applies to a status code, and it has to stay the same rule:
+             * an agent that retried a refusal in one shape and not the other
+             * would behave differently for a reason nobody could see.
+             */
+            log.warn("{} answered {}", endpoint, refused.statusCode())
+            return ChatCompletion.Failed(refused.message ?: "The provider refused the request", settled(refused.statusCode()))
+        } catch (failure: Exception) {
+            // Nothing came back at all: a socket that closed, a name that did
+            // not resolve, a timeout on a model still thinking. None of it is
+            // the provider's answer, so none of it is settled.
+            log.warn("Calling {} failed", endpoint, failure)
+            return ChatCompletion.Failed(failure.message ?: "The provider could not be reached", permanent = false)
+        }
+        val millis = (System.nanoTime() - started) / 1_000_000
+
+        return when (outcome) {
+            is OpenAiChat.Outcome.Failed -> ChatCompletion.Failed(outcome.reason)
+            is OpenAiChat.Outcome.Answered -> answered(modelId, outcome, millis)
+        }
+    }
+
+    private fun answered(modelId: Long, outcome: OpenAiChat.Outcome.Answered, millis: Long): ChatCompletion {
+        val split = split(outcome.said, outcome.thought)
+
+        // A model that asked for tools has not answered yet, and its text - if
+        // it sent any - is thinking aloud rather than a reply.
+        if (outcome.calls.isNotEmpty()) {
+            return counted(
+                modelId,
+                ChatCompletion.CalledTools(
+                    calls = outcome.calls,
+                    turn = ChatTurn("assistant", split.said, asked = outcome.calls),
+                    millis = millis,
+                    inputTokens = outcome.inputTokens,
+                    outputTokens = outcome.outputTokens,
+                    reasoning = split.thought,
+                    reasoningMillis = outcome.thoughtMillis,
+                ),
+            )
+        }
+
+        if (split.said.isBlank()) {
+            return ChatCompletion.Failed("The provider answered with no message", permanent = false)
+        }
+        return counted(
+            modelId,
+            ChatCompletion.Answered(
+                split.said,
+                millis,
+                outcome.inputTokens,
+                outcome.outputTokens,
+                split.thought,
+                outcome.thoughtMillis,
+            ),
+        )
     }
 
     /**
@@ -1105,6 +1221,24 @@ class ModelChatClient(
      * What went wrong, in the provider's own words where it gave any. A refused
      * key and a bad request read very differently to whoever has to fix it.
      */
+    /**
+     * The address a refusal was refused at.
+     *
+     * The sentence that reaches the screen carries the status and whatever the
+     * provider said about it, which is right for whoever is holding a chat
+     * window. It is the wrong thing for whoever is holding the logs: an
+     * endpoint, a deployment name and an API version are three fields somebody
+     * typed, any of them can be wrong, and every way of being wrong arrives as
+     * the same `404: Resource not found`. Printing where the request went is
+     * what turns that into one field to look at.
+     *
+     * The URI and nothing else. The credential travels in a header and the body
+     * carries the conversation, so neither is here to be leaked.
+     */
+    private fun refused(request: HttpRequest, status: Int) {
+        log.warn("{} answered {}", request.uri(), status)
+    }
+
     private fun reason(status: Int, body: String): String {
         val message = runCatching {
             val tree = mapper.readTree(body)
@@ -1114,6 +1248,8 @@ class ModelChatClient(
     }
 
     private companion object {
+        val log = LoggerFactory.getLogger(ModelChatClient::class.java)
+
         const val CONNECT_SECONDS = 10L
 
         /** The two statuses that are about the moment rather than the request. */

@@ -2,6 +2,7 @@ package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import com.openai.errors.OpenAIServiceException
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
@@ -11,7 +12,6 @@ import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.Base64
 
@@ -82,7 +82,7 @@ sealed interface Picture {
 class ModelImageClient(
     private val providers: ModelProviderRepository,
     private val models: LlmModelRepository,
-    private val probe: ModelProviderProbe,
+    private val media: OpenAiMedia,
     private val connections: ConnectionProbe,
     private val mapper: ObjectMapper,
     private val usage: ModelUsageRecorder,
@@ -130,61 +130,31 @@ class ModelImageClient(
         // decrypts nothing — the rule every client here follows.
         connections.vet(endpoint)?.let { return Picture.Failed("${provider.name} cannot be called: $it") }
 
-        val credential = when (val resolved = probe.credentials(provider)) {
-            is ModelProviderProbe.Credential.Failed -> return Picture.Failed(resolved.reason)
-            is ModelProviderProbe.Credential.Header -> resolved.header
-        }
-
-        /*
-         * Model, prompt, one picture, and nothing else.
-         *
-         * No `size` and no `quality`: those are the provider's own vocabulary,
-         * the way a voice is, and a value from one is a 400 from another — a
-         * local server with one output size rejects the size OpenAI's newest
-         * model requires. The model's own default is the only value that is
-         * right everywhere.
-         *
-         * No `response_format` either, which is the same argument at one remove.
-         * `b64_json` is what most of these answer with and it is what this would
-         * rather have, but OpenAI's own `gpt-image-1` refuses the parameter
-         * outright while always answering in that form. Asking for nothing and
-         * reading both shapes back works on every one of them.
-         *
-         * `n` is sent, and is 1. It is not a matter of taste: it is what makes
-         * one recorded request one picture, which is what the per-image price is
-         * multiplied by.
-         */
-        val body = mapper.writeValueAsString(
-            mapOf("model" to model.modelId, "prompt" to asked, "n" to 1),
-        )
-
-        val request = HttpRequest.newBuilder(uri)
-            // Generous for the reason reading aloud is: drawing takes tens of
-            // seconds on a hosted model and longer on a local one, and the
-            // alternative to waiting is a button that fails on every press.
-            .timeout(Duration.ofSeconds(REQUEST_SECONDS))
-            .header("Content-Type", "application/json")
-            .header(credential.name, credential.value)
-            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-            .build()
-
         val started = System.currentTimeMillis()
         return try {
-            val answer = http.send(request, HttpResponse.BodyHandlers.ofString())
-            val millis = System.currentTimeMillis() - started
-            if (answer.statusCode() !in 200..299) {
-                log.warn("Drawing by {} answered {}", model.name, answer.statusCode())
-                // The provider's own words where it gave any. A prompt refused
-                // for its content is answered here, and "the provider answered
-                // 400" would hide the one thing worth knowing about it.
-                return Picture.Failed(refusal(answer.body()) ?: "${model.name} answered ${answer.statusCode()}")
+            when (val drawn = media.draw(provider, model, asked)) {
+                is OpenAiMedia.Drawn.Failed -> Picture.Failed(drawn.reason)
+                is OpenAiMedia.Drawn.Bytes -> {
+                    val bytes = runCatching { Base64.getDecoder().decode(drawn.base64) }.getOrNull()
+                        ?: return Picture.Failed("${model.name} answered a picture that could not be read")
+                    counted(modelId, Picture.Drawn(bytes, PNG, System.currentTimeMillis() - started))
+                }
+                // Parked somewhere rather than sent, which is one more call to a
+                // host the provider chose - so it goes through the guard.
+                is OpenAiMedia.Drawn.Elsewhere ->
+                    counted(modelId, fetched(drawn.url, System.currentTimeMillis() - started, model.name, provider))
             }
-            counted(modelId, drawn(answer.body(), millis, model.name, provider))
+        } catch (refused: OpenAIServiceException) {
+            // The provider's own words where it gave any. A prompt refused for
+            // its content is answered here, and "answered 400" would hide the
+            // one thing worth knowing about it.
+            log.warn("Drawing by {} at {} answered {}", model.name, endpoint, refused.statusCode())
+            Picture.Failed(refused.message ?: "${model.name} answered ${refused.statusCode()}")
         } catch (failure: Exception) {
-            // A timeout arrives here, and it arrives as a sentence rather than
-            // as nothing: the picture is the whole of the request, so a caller
-            // with no reason to show has nothing at all to show.
-            log.warn("Drawing by {} could not be done", model.name, failure)
+            // A timeout arrives here, and as a sentence rather than as nothing:
+            // the picture is the whole of the request, so a caller with no
+            // reason to show has nothing at all to show.
+            log.warn("Drawing by {} at {} could not be done", model.name, endpoint, failure)
             Picture.Failed(failure.message ?: "The picture could not be drawn")
         }
     }
@@ -234,24 +204,6 @@ class ModelImageClient(
      * read as the refusal it is: several of these report an unusable prompt that
      * way.
      */
-    private fun drawn(body: String, millis: Long, name: String, provider: ModelProvider): Picture {
-        refusal(body)?.let { return Picture.Failed(it) }
-
-        val first = runCatching { mapper.readTree(body).path("data").path(0) }.getOrNull()
-            ?: return Picture.Failed("$name answered something that was not a picture")
-
-        val encoded = text(first, "b64_json")
-        if (!encoded.isNullOrBlank()) {
-            val bytes = runCatching { Base64.getDecoder().decode(encoded) }.getOrNull()
-                ?: return Picture.Failed("$name answered a picture that could not be read")
-            return Picture.Drawn(bytes, PNG, millis)
-        }
-
-        val url = text(first, "url")
-        if (url.isNullOrBlank()) return Picture.Failed("$name answered no picture")
-        return fetched(url, millis, name, provider)
-    }
-
     /**
      * A picture the provider parked somewhere rather than sent.
      *

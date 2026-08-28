@@ -9,6 +9,8 @@ import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import io.mszymanski.orknux.connector.security.HeldCredential
 import io.mszymanski.orknux.connector.security.SecretCipher
 import io.mszymanski.orknux.connector.security.SecretReferences
+import com.openai.credential.Credential as OpenAiCredential
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
 import java.net.URLEncoder
@@ -20,6 +22,7 @@ import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.function.Supplier
 
 /**
  * Checks that a provider answers, so "Connection successful" means the provider
@@ -93,6 +96,7 @@ class ModelProviderProbe(
 
         return try {
             val response = client.send(request.build(), HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() !in 200..299) log.warn("{} answered {}", url, response.statusCode())
             when (val status = response.statusCode()) {
                 in 200..299 -> Listing.Models(names(response.body()))
                 401, 403 -> Listing.Failed(
@@ -102,6 +106,7 @@ class ModelProviderProbe(
                 else -> Listing.Failed("The provider answered $status" + said(response.body()))
             }
         } catch (failure: Exception) {
+            log.warn("Asking {} for its models failed", url, failure)
             Listing.Failed(failure.message ?: "The provider could not be reached")
         }
     }
@@ -226,6 +231,71 @@ class ModelProviderProbe(
                 is EntraToken.Issued -> Credential.Header(HttpHeader("Authorization", "Bearer ${token.value}"))
             }
         }
+    }
+
+    /**
+     * The credential as the SDK takes it, or why there is not one.
+     *
+     * The Entra grant is made here and now rather than left to the supplier,
+     * because a refusal is worth a sentence on the provider's card - "the client
+     * secret is invalid" is a different afternoon from "the tenant is wrong" -
+     * and a supplier can only throw, from inside a call somebody else is making.
+     * What the supplier is for is the next hour: the client is cached and the
+     * token is not, so it re-reads on every call and picks up a rotated secret
+     * or an expired token without the client being rebuilt.
+     */
+    fun sdkCredential(provider: ModelProvider): SdkCredential {
+        if (!provider.configured()) {
+            return SdkCredential.Failed("There are no credentials to call this provider with")
+        }
+
+        val key = when (val resolved = key(provider)) {
+            is Key.Failed -> return SdkCredential.Failed(resolved.reason)
+            is Key.Held -> resolved.value
+        }
+
+        return when (provider.authMethod) {
+            ProviderAuthMethod.API_KEY -> SdkCredential.Ready(
+                if (provider.type == ProviderType.AZURE_OPENAI) {
+                    ModelClients.azureKey(key)
+                } else {
+                    ModelClients.apiKey(key)
+                },
+            )
+
+            ProviderAuthMethod.ENTRA_ID -> when (val token = entraToken(provider, key)) {
+                is EntraToken.Failed -> SdkCredential.Failed(token.reason)
+                is EntraToken.Issued -> SdkCredential.Ready(
+                    ModelClients.bearer(Supplier { fresh(provider) }),
+                )
+            }
+        }
+    }
+
+    /**
+     * A token for right now, for the supplier the SDK holds.
+     *
+     * Reads the credential again rather than closing over the one the client was
+     * built with, so a workspace secret given a new value is used from the next
+     * call. Throws where the rest of this returns a reason: there is a request
+     * in flight by the time this runs, and the SDK's own failure is the only
+     * place left for it to go.
+     */
+    private fun fresh(provider: ModelProvider): String {
+        val key = when (val resolved = key(provider)) {
+            is Key.Failed -> throw IllegalStateException(resolved.reason)
+            is Key.Held -> resolved.value
+        }
+        return when (val token = entraToken(provider, key)) {
+            is EntraToken.Failed -> throw IllegalStateException(token.reason)
+            is EntraToken.Issued -> token.value
+        }
+    }
+
+    /** The credential the SDK is built with, or why there is none. */
+    sealed interface SdkCredential {
+        data class Ready(val credential: OpenAiCredential) : SdkCredential
+        data class Failed(val reason: String) : SdkCredential
     }
 
     /**
@@ -388,6 +458,7 @@ class ModelProviderProbe(
         return try {
             val response = client.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() != 200) {
+                log.warn("{} answered {}", address, response.statusCode())
                 return EntraToken.Failed(
                     "Entra ID refused the credentials (${response.statusCode()})" + said(response.body()),
                 )
@@ -400,6 +471,7 @@ class ModelProviderProbe(
             val seconds = answer.path("expires_in").asLong(DEFAULT_TOKEN_SECONDS)
             EntraToken.Issued(token, seconds)
         } catch (failure: Exception) {
+            log.warn("Asking {} for a token failed", address, failure)
             EntraToken.Failed(failure.message ?: "Entra ID could not be reached")
         }
     }
@@ -410,6 +482,8 @@ class ModelProviderProbe(
     }
 
     private companion object {
+        val log = LoggerFactory.getLogger(ModelProviderProbe::class.java)
+
         /** What Azure OpenAI asks for when nothing else is said. */
         const val DEFAULT_SCOPE = "https://cognitiveservices.azure.com/.default"
 

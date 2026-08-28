@@ -1,0 +1,337 @@
+package io.mszymanski.orknux.connector.model
+
+import com.openai.core.JsonValue
+import com.openai.models.FunctionDefinition
+import com.openai.models.FunctionParameters
+import com.openai.models.chat.completions.ChatCompletionAssistantMessageParam
+import com.openai.models.chat.completions.ChatCompletionContentPart
+import com.openai.models.chat.completions.ChatCompletionContentPartImage
+import com.openai.models.chat.completions.ChatCompletionContentPartText
+import com.openai.models.chat.completions.ChatCompletionCreateParams
+import com.openai.models.chat.completions.ChatCompletionFunctionTool
+import com.openai.models.chat.completions.ChatCompletionMessageFunctionToolCall
+import com.openai.models.chat.completions.ChatCompletionStreamOptions
+import com.openai.models.chat.completions.ChatCompletionToolMessageParam
+import com.openai.models.chat.completions.ChatCompletionUserMessageParam
+import org.springframework.stereotype.Component
+
+/**
+ * The OpenAI-shaped half of a chat, spoken through the official SDK.
+ *
+ * **Why this exists as its own object.** Every provider but Anthropic answers
+ * this shape, and until now the request was assembled here as a Jackson tree and
+ * the answer read back out of one. That is the code AGENTS.md now forbids, and
+ * Azure is why: it serves two URL layouts from one resource and changes API
+ * versions quarterly, so a request built by hand is right until the day it is
+ * not, and the day it is not it returns `404 Resource not found` - which names
+ * no field and blames the wrong one. The SDK carries the shapes, the layouts and
+ * the versions, and is updated by the people who move them.
+ *
+ * **Why Anthropic is not here.** It is a different wire format with a different
+ * SDK, and folding it in would mean this object choosing between two libraries
+ * rather than speaking one. [ModelChatClient] keeps that fork and sends
+ * everything else here.
+ *
+ * What this returns is the application's own [Outcome] rather than the SDK's
+ * types: what a caller gets back does not change because of what is underneath,
+ * which is the only reason this can replace the hand-built path without every
+ * screen above it moving too.
+ */
+@Component
+class OpenAiChat(private val clients: ModelClients, private val probe: ModelProviderProbe) {
+
+    /** One answer, waited for. */
+    fun complete(
+        provider: ModelProvider,
+        model: LlmModel,
+        turns: List<ChatTurn>,
+        tools: List<ToolSpec>,
+    ): Outcome {
+        val client = when (val ready = ready(provider)) {
+            is Ready.No -> return Outcome.Failed(ready.reason)
+            is Ready.Yes -> ready.client
+        }
+
+        val answer = client.chat().completions().create(params(model, turns, tools).build())
+        val said = answer.choices().firstOrNull()?.message()
+        val calls = said?.toolCalls()?.orElse(null).orEmpty()
+            .filter { it.isFunction() }
+            .map { it.asFunction() }
+            .map { ToolCall(it.id(), it.function().name(), it.function().arguments()) }
+        val usage = answer.usage().orElse(null)
+
+        return Outcome.Answered(
+            said = said?.content()?.orElse(null).orEmpty(),
+            calls = calls,
+            thought = reasoning(said?._additionalProperties()),
+            inputTokens = usage?.promptTokens() ?: 0,
+            outputTokens = usage?.completionTokens() ?: 0,
+        )
+    }
+
+    /**
+     * The same answer, delivered as it is written.
+     *
+     * [onChunk] takes each piece as it lands and the whole is accumulated too,
+     * so a caller gets both without reassembling one from the other. The counts
+     * arrive in a final frame carrying no choices, which is why
+     * [ChatCompletionStreamOptions] is set: a stream sends no usage otherwise,
+     * and the chat window - which always streams - recorded every answer it ever
+     * showed as nought tokens.
+     */
+    fun stream(
+        provider: ModelProvider,
+        model: LlmModel,
+        turns: List<ChatTurn>,
+        tools: List<ToolSpec>,
+        onThinking: (String) -> Unit,
+        onChunk: (String) -> Unit,
+    ): Outcome {
+        val client = when (val ready = ready(provider)) {
+            is Ready.No -> return Outcome.Failed(ready.reason)
+            is Ready.Yes -> ready.client
+        }
+
+        val whole = StringBuilder()
+        val thinking = StringBuilder()
+        val gathered = sortedMapOf<Long, Gathering>()
+        var input = 0L
+        var output = 0L
+
+        /*
+         * One splitter for the whole stream, because a tag arrives in pieces.
+         * See [ThinkTags]: a provider is free to send `<thi` and `nk>` in two
+         * frames, and a splitter built per frame would put both on the screen.
+         */
+        val tags = ThinkTags()
+
+        /*
+         * When the thinking stopped, measured from the request going out rather
+         * than from the first reasoning frame. A model that emits its whole
+         * reasoning in one frame has its first and last frame at the same
+         * instant, so the difference between them is nought and the screen
+         * draws no time at all. What somebody waited through is the request,
+         * the prompt loading and then the reasoning - all of it before there
+         * was a word to read, which is the wait the block explains.
+         */
+        val started = System.nanoTime()
+        var sawThought = false
+        var thoughtTo = 0L
+
+        fun hand(piece: ModelPiece) {
+            if (piece.thought.isNotEmpty()) {
+                sawThought = true
+                thoughtTo = System.nanoTime()
+                thinking.append(piece.thought)
+                onThinking(piece.thought)
+            }
+            if (piece.said.isNotEmpty()) {
+                whole.append(piece.said)
+                onChunk(piece.said)
+            }
+        }
+
+        val params = params(model, turns, tools)
+            .streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
+            .build()
+
+        client.chat().completions().createStreaming(params).use { response ->
+            response.stream().forEach { chunk ->
+                chunk.usage().orElse(null)?.let {
+                    input = it.promptTokens()
+                    output = it.completionTokens()
+                }
+                val delta = chunk.choices().firstOrNull()?.delta() ?: return@forEach
+                // Thinking the provider named is thinking: it does not go
+                // through the tag splitter, which is only for the shape where
+                // nobody named it. Not part of the OpenAI shape either way, so
+                // it rides along as an extra property on the delta.
+                reasoning(delta._additionalProperties()).takeIf { it.isNotEmpty() }?.let { piece ->
+                    hand(ModelPiece(thought = piece))
+                }
+                delta.content().orElse(null)?.takeIf { it.isNotEmpty() }?.let { piece ->
+                    hand(tags.feed(piece))
+                }
+                // A call arrives in pieces too: the name once, the arguments a
+                // fragment at a time, paired up by index rather than by id.
+                delta.toolCalls().orElse(null).orEmpty().forEach { call ->
+                    val into = gathered.getOrPut(call.index()) { Gathering() }
+                    call.id().orElse(null)?.let { into.id = it }
+                    call.function().orElse(null)?.let { function ->
+                        function.name().orElse(null)?.let { into.name = it }
+                        function.arguments().orElse(null)?.let { into.arguments.append(it) }
+                    }
+                }
+            }
+        }
+        hand(tags.finish())
+
+        return Outcome.Answered(
+            said = whole.toString(),
+            calls = gathered.values.mapNotNull { it.asCall() },
+            thought = thinking.toString(),
+            thoughtMillis = if (!sawThought) 0L else (thoughtTo - started) / 1_000_000,
+            inputTokens = input,
+            outputTokens = output,
+        )
+    }
+
+    /** A call being assembled from the fragments a stream sends it in. */
+    private class Gathering {
+        var id: String? = null
+        var name: String? = null
+        val arguments = StringBuilder()
+
+        fun asCall(): ToolCall? {
+            val id = id ?: return null
+            val name = name ?: return null
+            return ToolCall(id, name, arguments.toString())
+        }
+    }
+
+    /** What a call produced, in this application's own words. */
+    sealed interface Outcome {
+        data class Answered(
+            val said: String,
+            val calls: List<ToolCall>,
+            val thought: String,
+            /** How long the thinking went on for; nought where there was none. */
+            val thoughtMillis: Long = 0,
+            val inputTokens: Long = 0,
+            val outputTokens: Long = 0,
+        ) : Outcome
+
+        data class Failed(val reason: String) : Outcome
+    }
+
+    private sealed interface Ready {
+        data class Yes(val client: com.openai.client.OpenAIClient) : Ready
+        data class No(val reason: String) : Ready
+    }
+
+    private fun ready(provider: ModelProvider): Ready =
+        when (val credential = probe.sdkCredential(provider)) {
+            is ModelProviderProbe.SdkCredential.Failed -> Ready.No(credential.reason)
+            is ModelProviderProbe.SdkCredential.Ready -> Ready.Yes(clients.clientFor(provider, credential.credential))
+        }
+
+    private fun params(
+        model: LlmModel,
+        turns: List<ChatTurn>,
+        tools: List<ToolSpec>,
+    ): ChatCompletionCreateParams.Builder {
+        val builder = ChatCompletionCreateParams.builder().model(model.modelId)
+        model.maxOutput?.let { builder.maxTokens(it.toLong()) }
+        turns.forEach { turn -> add(builder, turn) }
+        tools.forEach { tool -> builder.addTool(declared(tool)) }
+        return builder
+    }
+
+    private fun add(builder: ChatCompletionCreateParams.Builder, turn: ChatTurn) {
+        when {
+            // The answer to a call is its own role and has to name the call it
+            // answers, or the model cannot pair them up.
+            turn.respondingTo != null -> builder.addMessage(
+                ChatCompletionToolMessageParam.builder()
+                    .toolCallId(turn.respondingTo)
+                    .content(turn.content)
+                    .build(),
+            )
+
+            turn.asked.isNotEmpty() -> {
+                val assistant = ChatCompletionAssistantMessageParam.builder()
+                // A turn that only asked may carry no text at all.
+                if (turn.content.isNotEmpty()) assistant.content(turn.content)
+                turn.asked.forEach { asked ->
+                    assistant.addToolCall(
+                        ChatCompletionMessageFunctionToolCall.builder()
+                            .id(asked.id)
+                            .function(
+                                ChatCompletionMessageFunctionToolCall.Function.builder()
+                                    .name(asked.name)
+                                    .arguments(asked.arguments)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                }
+                builder.addMessage(assistant.build())
+            }
+
+            // A turn with pictures is a list of parts rather than a string. A
+            // model that cannot see ignores the image part rather than failing,
+            // which is why this does not need to know whether the model can.
+            turn.images.isNotEmpty() -> builder.addMessage(
+                ChatCompletionUserMessageParam.builder()
+                    .contentOfArrayOfContentParts(parts(turn))
+                    .build(),
+            )
+
+            turn.role == "system" -> builder.addSystemMessage(turn.content)
+            turn.role == "assistant" -> builder.addAssistantMessage(turn.content)
+            else -> builder.addUserMessage(turn.content)
+        }
+    }
+
+    private fun parts(turn: ChatTurn): List<ChatCompletionContentPart> = buildList {
+        if (turn.content.isNotEmpty()) {
+            add(
+                ChatCompletionContentPart.ofText(
+                    ChatCompletionContentPartText.builder().text(turn.content).build(),
+                ),
+            )
+        }
+        turn.images.forEach { image ->
+            add(
+                ChatCompletionContentPart.ofImageUrl(
+                    ChatCompletionContentPartImage.builder()
+                        .imageUrl(ChatCompletionContentPartImage.ImageUrl.builder().url(image).build())
+                        .build(),
+                ),
+            )
+        }
+    }
+
+    private fun declared(tool: ToolSpec): ChatCompletionFunctionTool {
+        val properties = tool.parameters.associate { parameter ->
+            parameter.name to mapOf("type" to "string", "description" to parameter.description)
+        }
+        val schema = FunctionParameters.builder()
+            .putAdditionalProperty("type", JsonValue.from("object"))
+            .putAdditionalProperty("properties", JsonValue.from(properties))
+            .putAdditionalProperty(
+                "required",
+                JsonValue.from(tool.parameters.filter { it.required }.map { it.name }),
+            )
+            .build()
+
+        return ChatCompletionFunctionTool.builder()
+            .function(
+                FunctionDefinition.builder()
+                    .name(tool.name)
+                    .description(tool.description)
+                    .parameters(schema)
+                    .build(),
+            )
+            .build()
+    }
+
+    /**
+     * What a model said about its own thinking, where it says anything.
+     *
+     * Not part of the OpenAI shape, so it arrives as an extra property under one
+     * of several names - each vendor picked its own - and is read off the
+     * message rather than parsed out of the text. Absent is the ordinary case.
+     */
+    private fun reasoning(properties: Map<String, JsonValue>?): String {
+        if (properties == null) return ""
+        return REASONING_FIELDS
+            .firstNotNullOfOrNull { name -> properties[name]?.asString()?.orElse(null)?.takeIf { it.isNotBlank() } }
+            .orEmpty()
+    }
+
+    private companion object {
+        /** Three spellings, because three vendors chose three. */
+        val REASONING_FIELDS = listOf("reasoning", "reasoning_content", "thinking")
+    }
+}

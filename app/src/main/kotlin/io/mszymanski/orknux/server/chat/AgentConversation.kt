@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.chat
 
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
+import io.mszymanski.orknux.connector.model.Hangup
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
@@ -140,10 +141,11 @@ class AgentConversation(
         into: Long? = null,
         shed: ToolShed? = null,
         watch: RoundWatch? = null,
+        hangup: Hangup? = null,
     ): ChatCompletion {
         val agent = agents.findByIdOrNull(agentId)
             ?: return ChatCompletion.Failed("That agent no longer exists")
-        return answer(modelId, agent, turns, into, shed, watch)
+        return answer(modelId, agent, turns, into, shed, watch, hangup)
     }
 
     /**
@@ -163,6 +165,13 @@ class AgentConversation(
      * @throws AgentRoundHalted where a [shed] ended the round. The agent's own
      *   tools never throw — a tool that failed is a fact the model is told — so
      *   this can only happen to a caller that lent it one.
+     * @param hangup somebody who may give up on the whole answer while it is
+     *   still being worked out, or null for the caller that cannot. It reaches
+     *   every round rather than only the one in flight, because an answer takes
+     *   as many rounds as the agent wants and stopping the current call while
+     *   letting the next one be made is not stopping anything. A round that
+     *   finds it pulled comes back [ChatCompletion.Failed], which is where the
+     *   loop already ends.
      */
     fun answer(
         modelId: Long,
@@ -171,6 +180,7 @@ class AgentConversation(
         into: Long? = null,
         shed: ToolShed? = null,
         watch: RoundWatch? = null,
+        hangup: Hangup? = null,
     ): ChatCompletion {
         val offered = tools.specsFor(agent) + shed?.specs().orEmpty()
         if (offered.isEmpty()) {
@@ -184,7 +194,12 @@ class AgentConversation(
             val once = if (watch == null) {
                 models.complete(modelId, turns).also { told(watch, it) }
             } else {
-                models.stream(modelId, turns, onThinking = { watch.thinking(it) }) { watch.answering() }
+                models.stream(
+                    modelId,
+                    turns,
+                    onThinking = { watch.thinking(it) },
+                    hangup = hangup,
+                ) { watch.answering() }
             }
             return once.also { record(into, agent, it) }
         }
@@ -269,6 +284,7 @@ class AgentConversation(
                     conversation,
                     offered,
                     onThinking = { watch.thinking(it) },
+                    hangup = hangup,
                 ) { watch.answering() }
             }
             when (answer) {

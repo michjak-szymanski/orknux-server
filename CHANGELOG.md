@@ -19,6 +19,14 @@ have failed.
 
 ### ✨ Added
 
+- 🔌 **A local model server no longer answers every other call with "unexpected
+  end of stream".** llama.cpp and most self-hosted servers close an idle
+  connection after five seconds; the HTTP client held one for five minutes and
+  wrote its next request into a socket the server had already closed. Chats,
+  titles and provider checks all failed on it, and the second attempt worked,
+  which made it look intermittent. Connections are now dropped before any
+  server drops them.
+
 - 🔌 **A provider is asked for its models where it actually keeps them.** The
   check behind "Test Connection" built its own address, and for an Azure
   endpoint written through to `/openai/v1` that came out one path too deep -

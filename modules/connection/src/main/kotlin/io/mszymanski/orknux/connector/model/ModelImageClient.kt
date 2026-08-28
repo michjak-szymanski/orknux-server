@@ -122,7 +122,18 @@ class ModelImageClient(
 
         cannotDraw(provider)?.let { return Picture.Failed(it) }
 
-        val endpoint = endpointFor(provider, model)
+        /*
+         * The base, because the SDK builds the path.
+         *
+         * This used to assemble Azure's `/openai/deployments/{name}/images/
+         * generations?api-version=...` itself and hand it over. The request is
+         * the SDK's now - see [OpenAiMedia] - so the only thing still wanted
+         * here is somewhere to vet and something to name in a log, and the base
+         * is what both of those are about. Keeping the old string would have
+         * meant vetting one address and calling another, and printing a URL
+         * nobody had asked for.
+         */
+        val endpoint = provider.openAiBase()
         val uri = try {
             URI(endpoint)
         } catch (_: Exception) {
@@ -178,24 +189,6 @@ class ModelImageClient(
         ProviderType.OPENAI, ProviderType.AZURE_OPENAI -> null
     }
 
-    /**
-     * Where the request goes.
-     *
-     * Azure puts the deployment and the version in the path, exactly as it does
-     * for chat completions. Everything else hangs off
-     * [ModelProvider.openAiBase], not off the endpoint directly — see that
-     * method for why the two are not always the same place.
-     */
-    private fun endpointFor(provider: ModelProvider, model: LlmModel): String {
-        val base = provider.endpoint.trimEnd('/')
-        return if (provider.type == ProviderType.AZURE_OPENAI) {
-            val deployment = provider.deploymentName?.ifBlank { null } ?: model.modelId
-            val version = provider.apiVersion?.ifBlank { null } ?: DEFAULT_AZURE_VERSION
-            "$base/openai/deployments/$deployment/images/generations?api-version=$version"
-        } else {
-            "${provider.openAiBase()}/images/generations"
-        }
-    }
 
     /**
      * The picture out of what the server answered.
@@ -296,8 +289,5 @@ class ModelImageClient(
 
         /** Collecting bytes that already exist, which is not slow. */
         const val FETCH_SECONDS = 60L
-
-        /** The same default `ModelProviderProbe` uses, for the same Azure surface. */
-        const val DEFAULT_AZURE_VERSION = "2024-06-01"
     }
 }

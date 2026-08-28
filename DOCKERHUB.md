@@ -322,6 +322,7 @@ and it needs nothing else configured here.
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface shares this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |
+| `OPENAI_LOG` | What the model SDK prints about its own requests, to stderr: `info` logs the method and the full URL of every model call, `debug` adds headers and bodies with credentials redacted. The application's own log names the provider's base address, not the path the SDK builds from it — so this is what to set when the question is which URL a provider was actually called at. Unset by default. | *none* | No |
 | `ORKNUX_LOG_LEVEL` | How much this application says: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Turns up its own code - triggers, model calls, task handover - and leaves the frameworks alone. | `INFO` | No |
 | `ORKNUX_LOG_LEVEL_ROOT` | The same for everything else on the classpath. Raise it when what is wrong is underneath this application rather than in it; `DEBUG` here is very loud. | `INFO` | No |
 | `ORKNUX_LOG_FORMAT` | `plain` reads well in a terminal; `json` (one ECS object per line) is what a collector wants. Applies to console and file alike. | `plain` | No |

@@ -201,6 +201,21 @@ class ChatDrawingTest(
         // The round really was streamed, which is the whole point of this one.
         assertThat(frames).contains("event:call").contains("chat_draw_picture")
 
+        /*
+         * And the picture is announced, not merely written down.
+         *
+         * The thread holds it either way - the assertion below has always
+         * passed - but an open chat learns what happened only from these
+         * frames, and nothing used to send this one. So a round drew a picture,
+         * told the model not to repeat the link, and left the browser showing
+         * an answer that talked about a picture nobody could see until they
+         * reloaded the page.
+         */
+        assertThat(frames)
+            .describedAs("the drawn picture is announced to the open chat, not only written to the thread")
+            .contains("event:drew")
+            .contains("/api/attachments/${filed.id}")
+
         assertThat(thread(chatId)).containsExactly(
             "user:Draw the architecture",
             "assistant:![A red square](/api/attachments/${filed.id})",

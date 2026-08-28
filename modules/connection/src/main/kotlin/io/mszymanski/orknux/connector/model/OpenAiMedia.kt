@@ -46,9 +46,9 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
          * some a URL, some refuse a request that names the one they do not do -
          * so both shapes are read back instead.
          */
-        val answer = client.images().generate(
+        val answer = clients.again { client.images().generate(
             ImageGenerateParams.builder().model(model.modelId).prompt(prompt).n(1).build(),
-        )
+        ) }
 
         val first = answer.data().orElse(null)?.firstOrNull()
             ?: return Drawn.Failed("${model.name} answered without a picture")
@@ -97,7 +97,7 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
             .responseFormat(SpeechCreateParams.ResponseFormat.MP3)
         params.voice(voice?.trim()?.ifBlank { null } ?: LAST_RESORT_VOICE)
 
-        return client.audio().speech().create(params.build()).use { answer ->
+        return clients.again { client.audio().speech().create(params.build()) }.use { answer ->
             Spoken.Audio(answer.body().readBytes())
         }
     }
@@ -144,9 +144,9 @@ class OpenAiMedia(private val clients: ModelClients, private val probe: ModelPro
             .contentType(contentType)
             .build()
 
-        val answer = client.audio().transcriptions().create(
+        val answer = clients.again { client.audio().transcriptions().create(
             TranscriptionCreateParams.builder().model(model.modelId).file(recording).build(),
-        )
+        ) }
         return Heard.Words(answer.asTranscription().text())
     }
 

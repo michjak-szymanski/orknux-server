@@ -52,7 +52,7 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
             is Ready.Yes -> ready.client
         }
 
-        val answer = client.chat().completions().create(params(model, turns, tools).build())
+        val answer = clients.again { client.chat().completions().create(params(model, turns, tools).build()) }
         val said = answer.choices().firstOrNull()?.message()
         val calls = said?.toolCalls()?.orElse(null).orEmpty()
             .filter { it.isFunction() }
@@ -148,7 +148,19 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
             .streamOptions(ChatCompletionStreamOptions.builder().includeUsage(true).build())
             .build()
 
-        client.chat().completions().createStreaming(params).use { response ->
+        /*
+         * Asked again only while nothing has been said. A connection closed
+         * before the first frame is the stale-socket case and costs nothing to
+         * repeat; one closed halfway through has already put words on somebody's
+         * screen, and asking again would write them twice.
+         */
+        val stream = if (whole.isEmpty() && thinking.isEmpty()) {
+            clients.again { client.chat().completions().createStreaming(params) }
+        } else {
+            client.chat().completions().createStreaming(params)
+        }
+
+        stream.use { response ->
             /*
              * The one thing that ends this call early, handed over the moment
              * there is one to hand over.

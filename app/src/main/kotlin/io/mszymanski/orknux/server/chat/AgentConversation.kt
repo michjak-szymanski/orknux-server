@@ -73,6 +73,18 @@ interface RoundWatch {
      */
     fun answering() = Unit
 
+    /**
+     * A picture the round drew, as the markdown that shows it.
+     *
+     * Written into the thread the moment it is drawn - see [ChatPictures.draw]
+     * for why - which is a fact the open chat has no other way of learning.
+     * Nothing announced it before, so a drawn picture sat in the conversation
+     * unseen until somebody reloaded the page, and a model told not to repeat
+     * the link left the round looking as though it had described a picture
+     * rather than drawn one.
+     */
+    fun drew(markdown: String) = Unit
+
     /** A call, the moment it is dispatched and before its tool has run. */
     fun called(at: Int, tool: String, arguments: String) = Unit
 

@@ -98,7 +98,7 @@ class ChatStreamAPI(
             chats.beginSend(id, request.text, attachments.imagesOf(sent)),
             request.text,
             response,
-            chatTools.shed(session),
+            session,
         )
     }
 
@@ -121,8 +121,7 @@ class ChatStreamAPI(
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        val shed = chatTools.shed(session)
-        return answering(id, chats.beginRegenerate(id), said = null, response = response, shed = shed) {
+        return answering(id, chats.beginRegenerate(id), said = null, response = response, session = session) {
             chats.abandonRegenerate(id)
         }
     }
@@ -145,7 +144,7 @@ class ChatStreamAPI(
         start: ChatSendStart,
         said: String?,
         response: HttpServletResponse,
-        shed: ToolShed,
+        session: ChatSession,
         giveUp: () -> Unit = {},
     ): StreamingResponseBody {
         // Nothing between here and the browser may hold a piece of the answer
@@ -221,7 +220,14 @@ class ChatStreamAPI(
                             hangup = hangup,
                         ) { piece -> send("chunk", mapOf("text" to piece)) }
                     } else {
-                        chats.ask(start, watching { event, payload -> send(event, payload) }, shed, hangup)
+                        /*
+                         * The watcher is built once and lent twice: to the round
+                         * itself, and to the tools, because the drawing tool has
+                         * something to announce - a picture it wrote into the
+                         * thread, which the open chat learns about no other way.
+                         */
+                        val watch = watching { event, payload -> send(event, payload) }
+                        chats.ask(start, watch, chatTools.shed(session, watch), hangup)
                             .also { whole ->
                                 if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                             }
@@ -328,6 +334,8 @@ class ChatStreamAPI(
      */
     private fun watching(send: (String, Any) -> Unit) = object : RoundWatch {
         override fun thinking(text: String) = send("thinking", mapOf("text" to text))
+
+        override fun drew(markdown: String) = send("drew", mapOf("markdown" to markdown))
 
         override fun called(at: Int, tool: String, arguments: String) =
             send("call", mapOf("at" to at, "tool" to tool, "arguments" to arguments))

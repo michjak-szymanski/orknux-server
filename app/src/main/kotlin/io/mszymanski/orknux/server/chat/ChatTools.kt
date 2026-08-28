@@ -57,9 +57,9 @@ class ChatTools(
      * which workspace — and reading it again inside the round would be a second
      * read of a row the door had in its hand.
      */
-    fun shed(chat: ChatSession): ToolShed = Shed(chat)
+    fun shed(chat: ChatSession, watch: RoundWatch = object : RoundWatch {}): ToolShed = Shed(chat, watch)
 
-    private inner class Shed(private val chat: ChatSession) : ToolShed {
+    private inner class Shed(private val chat: ChatSession, private val watch: RoundWatch) : ToolShed {
 
         override fun specs(): List<ToolSpec> = if (pictures.offered(chat)) listOf(DRAWING) else emptyList()
 
@@ -92,14 +92,20 @@ class ChatTools(
                          * vanished unless it pasted the link would paste it, and
                          * the chat would show the picture twice.
                          */
-                        is ChatDrawing.Drawn -> mapper.writeValueAsString(
+                        is ChatDrawing.Drawn -> {
+                            // The picture is in the thread already; this is what
+                            // puts it on the screen of whoever is watching the
+                            // round, rather than at their next reload.
+                            watch.drew(drawn.said)
+                            mapper.writeValueAsString(
                             mapOf(
                                 "drawn" to true,
                                 "markdown" to drawn.said,
                                 "note" to "The picture is already in this conversation, above your answer. " +
                                     "Do not repeat the markdown; say what you drew and why, and carry on.",
-                            ),
-                        )
+                                ),
+                            )
+                        }
                     }
                 }
             }

@@ -766,6 +766,13 @@ type Mutation {
     """
     setRevisionRetentionDays(days: Int!): InstallationSettings!
     """
+    How long a task may sit queued before something hands it over again.
+
+    Between 1 and 1440 minutes. Administrators only, and refused outright on an
+    installation running Temporal, where this is not set here.
+    """
+    setTaskSweepMinutes(minutes: Int!): InstallationSettings!
+    """
     Says which chat uploaded files belong to. Sent when the message is, since a
     first message is what makes the chat.
     """
@@ -1045,6 +1052,20 @@ type Mutation {
     revealVariable(id: ID!): String
     deleteVariable(id: ID!): Boolean!
     createAgent(input: CreateAgentInput!): Agent!
+    """
+    Makes an agent out of a model, in one press, from the Models screen.
+
+    Named after the model, and where that name is taken, the same with a number
+    after it. Granted nothing at all: no tools, no skills, no MCP servers, no
+    catalogues, no shell, no orknux access. Granting is what an agent's settings
+    page is for, and this is the bare agent you then dress - which is not a bare
+    model, because it has a name, a page, a prompt it can be given, memory, and
+    somewhere for every grant to go.
+
+    Refused for a model that does not answer questions, in the same words a task
+    refuses one with.
+    """
+    createAgentForModel(modelId: ID!): Agent!
     "Saves the agent settings form."
     updateAgent(id: ID!, input: UpdateAgentInput!): Agent!
     setAgentEnabled(id: ID!, enabled: Boolean!): Agent!
@@ -1149,10 +1170,16 @@ type Mutation {
     startChat(input: StartChatInput!): ChatSession!
     renameChat(id: ID!, title: String!): ChatSession!
     setChatPinned(id: ID!, pinned: Boolean!): ChatSession!
-    "The model selector above the log. Null unsets it, which stops the chat."
-    chooseChatModel(id: ID!, modelId: ID): ChatSession!
-    "Hands the chat to an agent; null hands it back to a bare model."
-    chooseChatAgent(id: ID!, agentId: ID): ChatSession!
+    """
+    Hands the chat to one of the workspace's agents.
+
+    There is no null, and there is no `chooseChatModel` beside this any more.
+    Both said the same thing - take the agent off and leave the model - which is
+    a chat on a bare model made in one press. A chat that already answers on a
+    bare model is untouched: it still opens, still renders and still answers, and
+    this is how it is handed to an agent when somebody wants it to be.
+    """
+    chooseChatAgent(id: ID!, agentId: ID!): ChatSession!
     "Deletes the chat and the history with it."
     deleteChat(id: ID!): Boolean!
     "Says something and answers it, with the whole thread as context."
@@ -2456,9 +2483,16 @@ input StartTaskInput {
     "The problem, in words. The first line of it names the task unless `title` says otherwise."
     prompt: String!
     title: String
-    "The agent to do it. Absent means a bare model, which starts with no grants at all."
-    agentId: ID
-    "Absent takes the agent's own model."
+    """
+    The agent to do it.
+
+    Required. Absent used to mean a bare model - an agent with no tools, no
+    skills, no grants, no memory and no instructions, set to a job that is
+    defined by doing - and it was offered in the picker as though it were the
+    other half of a real choice.
+    """
+    agentId: ID!
+    "Absent takes the agent's own model, which is nearly always what is wanted."
     modelId: ID
     "What it came from. It is the link back, and it decides who else hears about it."
     issueId: ID
@@ -2682,7 +2716,22 @@ type ChatAnswer {
 input StartChatInput {
     workspaceId: ID!
     title: String
-    modelId: ID
+    """
+    The agent to talk to.
+
+    Where a `modelId` used to be. A chat is opened on an agent or it is not
+    opened: an agent carries the tools, the skills, the grants, the memory and
+    the system prompt that make a conversation worth having, and a bare model is
+    that same agent with every one of them taken off. It was offered beside
+    agents as though it were a peer, and it never was.
+
+    Absent does not mean a bare model. It means nobody was named, which is what
+    the sidebar's "+ New" sends, and the answer is whichever agent this person
+    last talked to in this workspace - or, where they have not, the first agent
+    the workspace has that could answer. A workspace with no agent at all is
+    refused with `ChatAgentMissing`, which is the screen's cue to say to add one.
+    """
+    agentId: ID
     """
     The LLM session this chat continues, when it was opened from one.
 
@@ -4206,6 +4255,24 @@ type InstallationSettings {
     revisionRetentionDays: Int!
     "What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS."
     revisionRetentionDaysConfigured: Int!
+    """
+    How many minutes a task may sit queued before something hands it over again.
+
+    The net under the hand-over: a task whose start was lost - to a process
+    killed at the wrong moment, or a workflow that could not run - would
+    otherwise say QUEUED for ever. 5 unless somebody has said otherwise.
+    """
+    taskSweepMinutes: Int!
+    "What a fresh installation would wait - ORKNUX_TASK_SWEEP_MINUTES."
+    taskSweepMinutesConfigured: Int!
+    """
+    False where the installation runs Temporal, and the field is not offered.
+
+    The sweep itself runs either way. What is not an administrator's decision on
+    Temporal is how long it waits, so the control is drawn only for the engine
+    that carries tasks in this process.
+    """
+    taskSweepConfigurable: Boolean!
 }
 
 "What a component reports about itself."

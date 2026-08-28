@@ -19,6 +19,15 @@ have failed.
 
 ### ✨ Added
 
+- 🧪 **A model becomes an agent in one press.** Beside every chat model on
+  Models there is now a "Make an agent on this model" action: it creates an agent
+  on that model, named after it, and takes you to its settings page. The agent is
+  granted **nothing** — no tools, no skills, no MCP servers, no catalogues, no
+  shell — because granting is a deliberate act; it is a bare agent to dress, and
+  it is what makes "I have just added a model, does it work" a short path again.
+  Pressing it twice makes a second agent with a number after the name rather than
+  failing on the one that is taken.
+
 - 🐙 **GitHub, as a plugin rather than as a connection type.**
   `plugins/github/github.js` guards a webhook trigger with GitHub's HMAC
   signature and names what arrived, so pull requests, review comments and
@@ -54,7 +63,31 @@ have failed.
   is still there when the chat is reopened. A workspace with no image model
   chosen offers no such tool, and no agent is told it could have drawn.
 
+- 🧹 **A task that was never picked up is picked up.** Something now looks every
+  few minutes for tasks left sitting at Queued and hands them over again, so a
+  hand-over lost to a restart at the wrong moment — or, on Temporal, to a
+  workflow that started and could not run — no longer leaves a task nothing will
+  ever look at. A task a worker already has is never handed over twice. How long
+  a task may sit is a field on Admin → Settings for an installation carrying its
+  own tasks, five minutes by default; one running Temporal takes it from
+  `ORKNUX_TASK_SWEEP_MINUTES` and is shown no field.
+
 ### 🔧 Changed
+
+- ⚠️ **A new chat or task can no longer be started on a bare model.** Both
+  used to offer a choice between an agent and a model, and it was never a choice:
+  a bare model is an agent with the tools, the skills, the grants, the memory and
+  the system prompt taken off, and it was sitting beside them as though it were a
+  peer. **An existing installation loses the ability to start a chat or a task on
+  a bare model.** The Models half of the picker above a chat is gone and so are
+  the two calls that moved a chat back onto one; the task form asks for an agent;
+  and `startChat` and `startTask` refuse a model on their own. The chats and
+  tasks that were started that way are untouched — they open, they render, they
+  answer, and a chat can be handed to an agent whenever somebody wants it to be.
+  What is new is a workspace with no agent at all: chat and tasks now say so and
+  offer the way to add one, where before a bare model quietly filled the gap. A
+  workspace nobody had chatted in used to open its first chat on a bare model
+  whatever the interface offered; it now opens on the first agent that can answer.
 
 - 🏁 **A task started on an installation without Temporal now actually runs.**
   Every task started from the Tasks page or from an issue sat at Queued doing

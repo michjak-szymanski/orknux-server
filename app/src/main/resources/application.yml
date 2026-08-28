@@ -77,6 +77,15 @@ spring:
     password: ${ORKNUX_LDAP_BIND_PASSWORD:admin}
 
 logging:
+  level:
+    # Two knobs rather than one, because the useful question is almost always
+    # "more from this application" and almost never "more from Hibernate". Set
+    # ORKNUX_LOG_LEVEL to DEBUG and what gets louder is the code that decides
+    # things here - triggers firing, providers being called, tasks handed over -
+    # while the frameworks stay where they were. ORKNUX_LOG_LEVEL_ROOT is there
+    # for the other afternoon, when the thing that is wrong is underneath.
+    root: ${ORKNUX_LOG_LEVEL_ROOT:INFO}
+    io.mszymanski.orknux: ${ORKNUX_LOG_LEVEL:INFO}
   logback:
     rollingpolicy:
       # Only consulted when a file is being written. A log that grows without
@@ -494,6 +503,35 @@ orknux:
     # gives up. Long enough to cover a holiday, short enough that a forgotten
     # task is eventually a finished one.
     patience: ${ORKNUX_TASK_PATIENCE:7d}
+    sweep:
+      # The net under the hand-over.
+      #
+      # A task is recorded and then handed to whatever carries it, and that
+      # hand-over can be lost - a process killed at the wrong moment, a pool
+      # that refuses the work, or a Temporal workflow that starts and cannot
+      # run. The row then says QUEUED for ever. So something looks, and hands
+      # over anything queued longer than this; the same number is how often it
+      # looks.
+      #
+      # Five minutes. A task leaves QUEUED in the time it takes a worker to read
+      # its row, so this is three hundred times the ordinary case and still
+      # short enough that nobody watches a stuck task for long. Handing the same
+      # task over twice is refused by the engine rather than by this number.
+      #
+      # Where a fresh installation starts, not the last word: on an installation
+      # running the inline engine it is also a field on the Admin screen, and
+      # once an administrator has set it theirs is the answer. The sweep reads it
+      # on every pass, so changing it needs no restart. A Temporal installation
+      # draws no field - how a stuck task is recovered there is Temporal's
+      # business - and takes this number as it stands.
+      minutes: ${ORKNUX_TASK_SWEEP_MINUTES:5}
+      # False sweeps nothing on a timer; a lost task is then lost until a
+      # restart, and on Temporal for good.
+      enabled: ${ORKNUX_TASK_SWEEP_ENABLED:true}
+      # After the inline engine's own revival on the way up rather than racing
+      # it: that picks up everything left in flight, and this finds what it
+      # could not.
+      initial-delay: ${ORKNUX_TASK_SWEEP_INITIAL_DELAY:1m}
   temporal:
     # False runs workflows on the calling thread, with no retries and no
     # resumption. The tests do that; a deployment should not.

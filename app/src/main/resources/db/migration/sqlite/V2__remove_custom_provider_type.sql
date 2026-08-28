@@ -1,0 +1,28 @@
+-- The one thing the SQLite baseline cannot say on its own.
+--
+-- Every other schema change is written into V1 as though it had always been
+-- there, because a SQLite installation has no history to replay onto and a
+-- table that arrives already correct needs no second file. That reasoning holds
+-- for a column, an index or a constraint. It does not hold here, because this
+-- is not a schema change: it is a row that already exists on somebody's disk
+-- and now names a type the application no longer has.
+--
+-- `V224__remove_custom_provider_type.sql` moves those rows on Postgres. Without
+-- the same statement here, an all-in-one installation - which is SQLite by
+-- default, see DOCKERHUB-ONE.md - keeps its `CUSTOM` rows, because V1 has
+-- already run and is never applied again. The narrowed CHECK in V1 does not
+-- reach them either: it describes the table a *new* installation gets, while an
+-- existing file keeps the constraint it was created with. What that leaves is a
+-- provider whose stored type no longer maps to any `ProviderType`, and reading
+-- it throws rather than degrading - so the Models screen fails for a row that
+-- worked perfectly the day before the upgrade.
+--
+-- Nothing is lost in the move. A CUSTOM provider was already called as an
+-- OpenAI one byte for byte, so the endpoint, the credential, the auth method
+-- and every model hanging off it carry through untouched; only the name of the
+-- type changes.
+--
+-- A fresh installation runs V1 and then this, and this updates nothing, which
+-- is what a data migration should do on a database that never held the data.
+
+UPDATE model_provider SET type = 'OPENAI' WHERE type = 'CUSTOM';

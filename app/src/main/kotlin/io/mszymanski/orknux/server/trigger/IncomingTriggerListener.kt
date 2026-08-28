@@ -39,7 +39,19 @@ class IncomingTriggerListener(
         val action = event.action.asTriggerAction()
         val waiting = triggers.findByConnectionIdInAndActionAndEnabledTrue(deliveredTo(event, action), action)
         if (waiting.isEmpty()) {
-            log.debug("A {} on connection {} matched no trigger", action, event.connectionId)
+            /*
+             * At INFO, not DEBUG.
+             *
+             * "Slack message received" and then silence is what somebody reads
+             * when a trigger did not fire, and it is the one thing that tells
+             * them nothing: it is the same silence whether no trigger watches
+             * this connection, a condition refused the message, or a workflow
+             * threw. Each of those now says so at the level an installation
+             * actually runs at, so the question "where did my message go" is
+             * answered by reading down the log rather than by turning DEBUG on
+             * and asking somebody to send another one.
+             */
+            log.info("A {} on connection {} matched no trigger", action, event.connectionId)
             return
         }
 
@@ -64,7 +76,13 @@ class IncomingTriggerListener(
                 log.warn("Trigger {} no longer belongs to the workspace its connection does", trigger.id)
                 continue
             }
-            if (!toOneOfOurs(trigger, event)) continue
+            if (!toOneOfOurs(trigger, event)) {
+                log.info(
+                    "Trigger {} was left alone: the message does not reply to anything this workspace posted",
+                    trigger.name,
+                )
+                continue
+            }
             /*
              * One at a time, and one failing does not take the rest with it.
              *

@@ -55,7 +55,8 @@ sealed interface Picture {
  * answering with `data[0].b64_json` or `data[0].url`. That is the shape spoken
  * by OpenAI itself, by an Azure OpenAI deployment — which, as everywhere else
  * here, puts the deployment and the API version in the path — and by the local
- * servers that imitate OpenAI, which is what [ProviderType.CUSTOM] means.
+ * servers that imitate OpenAI, which is what [ProviderType.OPENAI] covers: the
+ * type names the shape being spoken, not the company answering.
  *
  * **Which providers are refused, and why.** Two, and both before a request is
  * built rather than after a 404:
@@ -71,8 +72,10 @@ sealed interface Picture {
  *   embeddings and the model list; it serves no image generation at all, and
  *   its own `/api` surface has no equivalent either. A local installation that
  *   wants to draw runs something else beside Ollama — a server that speaks
- *   `/images/generations` — and adds it as a CUSTOM provider, which is the
- *   answer this refusal points at.
+ *   `/images/generations` — and adds it as an [ProviderType.OPENAI] provider
+ *   pointed at that server's own address, which is the answer this refusal
+ *   points at. The type is about the shape, so naming OpenAI there is not a
+ *   claim about who is answering.
  *
  * Refusing by name is deliberate. Sending the request anyway would produce a
  * 404 that reads as a broken endpoint, and somebody would go and check the URL
@@ -170,9 +173,9 @@ class ModelImageClient(
 
         ProviderType.OLLAMA ->
             "${provider.name} runs Ollama, which has no image generation. " +
-                "Run an image server beside it and add that as a Custom provider."
+                "Run an image server beside it and add that as an OpenAI provider."
 
-        ProviderType.OPENAI, ProviderType.AZURE_OPENAI, ProviderType.CUSTOM -> null
+        ProviderType.OPENAI, ProviderType.AZURE_OPENAI -> null
     }
 
     /**

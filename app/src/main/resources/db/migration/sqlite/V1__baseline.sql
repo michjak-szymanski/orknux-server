@@ -499,7 +499,7 @@ CREATE TABLE model_provider
     -- this is the connection module's.
     constraint ck_model_provider_credential CHECK (secret_variable_id IS NULL OR secret IS NULL),
     constraint ck_model_provider_status CHECK (((status) IN ('NOT_CONFIGURED', 'NOT_CHECKED', 'CONNECTED', 'FAILED'))),
-    constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'OLLAMA', 'CUSTOM')))
+    constraint ck_model_provider_type CHECK (((type) IN ('OPENAI', 'ANTHROPIC', 'AZURE_OPENAI', 'OLLAMA')))
 );
 
 CREATE TABLE model_usage_day

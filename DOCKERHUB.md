@@ -322,6 +322,8 @@ and it needs nothing else configured here.
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface shares this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |
+| `ORKNUX_LOG_LEVEL` | How much this application says: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Turns up its own code - triggers, model calls, task handover - and leaves the frameworks alone. | `INFO` | No |
+| `ORKNUX_LOG_LEVEL_ROOT` | The same for everything else on the classpath. Raise it when what is wrong is underneath this application rather than in it; `DEBUG` here is very loud. | `INFO` | No |
 | `ORKNUX_LOG_FORMAT` | `plain` reads well in a terminal; `json` (one ECS object per line) is what a collector wants. Applies to console and file alike. | `plain` | No |
 | `ORKNUX_LOG_FILE` | Console always; name a file here and it is written to as well. Use an absolute path. | *none* (stdout only) | No |
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |

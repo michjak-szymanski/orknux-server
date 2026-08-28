@@ -63,15 +63,30 @@ enum class ResetInterval {
  * shape under `/v1` of an address of your own, which is what [ModelProvider.openAiBase]
  * is for. GOOGLE_AI was removed in V170 because it branched on nothing except
  * the name of its auth header - see the migration.
+ *
+ * CUSTOM went in V224 for a smaller reason and a worse one. The smaller reason
+ * is that it branched on nothing whatsoever: the one place in the codebase that
+ * ever named it put it in the same arm as OPENAI, and every other decision made
+ * about a provider - the auth header, the URL, the request body, the streaming
+ * events - let it fall through to the OpenAI default. The worse reason is what
+ * its name told people. Every other value here answers "what does this endpoint
+ * speak"; CUSTOM answered "we have not heard of this one", which reads as a
+ * promise that whatever the server speaks will be handled, and was delivered as
+ * an OpenAI request every single time. A provider whose wire format we cannot
+ * name is not a provider we can call, so there was nothing behind the promise to
+ * keep.
+ *
+ * OPENAI is therefore the honest home for anything OpenAI-shaped at an address
+ * of its own - a local llama.cpp, an inference gateway, Google's
+ * OpenAI-compatible surface - because that is what was already being sent to it.
+ * The part of such a provider that is genuinely custom is its endpoint, and the
+ * endpoint field carries that untouched.
  */
 enum class ProviderType {
     OPENAI,
     ANTHROPIC,
     AZURE_OPENAI,
     OLLAMA,
-
-    /** Anything that speaks one of the above well enough, until it earns a type. */
-    CUSTOM,
 }
 
 /** How a provider is authenticated. */

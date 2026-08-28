@@ -31,7 +31,6 @@ class TaskExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is TaskRequestSettledException,
             is TaskPromptMissingException,
             is TaskMessageMissingException,
-            is TaskWorkerMissingException,
             is TaskNotRunnableException,
             -> ErrorType.BAD_REQUEST
 

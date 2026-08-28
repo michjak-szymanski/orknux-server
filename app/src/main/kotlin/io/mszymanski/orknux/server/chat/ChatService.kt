@@ -4,7 +4,6 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
-import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.llm.LlmSessionKey
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
@@ -18,6 +17,7 @@ import org.springframework.ai.chat.messages.AssistantMessage
 import org.springframework.ai.chat.messages.Message
 import org.springframework.ai.chat.messages.MessageType
 import org.springframework.ai.chat.messages.UserMessage
+import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
 import jakarta.persistence.EntityManager
 import org.springframework.stereotype.Service
@@ -394,7 +394,7 @@ class ChatService(
         workspaceId: Long,
         userId: String,
         title: String,
-        modelId: Long?,
+        agentId: Long?,
         llmSessionId: Long? = null,
     ): ChatSession {
         val trimmed = title.trim().ifEmpty { throw ChatTitleInvalidException() }
@@ -403,14 +403,14 @@ class ChatService(
         llmSessionId?.let { continuable(workspaceId, it) }
 
         /*
-         * What answers, when the caller named nothing.
+         * What answers: the agent named, or the one this person last talked to.
          *
-         * Asked for as a pair rather than a model and then an agent, because
-         * the two are one decision: an agent brings its own model with it, and
-         * picking a model separately would either contradict it or be thrown
-         * away. See [lastUsed].
+         * A pair rather than an agent alone because the model comes with it and
+         * is written onto the row - the same reasoning [chooseAgent] gives for
+         * setting both. Never a model without an agent: that combination is what
+         * a bare-model chat is, and this door stopped making them (issue #295).
          */
-        val answering = if (modelId != null) Answering(modelId, null) else lastUsed(workspaceId, userId)
+        val answering = if (agentId != null) answering(workspaceId, agentId) else lastUsed(workspaceId, userId)
 
         val opened = sessions.save(
             ChatSession(
@@ -469,12 +469,37 @@ class ChatService(
         )
     }
 
-    /** What a chat answers with: an agent and its model, or a bare model. */
-    private data class Answering(val modelId: Long?, val agentId: Long?)
+    /**
+     * What a chat answers with: an agent, and the model that agent thinks with.
+     *
+     * Both non-null. It used to allow a model with no agent, which was a
+     * bare-model chat, and a new one is no longer something that can be opened
+     * (issue #295). The columns behind it stay nullable because the chats that
+     * were opened that way are still there and still work.
+     */
+    private data class Answering(val modelId: Long, val agentId: Long)
 
     /**
-     * What a chat answers with when the caller named nothing: whatever this
-     * person last chatted with in this workspace.
+     * The agent somebody named, checked the way [chooseAgent] checks one.
+     *
+     * The same four refusals in the same words, because an agent this would
+     * accept and the picker would refuse - or the other way round - is two
+     * screens disagreeing about the same agent.
+     */
+    private fun answering(workspaceId: Long, agentId: Long): Answering {
+        val agent = agents.findByIdOrNull(agentId) ?: throw ChatAgentUnusableException("That agent no longer exists")
+        if (agent.workspaceId != workspaceId) {
+            throw ChatAgentUnusableException("That agent belongs to another workspace")
+        }
+        if (!agent.enabled) throw ChatAgentUnusableException("${agent.name} is not active")
+        val model = agent.modelId
+            ?: throw ChatAgentUnusableException("${agent.name} has no model chosen, so it cannot answer")
+        return Answering(model, agentId)
+    }
+
+    /**
+     * What a chat answers with when the caller named nobody: whichever agent
+     * this person last chatted with in this workspace.
      *
      * ## Why it is remembered here rather than in the browser
      *
@@ -502,41 +527,47 @@ class ChatService(
      * pointing a new chat at one of them would be pointing it at nothing.
      *
      * A workspace nobody has chatted in yet has nothing to read, and the
-     * fallback is the first chat model the workspace offers — unchanged, and
-     * still not an agent. Issue #249 put agents first in the *picker*, which is
-     * where somebody is choosing; a chat nobody has chosen for opens on a bare
-     * model because that is the one thing certain to answer, and the picker
-     * opens on Agents over the top of it.
+     * fallback is the first agent the workspace has that could answer, in the
+     * order the Agents screen lists them. It used to be the first chat model,
+     * which was the last place in the product that made a chat on a bare model
+     * without anybody asking for one: a fresh workspace's first conversation was
+     * inherently bare, whatever the interface offered (issue #295).
      *
      * ## What has since been deleted
      *
-     * Read forward through the chats until one of them still names something
-     * usable, rather than taking the newest and hoping. An agent that was
+     * Read forward through the chats until one of them still names an agent that
+     * could answer, rather than taking the newest and hoping. An agent that was
      * deleted, disabled, moved or left without a model fails the same four
      * checks [chooseAgent] applies, so the answer here can never be one the
      * picker would refuse — and a person whose last agent is gone gets the one
      * before it rather than an empty picker.
      *
-     * Null only when the workspace has no usable chat model at all, which is a
-     * real condition worth reporting rather than papering over.
+     * A chat that is on a bare model is skipped rather than repeated. Those
+     * chats still work and still answer; what they no longer do is hand their
+     * bareness on to the next chat, which is the whole of what was being
+     * removed.
+     *
+     * ## When there is nothing
+     *
+     * A workspace with no agent at all is refused, by name, rather than given
+     * something. That case is new — it is what removing the bare model created —
+     * and the screen answers it by saying to add an agent and offering the way,
+     * which is a better answer than a conversation nothing can reply to.
      */
     private fun lastUsed(workspaceId: Long, userId: String): Answering {
         val recent = sessions(workspaceId, userId).sortedByDescending { it.lastMessageAt ?: it.createdAt }
 
         for (chat in recent) {
-            val agent = chat.agentId?.let { agents.findByIdOrNull(it) }
-            if (agent != null && agent.workspaceId == workspaceId && agent.enabled) {
-                agent.modelId?.let { return Answering(it, agent.id) }
+            val agent = chat.agentId?.let { agents.findByIdOrNull(it) } ?: continue
+            if (agent.workspaceId == workspaceId && agent.enabled) {
+                agent.modelId?.let { return Answering(it, requireNotNull(agent.id)) }
             }
-            // A chat on a bare model is an answer too, and it is the answer
-            // whenever a bare model is what was last talked to.
-            if (chat.agentId == null && chat.modelId != null) return Answering(chat.modelId, null)
         }
 
-        return Answering(
-            catalogue.models(workspaceId).firstOrNull { it.enabled && it.kind == ModelKind.CHAT }?.id,
-            null,
-        )
+        val first = agents.findByWorkspaceId(workspaceId, Sort.by("name"))
+            .firstOrNull { it.enabled && it.modelId != null }
+            ?: throw ChatAgentMissingException()
+        return Answering(requireNotNull(first.modelId), requireNotNull(first.id))
     }
 
     @Transactional
@@ -553,41 +584,27 @@ class ChatService(
         return session
     }
 
-    @Transactional
-    fun chooseModel(id: Long, modelId: Long?): ChatSession {
-        val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
-        session.modelId = modelId
-        // Choosing a bare model ends the agent's part in it: what answers next
-        // should be what the picker says answers.
-        session.agentId = null
-        return session
-    }
-
     /**
-     * Hands the chat to one of the workspace's agents, or back to a bare model.
+     * Hands the chat to one of the workspace's agents.
      *
      * The agent's model becomes the chat's, because an agent that cannot be run
      * is not one to hand a conversation to — and a chat answering on some other
      * model would not be answering as what the screen says it is.
+     *
+     * There is no way back. `chooseModel` was here, and it took the agent off
+     * and left the model, which is a bare-model chat made in one press; passing
+     * null here did the same thing with one fewer argument. Both are gone with
+     * issue #295, and nothing that already exists is changed by their going: a
+     * chat on a bare model still opens, still renders and still answers, and
+     * this is how it stops being one.
      */
     @Transactional
-    fun chooseAgent(id: Long, agentId: Long?): ChatSession {
+    fun chooseAgent(id: Long, agentId: Long): ChatSession {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
-        if (agentId == null) {
-            session.agentId = null
-            return session
-        }
+        val answering = answering(session.workspaceId, agentId)
 
-        val agent = agents.findByIdOrNull(agentId) ?: throw ChatAgentUnusableException("That agent no longer exists")
-        if (agent.workspaceId != session.workspaceId) {
-            throw ChatAgentUnusableException("That agent belongs to another workspace")
-        }
-        if (!agent.enabled) throw ChatAgentUnusableException("${agent.name} is not active")
-        val model = agent.modelId
-            ?: throw ChatAgentUnusableException("${agent.name} has no model chosen, so it cannot answer")
-
-        session.agentId = agentId
-        session.modelId = model
+        session.agentId = answering.agentId
+        session.modelId = answering.modelId
         return session
     }
 

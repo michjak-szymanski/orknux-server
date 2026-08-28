@@ -1,5 +1,8 @@
 package io.mszymanski.orknux.server.attachment
 
+import io.mszymanski.orknux.connector.model.LlmModelRepository
+import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.chat.ChatSessionRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
@@ -44,6 +47,9 @@ class ChatAttachmentAccessTest(
     @Autowired val files: AttachmentAPI,
     @Autowired val attachments: ChatAttachmentRepository,
     @Autowired val chats: ChatSessionRepository,
+    @Autowired val agents: AgentRepository,
+    @Autowired val models: LlmModelRepository,
+    @Autowired val providers: ModelProviderRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
 ) {
@@ -54,9 +60,13 @@ class ChatAttachmentAccessTest(
     fun reset() {
         attachments.deleteAll()
         chats.deleteAll()
+        agents.deleteAll()
+        models.deleteAll()
+        providers.deleteAll()
         audit.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
+        agent("Responder")
     }
 
     @Test
@@ -121,6 +131,37 @@ class ChatAttachmentAccessTest(
     private fun startChat(title: String): Long = graphQlTester.document(
         """mutation { startChat(input: { workspaceId: $workspaceId, title: "$title" }) { id } }""",
     ).execute().path("startChat.id").entity(Long::class.java).get()
+
+    /**
+     * What the workspace has to have before a chat can be started in it.
+     *
+     * Nothing here asks a model anything — the files are the subject and no turn
+     * is ever taken. But a chat is opened on an agent now rather than on a bare
+     * model (issue #295) and a workspace with none is refused, so the fixture
+     * puts one there, with the model behind it that makes it able to answer.
+     */
+    private fun agent(name: String): Long {
+        val providerId = graphQlTester.document(
+            """mutation { createModelProvider(input: {
+                 workspaceId: $workspaceId, name: "Stub", endpoint: "http://models.invalid", secret: "sk-test"
+               }) { id } }""",
+        ).execute().path("createModelProvider.id").entity(Long::class.java).get()
+
+        val modelId = graphQlTester.document(
+            """mutation { createModel(input: {
+                 providerId: $providerId, name: "Stub", modelId: "stub", kind: CHAT
+               }) { id } }""",
+        ).execute().path("createModel.id").entity(Long::class.java).get()
+
+        val id = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+        ).execute()
+        return id
+    }
 
     /** Uploads one, and hands back the id of the row it made. */
     private fun upload(name: String): Long {

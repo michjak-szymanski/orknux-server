@@ -24,9 +24,18 @@ data class NewTask(
     val prompt: String,
     /** Null takes the first line of the prompt, which is what somebody typing one means. */
     val title: String? = null,
-    /** The agent to do it. Null means a bare model, which starts with no grants. */
-    val agentId: Long? = null,
-    /** Null takes the agent's own model. */
+    /**
+     * The agent to do it.
+     *
+     * Required. It used to be optional, and null meant a bare model: an agent
+     * with no tools, no skills, no grants, no memory and no instructions, which
+     * is to say a worker that can do nothing but talk, set to a job that is
+     * defined by doing. Of the twenty tasks in the development database not one
+     * had been started that way, and it was offered in the picker as though it
+     * were the other half of a real choice (issue #295).
+     */
+    val agentId: Long,
+    /** Null takes the agent's own model, which is nearly always what is wanted. */
     val modelId: Long? = null,
     /** What it came from, where something started it. The link back, and the audience. */
     val issueId: Long? = null,
@@ -86,13 +95,12 @@ class TaskService(
         val prompt = input.prompt.trim()
         if (prompt.isEmpty()) throw TaskPromptMissingException()
 
-        val agent = input.agentId?.let { id ->
-            agents.findByIdOrNull(id)?.takeIf { it.workspaceId == input.workspaceId }
-                ?: throw TaskNotRunnableException("That agent is not one of this workspace's")
-        }
-        if (agent != null && !agent.enabled) throw TaskNotRunnableException("${agent.name} is switched off")
+        val agent = agents.findByIdOrNull(input.agentId)?.takeIf { it.workspaceId == input.workspaceId }
+            ?: throw TaskNotRunnableException("That agent is not one of this workspace's")
+        if (!agent.enabled) throw TaskNotRunnableException("${agent.name} is switched off")
 
-        val modelId = input.modelId ?: agent?.modelId ?: throw TaskWorkerMissingException()
+        val modelId = input.modelId ?: agent.modelId
+            ?: throw TaskNotRunnableException("${agent.name} has no model chosen, so it cannot work")
         val model = models.models(input.workspaceId).firstOrNull { it.id == modelId }
             ?: throw TaskNotRunnableException("That model is not one this workspace can reach")
         if (!model.enabled) throw TaskNotRunnableException("${model.name} is switched off")
@@ -103,7 +111,7 @@ class TaskService(
                 workspaceId = input.workspaceId,
                 title = titleFor(input.title, prompt),
                 prompt = prompt,
-                agentId = agent?.id,
+                agentId = agent.id,
                 modelId = modelId,
                 issueId = input.issueId,
                 createdBy = input.createdBy,

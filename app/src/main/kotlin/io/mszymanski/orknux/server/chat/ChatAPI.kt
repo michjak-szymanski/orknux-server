@@ -79,21 +79,17 @@ class ChatAPI(
                 /*
                  * Passed through as it arrived, null and all.
                  *
-                 * There used to be a default worked out here - the first
-                 * enabled model in the workspace - and because it was never
-                 * null where the workspace had any model at all, it shadowed
-                 * the one in `ChatService.start`, which is the one that knows
-                 * what this person last chatted with. So a new chat always
-                 * opened on whichever model sorted first, whatever anybody had
-                 * been talking to (issue #273). It also did not check the
-                 * model's kind, so a workspace whose alphabetically first model
-                 * transcribes audio opened chats on a model the picker itself
-                 * refuses to offer.
+                 * Null is the ordinary case and not an omission: the sidebar's
+                 * "+ New" names nobody, and which agent it opens on is
+                 * [ChatService.lastUsed]'s to answer because that answer needs
+                 * the person and their chats. There used to be a default worked
+                 * out here, and because it was never null wherever the workspace
+                 * had a model at all it shadowed the one that knew (issue #273).
                  *
-                 * Deciding it here was wrong twice over: this is a controller,
-                 * and the decision needs the person and their chats.
+                 * It used to be a model. It is an agent because a chat on a bare
+                 * model is no longer something this door will open (issue #295).
                  */
-                modelId = input.modelId,
+                agentId = input.agentId,
                 llmSessionId = input.llmSessionId,
             ),
         )
@@ -111,30 +107,22 @@ class ChatAPI(
         return describe(chats.setPinned(id, pinned))
     }
 
-    /** The model selector above the log. Null unsets it, which stops the chat. */
-    @MutationMapping
-    fun chooseChatModel(@Argument id: Long, @Argument modelId: Long?): ChatSessionView {
-        val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
-        requireOwn(session)
-        // A model from another workspace is not this chat's to use.
-        modelId?.let {
-            val model = models.model(it) ?: throw ChatModelUnusableException("That model no longer exists")
-            if (model.workspaceId != session.workspaceId) {
-                throw ChatModelUnusableException("That model belongs to another workspace")
-            }
-        }
-        return describe(chats.chooseModel(id, modelId))
-    }
-
     /**
-     * Hands the chat to an agent, or back to a bare model with null.
+     * Hands the chat to one of the workspace's agents.
+     *
+     * There is no null and there is no `chooseChatModel` beside this any more.
+     * Both said the same thing — take the agent off and leave the model — and
+     * that is a bare-model chat made in one press, which is the door issue #295
+     * closed. A chat that already answers on a bare model is untouched by the
+     * removal: it still opens, still renders and still answers, and this is how
+     * it is handed to an agent when somebody wants it to be.
      *
      * The access check is the chat's, and which agent may be used is the
      * service's — an agent belongs to a workspace, and this chat belongs to one.
      */
     @MutationMapping
     @Transactional
-    fun chooseChatAgent(@Argument id: Long, @Argument agentId: Long?): ChatSessionView {
+    fun chooseChatAgent(@Argument id: Long, @Argument agentId: Long): ChatSessionView {
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
         return describe(chats.chooseAgent(id, agentId))
@@ -252,7 +240,21 @@ class ChatAPI(
 data class StartChatInput(
     val workspaceId: Long,
     val title: String? = null,
-    val modelId: Long? = null,
+    /**
+     * The agent to talk to.
+     *
+     * Where a `modelId` used to be. A chat is opened on an agent or it is not
+     * opened: an agent carries the tools, the skills, the grants, the memory
+     * and the system prompt that make a conversation worth having, and a bare
+     * model is that same agent with every one of them taken off. Naming one was
+     * a choice offered beside agents as though it were a peer, and it never was
+     * (issue #295).
+     *
+     * Null does not mean a bare model. It means nobody was named, which is what
+     * the sidebar's "+ New" sends, and [ChatService.lastUsed] answers it with
+     * whichever agent this person last talked to here.
+     */
+    val agentId: Long? = null,
     /**
      * The LLM session this chat continues, when it was opened from one.
      *

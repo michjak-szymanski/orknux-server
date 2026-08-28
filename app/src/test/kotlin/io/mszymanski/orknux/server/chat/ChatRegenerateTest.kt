@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.chat
 
 import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
@@ -37,6 +38,7 @@ class ChatRegenerateTest(
     @Autowired val sessions: ChatSessionRepository,
     @Autowired val takes: ChatAnswerTakeRepository,
     @Autowired val history: ChatMemoryRepository,
+    @Autowired val agents: AgentRepository,
     @Autowired val models: LlmModelRepository,
     @Autowired val providers: ModelProviderRepository,
     @Autowired val workspaces: WorkspaceRepository,
@@ -49,11 +51,16 @@ class ChatRegenerateTest(
         sessions.findAll().forEach { history.deleteByConversationId(it.conversationId) }
         takes.deleteAll()
         sessions.deleteAll()
+        agents.deleteAll()
         models.deleteAll()
         providers.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
-        model("Gemma")
+        // The model is behind an agent because a chat is opened on one now
+        // rather than on a bare model (issue #295). Nothing here calls either:
+        // what a chat is pointed at only has to be something, so that the chats
+        // these tests regenerate can be started at all.
+        agent("Responder", model("Gemma"))
     }
 
     @Test
@@ -195,5 +202,16 @@ class ChatRegenerateTest(
             """mutation { createModel(input: { providerId: $providerId, name: "$name", modelId: "$name", kind: CHAT })
                { id } }""",
         ).execute().path("createModel.id").entity(Long::class.java).get()
+    }
+
+    private fun agent(name: String, modelId: Long): Long {
+        val id = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+        ).execute()
+        return id
     }
 }

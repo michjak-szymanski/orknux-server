@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.dependency.ComponentDependants
 import io.mszymanski.orknux.server.dependency.DependencyKind
@@ -125,6 +126,89 @@ class AgentAPI(
         )
         auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.AGENT, "Agent $name created")
         return describe(agent)
+    }
+
+    /**
+     * Makes an agent out of a model, in one press, from the Models screen.
+     *
+     * The other half of issue #295. Taking the bare model away closed the short
+     * path somebody had for finding out whether a model they had just added
+     * actually works, and what was left in its place was: build an agent by
+     * hand, name it, choose its model, save it, chat to it, delete it. This is
+     * that path, one press long, and it leaves behind a real agent rather than
+     * something to throw away.
+     *
+     * **What it is granted: nothing.** No tools, no skills, no MCP servers, no
+     * catalogues, no shell, no orknux access. Granting is a deliberate act - it
+     * is what an agent's whole settings page is for - and an action that quietly
+     * handed out capabilities because it was convenient would be the worst
+     * possible place in this product to be generous. What comes back is a bare
+     * agent, which is a thing you then dress. It is not a bare *model*: it has a
+     * name, a page, a system prompt it can be given, memory, and somewhere for
+     * every grant to go, and those are the whole of the difference.
+     *
+     * **What it is called: the model's own name**, and where that is taken, the
+     * same with a number after it. Derived rather than asked for, because asking
+     * would be a dialog and a dialog is the thing this replaces; the name is on
+     * the agent's page to be changed the moment it is wrong. The retry is not
+     * decoration - `uk_agent_workspace_name` is a unique constraint and pressing
+     * this twice on the same model is the obvious thing to do.
+     *
+     * **Where it lands** is the agent's page, and that is the caller's to do
+     * with what comes back. Not a chat: this would then open a conversation on
+     * every press, and a sidebar filling with untitled chats because somebody
+     * was checking their models is a worse answer than one more click. The page
+     * is also where the derived name and the empty grants are visible, which is
+     * what somebody who has just pressed an unfamiliar button wants to see.
+     */
+    @MutationMapping
+    @Transactional
+    fun createAgentForModel(@Argument modelId: Long): AgentView {
+        val model = models.model(modelId) ?: throw AgentModelUnusableException("That model no longer exists")
+        requireWorkspaceAccess(model.workspaceId)
+        // The same sentence a task refuses a transcription model with. An agent
+        // whose model cannot hold a conversation is an agent that cannot answer,
+        // and finding that out on the first message is finding it out too late.
+        if (model.kind != ModelKind.CHAT) {
+            throw AgentModelUnusableException("${model.name} does not answer questions")
+        }
+
+        val agent = agents.save(
+            Agent(
+                workspaceId = model.workspaceId,
+                name = available(model.workspaceId, model.name),
+                type = AgentType.LLM,
+                modelId = model.id,
+                lastModifiedBy = currentUser(),
+            ),
+        )
+        auditRecorder.record(model.workspaceId, WorkspaceAuditCategory.AGENT, "Agent ${agent.name} created")
+        return describe(agent)
+    }
+
+    /**
+     * [wanted], or the first "[wanted] n" nobody has taken.
+     *
+     * Read rather than caught. A `DataIntegrityViolationException` from the
+     * unique constraint arrives with the transaction already marked for
+     * rollback, so catching it to try again inside one is catching something
+     * that cannot be recovered from here - the retry has to happen before the
+     * insert, not after it. Two people pressing at the same instant still race,
+     * and the loser gets the constraint's refusal, which is the right answer for
+     * a collision this cannot see.
+     *
+     * Bounded, because an unbounded loop against a database is a way to hang a
+     * request. A hundred agents named after one model is somebody's script, not
+     * somebody's afternoon, and it is told so.
+     */
+    private fun available(workspaceId: Long, wanted: String): String {
+        val taken = agents.findByWorkspaceId(workspaceId, Sort.by("name")).map { it.name }.toSet()
+        if (wanted !in taken) return wanted
+        for (n in 2..MOST_OF_ONE_NAME) {
+            val tried = "$wanted $n"
+            if (tried !in taken) return tried
+        }
+        throw AgentNameTakenException(wanted)
     }
 
     /** Backs the agent settings form. */
@@ -409,6 +493,12 @@ class AgentAPI(
     /** Whoever is asking, for the stamp a revision of this state will carry. */
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
+
+    private companion object {
+
+        /** How many agents may be named after one model before it is somebody's script. */
+        const val MOST_OF_ONE_NAME = 100
+    }
 }
 
 data class CreateAgentInput(

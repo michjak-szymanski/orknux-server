@@ -16,7 +16,7 @@ import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
 
 /**
- * A new chat opens on whatever this person last chatted with here.
+ * A new chat opens on whichever agent this person last chatted with here.
  *
  * It used to open on whichever model sorted first. There were two defaults —
  * one in `ChatAPI` that took the workspace's first enabled model, and one in
@@ -25,6 +25,22 @@ import org.springframework.security.test.context.support.WithMockUser
  * unreachable. So somebody who talked to an agent every day was handed a bare
  * model every morning, and the picker they then had to open opened on the wrong
  * tab as well (issue #273).
+ *
+ * ## And now it is never a model
+ *
+ * The remaining half of that default was the last place in the product that
+ * made a chat on a bare model without anybody asking for one: a workspace
+ * nobody had chatted in yet fell back to its first chat model, so a fresh
+ * workspace's very first conversation was inherently bare whatever the picker
+ * offered. Issue #295 took that away. The fallback is now the workspace's first
+ * agent that could answer, and a workspace with no such agent is refused by
+ * name rather than given something — a condition that did not exist before, and
+ * one the screen answers by saying to add an agent.
+ *
+ * A chat that is already on a bare model is not touched by any of this. It
+ * opens, it renders and it answers exactly as it did. What it no longer does is
+ * hand its bareness on to the next chat, which is what the reading below skips
+ * it for.
  *
  * ## Nothing is stored for this
  *
@@ -71,42 +87,46 @@ class ChatOpensOnLastUsedTest(
     /**
      * The first chat in a workspace nobody has chatted in.
      *
-     * There is nothing to read, so it falls back to the first chat model the
-     * workspace offers — which is what every chat used to get and is still the
-     * right answer here. Issue #249 put agents first in the *picker*, where
-     * somebody is choosing; a chat nobody has chosen for opens on the one thing
-     * certain to answer.
+     * There is nothing to read, so it falls back to the first agent the
+     * workspace has that could answer — by name, which is the order the Agents
+     * screen lists them in, so the answer is one somebody can point at.
+     *
+     * It used to be the first chat *model*, and that was the last bare-model
+     * chat this product made on its own.
      */
     @Test
-    fun `the first chat in a workspace takes the first chat model`() {
+    fun `the first chat in a workspace takes the first agent that could answer`() {
         val providerId = provider()
-        val first = model(providerId, "Alpha")
-        model(providerId, "Beta")
+        val modelId = model(providerId, "Alpha")
+        val first = agent("Aardvark", modelId)
+        agent("Zebra", modelId)
 
         val chat = startChat("Nothing yet")
 
-        assertThat(agentOf(chat)).isNull()
-        assertThat(modelOf(chat)).isEqualTo(first)
+        assertThat(agentOf(chat)).isEqualTo(first)
+        assertThat(modelOf(chat)).isEqualTo(modelId)
     }
 
     /**
-     * A model that cannot hold a conversation is not the answer.
+     * An agent with no model chosen cannot answer, so it is not what a chat
+     * opens on however early it sorts.
      *
-     * The default in the controller did not look at the kind, so a workspace
-     * whose alphabetically first model transcribes audio opened every chat on a
-     * model the picker itself refuses to offer. Nothing failed until somebody
-     * typed.
+     * The same rule the picker applies, asked of the fallback. An agent this
+     * accepted and `chooseChatAgent` refused would be two screens disagreeing
+     * about the same agent.
      */
     @Test
-    fun `an audio model is never what a chat opens on`() {
+    fun `an agent that could not answer is never what a chat opens on`() {
         val providerId = provider()
-        // First by the order models come back in, and useless for a chat.
-        val ears = model(providerId, "Aardvark ears", kind = "TRANSCRIPTION")
-        val talks = model(providerId, "Zebra")
+        val modelId = model(providerId, "Alpha")
+        // First by name, and useless: nothing has been chosen for it to think with.
+        val idle = agent("Aardvark", modelId = null)
+        val works = agent("Zebra", modelId)
 
         val chat = startChat("Nothing yet")
 
-        assertThat(modelOf(chat)).isEqualTo(talks).isNotEqualTo(ears)
+        assertThat(agentOf(chat)).isEqualTo(works).isNotEqualTo(idle)
+        assertThat(modelOf(chat)).isEqualTo(modelId)
     }
 
     @Test
@@ -114,6 +134,9 @@ class ChatOpensOnLastUsedTest(
         val providerId = provider()
         val plain = model(providerId, "Alpha")
         val agentModel = model(providerId, "Zebra")
+        // Sorts first, so it is what the fallback would give if the reading
+        // below did not work - which is what makes the assertion mean anything.
+        agent("Another", plain)
         val agentId = agent("Responder", agentModel)
 
         val earlier = startChat("Yesterday")
@@ -129,47 +152,63 @@ class ChatOpensOnLastUsedTest(
         assertThat(modelOf(today)).isEqualTo(agentModel).isNotEqualTo(plain)
     }
 
+    /**
+     * A chat that is on a bare model does not hand its bareness on.
+     *
+     * The chats that were opened before issue #295 are still there, and there is
+     * no migration turning them into anything else: they open, they render and
+     * they answer. What the reading does with one is skip it. Taking it as the
+     * answer would make one old chat enough to keep manufacturing new bare ones
+     * indefinitely, which is exactly the door that was being closed.
+     *
+     * Built through the repository because there is no longer an API call that
+     * makes one — which is the point being tested.
+     */
     @Test
-    fun `a new chat opens on the bare model the last one was moved to`() {
+    fun `a chat already on a bare model is skipped rather than repeated`() {
         val providerId = provider()
-        val alpha = model(providerId, "Alpha")
         val zebra = model(providerId, "Zebra")
-        val agentId = agent("Responder", alpha)
+        val agentId = agent("Responder", zebra)
 
-        val earlier = startChat("Yesterday")
-        graphQlTester.document("""mutation { chooseChatAgent(id: $earlier, agentId: $agentId) { agentId } }""")
-            .execute().errors().verify()
-        // Moved off the agent and onto a bare model, deliberately. That is the
-        // last thing this person talked to and it is what should come back.
-        graphQlTester.document("""mutation { chooseChatModel(id: $earlier, modelId: $zebra) { modelId } }""")
-            .execute().errors().verify()
+        val bare = requireNotNull(
+            sessions.save(
+                ChatSession(
+                    workspaceId = workspaceId,
+                    conversationId = "00000000-0000-0000-0000-00000000beef",
+                    title = "From before",
+                    userId = "alice",
+                    modelId = zebra,
+                    agentId = null,
+                ),
+            ).id,
+        )
+        // It is the newest thing this person has, so it is the first row read.
+        assertThat(chat(bare).agentId).isNull()
 
         val today = startChat("Today")
 
-        assertThat(agentOf(today)).isNull()
+        assertThat(agentOf(today)).isEqualTo(agentId)
         assertThat(modelOf(today)).isEqualTo(zebra)
     }
 
     /**
-     * An agent that has since been deleted leaves a chat on that agent's model,
-     * and never pointing at nothing.
+     * An agent that has since been deleted leaves a chat pointing at nothing,
+     * and the next chat reads past it.
      *
      * `chat_session.agent_id` is `ON DELETE SET NULL`, so deleting an agent
-     * turns every chat that was using it into a chat on a bare model - the
-     * agent's own model, which is what the chat was already answering on. There
-     * is nothing left in the row to distinguish that from a chat somebody moved
-     * onto a bare model deliberately, and this deliberately does not try: what
-     * the person sees when they open that chat *is* a bare model, and a new
-     * chat opening on something the old one no longer shows would be two
-     * screens disagreeing about the same fact.
+     * turns every chat that was using it into a chat on a bare model — the
+     * agent's own model, which is what the chat was already answering on. Those
+     * chats keep working, and this is what the reading now does with one: skips
+     * it, the same as any other bare chat, and finds an agent that still exists.
      *
      * What matters is the guarantee: never the dead id, and never nothing.
      */
     @Test
-    fun `a deleted agent leaves the next chat on its model and not on a dead id`() {
+    fun `a deleted agent leaves the next chat on an agent that still exists`() {
         val providerId = provider()
         val alpha = model(providerId, "Alpha")
         val zebra = model(providerId, "Zebra")
+        val survivor = agent("Aardvark", alpha)
         val doomed = agent("Doomed", zebra)
 
         val earlier = startChat("Tuesday")
@@ -180,10 +219,8 @@ class ChatOpensOnLastUsedTest(
 
         val today = startChat("Wednesday")
 
-        assertThat(agentOf(today)).isNull()
-        // The agent's model, which is what that chat is still answering on -
-        // not the workspace's first, which is what the old default gave.
-        assertThat(modelOf(today)).isEqualTo(zebra).isNotEqualTo(alpha)
+        assertThat(agentOf(today)).isEqualTo(survivor)
+        assertThat(modelOf(today)).isEqualTo(alpha).isNotEqualTo(zebra)
     }
 
     /**
@@ -192,13 +229,14 @@ class ChatOpensOnLastUsedTest(
      *
      * A disabled agent keeps its id on the chat, unlike a deleted one, so this
      * is a chat naming something the picker would refuse. The answer is the
-     * fallback rather than that agent - never an id `chooseAgent` would not
+     * fallback rather than that agent — never an id `chooseAgent` would not
      * accept.
      */
     @Test
     fun `an agent that is no longer active is skipped`() {
         val providerId = provider()
         val alpha = model(providerId, "Alpha")
+        val other = agent("Aardvark", alpha)
         val agentId = agent("Responder", alpha)
 
         val earlier = startChat("Yesterday")
@@ -210,8 +248,7 @@ class ChatOpensOnLastUsedTest(
 
         val today = startChat("Today")
 
-        assertThat(agentOf(today)).isNull()
-        assertThat(modelOf(today)).isEqualTo(alpha)
+        assertThat(agentOf(today)).isEqualTo(other).isNotEqualTo(agentId)
     }
 
     /**
@@ -231,34 +268,63 @@ class ChatOpensOnLastUsedTest(
         val elsewhere = requireNotNull(workspaces.save(Workspace(name = "frontend")).id)
         val theirProvider = provider(elsewhere)
         val theirModel = model(theirProvider, "Theirs")
+        val theirAgent = agent("Theirs", theirModel, inWorkspace = elsewhere)
 
         val opened = graphQlTester.document(
             """mutation { startChat(input: { workspaceId: $elsewhere, title: "Over here" }) { id } }""",
         ).execute().errors().verify().path("startChat.id").entity(Long::class.java).get()
 
-        assertThat(chat(opened).agentId).isNull()
+        assertThat(chat(opened).agentId).isEqualTo(theirAgent).isNotEqualTo(agentId)
         assertThat(chat(opened).modelId).isEqualTo(theirModel)
     }
 
-    /** A model the caller named is still what it gets, and clears no agent onto it. */
+    /** An agent the caller named is still what it gets. */
     @Test
-    fun `a model asked for by name wins over what was last used`() {
+    fun `an agent asked for by name wins over what was last used`() {
         val providerId = provider()
         val alpha = model(providerId, "Alpha")
         val zebra = model(providerId, "Zebra")
-        val agentId = agent("Responder", alpha)
+        val familiar = agent("Responder", alpha)
+        val wanted = agent("Specialist", zebra)
 
         val earlier = startChat("Yesterday")
-        graphQlTester.document("""mutation { chooseChatAgent(id: $earlier, agentId: $agentId) { agentId } }""")
+        graphQlTester.document("""mutation { chooseChatAgent(id: $earlier, agentId: $familiar) { agentId } }""")
             .execute().errors().verify()
 
         val chosen = graphQlTester.document(
-            """mutation { startChat(input: { workspaceId: $workspaceId, title: "On Zebra", modelId: $zebra })
+            """mutation { startChat(input: { workspaceId: $workspaceId, title: "On Zebra", agentId: $wanted })
                { id } }""",
         ).execute().errors().verify().path("startChat.id").entity(Long::class.java).get()
 
-        assertThat(chat(chosen).agentId).isNull()
+        assertThat(chat(chosen).agentId).isEqualTo(wanted)
+        // The agent's model comes with it, the same as it does everywhere else.
         assertThat(chat(chosen).modelId).isEqualTo(zebra)
+    }
+
+    /**
+     * A workspace with no agent at all is told to add one.
+     *
+     * The case issue #295 created, and the reason it is refused by name rather
+     * than by a sentence: `ChatAgentMissing` is what the chat screen keys on to
+     * say "add an agent" and offer the way, and an unusable-agent refusal in its
+     * place would send somebody to a picker with nothing in it.
+     *
+     * A model in the workspace and no agent is the shape that used to work, so
+     * it is the shape asserted: what stopped it was the agent, not the model.
+     */
+    @Test
+    fun `a workspace with no agent has no chat to open`() {
+        model(provider(), "Alpha")
+
+        graphQlTester.document(
+            """mutation { startChat(input: { workspaceId: $workspaceId, title: "Nobody home" }) { id } }""",
+        ).execute()
+            .errors().satisfy { errors ->
+                assertThat(errors.first().extensions["code"]).isEqualTo("ChatAgentMissing")
+                assertThat(errors.first().message).contains("no agent to chat with")
+            }
+
+        assertThat(sessions.findAll()).isEmpty()
     }
 
     private fun startChat(title: String): Long = graphQlTester.document(
@@ -294,14 +360,17 @@ class ChatOpensOnLastUsedTest(
            }) { id } }""",
     ).execute().errors().verify().path("createModel.id").entity(Long::class.java).get()
 
-    private fun agent(name: String, modelId: Long): Long {
+    /** The model is set on update: creating an agent does not take one. */
+    private fun agent(name: String, modelId: Long?, inWorkspace: Long = workspaceId): Long {
         val id = graphQlTester.document(
-            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
+            """mutation { createAgent(input: { workspaceId: $inWorkspace, name: "$name", type: LLM }) { id } }""",
         ).execute().errors().verify().path("createAgent.id").entity(Long::class.java).get()
 
-        graphQlTester.document(
-            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
-        ).execute().errors().verify()
+        if (modelId != null) {
+            graphQlTester.document(
+                """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+            ).execute().errors().verify()
+        }
         return id
     }
 }

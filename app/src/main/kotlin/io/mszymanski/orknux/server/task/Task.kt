@@ -386,6 +386,22 @@ interface TaskRepository : JpaRepository<Task, Long> {
      */
     @Query("select t from Task t where t.status in :statuses")
     fun inState(statuses: Collection<TaskStatus>): List<Task>
+
+    /**
+     * Tasks that have been queued longer than they should be, ids only.
+     *
+     * What [TaskSweeper] reads, and the reason `task_queued_idx` exists: it is
+     * asked on a timer for the life of the installation, across every workspace,
+     * and on a healthy one it answers nothing. Ids rather than rows because
+     * nothing about a task is wanted here except which one to hand over - the
+     * engine reads the row it needs on its own thread.
+     *
+     * QUEUED is the only state with this shape. It is set once, when the row is
+     * written, and never returned to, so `created_at` is when the task entered
+     * it and no second column is needed to say so.
+     */
+    @Query("select t.id from Task t where t.status = :status and t.createdAt < :before")
+    fun idsInStateSince(status: TaskStatus, before: OffsetDateTime): List<Long>
 }
 
 interface TaskRequestRepository : JpaRepository<TaskRequest, Long> {
@@ -450,6 +466,3 @@ class TaskPromptMissingException : RuntimeException("A task needs something to w
  * the agent has been told something.
  */
 class TaskMessageMissingException : RuntimeException("A message needs something in it")
-
-class TaskWorkerMissingException :
-    RuntimeException("A task needs an agent or a model to do it")

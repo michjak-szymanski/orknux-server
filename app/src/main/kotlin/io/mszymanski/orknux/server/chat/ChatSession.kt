@@ -165,6 +165,21 @@ class ChatAgentUnusableException(val says: String) : RuntimeException(says), Ref
 }
 
 /**
+ * A workspace with no agent to chat with.
+ *
+ * A condition that did not exist until a chat on a bare model stopped being
+ * something this product opens (issue #295): before that every workspace with a
+ * model could hold a conversation, whether or not anybody had built an agent.
+ *
+ * Its own refusal, and not [ChatAgentUnusableException] with a sentence in it,
+ * because the two ask for different things. An unusable agent is one to pick
+ * again; this one is one to *make*, and the screen that catches it says so and
+ * offers the way — which it can only do if it can tell the two apart by code.
+ */
+class ChatAgentMissingException :
+    RuntimeException("This workspace has no agent to chat with; add one first")
+
+/**
  * A session that cannot be continued here, and why.
  *
  * Refused at the start rather than at the first send. A chat bound to a session

@@ -4,7 +4,9 @@ import io.mszymanski.orknux.connector.model.LlmModel
 import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelProvider
 import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentType
 import io.mszymanski.orknux.server.issue.IssueNewsRepository
 import io.mszymanski.orknux.server.llm.LlmSessionEventRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
@@ -54,6 +56,7 @@ class TaskAPITest(
 
     private var workspaceId: Long = 0
     private var modelId: Long = 0
+    private var agentId: Long = 0
 
     @BeforeEach
     fun reset() {
@@ -71,13 +74,14 @@ class TaskAPITest(
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
         modelId = model()
+        agentId = agent()
     }
 
     @Test
     fun `starting a task records what was asked and opens its log`() {
         val id = graphQlTester.document(
             """mutation { startTask(input: {
-                 workspaceId: $workspaceId, modelId: $modelId,
+                 workspaceId: $workspaceId, agentId: $agentId,
                  prompt: "Tidy the failed runs.\nThen write it up."
                }) { id title prompt createdBy sessionId turnsAllowed requests { id } } }""",
         ).execute()
@@ -98,16 +102,25 @@ class TaskAPITest(
         assertThat(audit.findAll().map { it.category }).contains(WorkspaceAuditCategory.TASK)
     }
 
+    /**
+     * A prompt with nothing in it, and no agent at all.
+     *
+     * The second used to mean a bare model - an agent with no tools, no skills,
+     * no grants and no instructions, set to a job that is defined by doing - and
+     * the refusal it now gets is the schema's rather than the service's, because
+     * `agentId` is `ID!` since issue #295. That is where the removal is: a
+     * refusal thrown at runtime would still be a task somebody could ask for.
+     */
     @Test
-    fun `a task needs something to work on and something to work with`() {
+    fun `a task needs something to work on and an agent to work on it`() {
         graphQlTester.document(
-            """mutation { startTask(input: { workspaceId: $workspaceId, modelId: $modelId, prompt: "   " })
+            """mutation { startTask(input: { workspaceId: $workspaceId, agentId: $agentId, prompt: "   " })
                { id } }""",
         ).execute().errors().expect { it.message?.contains("something to work on") == true }.verify()
 
         graphQlTester.document(
             """mutation { startTask(input: { workspaceId: $workspaceId, prompt: "Do it" }) { id } }""",
-        ).execute().errors().expect { it.message?.contains("agent or a model") == true }.verify()
+        ).execute().errors().expect { it.message?.contains("agentId") == true }.verify()
     }
 
     /** The list, and the filter on it. */
@@ -286,6 +299,22 @@ class TaskAPITest(
      * is built under whichever account the test names, and one of them is a
      * person who may not see this workspace at all.
      */
+    /**
+     * An agent to do the work, since a task can no longer be started without one
+     * (issue #295).
+     *
+     * Written through the repository rather than through `createAgent`, the same
+     * way [model] is written. The fixture runs under whichever user the test
+     * declares, and one of them is mallory, who cannot see this workspace - so a
+     * fixture that went through an access-checked mutation would fail in
+     * `reset` before the test it is for had begun.
+     */
+    private fun agent(): Long = requireNotNull(
+        agents.save(
+            Agent(workspaceId = workspaceId, name = "Worker", type = AgentType.LLM, modelId = modelId),
+        ).id,
+    )
+
     private fun model(): Long {
         val provider = providers.save(
             ModelProvider(workspaceId = workspaceId, name = "Nowhere", endpoint = "http://nowhere.invalid"),

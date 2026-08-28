@@ -167,7 +167,7 @@ class ChatCostTest(
         val modelId = model(serveToolThenAnswer())
         // Granted a catalogue, because an agent offered no tools takes one round
         // and there would be nothing to add up.
-        val agentId = agentOn(modelId, catalog("Reviews"))
+        val agentId = agentOn(modelId, granted = catalog("Reviews"))
         val agent = requireNotNull(agents.findByIdOrNull(agentId))
 
         val answer = conversation.answer(modelId, agent, listOf(ChatTurn("user", "How should I review this?")))
@@ -356,7 +356,7 @@ class ChatCostTest(
     @Test
     fun `an agent's tool rounds are in the chat's total`() {
         val modelId = model(serveToolThenAnswer())
-        val agentId = agentOn(modelId, catalog("Reviews"))
+        val agentId = agentOn(modelId, granted = catalog("Reviews"))
         val chatId = chatOn(modelId)
         graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { id } }""")
             .execute().path("chooseChatAgent.id").hasValue()
@@ -454,19 +454,31 @@ class ChatCostTest(
         ).execute().path("createModel.id").entity(Long::class.java).get()
     }
 
-    private fun chatOn(modelId: Long): Long = graphQlTester.document(
-        """mutation { startChat(input: { workspaceId: $workspaceId, title: "Costs", modelId: $modelId })
-           { id } }""",
-    ).execute().path("startChat.id").entity(Long::class.java).get()
+    /**
+     * A chat on a model, which is a chat on an agent that has one.
+     *
+     * It used to name the model itself. That door was taken away with issue
+     * #295 — a chat is opened on an agent or it is not opened — and the counting
+     * these tests are about is the same either way: the agent is given no
+     * catalogue, so it answers in one round, exactly as the bare model did.
+     */
+    private fun chatOn(modelId: Long): Long {
+        val agentId = agentOn(modelId, name = "Chatter")
+        return graphQlTester.document(
+            """mutation { startChat(input: { workspaceId: $workspaceId, title: "Costs", agentId: $agentId })
+               { id } }""",
+        ).execute().path("startChat.id").entity(Long::class.java).get()
+    }
 
-    private fun agentOn(modelId: Long, granted: String): Long {
+    private fun agentOn(modelId: Long, name: String = "Reviewer", granted: String? = null): Long {
         val id = graphQlTester.document(
-            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "Reviewer", type: LLM }) { id } }""",
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
         ).execute().path("createAgent.id").entity(Long::class.java).get()
 
+        val granting = granted?.let { """, skillCatalogs: ["$it"]""" }.orEmpty()
+
         graphQlTester.document(
-            """mutation { updateAgent(id: $id, input: { name: "Reviewer", modelId: $modelId,
-                 skillCatalogs: ["$granted"] }) { id } }""",
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId$granting }) { id } }""",
         ).execute()
         return id
     }

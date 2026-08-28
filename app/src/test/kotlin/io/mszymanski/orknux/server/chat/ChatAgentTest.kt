@@ -72,29 +72,73 @@ class ChatAgentTest(
             .path("chooseChatAgent.modelId").entity(Long::class.java).isEqualTo(modelId)
     }
 
-    /** An agent that cannot run is not one to hand a conversation to. */
+    /**
+     * An agent that cannot run is not one to hand a conversation to, and it is
+     * not one to open a conversation on either.
+     *
+     * Both doors, because since issue #295 there are two: an agent can be named
+     * when the chat is started as well as chosen once it is open, and the second
+     * would be worth very little if the first let the same agent through.
+     */
     @Test
     fun `an agent with no model is refused, and says why`() {
-        val agentId = agent("Reviewer", modelId = null)
+        // Something answerable has to exist or the chat could not be opened at
+        // all - a workspace with no usable agent has nothing to open one on.
+        agent("Answerer", model("Gemma"))
+        val useless = agent("Reviewer", modelId = null)
         val chatId = startChat()
 
-        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $useless) { agentId } }""")
             .execute()
+            .errors().satisfy { errors ->
+                assertThat(errors.first().message).contains("has no model chosen")
+            }
+
+        graphQlTester.document(
+            """mutation { startChat(input: { workspaceId: $workspaceId, title: "Review", agentId: $useless })
+               { id } }""",
+        ).execute()
             .errors().satisfy { errors ->
                 assertThat(errors.first().message).contains("has no model chosen")
             }
     }
 
+    /**
+     * There is no way back to a bare model.
+     *
+     * `chooseChatModel` was the way, and passing null here was the same way with
+     * one fewer argument: both took the agent off and left the model, which is a
+     * chat on a bare model made in one press. Removing the two doors that start
+     * one and leaving these two open would have been painting over the handle
+     * (issue #295).
+     *
+     * Asserted against the schema rather than against a message, because that is
+     * where the removal actually is: `chooseChatModel` is not a field of
+     * `Mutation` any more, and `agentId` is `ID!`. A refusal thrown at runtime
+     * would still be a mutation somebody could call.
+     */
     @Test
-    fun `choosing a bare model afterwards ends the agent's part in it`() {
-        val modelId = model("Gemma")
-        val agentId = agent("Reviewer", modelId)
+    fun `a chat cannot be handed back to a bare model`() {
+        val agentId = agent("Reviewer", model("Gemma"))
         val chatId = startChat()
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
+            .execute().errors().verify()
 
-        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""").execute()
-        graphQlTester.document("""mutation { chooseChatModel(id: $chatId, modelId: $modelId) { agentId modelId } }""")
+        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: null) { agentId } }""")
             .execute()
-            .path("chooseChatModel.agentId").valueIsNull()
+            .errors().satisfy { errors ->
+                assertThat(errors.first().message).contains("agentId")
+            }
+
+        graphQlTester.document("""mutation { chooseChatModel(id: $chatId, modelId: 1) { id } }""")
+            .execute()
+            .errors().satisfy { errors ->
+                assertThat(errors.first().message).contains("chooseChatModel")
+            }
+
+        // And the chat is still the agent's, which is the half a schema
+        // assertion cannot see: neither refusal left it half-moved.
+        assertThat(requireNotNull(sessions.findByIdOrNull(chatId)).agentId).isEqualTo(agentId)
     }
 
     /**

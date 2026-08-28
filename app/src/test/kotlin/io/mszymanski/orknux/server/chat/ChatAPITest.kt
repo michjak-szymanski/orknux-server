@@ -1,5 +1,8 @@
 package io.mszymanski.orknux.server.chat
 
+import io.mszymanski.orknux.connector.model.LlmModelRepository
+import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
@@ -29,6 +32,9 @@ class ChatAPITest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val sessions: ChatSessionRepository,
     @Autowired val history: ChatMemoryRepository,
+    @Autowired val agents: AgentRepository,
+    @Autowired val models: LlmModelRepository,
+    @Autowired val providers: ModelProviderRepository,
     @Autowired val workspaces: WorkspaceRepository,
 ) {
 
@@ -38,8 +44,12 @@ class ChatAPITest(
     fun reset() {
         sessions.findAll().forEach { history.deleteByConversationId(it.conversationId) }
         sessions.deleteAll()
+        agents.deleteAll()
+        models.deleteAll()
+        providers.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
+        agent("Responder")
     }
 
     @Test
@@ -115,6 +125,10 @@ class ChatAPITest(
     @Test
     fun `a chat with no model chosen says so rather than sending`() {
         val id = startChat("Database migration help")
+        // Taken away rather than never given, because no door opens a chat
+        // without a model any more. This is how a real one gets there: the model
+        // it named was removed, and `chat_session.model_id` is left null.
+        sessions.save(sessions.findAll().single().also { it.modelId = null })
 
         graphQlTester.document("""mutation { sendChatMessage(id: $id, text: "Hello") { millis } }""")
             .execute().errors().satisfy { errors ->
@@ -154,4 +168,36 @@ class ChatAPITest(
     private fun startChat(title: String): Long = graphQlTester.document(
         """mutation { startChat(input: { workspaceId: $workspaceId, title: "$title" }) { id } }""",
     ).execute().path("startChat.id").entity(Long::class.java).get()
+
+    /**
+     * The one thing this workspace needs before a chat can be started in it.
+     *
+     * None of these tests calls a provider, and none of them used to need a
+     * model either. A chat is opened on an agent now rather than on a bare model
+     * (issue #295), and a workspace with no agent to hand is refused, so the
+     * fixture puts one there — with the model behind it, because an agent
+     * without one cannot answer and is skipped.
+     */
+    private fun agent(name: String): Long {
+        val providerId = graphQlTester.document(
+            """mutation { createModelProvider(input: {
+                 workspaceId: $workspaceId, name: "Stub", endpoint: "http://models.invalid", secret: "sk-test"
+               }) { id } }""",
+        ).execute().path("createModelProvider.id").entity(Long::class.java).get()
+
+        val modelId = graphQlTester.document(
+            """mutation { createModel(input: {
+                 providerId: $providerId, name: "Stub", modelId: "stub", kind: CHAT
+               }) { id } }""",
+        ).execute().path("createModel.id").entity(Long::class.java).get()
+
+        val id = graphQlTester.document(
+            """mutation { createAgent(input: { workspaceId: $workspaceId, name: "$name", type: LLM }) { id } }""",
+        ).execute().path("createAgent.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId }) { id } }""",
+        ).execute()
+        return id
+    }
 }

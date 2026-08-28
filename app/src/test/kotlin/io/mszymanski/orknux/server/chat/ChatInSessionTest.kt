@@ -21,6 +21,7 @@ import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
 import java.net.InetAddress
@@ -81,6 +82,13 @@ class ChatInSessionTest(
         workspaces.deleteAll()
         received.clear()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
+        // A chat is opened on an agent now, and a workspace with none to hand
+        // is refused before anything is written - so the workspace needs one
+        // before a single reading below can start a chat at all. This is the
+        // one every reading that names no agent of its own opens on. It answers
+        // nothing: a reading that sends builds its own agent, on a model this
+        // test is serving.
+        agent("Responder", model("http://models.invalid", name = "Idle"))
     }
 
     @AfterEach
@@ -142,7 +150,7 @@ class ChatInSessionTest(
         recorder.userSaid(sessionId, "Ask reviewer", "Why did the database fall over?")
         recorder.toolCalled(sessionId, "search_tickets", """{"query":"billing export"}""")
         recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
-        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+        val chatId = startChat(sessionId, agentId = agent("Reviewer", model(serveAnswer("Raise the pool size."))))
 
         send(chatId, "So what do we do about it?")
 
@@ -222,7 +230,7 @@ class ChatInSessionTest(
     fun `the chat's own turns are not attributed to the session`() {
         val sessionId = session("issue", "42")
         recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
-        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+        val chatId = startChat(sessionId, agentId = agent("Reviewer", model(serveAnswer("Raise the pool size."))))
 
         send(chatId, "So what do we do about it?")
 
@@ -243,7 +251,7 @@ class ChatInSessionTest(
      */
     @Test
     fun `an ordinary chat attributes none of its turns`() {
-        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+        val chatId = bareChat(llmSessionId = null, endpoint = serveAnswer("Hello."))
 
         send(chatId, "Anyone there?")
 
@@ -264,7 +272,7 @@ class ChatInSessionTest(
     fun `what is said in the chat is written back into the session`() {
         val sessionId = session("issue", "42")
         recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
-        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+        val chatId = bareChat(sessionId, endpoint = serveAnswer("Raise the pool size."))
 
         send(chatId, "So what do we do about it?")
 
@@ -296,7 +304,7 @@ class ChatInSessionTest(
     fun `the model is asked with the session's exchange in front of it, once`() {
         val sessionId = session("issue", "42")
         recorder.agentSaid(sessionId, "Reviewer", "The connection pool was exhausted.")
-        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
+        val chatId = startChat(sessionId, agentId = agent("Reviewer", model(serveAnswer("Raise the pool size."))))
 
         send(chatId, "So what do we do about it?")
 
@@ -315,10 +323,7 @@ class ChatInSessionTest(
     @Test
     fun `an agent answering in the chat records its round once, under its own name`() {
         val sessionId = session("issue", "42")
-        val chatId = startChat(sessionId, modelId = model(serveAnswer("Raise the pool size.")))
-        val agentId = agent("Reviewer", chats.findAll().single().modelId!!)
-        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
-            .execute()
+        val chatId = startChat(sessionId, agentId = agent("Reviewer", model(serveAnswer("Raise the pool size."))))
 
         send(chatId, "So what do we do about it?")
 
@@ -360,7 +365,7 @@ class ChatInSessionTest(
      */
     @Test
     fun `a chat started the ordinary way records nothing`() {
-        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+        val chatId = bareChat(llmSessionId = null, endpoint = serveAnswer("Hello."))
 
         send(chatId, "Anyone there?")
 
@@ -388,10 +393,8 @@ class ChatInSessionTest(
     fun `a chat with an agent is asked with what its tools returned before`() {
         val catalogId = catalog("Reviews")
         skill("codeReview", catalogId, "Read the diff twice before commenting.")
-        val chatId = startChat(llmSessionId = null, modelId = model(serveToolThenAnswer()))
-        val agentId = agent("Reviewer", chats.findAll().single().modelId!!, granted = "Reviews")
-        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
-            .execute()
+        val agentId = agent("Reviewer", model(serveToolThenAnswer()), granted = "Reviews")
+        val chatId = startChat(llmSessionId = null, agentId = agentId)
 
         send(chatId, "What does the review skill say?")
 
@@ -427,10 +430,8 @@ class ChatInSessionTest(
     fun `what the agent said before a lookup is drawn above the lookup`() {
         val catalogId = catalog("Reviews")
         skill("codeReview", catalogId, "Read the diff twice before commenting.")
-        val chatId = startChat(llmSessionId = null, modelId = model(serveRemarkingThenToolThenAnswer()))
-        val agentId = agent("Reviewer", chats.findAll().single().modelId!!, granted = "Reviews")
-        graphQlTester.document("""mutation { chooseChatAgent(id: $chatId, agentId: $agentId) { agentId } }""")
-            .execute()
+        val agentId = agent("Reviewer", model(serveRemarkingThenToolThenAnswer()), granted = "Reviews")
+        val chatId = startChat(llmSessionId = null, agentId = agentId)
 
         send(chatId, "What does the review skill say?")
 
@@ -461,7 +462,7 @@ class ChatInSessionTest(
      */
     @Test
     fun `a chat with no agent opens no session even after it is used`() {
-        val chatId = startChat(llmSessionId = null, modelId = model(serveAnswer("Hello.")))
+        val chatId = bareChat(llmSessionId = null, endpoint = serveAnswer("Hello."))
 
         send(chatId, "Anyone there?")
         send(chatId, "Still there?")
@@ -472,14 +473,44 @@ class ChatInSessionTest(
 
     private fun session(prefix: String, key: String): Long = recorder.open(workspaceId, prefix, key)
 
-    private fun startChat(llmSessionId: Long?, modelId: Long? = null): Long {
+    /**
+     * @param agentId who answers, or absent for whichever agent the workspace
+     *   would hand this person. Where a model used to be named: the door that
+     *   opened a chat on a bare model is gone, and what is left names an agent
+     *   or names nobody.
+     */
+    private fun startChat(llmSessionId: Long?, agentId: Long? = null): Long {
         val named = llmSessionId?.let { ", llmSessionId: $it" }.orEmpty()
-        val talking = modelId?.let { ", modelId: $it" }.orEmpty()
+        val talking = agentId?.let { ", agentId: $it" }.orEmpty()
         return graphQlTester.document(
             """mutation { startChat(input: {
                  workspaceId: $workspaceId, title: "Continuing"$talking$named
                }) { id llmSessionId } }""",
         ).execute().path("startChat.id").entity(Long::class.java).get()
+    }
+
+    /**
+     * A chat on a bare model, opened on an agent and then stripped of it.
+     *
+     * Nothing starts one of these any more: a chat is opened on an agent or it
+     * is not opened, and a bare model is not offered beside them (issue #295).
+     * The chats opened before that door shut are still there, and they still
+     * open, still render and still answer - which is exactly what the readings
+     * using this are about, so the one thing they may not do is start their
+     * chat the way the screen would today. The model the agent supplied stays
+     * on the row, so what is left is that chat and not a broken one.
+     *
+     * Opened and then stripped rather than written as a row, because one of
+     * them continues a session: what was already said is copied into a chat's
+     * thread as it opens, and a row put there by hand would be a chat that
+     * carried nothing pretending it had.
+     */
+    private fun bareChat(llmSessionId: Long?, endpoint: String): Long {
+        val chatId = startChat(llmSessionId, agent("Opener", model(endpoint)))
+        val chat = requireNotNull(chats.findByIdOrNull(chatId))
+        chat.agentId = null
+        chats.save(chat)
+        return chatId
     }
 
     private fun send(chatId: Long, text: String) {
@@ -518,15 +549,22 @@ ${'"'}${'"'}${'"'}
            }) { id } }""",
     ).execute().path("createSkill.id").entity(Long::class.java).get()
 
-    private fun model(endpoint: String): Long {
+    /**
+     * @param name what the provider and the model are both called. A name is
+     *   unique within a workspace, so the fixture's idle model cannot share one
+     *   with a model that is being served - and the default is the name a bare
+     *   model's answer is written into the session under, which one of the
+     *   readings above reads back.
+     */
+    private fun model(endpoint: String, name: String = "Stub"): Long {
         val providerId = graphQlTester.document(
             """mutation { createModelProvider(input: {
-                 workspaceId: $workspaceId, name: "Stub", endpoint: "$endpoint", secret: "sk-test"
+                 workspaceId: $workspaceId, name: "$name", endpoint: "$endpoint", secret: "sk-test"
                }) { id } }""",
         ).execute().path("createModelProvider.id").entity(Long::class.java).get()
 
         return graphQlTester.document(
-            """mutation { createModel(input: { providerId: $providerId, name: "Stub", modelId: "stub", kind: CHAT })
+            """mutation { createModel(input: { providerId: $providerId, name: "$name", modelId: "stub", kind: CHAT })
                { id } }""",
         ).execute().path("createModel.id").entity(Long::class.java).get()
     }

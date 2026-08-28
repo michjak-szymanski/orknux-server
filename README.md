@@ -653,13 +653,22 @@ the messages table the design rules forbid: it holds what was deliberately taken
 the chat when the chat goes. Only the answer a conversation ends on can be asked
 again, and a provider that refuses puts the old answer straight back.
 
-**A chat can be with an agent rather than with a bare model.** An agent is a
-configuration — the model that answers, the instructions it works under, and the
-skill catalogs it has been granted — so handing a chat to one makes its model the
-chat's model, and puts a system turn in front of the conversation holding its
-prompt and the skills in the catalogs it was given. Only those: a skill in a
-catalog nobody granted is the workspace's, not that agent's, and a skill switched
-off is out of reach here as anywhere.
+**A chat is with an agent.** An agent is a configuration — the model that
+answers, the instructions it works under, and the skill catalogs it has been
+granted — so a chat takes its model from the agent, and puts a system turn in
+front of the conversation holding its prompt and the skills in the catalogs it
+was given. Only those: a skill in a catalog nobody granted is the workspace's,
+not that agent's, and a skill switched off is out of reach here as anywhere.
+
+There used to be a second answer, a chat with a bare model, and it was offered
+beside the agents as though it were a peer. It never was: a bare model is that
+same agent with the tools, the skills, the grants, the memory and the system
+prompt taken off. Neither a chat nor a task can be started on one now. The ones
+that were are untouched — they open, they render and they answer — and a chat can
+be handed to an agent at any time; nothing hands one back. A workspace with no
+agent is therefore a workspace where a conversation cannot be started, which is
+what the action beside each chat model on **Models** is for: it makes an agent on
+that model in one press, named after it and granted nothing.
 
 **An agent with tools does not answer in one round.** It asks for a lookup, is
 told what came back, and either asks again or answers; `AgentConversation` runs

@@ -365,7 +365,7 @@ data class StartTaskInput(
     val workspaceId: Long,
     val prompt: String,
     val title: String? = null,
-    val agentId: Long? = null,
+    val agentId: Long,
     val modelId: Long? = null,
     val issueId: Long? = null,
 )

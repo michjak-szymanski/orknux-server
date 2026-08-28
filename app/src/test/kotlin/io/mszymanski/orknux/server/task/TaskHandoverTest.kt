@@ -4,7 +4,9 @@ import io.mszymanski.orknux.connector.model.LlmModel
 import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelProvider
 import io.mszymanski.orknux.connector.model.ModelProviderRepository
+import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.agent.AgentType
 import io.mszymanski.orknux.server.issue.IssueNewsRepository
 import io.mszymanski.orknux.server.llm.LlmSessionEventRepository
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
@@ -82,6 +84,7 @@ class TaskHandoverTest(
 
     private var workspaceId: Long = 0
     private var modelId: Long = 0
+    private var agentId: Long = 0
 
     /** The status the stand-in worker found each time it was handed an id. */
     private val readings = CopyOnWriteArrayList<TaskStatus?>()
@@ -105,6 +108,7 @@ class TaskHandoverTest(
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
         modelId = model()
+        agentId = worker()
 
         readings.clear()
         reset(loop)
@@ -145,6 +149,7 @@ class TaskHandoverTest(
                     NewTask(
                         workspaceId = workspaceId,
                         prompt = "Tidy the failed runs.",
+                        agentId = agentId,
                         modelId = modelId,
                         createdBy = "alice",
                     ),
@@ -246,6 +251,19 @@ class TaskHandoverTest(
         )
         return id
     }
+
+    /**
+     * Somebody to do the work.
+     *
+     * A task is held with an agent since #295, so one exists here even though
+     * nothing in this file reaches a model: what is being measured is when a
+     * worker may read the row, not what it finds when it does.
+     */
+    private fun worker(): Long = requireNotNull(
+        agents.save(
+            Agent(workspaceId = workspaceId, name = "Worker", type = AgentType.LLM, modelId = modelId),
+        ).id,
+    )
 
     /** A provider that can never answer; nothing here reaches a model. */
     private fun model(): Long {

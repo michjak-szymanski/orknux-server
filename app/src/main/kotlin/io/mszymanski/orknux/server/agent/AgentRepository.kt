@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.agent
 
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
+import org.springframework.data.domain.Sort
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
 import org.springframework.data.repository.query.Param
@@ -9,6 +10,17 @@ import org.springframework.data.repository.query.Param
 interface AgentRepository : JpaRepository<Agent, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<Agent>
+
+    /**
+     * All of them, in an order somebody would recognise.
+     *
+     * Beside the paged one because two callers want the whole list rather than a
+     * screenful of it: the chat that has to open on *some* agent when nobody has
+     * chatted here yet, and the name a new agent is given when the one derived
+     * from a model is taken. Neither is drawing a page, and asking for one of
+     * unbounded size to get a list reads as a page that forgot its size.
+     */
+    fun findByWorkspaceId(workspaceId: Long, sort: Sort): List<Agent>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): Agent?
 

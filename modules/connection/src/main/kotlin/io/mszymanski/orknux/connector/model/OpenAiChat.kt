@@ -78,6 +78,13 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
      * [ChatCompletionStreamOptions] is set: a stream sends no usage otherwise,
      * and the chat window - which always streams - recorded every answer it ever
      * showed as nought tokens.
+     *
+     * @param hangup somebody who may decide, part way through, that nobody is
+     *   listening any more. Closing the [com.openai.core.http.StreamResponse] is
+     *   how one of these is torn down and it is the only thing that does tear
+     *   one down, so the closing is handed over rather than left to a caller
+     *   that cannot reach it. Null for every caller with nobody to walk away -
+     *   a workflow, a task loop - which is the ordinary case.
      */
     fun stream(
         provider: ModelProvider,
@@ -85,8 +92,14 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
         turns: List<ChatTurn>,
         tools: List<ToolSpec>,
         onThinking: (String) -> Unit,
+        hangup: Hangup? = null,
         onChunk: (String) -> Unit,
     ): Outcome {
+        // Given up on before it was made. A round of an agent's loop reaches
+        // this after the reader has already gone, and asking the provider for an
+        // answer nobody will read is the whole of what is being avoided.
+        if (hangup?.hungUp == true) return Outcome.Failed(HUNG_UP)
+
         val client = when (val ready = ready(provider)) {
             is Ready.No -> return Outcome.Failed(ready.reason)
             is Ready.Yes -> ready.client
@@ -136,6 +149,17 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
             .build()
 
         client.chat().completions().createStreaming(params).use { response ->
+            /*
+             * The one thing that ends this call early, handed over the moment
+             * there is one to hand over.
+             *
+             * `use` closes it when the loop below ends, and that is what happens
+             * to a call that finishes; this is for the call that must not
+             * finish. Closing it from the other thread makes the read underneath
+             * throw, which comes back out of `forEach` as any other broken
+             * stream would - so there is one way out of here rather than two.
+             */
+            hangup?.holding { response.close() }
             response.stream().forEach { chunk ->
                 chunk.usage().orElse(null)?.let {
                     input = it.promptTokens()
@@ -164,6 +188,13 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
                 }
             }
         }
+        hangup?.letGo()
+
+        // Hung up on part way through, so what was gathered is half an answer
+        // to a question nobody is waiting on. Said as a failure rather than
+        // handed back, or a caller would keep it.
+        if (hangup?.hungUp == true) return Outcome.Failed(HUNG_UP)
+
         hand(tags.finish())
 
         return Outcome.Answered(
@@ -333,5 +364,14 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
     private companion object {
         /** Three spellings, because three vendors chose three. */
         val REASONING_FIELDS = listOf("reasoning", "reasoning_content", "thinking")
+
+        /**
+         * What a call that was given up on says.
+         *
+         * Nobody reads it - the reader walking away is what produced it - and it
+         * is written for the log, where a torn stream would otherwise look like
+         * a provider that fell over.
+         */
+        const val HUNG_UP = "Nobody was left to read the answer"
     }
 }

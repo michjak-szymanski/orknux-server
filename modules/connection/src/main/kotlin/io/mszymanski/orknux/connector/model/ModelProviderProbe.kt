@@ -183,7 +183,8 @@ class ModelProviderProbe(
         }
 
         return try {
-            Listing.Models(clients.clientFor(provider, credential).models().list().data().map { it.id() }.distinct())
+            val listed = clients.again { clients.clientFor(provider, credential).models().list() }
+            Listing.Models(listed.data().map { it.id() }.distinct())
         } catch (refused: OpenAIServiceException) {
             log.warn("{} answered {} when asked for its models", base, refused.statusCode())
             when (refused.statusCode()) {

@@ -5,10 +5,12 @@ import com.openai.azure.credential.AzureApiKeyCredential
 import com.openai.client.OpenAIClient
 import com.openai.client.okhttp.OpenAIOkHttpClient
 import com.openai.core.http.ProxyAuthenticator
+import com.openai.errors.OpenAIIoException
 import com.openai.credential.BearerTokenCredential
 import com.openai.credential.Credential
 import io.mszymanski.orknux.connector.proxy.ProxyChoice
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -63,6 +65,35 @@ class ModelClients(private val proxies: ProxyRouter) {
         return cache.computeIfAbsent(ClientKey(base, provider.type, identity(credential))) {
             build(base, provider, credential)
         }
+    }
+
+    /**
+     * The same call again when the connection died before it was answered.
+     *
+     * **Why this and not the SDK's own retry.** A self-hosted server keeps an
+     * idle connection for a few seconds - llama.cpp says five - while the pool
+     * holding it does not know that, so a request written into one the server
+     * has closed comes back as `unexpected end of stream` with no response at
+     * all. Shortening how long a connection is kept narrows that window and
+     * cannot close it: the socket looks open right up until it is written to.
+     *
+     * The SDK will retry this, and it also retries a `429`, which is not its
+     * decision to make - an agent node has a retry count, a backoff and a
+     * screen showing the attempts, and a library absorbing the refusal
+     * underneath makes all three lie. Measured: with the SDK retrying, a rate
+     * limited call reported one attempt where the policy allowed three.
+     *
+     * So only this, and only once. [OpenAIIoException] is the transport
+     * failing, never an answer: a provider that refuses, rate limits or breaks
+     * raises `OpenAIServiceException` instead and goes straight out to whoever
+     * is counting attempts. Once, because a second failure is a server that is
+     * really gone rather than a socket that was already closed.
+     */
+    fun <T> again(call: () -> T): T = try {
+        call()
+    } catch (lost: OpenAIIoException) {
+        log.debug("A model connection was closed before it answered; asking once more", lost)
+        call()
     }
 
     /** Forget every built client, so the next call reads the rules again. */
@@ -136,6 +167,8 @@ class ModelClients(private val proxies: ProxyRouter) {
     private data class ClientKey(val base: String, val type: ProviderType, val credential: String)
 
     companion object {
+        private val log = LoggerFactory.getLogger(ModelClients::class.java)
+
         /**
          * How many idle connections are kept, and for how long.
          *

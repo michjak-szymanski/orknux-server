@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.chat
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.connector.model.ChatTurn
+import io.mszymanski.orknux.connector.model.Hangup
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.llm.LlmSessionKey
@@ -652,15 +653,25 @@ class ChatService(
      *   a cycle. It is also where `TaskLoop` builds one, and for the same
      *   reason: the thing running the loop is the thing that knows where what
      *   the model makes has to be filed.
+     * @param hangup somebody who may give up on this answer while it is still
+     *   being worked out, or null for the caller with nobody to walk away. Only
+     *   the streaming door passes one: it is the only caller here that has a
+     *   reader on the other end of a connection, and therefore the only one that
+     *   can lose them.
      */
-    fun ask(start: ChatSendStart, watch: RoundWatch? = null, shed: ToolShed? = null): ChatCompletion =
+    fun ask(
+        start: ChatSendStart,
+        watch: RoundWatch? = null,
+        shed: ToolShed? = null,
+        hangup: Hangup? = null,
+    ): ChatCompletion =
         if (start.agentId == null) {
             // A bare model is offered nothing: no tools of its own, and nothing
             // lent either - there is no round to lend into.
             models.complete(start.modelId, start.turns)
         } else {
             // An agent may need its tools before it can answer; a bare model cannot.
-            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId, shed, watch)
+            conversation.answer(start.modelId, start.agentId, start.turns, start.llmSessionId, shed, watch, hangup)
         }
 
     /**

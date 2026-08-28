@@ -229,19 +229,28 @@ class ModelChatClient(
      *
      *   Default does nothing, which is right for every caller that has nowhere
      *   to put it: the thinking is dropped rather than folded into the answer.
+     *
+     * @param hangup somebody who may give up on this call while it is still
+     *   running, or null for the caller that cannot. See [Hangup]: what ends a
+     *   streaming call is closing the thing being read, and which thing that is
+     *   depends on which of the two shapes below is being spoken - so each of
+     *   them hands its own over.
      */
     fun stream(
         modelId: Long,
         turns: List<ChatTurn>,
         tools: List<ToolSpec> = emptyList(),
         onThinking: (String) -> Unit = {},
+        hangup: Hangup? = null,
         onChunk: (String) -> Unit,
     ): ChatCompletion {
         spoken(modelId)?.let { shape ->
             return through(modelId, shape) {
-                openAi.stream(shape.provider, shape.model, turns, tools, onThinking, onChunk)
+                openAi.stream(shape.provider, shape.model, turns, tools, onThinking, hangup, onChunk)
             }
         }
+
+        if (hangup?.hungUp == true) return ChatCompletion.Failed(HUNG_UP, permanent = false)
 
         val call = prepare(modelId, turns, streaming = true, tools = tools)
         if (call is Prepared.Failed) return ChatCompletion.Failed(call.reason)
@@ -250,6 +259,14 @@ class ModelChatClient(
         val started = System.nanoTime()
         return try {
             val response = client.send(ready.request, HttpResponse.BodyHandlers.ofInputStream())
+            /*
+             * The body is what this shape is read from, so the body is what
+             * closing it means. Closed from the other thread, the reader below
+             * throws and lands in the same catch a dropped provider lands in -
+             * which is the point, since a stream nobody is reading and a stream
+             * that broke are the same thing to everything downstream.
+             */
+            hangup?.holding { response.body().close() }
             if (response.statusCode() !in 200..299) {
                 val body = response.body().reader().use { it.readText() }
                 refused(ready.request, response.statusCode())
@@ -337,6 +354,9 @@ class ModelChatClient(
                     if (frame.said.isNotEmpty()) hand(tags.feed(frame.said))
                 }
             }
+            hangup?.letGo()
+            if (hangup?.hungUp == true) return ChatCompletion.Failed(HUNG_UP, permanent = false)
+
             hand(tags.finish())
             val thoughtFor = if (!sawThought) 0L else (thoughtTo - started) / 1_000_000
 
@@ -1271,5 +1291,15 @@ class ModelChatClient(
 
         /** What the OpenAI shape closes with; Anthropic simply stops. */
         const val DONE = "[DONE]"
+
+        /**
+         * What a call somebody gave up on says, in the same words the SDK path
+         * says it in.
+         *
+         * Never settled, on the same rule every other torn socket follows: the
+         * provider has said nothing about the request, and the reader walking
+         * away is not an opinion about whether the question can be answered.
+         */
+        const val HUNG_UP = "Nobody was left to read the answer"
     }
 }

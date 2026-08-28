@@ -165,6 +165,18 @@ have failed.
   staying open until the turn ends — a long answer no longer leaves the block
   counting up with the reasoning stopped mid-sentence.
 
+- 🛑 **Interrupting a chat now stops the model, rather than only stopping
+  listening to it.** Pressing the big circle in voice mode put the panel back to
+  Listening and left the request exactly where it was: the model went on writing
+  an answer nobody would ever hear, every word of it was charged for, and the
+  next thing said raced a turn that had never ended. The interruption now aborts
+  the request, and the server hangs up on the provider when the reader goes —
+  which it could not previously notice at all while the model was thinking,
+  because nothing was being written to find out on. The composer has a **Stop**
+  beside the send button that does the same thing for a typed turn. An answer
+  that was stopped is not written to the history: the chat keeps the question and
+  no answer, rather than half a sentence attributed to the model.
+
 ## 0.9.4
 
 ### ✨ Added

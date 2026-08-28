@@ -3,10 +3,12 @@ package io.mszymanski.orknux.server.chat
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.mszymanski.orknux.connector.model.ChatCompletion
+import io.mszymanski.orknux.connector.model.Hangup
 import io.mszymanski.orknux.connector.model.ModelChatClient
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.attachment.ChatAttachments
 import io.mszymanski.orknux.server.attachment.InstallationSettings
+import io.mszymanski.orknux.server.stream.ReaderWatch
 import io.mszymanski.orknux.server.stream.ServerSentEvents
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
@@ -60,6 +62,8 @@ class ChatStreamAPI(
     private val ownership: ChatOwnership,
     private val attachments: ChatAttachments,
     private val settings: InstallationSettings,
+    /** How this endpoint finds out that the person who asked has walked away. */
+    private val readers: ReaderWatch,
     private val mapper: ObjectMapper,
     private val chatTools: ChatTools,
 ) {
@@ -170,6 +174,19 @@ class ChatStreamAPI(
             // rescue below cannot run on top of one that did arrive.
             var kept = false
 
+            /*
+             * The handle the model call is stopped by when nobody is left to
+             * read it.
+             *
+             * Pulled from [ReaderWatch]'s thread rather than this one, which is
+             * inside the call and will not come out of it on its own - that is
+             * the whole of why it is a handle rather than a flag. This thread
+             * comes back some moments later and asks the same object what
+             * happened, because what it is then holding is the wreckage of an
+             * answer nobody wanted rather than an answer.
+             */
+            val hangup = Hangup()
+
             try {
                 /*
                  * An agent's answer still arrives as one chunk, and its working
@@ -186,17 +203,49 @@ class ChatStreamAPI(
                  * A bare model calls no tools; what it can have is thinking,
                  * and that streams beside the answer.
                  */
-                val answer = if (start.agentId == null) {
-                    client.stream(
-                        start.modelId,
-                        start.turns,
-                        onThinking = { piece -> send("thinking", mapOf("text" to piece)) },
-                    ) { piece -> send("chunk", mapOf("text" to piece)) }
-                } else {
-                    chats.ask(start, watching { event, payload -> send(event, payload) }, shed).also { whole ->
-                        if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
+                /*
+                 * Watched while it runs, because the container says nothing
+                 * about a browser that has gone until something is written to
+                 * it - and between the question and the first piece of the
+                 * answer there is nothing to write. See [ReaderWatch] and issue
+                 * #299: interrupting used to stop the listening and nothing
+                 * else, so the model went on writing an answer nobody would
+                 * ever read and it went on being charged for.
+                 */
+                val answer = readers.whileReading(stream, gone = { hangup.hangUp() }) {
+                    if (start.agentId == null) {
+                        client.stream(
+                            start.modelId,
+                            start.turns,
+                            onThinking = { piece -> send("thinking", mapOf("text" to piece)) },
+                            hangup = hangup,
+                        ) { piece -> send("chunk", mapOf("text" to piece)) }
+                    } else {
+                        chats.ask(start, watching { event, payload -> send(event, payload) }, shed, hangup)
+                            .also { whole ->
+                                if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
+                            }
                     }
                 }
+
+                /*
+                 * Given up on, so nothing is made of what came back.
+                 *
+                 * Not written to the history in particular. What the model had
+                 * produced when the reader went is part of an answer that was
+                 * stopped on purpose, and a chat reopened tomorrow ending in
+                 * half a sentence attributed to the model is a worse record
+                 * than one ending on the question. A regenerate is put back the
+                 * way it is for anything else that did not answer, or the chat
+                 * would be left ending on a question it had already answered
+                 * once.
+                 */
+                if (hangup.hungUp) {
+                    log.debug("Chat {} was given up on while it was being answered", id)
+                    if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
+                    return@StreamingResponseBody
+                }
+
                 when (answer) {
                     is ChatCompletion.Failed -> {
                         giveUp()

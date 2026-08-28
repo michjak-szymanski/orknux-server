@@ -2,15 +2,12 @@ package io.mszymanski.orknux.connector.model
 
 import io.mszymanski.orknux.connector.connection.ConnectionProbe
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import com.openai.errors.OpenAIServiceException
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
-import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.nio.charset.StandardCharsets
 import java.time.Duration
 
 /** What came back from a reading, or why nothing did. */
@@ -55,9 +52,8 @@ sealed interface Speech {
 class ModelSpeechClient(
     private val providers: ModelProviderRepository,
     private val models: LlmModelRepository,
-    private val probe: ModelProviderProbe,
+    private val media: OpenAiMedia,
     private val connections: ConnectionProbe,
-    private val mapper: ObjectMapper,
     private val proxies: ProxyRouter,
 ) {
 
@@ -112,69 +108,29 @@ class ModelSpeechClient(
          */
         connections.vet(endpoint)?.let { return Speech.Failed("${provider.name} cannot be called: $it") }
 
-        val credential = when (val resolved = probe.credentials(provider)) {
-            is ModelProviderProbe.Credential.Failed -> return Speech.Failed(resolved.reason)
-            is ModelProviderProbe.Credential.Header -> resolved.header
-        }
-
-        val body = mapper.writeValueAsString(
-            buildMap {
-                put("model", model.modelId)
-                put("input", said)
-                put("response_format", FORMAT)
-                voice?.takeIf { it.isNotBlank() }?.let { put("voice", it.trim()) }
-            },
-        )
-
-        val request = HttpRequest.newBuilder(uri)
-            // Generous for the same reason transcription is: a local model
-            // synthesising a long answer is slow, and the alternative to waiting
-            // is a button that fails on exactly the answers worth hearing.
-            .timeout(Duration.ofSeconds(REQUEST_SECONDS))
-            .header("Content-Type", "application/json")
-            .header(credential.name, credential.value)
-            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-            .build()
-
         val started = System.currentTimeMillis()
         return try {
-            val answer = http.send(request, HttpResponse.BodyHandlers.ofByteArray())
-            val millis = System.currentTimeMillis() - started
-            if (answer.statusCode() !in 200..299) {
-                log.warn("Speech by {} answered {}", model.name, answer.statusCode())
-                return Speech.Failed("${model.name} answered ${answer.statusCode()}")
+            when (val spoken = media.speak(provider, model, said, voice)) {
+                is OpenAiMedia.Spoken.Failed -> Speech.Failed(spoken.reason)
+                is OpenAiMedia.Spoken.Audio -> {
+                    val millis = System.currentTimeMillis() - started
+                    if (spoken.bytes.isEmpty()) {
+                        Speech.Failed("${model.name} answered nothing")
+                    } else {
+                        // The SDK decodes the refusal shapes; what reaches here
+                        // is audio or an exception, so the content type is the
+                        // one that was asked for.
+                        Speech.Spoke(audio = spoken.bytes, contentType = "audio/$FORMAT", millis = millis)
+                    }
+                }
             }
-            spoke(answer, millis, model.name)
+        } catch (refused: OpenAIServiceException) {
+            log.warn("Speech by {} at {} answered {}", model.name, endpoint, refused.statusCode())
+            Speech.Failed(refused.message ?: "${model.name} answered ${refused.statusCode()}")
         } catch (failure: Exception) {
-            log.warn("Speech by {} could not be done", model.name, failure)
+            log.warn("Speech by {} at {} could not be done", model.name, endpoint, failure)
             Speech.Failed(failure.message ?: "The text could not be read")
         }
-    }
-
-    /**
-     * The audio out of what the server answered.
-     *
-     * A provider that answered JSON answered a refusal rather than a recording,
-     * whatever its status code said — some of them report a bad voice or an
-     * unknown model with a 200 and an error object.
-     */
-    private fun spoke(answer: HttpResponse<ByteArray>, millis: Long, name: String): Speech {
-        val audio = answer.body()
-        if (audio.isEmpty()) return Speech.Failed("$name answered nothing")
-
-        val contentType = answer.headers().firstValue("content-type").orElse("").lowercase()
-        if (contentType.startsWith("application/json") || contentType.startsWith("text/")) {
-            val said = runCatching {
-                mapper.readTree(audio).path("error").path("message").stringValue()
-            }.getOrNull()
-            return Speech.Failed(said?.takeIf { it.isNotBlank() } ?: "$name answered something that was not audio")
-        }
-
-        return Speech.Spoke(
-            audio = audio,
-            contentType = contentType.ifEmpty { "audio/$FORMAT" },
-            millis = millis,
-        )
     }
 
     private companion object {

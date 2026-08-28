@@ -141,15 +141,34 @@ class OpenAiMediaTest {
         assertThat(asked.single().second).contains("\"voice\":")
     }
 
+    /**
+     * The part has to be a file, and a file has a name.
+     *
+     * Migrating this lost the filename that the hand-written encoder used to
+     * put on the part, and the SDK given raw bytes sends them as an ordinary
+     * form field - so a Whisper server answered `Expected UploadFile, received
+     * str` and transcription was broken for everyone. The first version of this
+     * test asserted only that a multipart body was sent, which it was; the
+     * assertion below is on the thing that was actually missing.
+     */
     @Test
-    fun `a recording goes over as a form the SDK builds, and comes back as words`() {
-        val heard = media().transcribe(provider(), model(ModelKind.TRANSCRIPTION, "whisper-1"), "audio".toByteArray())
+    fun `a recording goes over as a named file, not as a field of bytes`() {
+        val heard = media().transcribe(
+            provider(),
+            model(ModelKind.TRANSCRIPTION, "whisper-1"),
+            "audio".toByteArray(),
+            "spoken.wav",
+            "audio/wav",
+        )
 
         assertThat(heard).isEqualTo(OpenAiMedia.Heard.Words("What was said."))
         val (path, body) = asked.single()
         assertThat(path).isEqualTo("/audio/transcriptions")
-        // The multipart this used to write out itself, boundary and all.
-        assertThat(body).contains("Content-Disposition: form-data").contains("whisper-1")
+        assertThat(body).contains("whisper-1")
+        // The two that make it a file rather than a string: the name the server
+        // reads the format off, and the type beside it.
+        assertThat(body).contains("filename=\"spoken.wav\"")
+        assertThat(body).contains("audio/wav")
     }
 
     private fun media(): OpenAiMedia {

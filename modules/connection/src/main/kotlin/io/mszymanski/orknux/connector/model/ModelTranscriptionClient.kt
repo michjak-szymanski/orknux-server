@@ -90,7 +90,7 @@ class ModelTranscriptionClient(
 
         val started = System.currentTimeMillis()
         return try {
-            when (val heard = media.transcribe(provider, model, audio)) {
+            when (val heard = media.transcribe(provider, model, audio, filename, contentType)) {
                 is OpenAiMedia.Heard.Failed -> Transcription.Failed(heard.reason)
                 is OpenAiMedia.Heard.Words -> {
                     val said = heard.text.trim()

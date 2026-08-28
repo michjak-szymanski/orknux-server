@@ -124,26 +124,21 @@ class OpenAiMediaTest {
      * The behaviour that could not be kept, pinned as what replaced it.
      *
      * Sending no voice at all is what this used to do and the SDK will not: the
-     * field is required. So a name is always sent, and which name is the
-     * installation's to decide — hard-coding OpenAI's would fail every server
-     * with a voice set of its own.
+     * field is required. A speech model carries its own voice, so the only rows
+     * that reach this are ones saved before that field was there.
      */
     @Test
-    fun `a model that names no voice falls back to the installation's, not to a fixed name`() {
-        val elsewhere = media(ConnectionProperties(speechDefaultVoice = "piper-alba"))
+    fun `a model saved without a voice still reads, on a last resort`() {
+        media().speak(provider(), model(ModelKind.SPEECH, "tts-1"), "Read this.", null)
 
-        elsewhere.speak(provider(), model(ModelKind.SPEECH, "tts-1"), "Read this.", null)
-
-        assertThat(asked.single().second).contains("\"voice\":\"piper-alba\"")
+        assertThat(asked.single().second).contains("\"voice\":")
     }
 
     @Test
-    fun `a blank voice is no voice, and takes the same fallback`() {
-        val elsewhere = media(ConnectionProperties(speechDefaultVoice = "piper-alba"))
+    fun `a blank voice is no voice, and takes the same road`() {
+        media().speak(provider(), model(ModelKind.SPEECH, "tts-1"), "Read this.", "   ")
 
-        elsewhere.speak(provider(), model(ModelKind.SPEECH, "tts-1"), "Read this.", "   ")
-
-        assertThat(asked.single().second).contains("\"voice\":\"piper-alba\"")
+        assertThat(asked.single().second).contains("\"voice\":")
     }
 
     @Test
@@ -157,7 +152,8 @@ class OpenAiMediaTest {
         assertThat(body).contains("Content-Disposition: form-data").contains("whisper-1")
     }
 
-    private fun media(properties: ConnectionProperties = ConnectionProperties()): OpenAiMedia {
+    private fun media(): OpenAiMedia {
+        val properties = ConnectionProperties()
         val router = ProxyRouter(ProxyRuleSource { emptyList() })
         val probe = ModelProviderProbe(
             ConnectionProbe(properties, router, SecretCipher(TEST_KEY)),
@@ -167,7 +163,7 @@ class OpenAiMediaTest {
             router,
             ModelClients(router),
         )
-        return OpenAiMedia(ModelClients(router), probe, properties)
+        return OpenAiMedia(ModelClients(router), probe)
     }
 
     private fun provider() = ModelProvider(

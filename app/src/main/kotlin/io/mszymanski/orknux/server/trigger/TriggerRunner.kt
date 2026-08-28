@@ -110,6 +110,11 @@ class TriggerRunner(
         val payload = inputFor(trigger, fill)
         val verdict = admits(trigger, payload)
         if (verdict != null) {
+            // Said out loud as well as written down. The row is on the trigger's
+            // own page; the log is where somebody watching a message not arrive
+            // is looking, and a condition quietly refusing it is the commonest
+            // reason for the silence they are reading.
+            log.info("Trigger {} did not fire: {}", trigger.name, verdict.detail)
             record(trigger, verdict.outcome, verdict.detail)
             return 0
         }
@@ -119,6 +124,7 @@ class TriggerRunner(
         val refusals = offNames.toMutableList()
         val started = runnable.count { start(trigger, requireNotNull(it.workflow.id), payload, refusals) }
         if (started == assigned.size) {
+            log.info("Trigger {} started {} workflow(s)", trigger.name, started)
             record(trigger, FiringOutcome.STARTED, "Started $started of ${assigned.size}", started)
         } else {
             /*

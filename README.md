@@ -926,15 +926,22 @@ filed into attachment storage so it survives the chat being reopened. Two
 providers are refused a drawing before a request is built rather than after a
 404: Anthropic's Messages API generates text, and Ollama serves no image
 generation on either of its surfaces. A local installation that wants to draw
-runs something that speaks `/images/generations` beside Ollama and adds it as a
-Custom provider.
+runs something that speaks `/images/generations` beside Ollama and adds it as an
+`OPENAI` provider pointed at that server.
 
 **A type exists where something branches on it**, and nowhere else. `OPENAI` is
 the shape the rest are measured against, `ANTHROPIC` has its own body, streaming
 events and `/messages` path, `AZURE_OPENAI` puts the deployment and the API
-version in the URL, `OLLAMA` is the OpenAI shape at an address of your own and
-hangs it off `/v1` — and `CUSTOM` is anything that speaks one of those well
-enough, which is most things.
+version in the URL, and `OLLAMA` is the OpenAI shape at an address of your own
+and hangs it off `/v1`.
+
+`CUSTOM` was here until V224 and branched on nothing whatsoever — it was grouped
+with `OPENAI` in the one place that named it and fell through to the OpenAI
+default everywhere else. It also asked the wrong question. Every other value
+says what the endpoint speaks; `CUSTOM` said we had not heard of it, which reads
+as a promise to handle whatever format turns up and was delivered as an OpenAI
+request every time. Its rows are `OPENAI` now, which is what they always were on
+the wire.
 
 `OLLAMA` earns its branch on that one line and did not always have it. The whole
 client was built on the endpoint as written, so a provider pointed at the address
@@ -945,10 +952,11 @@ did nothing that picking OpenAI would not, and the type was decoration. The
 suffix belongs to the client rather than to the check, because proving
 `/api/tags` answers would say the daemon is up and nothing about the surface a
 message is actually sent to.
-A service reached through **Custom** is not a second-class one: Google's own
-OpenAI-compatible endpoint is a Custom provider pointed at
+A service nobody here has a name for is not a second-class one: Google's own
+OpenAI-compatible endpoint is an `OPENAI` provider pointed at
 `https://generativelanguage.googleapis.com/v1beta/openai`, and a type of its own
-would have branched on nothing but the name of an auth header.
+would have branched on nothing but the name of an auth header. The part that is
+genuinely yours is the address, and the endpoint field is where it goes.
 
 Azure OpenAI wants an API version, a deployment and a region, and can
 authenticate either with an API key or as an **Entra ID service principal**,

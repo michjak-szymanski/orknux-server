@@ -3595,7 +3595,12 @@ enum ProviderStatus {
     FAILED
 }
 
-"The services a provider can be; each brings its own settings and its own way in."
+"""
+The services a provider can be; each brings its own settings and its own way in.
+
+The type names the wire format, not the company: anything OpenAI-shaped at an
+address of its own is `OPENAI`, whoever is answering at that address.
+"""
 enum ProviderType {
     OPENAI
     ANTHROPIC
@@ -3606,7 +3611,6 @@ enum ProviderType {
     nobody has to know it. An endpoint already written `.../v1` still works.
     """
     OLLAMA
-    CUSTOM
 }
 
 "How a provider is authenticated. ENTRA_ID is Azure OpenAI only."

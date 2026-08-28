@@ -89,6 +89,17 @@ have failed.
   workspace nobody had chatted in used to open its first chat on a bare model
   whatever the interface offered; it now opens on the first agent that can answer.
 
+- 🔌 **Custom is no longer a provider type; those providers are OpenAI now.** The
+  type named who was at the other end where every other one names what the
+  endpoint speaks, so it promised that any wire format would be handled and sent
+  an OpenAI request every time — it branched on nothing anywhere in the server.
+  **On upgrade** every Custom provider becomes an OpenAI provider with its
+  endpoint, its key, its authentication and its models untouched, and the calls
+  it makes are the ones it was already making. Google's OpenAI-compatible
+  endpoint, a local server or a gateway is an **OpenAI** provider pointed at its
+  own address, which is what it was doing under the old name. If you script
+  against the API, `CUSTOM` is gone from `ProviderType`.
+
 - 🏁 **A task started on an installation without Temporal now actually runs.**
   Every task started from the Tasks page or from an issue sat at Queued doing
   nothing until the server was restarted: the work was handed to a worker a

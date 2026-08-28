@@ -11,33 +11,32 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * What happens to the rows when a type that could not work stops existing.
+ * What happens to the rows when the type that promised any format stops existing.
  *
- * V170 removes GOOGLE_AI. Unlike TEAMS the interface did offer it, so a row is
- * far likelier to exist than in V160's case - and a CHECK narrowed against a
- * table still holding the value it is narrowing away fails on startup rather
- * than quietly. V170 therefore moves the rows to CUSTOM first, which is the only
- * type under which that endpoint and that key can actually reach Google: CUSTOM
- * sends `Authorization: Bearer`, which is what Google's OpenAI-compatible
- * surface documents, where GOOGLE_AI sent `x-goog-api-key` at OpenAI-shaped
- * paths that do not exist on the API that header belongs to.
+ * V224 removes CUSTOM. Unlike the types V160 and V183 removed it was not merely
+ * unimplemented, and unlike GOOGLE_AI it was not wrong on the wire: a CUSTOM
+ * provider worked, because it was called as an OpenAI one in every respect - the
+ * Bearer header, `{endpoint}/models`, `{endpoint}/chat/completions`, an OpenAI
+ * body. What was wrong was the name, which answered "who is at the other end"
+ * where every other value in the enum answers "what does this endpoint speak",
+ * and so promised a wire format nobody had written a line of code for.
  *
- * V224 then removed CUSTOM in turn, for a reason of its own, and moved its rows
- * to OPENAI. So a row that goes in as GOOGLE_AI comes out as OPENAI, having
- * been CUSTOM in between. That second hop changes nothing about what is sent -
- * CUSTOM was called as an OpenAI provider in every respect - so what this test
- * asserts about the header is as true at the end of the history as it was at
- * V170, and only the name of the surviving type has moved on.
+ * The rows therefore move to OPENAI, which is what they already were, and this
+ * test is mostly the statement that moving them changes nothing else. The
+ * interface offered CUSTOM prominently - it is what the manual told people to
+ * pick for Gemini and for a local server - so rows are near certain to exist,
+ * and a CHECK narrowed against a table still holding the value it is narrowing
+ * away fails on startup rather than quietly.
  *
  * This replays the real Postgres history into a schema of its own - up to the
- * migration before V170, then a Google provider with a key and a model
- * configured against it, then the rest of the history - and asserts the provider
+ * migration before V224, then a Custom provider with a key, an endpoint of its
+ * own and a model configured against it, then V224 - and asserts the provider
  * comes out intact rather than merely renamed, and that its models came with it.
  */
-class GoogleAiTypeMigrationTest {
+class CustomTypeMigrationTest {
 
     @Test
-    fun `a Google AI provider comes through the removals as an OpenAI provider with its models intact`() {
+    fun `a Custom provider comes through V224 as an OpenAI provider with its models intact`() {
         val url = System.getProperty("spring.datasource.url").orEmpty()
         // The SQLite run has no numbered history to replay; its half of this
         // change is the baseline, which SqliteSchemaTest applies.
@@ -54,7 +53,7 @@ class GoogleAiTypeMigrationTest {
                     statement.execute(
                         """
                         INSERT INTO model_provider (workspace_id, name, type, endpoint, auth_method, secret, status)
-                        VALUES (1, 'Gemini', 'GOOGLE_AI', 'https://generativelanguage.googleapis.com/v1beta',
+                        VALUES (1, 'Gemini', 'CUSTOM', 'https://generativelanguage.googleapis.com/v1beta/openai',
                                 'API_KEY', 'key-was-here', 'CONNECTED')
                         """.trimIndent(),
                     )
@@ -74,10 +73,14 @@ class GoogleAiTypeMigrationTest {
                 assertThat(migrated.type).describedAs("the row moved to the surviving type").isEqualTo("OPENAI")
 
                 // The point of the whole test: the conversion changes the name of
-                // the type and nothing else. The secret is stored encrypted, so a
+                // the type and nothing else. The endpoint above is not OpenAI's
+                // and was never meant to be - it is Google's OpenAI-compatible
+                // surface - and the migration leaves it exactly where somebody
+                // typed it, because the type says what is spoken there and the
+                // endpoint says where. The secret is stored encrypted, so a
                 // migration that rewrote it could not be undone afterwards.
                 assertThat(migrated.secret).isEqualTo("key-was-here")
-                assertThat(migrated.endpoint).isEqualTo("https://generativelanguage.googleapis.com/v1beta")
+                assertThat(migrated.endpoint).isEqualTo("https://generativelanguage.googleapis.com/v1beta/openai")
                 assertThat(migrated.authMethod).isEqualTo("API_KEY")
 
                 // Models hang off the provider by id and are deleted with it by
@@ -87,7 +90,9 @@ class GoogleAiTypeMigrationTest {
                 assertThat(single(db, "SELECT model_id FROM llm_model WHERE name = 'Flash'"))
                     .isEqualTo("gemini-2.0-flash")
 
-                // And it is a provider the application still considers usable.
+                // And it is a provider the application still considers usable,
+                // reached at the address it was already reached at: nothing here
+                // was Ollama, so no `/v1` is added and the endpoint is the base.
                 val provider = ModelProvider(
                     id = 1,
                     workspaceId = 1,
@@ -97,13 +102,14 @@ class GoogleAiTypeMigrationTest {
                     secret = migrated.secret,
                 )
                 assertThat(provider.configured()).isTrue()
+                assertThat(provider.openAiBase()).isEqualTo("https://generativelanguage.googleapis.com/v1beta/openai")
 
                 // And the value cannot come back in through the front door.
                 assertThatThrownBy {
                     insert(
                         db,
                         "INSERT INTO model_provider (workspace_id, name, type, endpoint) " +
-                            "VALUES (1, 'Late', 'GOOGLE_AI', 'https://generativelanguage.googleapis.com')",
+                            "VALUES (1, 'Late', 'CUSTOM', 'https://example.invalid')",
                     )
                 }.hasMessageContaining("ck_model_provider_type")
             }
@@ -157,14 +163,14 @@ class GoogleAiTypeMigrationTest {
     )
 
     private companion object {
-        const val SCHEMA = "google_ai_type_migration"
+        const val SCHEMA = "custom_type_migration"
 
         /**
-         * Everything below V170. The `?` is Flyway's "or the highest there is
-         * under it": nothing is numbered 169 and nothing needs to be, and a
-         * migration added between now and then is included without editing this.
+         * Everything below V224. The `?` is Flyway's "or the highest there is
+         * under it", so a migration added between now and then is included
+         * without editing this.
          */
-        const val BEFORE_THE_REMOVAL = "169?"
+        const val BEFORE_THE_REMOVAL = "223?"
         const val LATEST = "latest"
     }
 }

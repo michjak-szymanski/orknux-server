@@ -12,6 +12,7 @@ import io.mszymanski.orknux.connector.proxy.ProxyRouter
 import org.springframework.stereotype.Component
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.Supplier
 
@@ -84,6 +85,27 @@ class ModelClients(private val proxies: ProxyRouter) {
              * make it no more.
              */
             .maxRetries(0)
+            /*
+             * And a connection is not kept longer than the other end keeps it.
+             *
+             * OkHttp pools an idle connection for five minutes. llama.cpp
+             * answers `Keep-Alive: timeout=5` and drops it after five seconds,
+             * and the provider check runs every five minutes - so every check
+             * after the first wrote its request into a socket the server had
+             * closed long ago and read back `unexpected end of stream`. Ollama
+             * and most self-hosted servers are the same shape; the hosted ones
+             * hold a connection far longer than this and lose nothing by it.
+             *
+             * Two seconds rather than a retry. The SDK's own retry would cover
+             * this, and it also retries a 429 - which is the application's
+             * decision to make, not the library's: a node's retry policy has a
+             * count, a backoff and a screen that shows the attempts, and a
+             * library quietly absorbing the refusal underneath makes all three
+             * lie. Measured: with the SDK retrying, a rate-limited call reports
+             * one attempt where the policy allowed three.
+             */
+            .maxIdleConnections(MAX_IDLE_CONNECTIONS)
+            .keepAliveDuration(Duration.ofSeconds(KEEP_ALIVE_SECONDS))
 
         // Azure decides its own URL layout from the address it was given.
         if (provider.type == ProviderType.AZURE_OPENAI) builder.azureUrlPathMode(AzureUrlPathMode.AUTO)
@@ -114,6 +136,16 @@ class ModelClients(private val proxies: ProxyRouter) {
     private data class ClientKey(val base: String, val type: ProviderType, val credential: String)
 
     companion object {
+        /**
+         * How many idle connections are kept, and for how long.
+         *
+         * Both or neither: the SDK refuses a builder that sets one alone. The
+         * duration is the point - see [build] - and the count is OkHttp's own
+         * default, written down beside it so the pair reads as one decision.
+         */
+        private const val MAX_IDLE_CONNECTIONS = 5
+        private const val KEEP_ALIVE_SECONDS = 2L
+
         /** A token read afresh on every call, so a rotated one is picked up. */
         fun bearer(token: Supplier<String>): Credential = BearerTokenCredential.create(token)
 

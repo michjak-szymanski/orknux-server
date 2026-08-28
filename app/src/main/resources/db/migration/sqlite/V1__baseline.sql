@@ -1471,6 +1471,7 @@ CREATE INDEX spring_ai_chat_memory_conversation_id_timestamp_idx ON spring_ai_ch
 CREATE UNIQUE INDEX spring_session_ix1 ON spring_session (session_id);
 CREATE INDEX spring_session_ix2 ON spring_session (expiry_time);
 CREATE INDEX spring_session_ix3 ON spring_session (principal_name);
+CREATE INDEX task_queued_idx ON task (status, created_at);
 CREATE INDEX task_message_task_idx ON task_message (task_id, sent_at, id);
 CREATE INDEX task_picture_task_idx ON task_picture (task_id, drawn_at, id);
 CREATE INDEX idx_trigger_firing_trigger ON trigger_firing (trigger_id, at DESC);

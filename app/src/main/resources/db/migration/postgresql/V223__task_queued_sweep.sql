@@ -1,0 +1,28 @@
+-- What the sweep under the hand-over reads.
+--
+-- A task is recorded and then handed to whatever carries it, and that hand-over
+-- can be lost: a process killed between the commit and the callback, a thread
+-- pool that refuses the work, or - on Temporal - a workflow that starts and
+-- cannot run, which is exactly what "Activity Type AdvanceTask is not
+-- registered" was. All three leave a row saying QUEUED that nothing will ever
+-- look at again, and until now the only recovery from any of them was
+-- restarting an installation running the inline engine. A Temporal one had no
+-- net at all.
+--
+-- So something asks, on a timer and across every workspace, which tasks have
+-- been queued longer than they should be. That query is `status = 'QUEUED' and
+-- created_at < ?`, and this is the index it reads. Neither existing index
+-- serves it: task_workspace_idx leads on the workspace, which this query does
+-- not name, and task_waiting_idx's second column is waiting_until, which is
+-- null on every queued task.
+--
+-- No column. QUEUED is set once, when the row is written, and never returned
+-- to - so created_at *is* when the task entered it, and a second timestamp
+-- saying the same thing would only be one more thing to keep in step.
+--
+-- The interval itself is not here either: it is an installation setting, held
+-- in installation_setting under `task.sweep.minutes` the way the revision
+-- retention is, so an administrator can change it without a migration or a
+-- restart.
+
+CREATE INDEX task_queued_idx ON task (status, created_at);

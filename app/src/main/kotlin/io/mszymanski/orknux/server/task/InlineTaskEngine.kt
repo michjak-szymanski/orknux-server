@@ -74,6 +74,28 @@ class InlineTaskEngine(
     override fun nudge(taskId: Long) = submit(taskId)
 
     /**
+     * Takes a stranded task back, and says whether it was this call that did.
+     *
+     * [inHand] is the whole of the safety here, and it is why this can be
+     * called from a clock that knows nothing about what the pool is doing. A
+     * task is in that set from before it reaches a worker until after its last
+     * turn - so a task waiting its turn behind four long ones is in it too, and
+     * a sweep that meets it says no. Which matters more than it looks: four
+     * threads and hour-long turns mean a fifth task legitimately sits at QUEUED
+     * for an hour, and it is [inHand] rather than any interval that stops the
+     * sweep starting it a second time.
+     *
+     * There is no transaction to wait for. This is called from a scheduled pass
+     * that has already committed nothing, so it goes straight to a worker
+     * rather than through [submit]'s deferral - the same reasoning [start] is
+     * built on.
+     */
+    override fun recover(taskId: Long): Boolean {
+        if (!running) return false
+        return pickUp(taskId)
+    }
+
+    /**
      * Picks up whatever was in flight when this process last stopped.
      *
      * A task that was mid-turn is asked again from what it wrote down; a task
@@ -126,7 +148,9 @@ class InlineTaskEngine(
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(
                 object : TransactionSynchronization {
-                    override fun afterCommit() = pickUp(taskId)
+                    override fun afterCommit() {
+                        pickUp(taskId)
+                    }
                 },
             )
         } else {
@@ -134,14 +158,22 @@ class InlineTaskEngine(
         }
     }
 
-    /** Puts it on a worker, unless it is already on one. */
-    private fun pickUp(taskId: Long) {
-        if (!inHand.add(taskId)) return
-        try {
+    /**
+     * Puts it on a worker, unless it is already on one.
+     *
+     * Answers whether it did, which is what [recover] passes on to the sweep.
+     * A refusal from the pool answers false as well: the warning below was
+     * where a task could be dropped for good, and now something looks again.
+     */
+    private fun pickUp(taskId: Long): Boolean {
+        if (!inHand.add(taskId)) return false
+        return try {
             workers.execute { work(taskId) }
+            true
         } catch (refused: RuntimeException) {
             inHand.remove(taskId)
             log.warn("Task {} could not be picked up", taskId, refused)
+            false
         }
     }
 

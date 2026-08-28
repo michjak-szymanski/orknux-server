@@ -83,6 +83,8 @@ import io.mszymanski.orknux.server.attachment.AttachmentNotFoundException
 import io.mszymanski.orknux.server.attachment.AttachmentTooLargeException
 import io.mszymanski.orknux.server.attachment.AttachmentsDisabledException
 import io.mszymanski.orknux.server.attachment.RetentionOutOfRangeException
+import io.mszymanski.orknux.server.attachment.TaskSweepIntervalOutOfRangeException
+import io.mszymanski.orknux.server.attachment.TaskSweepNotConfigurableException
 import io.mszymanski.orknux.server.trigger.TriggerScheduleInvalidException
 import io.mszymanski.orknux.server.trigger.TriggerScheduleUnreachableException
 import io.mszymanski.orknux.server.variable.VariableCatalogNameInvalidException
@@ -223,6 +225,8 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ConditionFunctionElsewhereException,
             is ConditionFunctionNotBooleanException,
             is RetentionOutOfRangeException,
+            is TaskSweepIntervalOutOfRangeException,
+            is TaskSweepNotConfigurableException,
             is RevisionNotRestorableException,
             is RevisionComponentGoneException,
             -> ErrorType.BAD_REQUEST

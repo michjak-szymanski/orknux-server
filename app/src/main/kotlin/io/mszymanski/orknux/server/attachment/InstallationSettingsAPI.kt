@@ -40,6 +40,9 @@ class InstallationSettingsAPI(
         metricsAnonymousConfigured = settings.metricsAnonymousConfigured(),
         revisionRetentionDays = settings.revisionRetentionDays(),
         revisionRetentionDaysConfigured = settings.revisionRetentionDaysConfigured(),
+        taskSweepMinutes = settings.taskSweepMinutes(),
+        taskSweepMinutesConfigured = settings.taskSweepMinutesConfigured(),
+        taskSweepConfigurable = settings.taskSweepConfigurable(),
     )
 
     @MutationMapping
@@ -117,6 +120,31 @@ class InstallationSettingsAPI(
         return installationSettings()
     }
 
+    /**
+     * How long a task may sit queued before something hands it over again.
+     *
+     * Gated like the chat and attachment switches — what the screen does not
+     * offer, this does not store — but the gate itself is in
+     * [InstallationSettings.setTaskSweepMinutes] beside the answer it asks,
+     * rather than restated here where it would be a second place to remember.
+     * A Temporal installation has no field for this: how a stuck task is
+     * recovered there is Temporal's business and the interval comes from the
+     * file, so a value arriving anyway is refused rather than kept where nobody
+     * could see it.
+     */
+    @MutationMapping
+    fun setTaskSweepMinutes(@Argument minutes: Int): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setTaskSweepMinutes(minutes, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Queued tasks picked up again after $minutes minutes",
+        )
+        return installationSettings()
+    }
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
@@ -160,4 +188,24 @@ data class InstallationSettingsView(
     val revisionRetentionDays: Int,
     /** What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS. */
     val revisionRetentionDaysConfigured: Int,
+    /**
+     * How many minutes a task may sit queued before something hands it over
+     * again.
+     *
+     * The net under the hand-over: a task whose start was lost - to a process
+     * killed at the wrong moment, or a workflow that could not run - would
+     * otherwise say QUEUED for ever. Five minutes unless an administrator has
+     * said otherwise.
+     */
+    val taskSweepMinutes: Int,
+    /** What a fresh installation would wait - ORKNUX_TASK_SWEEP_MINUTES. */
+    val taskSweepMinutesConfigured: Int,
+    /**
+     * False on an installation running Temporal, and the field is not offered.
+     *
+     * A `configurable` flag like the chat's and the attachments', and the fact
+     * behind it is which engine is carrying tasks. The sweep runs either way;
+     * what is not an administrator's decision on Temporal is how long it waits.
+     */
+    val taskSweepConfigurable: Boolean,
 )

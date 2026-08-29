@@ -83,6 +83,29 @@ class ModelProviderProbe(
      */
     fun list(provider: ModelProvider): Listing {
         /*
+         * Whether there is a credential at all is settled before anything is
+         * sent, on either road.
+         *
+         * Both roads below resolve it for themselves, so this looks redundant
+         * and is not: the shortcut further down returns "No model list at
+         * {base}/models — check the endpoint" without consulting either. A
+         * provider pointed at a workspace secret nobody has filled in cannot
+         * reach anything, so the SDK's attempt fails as a connection failure -
+         * not a refusal - and that shortcut then reports the endpoint. The
+         * endpoint is the one part of the configuration that is right, and
+         * sending whoever configured it there is the confusion #211 removed.
+         *
+         * Only the key is read here, not [credentials], because that grants an
+         * Entra token and this must not put a request on the wire to answer a
+         * question about what is stored. Both roads read it again; reading it
+         * twice costs a repository lookup and no network.
+         */
+        if (!provider.configured()) {
+            return Listing.Failed("There are no credentials to call this provider with")
+        }
+        (key(provider) as? Key.Failed)?.let { return Listing.Failed(it.reason) }
+
+        /*
          * The SDK asks first, for every provider that speaks the OpenAI shape.
          *
          * It knows where each of Azure's two surfaces keeps its listing, which

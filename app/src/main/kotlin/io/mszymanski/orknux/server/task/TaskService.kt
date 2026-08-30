@@ -204,21 +204,71 @@ class TaskService(
      * just let go of is picked back up by it rather than waiting for something
      * else to happen.
      *
+     * **A task that has already ended is set going again**, which is #312 and
+     * is the same act seen a minute later. "Make the third stanza shorter" is
+     * not a new piece of work: it is this one, continued, and the agent that
+     * did it is the only thing that knows how. Refusing it - which this used to
+     * do - left starting a fresh task as the only route, and a fresh task opens
+     * on an empty session and has to be told the whole job again by somebody
+     * who has just watched it be done.
+     *
      * @throws TaskMessageMissingException when there is nothing in it.
-     * @throws TaskNotRunnableException when the task has already ended - there
-     *   is no next turn to read it on, and saying so is better than writing a
-     *   row nobody will ever pick up.
      */
     @Transactional
     fun say(taskId: Long, said: String, by: String): Task {
         val task = tasks.findByIdOrNull(taskId) ?: throw TaskNotFoundException(taskId)
         val words = said.trim()
         if (words.isEmpty()) throw TaskMessageMissingException()
-        if (task.status.over) throw TaskNotRunnableException("That task has ended, so nothing will read this")
 
         messages.save(TaskMessage(taskId = taskId, saidBy = by, body = words))
-        engine.nudge(taskId)
+        if (task.status.over) carryOn(task) else engine.nudge(taskId)
         return task
+    }
+
+    /**
+     * Sets a finished task working again on what was just said to it.
+     *
+     * Same task, same id, same session - which is the whole point. A task's
+     * memory is its LLM session and [TaskLoop] rebuilds the conversation out of
+     * it at the top of every turn, so an agent picked back up here has the poem
+     * it wrote, the pictures it drew and the files it read, and the follow-up
+     * reads as the next thing said in a conversation rather than as a brief.
+     * Nothing is copied and nothing is replayed.
+     *
+     * **The budget starts again.** A task that stopped at 3 of 40 turns and a
+     * minute of two hours has plenty left, and carrying the old counts forward
+     * would be arithmetic nobody asked for; a task that stopped *because* it ran
+     * out has none, and would refuse the follow-up on the turn it was given. So
+     * both are answered the same way - the allowance is the one a task started
+     * now would get, and the counts are back to nothing. Each reopening is a
+     * deliberate act by a person, which is what bounds the bill.
+     *
+     * The outcome goes with them. It described work done without knowing what
+     * was wanted, and leaving it on a task that is working again would be a page
+     * showing a conclusion and a task still reaching one. It is not lost: the
+     * summary is in the session where the agent wrote it, and the next
+     * `task_done` writes the next one.
+     *
+     * [TaskEngine.begin] rather than [TaskEngine.nudge], because there is
+     * nothing left to nudge - a nudge reaches a carrier that is already holding
+     * the task, and this one's finished when the task did. Both engines key
+     * `begin` on the task's id, so a second call for a task already going again
+     * does not start it twice.
+     */
+    private fun carryOn(task: Task) {
+        task.status = TaskStatus.RUNNING
+        task.turnsSpent = 0
+        task.workedSeconds = 0
+        task.turnsAllowed = turnsFor(task.workspaceId)
+        task.secondsAllowed = properties.workingTime.toSeconds()
+        task.outcome = null
+        task.endedBecause = null
+        task.finishedAt = null
+        task.waitingUntil = null
+        tasks.save(task)
+
+        task.sessionId?.let { sessions.note(it, "The task was asked to carry on.") }
+        engine.begin(requireNotNull(task.id))
     }
 
     /**

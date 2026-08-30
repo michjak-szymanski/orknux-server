@@ -992,20 +992,29 @@ type Mutation {
     "Answers the question a parked task stopped to ask."
     answerTaskRequest(id: ID!, said: String!): Task!
     """
-    Says something to a task that is still working.
+    Says something to a task, working or finished.
 
     The other direction from a request. A request is the agent stopping to ask
-    and somebody answering; this is nobody having asked - the work is going,
-    somebody watching it wants it shaped differently, and they say so without
-    stopping the task and starting a new one with a better prompt.
+    and somebody answering; this is nobody having asked - somebody watching the
+    work wants it shaped differently, and they say so without stopping the task
+    and starting a new one with a better prompt.
 
-    It is read at the top of the agent's next turn, as a turn from whoever typed
-    it, and the agent is told to treat it as the newest word on what is wanted.
-    So it is not instant: a message sent while the model is mid-turn is read when
-    that turn ends, which is what `TaskMessage.readAt` says and why it is there.
+    The agent picks it up between the tools it is running, as a turn from
+    whoever typed it, and is told to treat it as the newest word on what is
+    wanted - so a correction reaches it within seconds rather than at the end of
+    a turn. It is still not instant, which is what `TaskMessage.readAt` says and
+    why it is there, and a task cannot finish while something said to it is
+    unread.
 
-    Refused on a task that has already ended - there is no next turn to read it
-    on - and on an empty message.
+    **A task that has already ended is set working again on it.** Same task,
+    same id, same session, so the agent carries on with everything it knew: a
+    follow-up is this piece of work continued rather than a new one that has to
+    be explained from nothing. The turn and time allowances are taken again from
+    the settings as they stand and the counts start from zero, and the outcome
+    is cleared - it described work done without knowing what was wanted, and the
+    next `task_done` writes the next one. What it said is still in the session.
+
+    Refused on an empty message.
     """
     sendTaskMessage(id: ID!, said: String!): Task!
     """

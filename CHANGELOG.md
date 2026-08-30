@@ -112,6 +112,19 @@ have failed.
   by default and sharing the one setting those screens share. A task that has
   finished is not offered it, having nothing left to change.
 
+- ↩️ **A finished task can be told to carry on.** "Make the third stanza
+  shorter" is not a new piece of work, it is this one continued — and the only
+  thing that knows how is the agent that did it. The box on a task's page stays
+  after it ends, reading **Carry on**: what is typed there sets the same task
+  working again on the same session, so the agent has the poem it wrote, the
+  pictures it drew and the files it read, and does not have to be told the whole
+  job by somebody who just watched it be done. Starting a fresh task was the
+  only route before, and a fresh task opens on nothing. The turn and time
+  allowances are taken again from the settings as they stand and the counts
+  start from zero, so a task that stopped *because* it ran out can still be
+  asked for more; the outcome it wrote is cleared and the next one replaces it,
+  with what it said still in the log.
+
 ### 🔧 Changed
 
 - 🪵 **A provider that cannot be reached is one line in the log rather than a

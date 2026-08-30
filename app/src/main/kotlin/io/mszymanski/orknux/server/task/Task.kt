@@ -187,13 +187,21 @@ class Task(
     @Column(name = "worked_seconds", nullable = false)
     var workedSeconds: Long = 0,
 
-    /** Copied from the installation's settings when the task was made, so a
-     * later change to them does not move the goalposts under a running task. */
+    /**
+     * Copied from the installation's settings when the task was made, so a
+     * later change to them does not move the goalposts under a running task.
+     *
+     * Settable, and only ever at one moment: [TaskService.carryOn], where a
+     * finished task is asked to carry on and both allowances are taken again
+     * from the settings as they stand. Nothing else writes them, and nothing
+     * writes them while the task is working - which is what the paragraph above
+     * is about.
+     */
     @Column(name = "turns_allowed", nullable = false)
-    val turnsAllowed: Int,
+    var turnsAllowed: Int,
 
     @Column(name = "seconds_allowed", nullable = false)
-    val secondsAllowed: Long,
+    var secondsAllowed: Long,
 
     /** When a parked task gives up on being answered. Null unless waiting. */
     @Column(name = "waiting_until")

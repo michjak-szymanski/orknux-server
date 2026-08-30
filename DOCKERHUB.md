@@ -123,18 +123,12 @@ is why.
 | `ORKNUX_AUTH_METHOD` | `LDAP`, `INTERNAL`, `OIDC`, or `NONE` to turn authentication off. | `LDAP` | No |
 | `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
-**How hard somebody may try.** A wrong password costs nothing until the
-allowance is spent, then a pause that doubles to the ceiling and stops there.
-Nothing locks anybody out: a success clears the record, and so does going quiet.
-Counted in memory, so a restart forgets it.
-
-| Variable | What it does | Default | Required |
-| --- | --- | --- | --- |
-| `ORKNUX_SIGN_IN_PER_USERNAME` | Tries against one username that cost nothing; the next one waits. | `5` | No |
-| `ORKNUX_SIGN_IN_PER_ADDRESS` | Tries from one address that cost nothing. Higher, since an office behind one router is one address. | `20` | No |
-| `ORKNUX_SIGN_IN_FIRST_WAIT` | The pause on the first failure past the allowance. | `2s` | No |
-| `ORKNUX_SIGN_IN_LONGEST_WAIT` | Where the doubling stops. | `5m` | No |
-| `ORKNUX_SIGN_IN_FORGET_AFTER` | How long a quiet username or address is remembered for. | `15m` | No |
+**How hard somebody may try.** A wrong password costs nothing until the allowance
+is spent, then a pause that doubles to the ceiling. Nothing locks anybody out.
+The five `ORKNUX_SIGN_IN_*` variables that tune it, and the six
+`ORKNUX_PASSWORD_RESET_*` beside them, are in
+[the README's **Rate limits**](https://github.com/michjak-szymanski/orknux-server/blob/main/README.md#rate-limits);
+the defaults are right for almost every installation.
 
 **INTERNAL** - nothing to configure, which is the point. Username and password
 against the accounts this installation holds itself, with no directory and no
@@ -176,29 +170,20 @@ per request.
 | `ORKNUX_OIDC_DISPLAY_NAME` | What the sign-in button says. | `single sign-on` | No |
 | `ORKNUX_OIDC_AUDIENCES` | Which audiences a bearer token may name, comma separated. **Read the paragraph below before upgrading an OIDC installation.** | *the client id* | **Conditional** - see below |
 
-**`ORKNUX_OIDC_AUDIENCES` is the one that locks scripts out.** A bearer token has
-to name this installation in its `aud` claim, and empty means the client id -
-which is not what two common providers write: **Keycloak** names `account`
-unless an audience mapper is configured against this client, and **Entra** names
-the application's **App ID URI**, `api://…`. A token naming neither is **a 401 on
-every API call**, with `The aud claim is not valid` in the log; browser sign-in
-is unaffected. Either configure the provider to name this client, or set this to
-what its tokens carry - one entry matching is enough. Checked since 0.5.0, so an
-installation from 0.4 meets it on upgrade.
+**`ORKNUX_OIDC_AUDIENCES` is the one that locks scripts out**, because Keycloak
+and Entra do not write the audience an empty setting expects - a 401 on every API
+call while browser sign-in carries on working.
+[The README's **Access** section](https://github.com/michjak-szymanski/orknux-server/blob/main/README.md#access)
+has what each writes and what to set, and covers `orknux.security.role-mapping`,
+which is YAML only.
 
-Which of the provider's names grants which of this installation's roles is
-`orknux.security.role-mapping`, **YAML only** because the keys are group DNs and
-claim values, full of dots and commas. Empty works: a role with no mapping is
-granted to whoever holds an authority derived from its own name.
-
-**The first administrator.** An installation with neither a directory nor an
-OIDC provider has nobody to create the administrator who could create you. Set
-both of these and one internal administrator is created at startup, with the
-built-in `Administrators` role and a password on the ordinary sign-in form,
-which internal users may always use whatever `ORKNUX_AUTH_METHOD` says. It only
-ever creates, so an existing account of that name is untouched; and a password
-in a variable is a way in rather than one to keep, so sign in, change it, and
-unset both.
+**The first administrator.** With neither a directory nor OIDC there is nobody to
+create the administrator who could create you. Set both of these and one internal
+administrator is made at startup, with the `Administrators` role and a password on
+the ordinary sign-in form - which internal users may always use, whatever
+`ORKNUX_AUTH_METHOD` says. It only ever creates, so an existing account of that
+name is untouched. A password in a variable is a way in rather than one to keep:
+sign in, change it, unset both.
 [`deploy/README.md`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/README.md#signing-in-without-a-directory)
 has the rest.
 
@@ -207,11 +192,10 @@ has the rest.
 | `ORKNUX_BOOTSTRAP_ADMIN_USERNAME` | The first administrator's username. Empty seeds nobody. | *none* | **Yes** with no directory and no OIDC |
 | `ORKNUX_BOOTSTRAP_ADMIN_PASSWORD` | What they sign in with the first time. At least 12 characters; a shorter one seeds nobody. | *none* | With the above |
 
-**Resetting a forgotten password** - a link mailed to the address on the
-account, good once and for an hour, and only for an internal user who already
-has one: a directory or OIDC account's password belongs to the provider. Until
-the mail server below and `ORKNUX_BASE_URL` are set it is off, and the log says
-what is missing.
+**Resetting a forgotten password** - a link mailed to the address on the account,
+good once and for an hour, and only for an internal user: a directory or OIDC
+account's password belongs to the provider. Off until the mail server below and
+`ORKNUX_BASE_URL` are set, and the log says what is missing.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -221,12 +205,6 @@ what is missing.
 | `ORKNUX_MAIL_USERNAME` | Empty sends without authenticating. | *none* | No |
 | `ORKNUX_MAIL_PASSWORD` | That account's password. | *none* | No |
 | `ORKNUX_MAIL_SECURITY` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than merely offered, so a server that stopped offering it is refused rather than sent the password in the clear. | `STARTTLS` | No |
-| `ORKNUX_PASSWORD_RESET_EXPIRY` | How long a mailed link works for. | `1h` | No |
-| `ORKNUX_PASSWORD_RESET_PER_EMAIL` | Requests about one address that cost nothing; the next one waits. | `3` | No |
-| `ORKNUX_PASSWORD_RESET_PER_ADDRESS` | Requests from one caller that cost nothing. Higher, for the same reason. | `20` | No |
-| `ORKNUX_PASSWORD_RESET_FIRST_WAIT` | The pause on the first request past the allowance; it doubles after that. | `2s` | No |
-| `ORKNUX_PASSWORD_RESET_LONGEST_WAIT` | Where that doubling stops. | `5m` | No |
-| `ORKNUX_PASSWORD_RESET_FORGET_AFTER` | How long a quiet address is remembered for. Counted separately from sign-in. | `15m` | No |
 
 ## Runs
 
@@ -327,12 +305,12 @@ and it needs nothing else configured here.
 | `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
 | `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is elsewhere |
 | `ORKNUX_BASE_URL` | Where the interface is reached from, as a browser spells it, and what a mailed password reset link points at. Configured rather than read off the `Host` header, which a caller writes. | `http://localhost:5173` | **Yes** for password resets |
-| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, any way `DataSize` reads: `1MB`, `512KB`. That endpoint is open to the internet by necessity, so more is refused with 413, before any trigger. | `1MB` | No |
+| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, any way `DataSize` reads. That endpoint is open by necessity, so more is refused with 413 before any trigger runs. | `1MB` | No |
 | `ORKNUX_ASYNC_REQUEST_TIMEOUT` | How long a request that answered with a promise may stay open. The container's own thirty seconds would cut off the five minutes `orknux_news` may be asked to wait. | `330s` | No |
 | `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider. Shorten it where that is not true. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface shares this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |
-| `OPENAI_LOG` | What the model SDK prints about its own requests, to stderr: `info` logs the method and the full URL of every model call, `debug` adds headers and bodies with credentials redacted. The application's own log names the provider's base address, not the path the SDK builds from it — so this is what to set when the question is which URL a provider was actually called at. Unset by default. | *none* | No |
+| `OPENAI_LOG` | What the model SDK prints to stderr: `info` gives the method and full URL of every model call, `debug` adds headers and bodies with credentials redacted. Set it when the question is which URL a provider was actually called at - this application's own log names the base address, not the path the SDK builds from it. | *none* | No |
 | `ORKNUX_LOG_LEVEL` | How much this application says: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Turns up its own code - triggers, model calls, task handover - and leaves the frameworks alone. | `INFO` | No |
 | `ORKNUX_LOG_LEVEL_ROOT` | The same for everything else on the classpath. Raise it when what is wrong is underneath this application rather than in it; `DEBUG` here is very loud. | `INFO` | No |
 | `ORKNUX_LOG_FORMAT` | `plain` reads well in a terminal; `json` (one ECS object per line) is what a collector wants. Applies to console and file alike. | `plain` | No |
@@ -340,10 +318,7 @@ and it needs nothing else configured here.
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together. | `1GB` | No |
-| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. Nothing else under `/actuator` opens. | `false` | No |
-| `ORKNUX_REVISION_RETENTION_DAYS` | How many days of a component's history are kept. A version of a function, tool, skill or agent is a whole copy of what it was, so this decides the size of that table. Also on the Admin screen; once set, that holds. | `14` | No |
-| `ORKNUX_REVISION_SWEEP_ENABLED` | Whether the retention sweep runs. `false` deletes nothing, and the history grows without limit. | `true` | No |
-| `ORKNUX_REVISION_SWEEP_INTERVAL` | How often it runs. | `6h` | No |
+| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers a caller who has not signed in. A scrape describes the installation, so it needs a credential like anything else and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. | `false` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |
 
 Sessions are kept in the database, so signing in outlives a restart and more

@@ -45,6 +45,13 @@ data class ModelProviderCheckProperties(
  *
  * Providers with nothing to check with are skipped rather than reported as
  * failing: not configured is not broken.
+ *
+ * So are providers whose own switch is off. Not every endpoint is one an
+ * installation wants polled - a model server on somebody's laptop is off more
+ * often than it is on, and a sweep against it produces a failed row and a
+ * warning in the log every five minutes for a state nobody thinks is wrong.
+ * That switch stops this timer and nothing else: Test Connection still runs,
+ * and so does every chat and task the provider serves.
  */
 @Component
 @ConditionalOnProperty(name = ["orknux.model.check.enabled"], havingValue = "true", matchIfMissing = true)
@@ -107,7 +114,7 @@ class ModelProviderMonitor(
      * leave every provider after it in the list unchecked.
      */
     fun sweep() {
-        val worth = providers.findAll().filter { it.configured() }
+        val worth = providers.findAll().filter { it.configured() && it.checkEnabled }
         if (worth.isEmpty()) return
 
         for (provider in worth) {
@@ -118,10 +125,18 @@ class ModelProviderMonitor(
         log.debug("Checked {} model providers", worth.size)
     }
 
-    /** Skipped rather than failed when there is nothing to check with. */
+    /**
+     * Skipped rather than failed when there is nothing to check with, and
+     * skipped rather than asked when somebody said not to.
+     *
+     * Both guards are here as well as in [sweep] because this is also the
+     * save's road in, and a provider saved with checking turned off must not be
+     * called once on the way past - which is precisely the sweep somebody was
+     * turning off, arriving a second earlier.
+     */
     private fun check(providerId: Long) {
         val provider = providers.findByIdOrNull(providerId) ?: return
-        if (!provider.configured()) return
+        if (!provider.configured() || !provider.checkEnabled) return
         models.testProvider(providerId)
     }
 

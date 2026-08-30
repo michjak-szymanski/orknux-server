@@ -205,6 +205,25 @@ class ModelProvider(
     @Column(length = 300)
     var scope: String? = null,
 
+    /**
+     * Whether the sweep is allowed to ask this provider anything.
+     *
+     * On for everything, which is what an installation wants for a provider it
+     * pays for and relies on. Off is for the one somebody keeps configured
+     * against a box that is not always running - a laptop's llama.cpp, a model
+     * server started for an afternoon - where every sweep is a connection
+     * refused, and the only thing it produces is a warning in the log for a
+     * state nobody thinks is wrong.
+     *
+     * It stops the timer, not the button. Test Connection goes through
+     * [ModelService.testProvider] whatever this says, because a check somebody
+     * asked for is a check they want the answer to; what is turned off here is
+     * asking on their behalf. The provider goes on being used for chats and
+     * tasks either way - this decides who is *polled*, never who is called.
+     */
+    @Column(name = "check_enabled", nullable = false)
+    var checkEnabled: Boolean = true,
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 16)
     var status: ProviderStatus = ProviderStatus.NOT_CONFIGURED,

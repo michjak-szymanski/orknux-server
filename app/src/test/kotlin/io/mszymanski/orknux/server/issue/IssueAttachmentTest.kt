@@ -8,6 +8,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -62,13 +63,30 @@ class IssueAttachmentTest(
         attachments.deleteAll()
         issues.deleteAll()
         audit.deleteAll()
-        // The switch is held in a row, so a test that turned attachments off
-        // would turn them off for whatever runs next.
         settings.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
         elsewhereId = requireNotNull(workspaces.save(Workspace(name = "billing")).id)
     }
+
+    /**
+     * The switch back on, and this has to be *after* rather than only before.
+     *
+     * Attachments being on is a row in `installation_setting`, shared by every
+     * test in the run and not rolled back by anything - so the last test in this
+     * class, which turns them off on purpose, turned them off for whatever class
+     * ran next. Cleaning up on the way in protects this class from its own
+     * previous test and nothing else, which is what was here.
+     *
+     * What that cost: `TaskPictureTest` asks whether the drawing tool is offered,
+     * and it is offered only where attachments are on. With them off the model is
+     * never given the tool, asks for it anyway, is told there is no such tool, and
+     * goes round the loop to its ceiling - eight calls to the model and no
+     * drawing. It fails on the ordering alone, which is why it passed on one
+     * machine and failed in CI.
+     */
+    @AfterEach
+    fun putItBack() = settings.deleteAll()
 
     private fun file(title: String): Long =
         graphQlTester.document(

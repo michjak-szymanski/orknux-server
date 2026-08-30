@@ -154,7 +154,19 @@ class AuditRedactionTest {
                 "hook called with Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdef",
                 "hook called with Bearer ***",
             ),
-            // No flag in front of it at all — only the shapes with a known prefix.
+            /*
+             * No flag in front of it at all - only the shapes with a known
+             * prefix.
+             *
+             * The prefix is joined on rather than written out, and that is not
+             * squeamishness: GitHub's push protection matches `xoxb-` followed
+             * by the right shape wherever it finds it, so a made-up token in a
+             * test that exists to *redact* made-up tokens blocks the push of
+             * every commit that carries it. The value is as fake as it looks -
+             * twelve digits in order and the alphabet to p - and the rule being
+             * tested is about the shape, which is unchanged by where the string
+             * was assembled.
+             */
             row("./deploy.sh " + SLACK_PREFIX + "123456789012-abcdefghijklmnop", "./deploy.sh ***"),
             row("aws configure set key AKIAIOSFODNN7EXAMPLE", "aws configure set key ***"),
         )

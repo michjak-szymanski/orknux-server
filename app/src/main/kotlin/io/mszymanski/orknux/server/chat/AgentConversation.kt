@@ -101,6 +101,38 @@ interface RoundWatch {
 }
 
 /**
+ * Somebody who may have something to add between the rounds of one answer.
+ *
+ * A round is not one call. An agent with tools asks for a lookup, is told what
+ * came back, asks for another, and only then answers - and that can be minutes
+ * of wall clock in which the caller learns something the model ought to know.
+ * For a task it is the obvious case: a person watching it work says "actually,
+ * make it about hobbits", and the whole point of saying it *now* is that the
+ * next three pictures should be of hobbits.
+ *
+ * Asked once per round, after that round's tool results have been threaded in
+ * and before the model is called again, which is the only moment in the loop
+ * where a new user turn is both safe and useful: safe because a tool result has
+ * to follow its call immediately and by then they all have, and useful because
+ * the very next thing that happens is the model reading the conversation.
+ *
+ * Whatever is returned is put in front of the model as a turn from a person, in
+ * order. An empty list is the ordinary answer and costs nothing - which is why
+ * this is a callback rather than a list: the caller cannot know in advance
+ * whether anybody will say anything, and asking is a query it can make cheap.
+ *
+ * The implementer records what it hands over. This loop does not write it into
+ * any session - it cannot know whose name it is under, or what marks it as
+ * delivered - and a caller that hands out the same message twice will have it
+ * read twice.
+ */
+fun interface Interjections {
+
+    /** What has been said since the last time this was asked; empty is ordinary. */
+    fun waiting(): List<String>
+}
+
+/**
  * Asking an agent something, and letting it use its tools before it answers.
  *
  * A model with tools does not answer in one round: it asks for a lookup, is told
@@ -154,10 +186,11 @@ class AgentConversation(
         shed: ToolShed? = null,
         watch: RoundWatch? = null,
         hangup: Hangup? = null,
+        interjections: Interjections? = null,
     ): ChatCompletion {
         val agent = agents.findByIdOrNull(agentId)
             ?: return ChatCompletion.Failed("That agent no longer exists")
-        return answer(modelId, agent, turns, into, shed, watch, hangup)
+        return answer(modelId, agent, turns, into, shed, watch, hangup, interjections)
     }
 
     /**
@@ -193,6 +226,7 @@ class AgentConversation(
         shed: ToolShed? = null,
         watch: RoundWatch? = null,
         hangup: Hangup? = null,
+        interjections: Interjections? = null,
     ): ChatCompletion {
         val offered = tools.specsFor(agent) + shed?.specs().orEmpty()
         if (offered.isEmpty()) {
@@ -428,6 +462,26 @@ class AgentConversation(
                             content = got,
                             respondingTo = call.id,
                         )
+                    }
+
+                    /*
+                     * And anything a person said while those tools ran.
+                     *
+                     * Here and nowhere else in the loop. Every tool result is
+                     * threaded in by this point, which providers require to
+                     * follow their call immediately, and the next thing that
+                     * happens is the model being asked again - so a turn added
+                     * here is read at the top of the very next call rather than
+                     * at the end of a round that may be several more lookups
+                     * away. A task drawing three pictures reads a correction
+                     * before the second one.
+                     *
+                     * As a turn from a person, which is what it is, and in the
+                     * order it was said in. The caller is what writes it down
+                     * and what marks it delivered; see [Interjections].
+                     */
+                    interjections?.waiting()?.forEach { said ->
+                        conversation += ChatTurn(role = "user", content = said)
                     }
                 }
             }

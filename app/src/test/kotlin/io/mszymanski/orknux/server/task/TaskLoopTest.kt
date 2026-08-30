@@ -338,7 +338,7 @@ class TaskLoopTest(
                     // The turn the loop is on right now, being answered. This
                     // is what "while it is still working" means.
                     else -> {
-                        service.say(running.get(), MESSAGE, "alice")
+                        said(running.get())
                         saying("Reading the runs.")
                     }
                 }
@@ -371,6 +371,113 @@ class TaskLoopTest(
             .anyMatch { it.actor == "alice" && it.content == MESSAGE }
 
         assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId).single().read).isTrue()
+    }
+
+    /**
+     * The reactive half, and what the feature was reported as missing.
+     *
+     * A turn is not one model call. An agent with tools spends a turn asking for
+     * a lookup, being told what came back, asking for another - which for a task
+     * drawing three pictures is minutes - and a correction sent thirteen seconds
+     * in used to wait for the *turn* to end. On a task that does all its work
+     * inside one turn, as most do, that boundary never arrives: the agent calls
+     * task_done and the message is still sitting unread when the row goes to
+     * DONE. That is task 30 and task 31 on the developer's own installation.
+     *
+     * So it is picked up between the rounds of a turn as well as at the top of
+     * one, and this pins the difference. The stub says something to the task
+     * from inside the first model call of the turn and then asks for a tool; the
+     * assertion is that the *second call of that same turn* already carries it,
+     * and that the whole thing happened in one turn rather than two.
+     *
+     * `task_ask` with no question is the tool used, because the shed refuses it
+     * and a refusal is an ordinary tool result: the round carries on, which is
+     * exactly the shape being tested. Any non-terminal call would do.
+     */
+    @Test
+    fun `a message sent between tool calls reaches the model without waiting for the next turn`() {
+        val running = AtomicLong()
+        val taskId = taskFor(
+            serve { body ->
+                when {
+                    // The second call of this turn, if the message got through.
+                    body.contains(MESSAGE) -> finishing("Made it a table.")
+                    // The first. Said from the thread the loop is blocked on,
+                    // so there is a real turn in flight and no seam near it.
+                    else -> {
+                        said(running.get())
+                        calling("task_ask", """{}""")
+                    }
+                }
+            },
+        )
+        running.set(taskId)
+
+        assertThat(loop.advance(taskId))
+            .describedAs("one turn, start to finish")
+            .isEqualTo(TaskTurn.Over)
+
+        assertThat(received)
+            .describedAs("two calls to the model, both inside that one turn")
+            .hasSize(2)
+        assertThat(received.last())
+            .describedAs("and the second already carries what was said during the first")
+            .contains(MESSAGE)
+
+        val task = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(task.turnsSpent)
+            .describedAs("no second turn was needed, which is what was wrong before")
+            .isEqualTo(1)
+        assertThat(task.status).isEqualTo(TaskStatus.DONE)
+        assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId).single().read).isTrue()
+    }
+
+    /**
+     * The backstop, for the message that lands after the last tool has run.
+     *
+     * Between-rounds pickup covers a turn that is still calling tools; it cannot
+     * cover one where the agent has stopped calling them and the very next thing
+     * it does is finish. So finishing is checked too: task_done with something
+     * unread above it is not the end, it is another turn with the message in
+     * front of the agent. The alternative is the box on the screen quietly
+     * swallowing what somebody typed, which is the whole complaint.
+     */
+    @Test
+    fun `a task does not finish while something said to it is still unread`() {
+        val running = AtomicLong()
+        val taskId = taskFor(
+            serve { body ->
+                when {
+                    body.contains(MESSAGE) -> finishing("Made it a table.")
+                    // Finishing on the first call, with the message written
+                    // while that call is being answered - so no tool ran after
+                    // it and there was no round to pick it up between.
+                    else -> {
+                        said(running.get())
+                        finishing("Wrote it as prose.")
+                    }
+                }
+            },
+        )
+        running.set(taskId)
+
+        assertThat(loop.advance(taskId))
+            .describedAs("the task_done is not honoured, and the task carries on")
+            .isEqualTo(TaskTurn.Working)
+
+        val part = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(part.status).isEqualTo(TaskStatus.RUNNING)
+        assertThat(part.outcome)
+            .describedAs("the summary written without knowing what was wanted is not the outcome")
+            .isNull()
+        assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId).single().read)
+            .describedAs("it was read on the way past, rather than left for a turn that may not come")
+            .isTrue()
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+        val done = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(done.status).isEqualTo(TaskStatus.DONE)
+        assertThat(done.outcome).isEqualTo("Made it a table.")
     }
 
     /**
@@ -488,6 +595,26 @@ class TaskLoopTest(
      * hands it to an engine, which would run it on a thread of its own while the
      * test was still setting up.
      */
+    /**
+     * Says something to a task from inside the turn that is running.
+     *
+     * The row and nothing else, which is the whole of the delivery -
+     * [TaskService.say] writes the same row and then nudges the engine, and the
+     * nudge is what cannot be used here. These tests drive [TaskLoop] by hand,
+     * so the task is not in the engine's hands and the nudge is taken as an
+     * invitation to run it a second time, in parallel, on a worker thread: two
+     * turns against one row, an optimistic-lock failure in the log, and a
+     * message delivered by whichever got there first. Nothing about that is
+     * production - a real task is in hand for its whole life and the nudge finds
+     * it there - and it made this file fail about one time in several.
+     *
+     * What is being pinned is what the loop does with a row that appeared while
+     * it was mid-turn, and that is exactly what this leaves it.
+     */
+    private fun said(taskId: Long, body: String = MESSAGE, by: String = "alice") {
+        messages.save(TaskMessage(taskId = taskId, saidBy = by, body = body))
+    }
+
     private fun taskFor(endpoint: String, turns: Int = 10): Long {
         val modelId = model(endpoint)
         val agentId = agent("Worker", modelId)

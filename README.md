@@ -368,7 +368,44 @@ away, and a real key has no business in a build file.
 The GraphQL schema is `app/src/main/resources/graphql/schema.graphqls`;
 controllers are `@Controller` classes with `@QueryMapping` / `@MutationMapping`.
 
+### Rate limits
+
+Two counters, both in memory, both forgotten on a restart, and neither of them locks anybody out: a success clears the record and so does going quiet. The defaults are right for almost every installation, which is why they are here rather than in the image description.
+
+| Variable | What it does | Default |
+| --- | --- | --- |
+| `ORKNUX_SIGN_IN_PER_USERNAME` | Tries against one username that cost nothing; the next one waits. | `5` |
+| `ORKNUX_SIGN_IN_PER_ADDRESS` | Tries from one address that cost nothing. Higher, since an office behind one router is one address. | `20` |
+| `ORKNUX_SIGN_IN_FIRST_WAIT` | The pause on the first failure past the allowance. | `2s` |
+| `ORKNUX_SIGN_IN_LONGEST_WAIT` | Where the doubling stops. | `5m` |
+| `ORKNUX_SIGN_IN_FORGET_AFTER` | How long a quiet username or address is remembered for. | `15m` |
+| `ORKNUX_PASSWORD_RESET_EXPIRY` | How long a mailed link works for. | `1h` |
+| `ORKNUX_PASSWORD_RESET_PER_EMAIL` | Requests about one address that cost nothing; the next one waits. | `3` |
+| `ORKNUX_PASSWORD_RESET_PER_ADDRESS` | Requests from one caller that cost nothing. Higher, for the same reason. | `20` |
+| `ORKNUX_PASSWORD_RESET_FIRST_WAIT` | The pause on the first request past the allowance; it doubles after that. | `2s` |
+| `ORKNUX_PASSWORD_RESET_LONGEST_WAIT` | Where that doubling stops. | `5m` |
+| `ORKNUX_PASSWORD_RESET_FORGET_AFTER` | How long a quiet address is remembered for. Counted separately from sign-in. | `15m` |
+
+`ORKNUX_REVISION_RETENTION_DAYS` (14), `ORKNUX_REVISION_SWEEP_ENABLED` (true) and `ORKNUX_REVISION_SWEEP_INTERVAL` (6h) govern how much of a component's history is kept. All three are on **Admin -> Settings** as well, and once set there that is what holds.
+
 ### Access
+
+**`ORKNUX_OIDC_AUDIENCES` is the setting that locks scripts out.** A bearer token
+has to name this installation in its `aud` claim, and empty means the client id —
+which is not what two common providers write. **Keycloak** names `account` unless
+an audience mapper is configured against this client; **Entra** names the
+application's **App ID URI**, `api://…`. A token naming neither is a 401 on every
+API call, with `The aud claim is not valid` in the log, while browser sign-in
+carries on working — which is what makes it look like the API is broken rather
+than the token. Either configure the provider to name this client, or set the
+variable to what its tokens carry; one entry matching is enough. Checked since
+0.5.0, so an installation from 0.4 meets it on upgrade.
+
+Which of the provider's names grants which of this installation's roles is
+`orknux.security.role-mapping`, **YAML only** because the keys are group DNs and
+claim values, full of dots and commas. Empty works: a role with no mapping is
+granted to whoever holds an authority derived from its own name.
+
 
 A **role** is this installation's own word for an audience, and it is the only
 vocabulary anything past the front door deals in. A role has a scope: `ADMIN`

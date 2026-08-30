@@ -3665,6 +3665,13 @@ type ModelProvider {
     tenantId: String
     clientId: String
     scope: String
+    """
+    Whether the timed sweep is allowed to call this provider. False is a
+    provider nobody wants polled — a model server that is only sometimes
+    running — and it is why the status beside it may stay `NOT_CHECKED`.
+    Test Connection, and every chat and task the provider serves, ignore it.
+    """
+    checkEnabled: Boolean!
     status: ProviderStatus!
     "What the last check found, and when it ran."
     lastCheckMessage: String
@@ -3804,6 +3811,8 @@ input CreateModelProviderInput {
     tenantId: String
     clientId: String
     scope: String
+    "Whether the timed sweep may call it. Null is true: a new provider is checked."
+    checkEnabled: Boolean
 }
 
 input UpdateModelProviderInput {
@@ -3830,6 +3839,8 @@ input UpdateModelProviderInput {
     tenantId: String
     clientId: String
     scope: String
+    "Whether the timed sweep may call it. Null leaves it as it is."
+    checkEnabled: Boolean
 }
 
 

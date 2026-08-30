@@ -182,7 +182,17 @@ class ModelProviderProbe(
                 else -> Listing.Failed("The provider answered $status" + said(response.body()))
             }
         } catch (failure: Exception) {
-            log.warn("Asking {} for its models failed", url, failure)
+            /*
+             * The sentence, not the stack. A provider that cannot be reached is
+             * an ordinary answer to an ordinary question - the box is off, the
+             * address moved - and it is recorded on the provider's own row
+             * where somebody will read it. Printed with sixty frames of okhttp
+             * and Spring proxies it is a page of log per provider per sweep,
+             * which is how a log stops being read at all. The stack is still
+             * there at DEBUG for the failure that is not ordinary.
+             */
+            log.warn("Asking {} for its models failed: {}", url, failure.toString())
+            log.debug("Asking {} for its models failed", url, failure)
             Listing.Failed(failure.message ?: "The provider could not be reached")
         }
     }
@@ -220,7 +230,11 @@ class ModelProviderProbe(
                 else -> Listing.Failed("The provider answered ${refused.statusCode()}", refused = false)
             }
         } catch (failure: Exception) {
-            log.warn("Asking {} for its models through the SDK failed", base, failure)
+            // As above, and doubly so here: this road is tried first and the
+            // hand-built one after it, so an unreachable provider produced two
+            // of these stacks for one press of one button.
+            log.warn("Asking {} for its models through the SDK failed: {}", base, failure.toString())
+            log.debug("Asking {} for its models through the SDK failed", base, failure)
             Listing.Failed(failure.message ?: "The provider could not be reached", refused = false)
         }
     }

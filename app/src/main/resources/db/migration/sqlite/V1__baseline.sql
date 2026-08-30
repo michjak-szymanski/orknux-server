@@ -489,6 +489,9 @@ CREATE TABLE model_provider
     tenant_id                    varchar(120),
     client_id                    varchar(120),
     scope                        varchar(300),
+    -- V225: whether the sweep is allowed to ask this one anything. The timer
+    -- only; Test Connection and every call made through the provider ignore it.
+    check_enabled                boolean not null default true,
     status                       varchar(16) not null default 'NOT_CONFIGURED',
     last_check_message           varchar(500),
     last_checked_at              timestamp,

@@ -109,6 +109,7 @@ class ModelService(
             tenantId = input.tenantId?.trim()?.ifEmpty { null },
             clientId = input.clientId?.trim()?.ifEmpty { null },
             scope = input.scope?.trim()?.ifEmpty { null },
+            checkEnabled = input.checkEnabled ?: true,
         )
         provider.forgetCheck()
         val saved = providers.save(provider)
@@ -169,6 +170,10 @@ class ModelService(
         provider.tenantId = input.tenantId?.trim()?.ifEmpty { null }
         provider.clientId = input.clientId?.trim()?.ifEmpty { null }
         provider.scope = input.scope?.trim()?.ifEmpty { null }
+        // Null leaves it alone, unlike the fields above: those are the form's
+        // own and it sends all of them, while a caller written before this
+        // column existed would otherwise turn checking back on every save.
+        input.checkEnabled?.let { provider.checkEnabled = it }
 
         provider.forgetCheck()
         events.publishEvent(ModelProviderSaved(id))
@@ -526,6 +531,11 @@ data class CreateProviderInput(
     val tenantId: String? = null,
     val clientId: String? = null,
     val scope: String? = null,
+    /**
+     * Whether the sweep may call this provider. Null on create is on, which is
+     * what a provider somebody has just configured wants.
+     */
+    val checkEnabled: Boolean? = null,
 )
 
 data class UpdateProviderInput(
@@ -549,6 +559,8 @@ data class UpdateProviderInput(
     val tenantId: String? = null,
     val clientId: String? = null,
     val scope: String? = null,
+    /** Null leaves it as it is, so a caller that does not know about it cannot turn it off. */
+    val checkEnabled: Boolean? = null,
 )
 
 data class CreateModelInput(
@@ -604,6 +616,12 @@ data class ModelProviderView(
     val tenantId: String?,
     val clientId: String?,
     val scope: String?,
+    /**
+     * Whether the sweep calls this provider. Off is a provider nobody wants
+     * polled - a model server that is only sometimes running - and it is why
+     * the status beside it may be "Not checked" indefinitely.
+     */
+    val checkEnabled: Boolean,
     val status: ProviderStatus,
     val lastCheckMessage: String?,
     /** ISO-8601, as `WorkspaceConnectionView` reports its own. */
@@ -639,6 +657,7 @@ data class ModelProviderView(
         tenantId = provider.tenantId,
         clientId = provider.clientId,
         scope = provider.scope,
+        checkEnabled = provider.checkEnabled,
         status = provider.status,
         lastCheckMessage = provider.lastCheckMessage,
         lastCheckedAt = provider.lastCheckedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),

@@ -89,7 +89,26 @@ have failed.
   own tasks, five minutes by default; one running Temporal takes it from
   `ORKNUX_TASK_SWEEP_MINUTES` and is shown no field.
 
+- 🔕 **A provider can be told not to be checked on a timer.** The sweep asks
+  every configured provider every few minutes so that "Connected" means today,
+  which is right for a provider an installation pays for and wrong for the one
+  somebody keeps configured against a box that is only sometimes running — a
+  laptop's model server, an endpoint started for an afternoon. There it produced
+  a failed row and a page of connection-refused in the log every five minutes
+  about a state nobody thought was wrong. **Automatic checks** on the provider's
+  own page turns that off; every provider that exists today has it on. It stops
+  the timer and nothing else — Test Connection still runs, and so does every
+  chat and task the provider serves.
+
 ### 🔧 Changed
+
+- 🪵 **A provider that cannot be reached is one line in the log rather than a
+  page of it.** The stack trace behind a connection refused was printed at WARN
+  every time, twice per attempt since the listing tries the SDK and then a
+  hand-built request — sixty frames of okhttp and Spring proxies for the
+  ordinary answer that a box is switched off. The sentence is kept at WARN and
+  the stack moves to DEBUG; what the check found is still written on the
+  provider's own row, which is where somebody reads it.
 
 - ⚠️ **A new chat or task can no longer be started on a bare model.** Both
   used to offer a choice between an agent and a model, and it was never a choice:

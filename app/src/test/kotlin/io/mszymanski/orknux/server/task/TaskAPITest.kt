@@ -206,17 +206,40 @@ class TaskAPITest(
             .anyMatch { it.contains("Needs a shell") && it.contains("given a message") }
     }
 
+    /**
+     * An empty message is refused whatever state the task is in, and a task that
+     * has ended is set going again rather than refused.
+     *
+     * The second half used to be the opposite. There was no next turn to read a
+     * message on, so writing the row would have been a promise nothing could
+     * keep; #312 gave it one - the same task, on the same session, working again
+     * - so the refusal went with the reason for it. The empty message did not
+     * change: it is a mistyped Enter either way, and accepting it on a task that
+     * has ended would reopen the work to say nothing.
+     */
     @Test
-    fun `an empty message is refused, and so is one to a task that has ended`() {
+    fun `an empty message is refused, and one to a task that has ended sets it going again`() {
         val taskId = parked("Needs a shell")
 
         graphQlTester.document("""mutation { sendTaskMessage(id: $taskId, said: "   ") { id } }""")
             .execute().errors().expect { it.message?.contains("needs something in it") == true }.verify()
 
-        graphQlTester.document("""mutation { stopTask(id: $taskId) { id } }""").execute()
+        graphQlTester.document("""mutation { stopTask(id: $taskId) { status } }""")
+            .execute().path("stopTask.status").entity(TaskStatus::class.java).isEqualTo(TaskStatus.STOPPED)
 
-        graphQlTester.document("""mutation { sendTaskMessage(id: $taskId, said: "One more thing.") { id } }""")
-            .execute().errors().expect { it.message?.contains("has ended") == true }.verify()
+        graphQlTester.document("""mutation { sendTaskMessage(id: $taskId, said: "   ") { id } }""")
+            .execute().errors().expect { it.message?.contains("needs something in it") == true }.verify()
+
+        graphQlTester.document(
+            """mutation { sendTaskMessage(id: $taskId, said: "One more thing.") {
+                 status turnsSpent outcome messages { body readAt }
+               } }""",
+        ).execute()
+            .path("sendTaskMessage.status").entity(TaskStatus::class.java).isEqualTo(TaskStatus.RUNNING)
+            .path("sendTaskMessage.turnsSpent").entity(Int::class.java).isEqualTo(0)
+            .path("sendTaskMessage.outcome").valueIsNull()
+            .path("sendTaskMessage.messages[0].body").entity(String::class.java).isEqualTo("One more thing.")
+            .path("sendTaskMessage.messages[0].readAt").valueIsNull()
     }
 
     /** A running task is stopped deliberately, not as a side effect of tidying up. */

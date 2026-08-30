@@ -374,6 +374,105 @@ class TaskLoopTest(
     }
 
     /**
+     * #312: a finished task, told to carry on.
+     *
+     * "Make the third stanza shorter" is not a new piece of work, it is this one
+     * continued - and the only thing that knows how is the agent that did it.
+     * Starting a fresh task loses all of that: a new session, an empty
+     * conversation, and the whole job to be explained again by somebody who has
+     * just watched it be done. So the message reopens this task instead.
+     *
+     * Same id and, crucially, the same session: what is asserted below is that
+     * the model is sent the *original prompt* on the turn after the reopening,
+     * which it can only be if the conversation was rebuilt from the session the
+     * first run wrote. A build that started something new would send the
+     * follow-up alone.
+     *
+     * The budget starts again because the developer asked for it that way, and
+     * it is the only answer that works for both shapes: a task that finished at
+     * 3 of 40 has room and does not need the arithmetic, while one that finished
+     * *because* it ran out would refuse the follow-up on the turn it was handed.
+     */
+    @Test
+    fun `a finished task is set going again by what is said to it, on the session it already had`() {
+        val taskId = taskFor(
+            serve { body ->
+                if (body.contains(MESSAGE)) finishing("Made it a table.") else finishing("Wrote it as prose.")
+            },
+            turns = 2,
+        )
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+        val finished = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(finished.status).isEqualTo(TaskStatus.DONE)
+        assertThat(finished.outcome).isEqualTo("Wrote it as prose.")
+        val session = finished.sessionId
+
+        service.say(taskId, MESSAGE, "alice")
+
+        val going = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(going.status)
+            .describedAs("the task is working again rather than a second task existing")
+            .isEqualTo(TaskStatus.RUNNING)
+        assertThat(going.sessionId)
+            .describedAs("and on the log it already had, which is where everything it knows is")
+            .isEqualTo(session)
+        assertThat(going.outcome)
+            .describedAs("the summary went with the ending it described")
+            .isNull()
+        assertThat(going.finishedAt).isNull()
+        assertThat(going.turnsSpent)
+            .describedAs("the budget starts again")
+            .isZero()
+        assertThat(going.workedSeconds).isZero()
+        assertThat(going.turnsAllowed)
+            .describedAs("with the allowance a task started now would get, not the one it exhausted")
+            .isGreaterThan(0)
+
+        received.clear()
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+
+        val asked = requireNotNull(received.lastOrNull())
+        assertThat(asked)
+            .describedAs("the follow-up reached the model")
+            .contains(MESSAGE)
+        assertThat(asked)
+            .describedAs("and so did the original prompt, which only the old session holds")
+            .contains(PROMPT)
+
+        val done = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(done.status).isEqualTo(TaskStatus.DONE)
+        assertThat(done.outcome).isEqualTo("Made it a table.")
+    }
+
+    /**
+     * And a task that ran out of turns can still be asked for more.
+     *
+     * The case a top-up would have had to reason about and a reset does not: the
+     * counts are back to nothing, so the turn the follow-up is read on is one
+     * the task has.
+     */
+    @Test
+    fun `a task that ran out of turns takes more once it is asked to carry on`() {
+        val taskId = taskFor(serve { body ->
+            if (body.contains(MESSAGE)) finishing("Made it a table.") else saying("Still going.")
+        }, turns = 1)
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+        val spent = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(spent.status).isEqualTo(TaskStatus.FAILED)
+        assertThat(spent.endedBecause).contains("out of turns")
+
+        service.say(taskId, MESSAGE, "alice")
+
+        assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
+        val done = requireNotNull(tasks.findByIdOrNull(taskId))
+        assertThat(done.status).isEqualTo(TaskStatus.DONE)
+        assertThat(done.outcome).isEqualTo("Made it a table.")
+    }
+
+    /**
      * The reactive half, and what the feature was reported as missing.
      *
      * A turn is not one model call. An agent with tools spends a turn asking for
@@ -506,20 +605,27 @@ class TaskLoopTest(
     }
 
     /**
-     * A task that has ended is not a task anybody can still talk to.
+     * What is still refused, now that a finished task is not.
      *
-     * Said rather than accepted quietly: there is no next turn to read it on, so
-     * a row written here would sit unread for the life of the installation while
-     * whoever typed it believed the agent had been told.
+     * This used to refuse a message to a task that was over: there was no next
+     * turn to read it on, so the row would have sat unread for the life of the
+     * installation. #312 gave it a next turn - the task is set going again -
+     * and the refusal went with the reason for it. What has not changed is the
+     * empty message, which is a mistyped Enter whatever state the task is in and
+     * would otherwise reopen a finished task to tell it nothing.
      */
     @Test
-    fun `a message to a task that is over is refused`() {
+    fun `an empty message is refused, on a task that is over as much as on one that is not`() {
         val taskId = taskFor(serve { finishing("Done.") })
         loop.advance(taskId)
+        assertThat(requireNotNull(tasks.findByIdOrNull(taskId)).status).isEqualTo(TaskStatus.DONE)
 
-        assertThatThrownBy { service.say(taskId, "One more thing.", "alice") }
-            .isInstanceOf(TaskNotRunnableException::class.java)
+        assertThatThrownBy { service.say(taskId, "   ", "alice") }
+            .isInstanceOf(TaskMessageMissingException::class.java)
         assertThat(messages.findByTaskIdOrderBySentAtAscIdAsc(taskId)).isEmpty()
+        assertThat(requireNotNull(tasks.findByIdOrNull(taskId)).status)
+            .describedAs("and nothing was set going on the strength of it")
+            .isEqualTo(TaskStatus.DONE)
     }
 
     /**

@@ -70,6 +70,15 @@ and Temporal. Several are wrong in a deployment, and those say so.
 | --- | --- | --- | --- |
 | `ORKNUX_SECRET_KEY` | Encrypts every credential this server is trusted with - provider keys, Slack tokens, MCP secrets - so the database alone is not enough to use them. 32 bytes, base64. | *none* | **Yes** |
 
+A key that is set and **cannot work** - not valid base64, or the wrong number of
+bytes - stops the boot, loudly, at the moment it is set. It used to be found out
+by whichever request first needed a credential, which was a 500 on somebody's
+unrelated screen hours after the deployment, while the installation answered and
+served pages and every credential it held was quietly unusable. A key that is
+*missing* still boots: that is a first run with nothing encrypted yet, and
+refusing would hide the screen that explains what to set. The Doctor screen
+reports it.
+
 There is deliberately **no default**: a key committed to an image is a key every
 installation shares, which is the same as no key at all. Generate one with
 `openssl rand -base64 32` and keep it somewhere other than the database it
@@ -245,6 +254,7 @@ The README's **Publishing** section is the rest.
 | `ORKNUX_TASK_MAX_TURNS` | How often a task's agent may be asked before it is stopped, unless the workspace sets its own. Copied onto a task at creation, as is the next, so a change spares one running. | `40` | No |
 | `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting to be approved counts for none. | `2h` | No |
 | `ORKNUX_TASK_PATIENCE` | How long a parked task waits for a person. | `7d` | No |
+| `ORKNUX_TASK_SWEEP_MINUTES` | How long a task may sit at Queued before it is handed over again, so a hand-over lost to a restart does not leave a task nothing will look at. An installation carrying its own tasks sets this on Admin -> Settings instead and is shown a field; one running Temporal takes it from here and is shown none. | `5` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
 | `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
 | `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |

@@ -821,7 +821,30 @@ The page is the point. A task's log is a `llm_session` like any other and it is
 model is thinking appears while it is thinking it, tool calls open as they are
 made and close with what came back, and the block being written is the one that is
 open. A reader who arrives halfway through is told the rest of the line that was
-already in flight.
+already in flight. A stream can stop without saying so, which from the reader's
+side is indistinguishable from a model thinking for four minutes, so the page also
+offers an interval to re-read at — off by default, and the same setting the run
+and audit screens share.
+
+**A task can be told something while it works, and after it stops.** The row is
+written by `TaskService.say` and read by the loop; nothing is signalled, which is
+what makes it work identically on the inline engine and on Temporal and what lets
+a message sent a second before a process dies still reach whichever process picks
+the task up. It is read between the rounds of a turn rather than only at the top
+of one — an agent drawing three pictures spends minutes inside a single turn, and
+a task that does all its work in one turn has no next top to be read at — and
+`task_done` is not honoured while something is unread, so a message sent before
+the task ends is always read before it ends.
+
+Saying something to a task that has already ended **sets it going again**, on the
+same id and the same session: the loop rebuilds the conversation out of
+`llm_session_event` every turn, so the agent carries on with everything it knew
+and a follow-up is this piece of work continued rather than a new one explained
+from nothing. The turn and time allowances are taken again from the settings as
+they stand and the counts start from zero, which is the only answer that serves
+both a task that finished with room to spare and one that finished because it ran
+out. The outcome is cleared and the next `task_done` writes the next one; what it
+said is still in the log.
 
 **Start by AI** on an issue is the same machinery with the prompt composed for
 you: the issue's number, title and kind, its labels unread, its description whole,
@@ -999,6 +1022,18 @@ not are skipped rather than reported as failing, because not configured is not
 broken. A failure to reach one provider cannot end the sweep. Set
 `orknux.model.check.enabled=false` to check only on the button — which is what a
 test run does.
+
+One provider can opt out of the timer on its own: **Automatic checks** on its
+page sets `check_enabled`, and the sweep skips it. That is for the endpoint an
+installation keeps against a box that is only sometimes running — a laptop's
+model server, one started for an afternoon — where being off is the normal state
+and the sweep produced a failed row and a page of connection-refused every five
+minutes for something nobody thought was wrong. It stops the timer alone:
+`testProvider` is the button's road and is not touched, the save's own check goes
+through the same guard so a provider saved with it off is not called once on the
+way past, and every chat and task the provider serves is unaffected. An update
+that says nothing about the field leaves it alone, so a caller written before the
+column existed cannot turn it back on at the next unrelated edit.
 
 The check's answer is also the catalogue: `discoveredModels(providerId)` runs the
 same request and returns the ids the provider listed, flagging the ones already

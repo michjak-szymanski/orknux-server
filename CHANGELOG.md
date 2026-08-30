@@ -100,6 +100,14 @@ have failed.
   the timer and nothing else — Test Connection still runs, and so does every
   chat and task the provider serves.
 
+- ⏱ **A task page can be told to catch up on a timer.** The page follows a task
+  on a stream, so nothing here waits on a refresh — but a stream can stop
+  without saying so, and from the reader's side that looks exactly like a model
+  thinking for four minutes. The same interval control the Executions and Audit
+  screens carry is now beside the word that says whether the stream is up, Off
+  by default and sharing the one setting those screens share. A task that has
+  finished is not offered it, having nothing left to change.
+
 ### 🔧 Changed
 
 - 🪵 **A provider that cannot be reached is one line in the log rather than a

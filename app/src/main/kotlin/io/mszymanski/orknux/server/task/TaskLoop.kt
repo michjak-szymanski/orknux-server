@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
+import io.mszymanski.orknux.server.chat.Interjections
 import io.mszymanski.orknux.server.chat.RoundWatch
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
@@ -99,12 +100,48 @@ class TaskLoop(
         } catch (parked: TaskParked) {
             park(task, parked)
         } catch (finished: TaskFinished) {
-            end(task, TaskStatus.DONE, "finished", finished.summary)
+            /*
+             * Not finished if somebody said something first.
+             *
+             * A message is read at the top of a turn, and for a task that does
+             * its work inside one turn there is never a second top to read it
+             * at: the agent calls its tools to a conclusion, calls task_done,
+             * and a correction sent thirteen seconds in is still sitting
+             * unread when the row goes to DONE. That is the shape most tasks
+             * have, so the box was taking words nothing would ever look at.
+             *
+             * So finishing is where the last check happens. What was said is
+             * put in front of the agent and it is given the turn it would
+             * otherwise not have had, which is the promise the screen makes -
+             * a message sent before the task ends is read before it ends. The
+             * summary it just wrote is dropped, deliberately: it describes work
+             * done without knowing what was wanted, and the agent writes
+             * another when it calls task_done again. Nothing loops, because
+             * what was delivered is marked delivered.
+             */
+            reconsider(task) ?: end(task, TaskStatus.DONE, "finished", finished.summary)
         } catch (unrunnable: TaskNotRunnableException) {
             // The agent was deleted, switched off, or its model is gone. Not
             // something another turn will fix, and not a failure of the model.
             end(task, TaskStatus.FAILED, unrunnable.message ?: "it could not be run", said = null)
         }
+    }
+
+    /**
+     * Another turn, where the agent tried to finish with something unread.
+     *
+     * Null when there was nothing waiting, which is the ordinary case and means
+     * the caller should let the task end.
+     */
+    private fun reconsider(task: Task): TaskTurn? {
+        val taskId = requireNotNull(task.id)
+        val session = task.sessionId ?: return null
+        if (messages.findByTaskIdAndDeliveredAtIsNullOrderBySentAtAscIdAsc(taskId).isEmpty()) return null
+
+        deliver(taskId, session)
+        sessions.userSaid(session, TASK, RECONSIDER)
+        log.debug("Task {} was told something before it could finish, so it takes another turn", taskId)
+        return TaskTurn.Working
     }
 
     /** One round of the agent's own conversation, and what its answer meant. */
@@ -140,7 +177,15 @@ class TaskLoop(
 
         val begun = System.nanoTime()
         val answer = try {
-            conversation.answer(working.modelId, agent, turns, session, tools.shed(task), watching)
+            conversation.answer(
+                working.modelId,
+                agent,
+                turns,
+                session,
+                tools.shed(task),
+                watching,
+                interjections = { pickUp(taskId, session) },
+            )
         } finally {
             // Before the turn is counted, and whatever the turn did. A line
             // left open is one a page reads as still being thought, and on a
@@ -204,8 +249,30 @@ class TaskLoop(
      * other order loses it silently, which nobody can.
      */
     private fun deliver(taskId: Long, session: Long) {
+        pickUp(taskId, session)
+    }
+
+    /**
+     * Everything waiting, written down, marked delivered, and handed back.
+     *
+     * Handed back because this is also what [Interjections] is answered with:
+     * the same rows, the same writes, read from two places in one turn. The top
+     * of a turn is one of them, and between the rounds of that turn is the
+     * other - and the second is what makes this feature what it says it is.
+     *
+     * A turn is not one call. An agent drawing three pictures spends minutes
+     * inside a single turn, and a correction sent thirteen seconds in used to
+     * wait for a turn boundary that, on a task finishing inside its first turn,
+     * never arrived at all. Asked between rounds it reaches the model before
+     * the second picture.
+     *
+     * Written down first and marked delivered second, on both roads. A process
+     * that dies between the two says the same thing twice, which the agent can
+     * read; the other order loses it silently, which nobody can.
+     */
+    private fun pickUp(taskId: Long, session: Long): List<String> {
         val waiting = messages.findByTaskIdAndDeliveredAtIsNullOrderBySentAtAscIdAsc(taskId)
-        if (waiting.isEmpty()) return
+        if (waiting.isEmpty()) return emptyList()
 
         val now = OffsetDateTime.now()
         waiting.forEach { message ->
@@ -216,6 +283,7 @@ class TaskLoop(
             messages.save(message)
         }
         log.debug("Task {} was told {} thing(s) while it worked", taskId, waiting.size)
+        return waiting.map { it.body }
     }
 
     /**
@@ -349,6 +417,18 @@ class TaskLoop(
         const val TASK = "task"
 
         const val CARRY_ON = "Carry on with the task. Call task_done when it is finished."
+
+        /**
+         * Said after a task_done that arrived with something unread above it.
+         *
+         * It names what happened, because the alternative is an agent that
+         * announced it had finished and is then asked to carry on with no
+         * explanation - which reads, to the model, as its own summary having
+         * been ignored.
+         */
+        const val RECONSIDER = "You called task_done, but the message above arrived while you were working " +
+            "and is the newest word on what is wanted. Take it into account, say what you are doing " +
+            "differently, and call task_done again when that is finished."
 
         /** How many close polls a freshly parked task gets before they lengthen. */
         const val CLOSE_POLLS = 10L

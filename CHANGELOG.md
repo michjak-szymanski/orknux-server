@@ -54,10 +54,14 @@ have failed.
   its signature scheme is a new version of that file, not a release.
 
 - 💬 **A working task can be told something.** A box on its page takes a message
-  while the agent is mid-turn; the agent reads it at the top of its next turn as
-  the newest word on what is wanted, and carries on from there — so a report can
-  become a table without the task being stopped and started again with a better
-  prompt. Until it has been read the page says so, because a turn is minutes.
+  while the agent is mid-turn, and the agent picks it up **between the tools it
+  is running** — so a correction reaches it within seconds rather than at the end
+  of a turn, and a report can become a table without the task being stopped and
+  started again with a better prompt. A task cannot finish while something said
+  to it is still unread: `task_done` with a message above it earns another turn
+  instead of ending. Until it has been read the page says so, and a message that
+  was never read — on a task that failed or was stopped — stays on the page
+  saying that, rather than disappearing with the box.
 
 - 💼 **Microsoft Teams, as a plugin** — `plugins/teams/teams.js`, loaded on the
   Plugins screen. A message in Teams starts a workflow by way of a Teams outgoing

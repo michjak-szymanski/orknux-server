@@ -23,7 +23,24 @@ package io.mszymanski.orknux.workflow.execution
  * Temporal one walks it across activities, and a run that took different paths
  * depending on which engine carried it would be the worst kind of difference.
  */
-class BranchGate(edges: List<GraphEdge>) {
+class BranchGate(
+    edges: List<GraphEdge>,
+    /**
+     * The nodes that are not beginnings of *this* run, though the graph would
+     * otherwise make them one.
+     *
+     * A workflow may be drawn with two triggers, and only one of them fires.
+     * Both have nothing pointing at them, so without this both are beginnings
+     * and both branches run — which is one message sent by the trigger that did
+     * not fire, and an agent charged for an answer nobody asked for.
+     *
+     * Named for what it does rather than for triggers, because the question is
+     * general: which nodes does this run start from. A run that begins partway
+     * down and, one day, a graph that says what runs beside what are the same
+     * question asked again, and neither should have to undo this.
+     */
+    private val blocked: Set<String> = emptySet(),
+) {
 
     private val incoming: Map<String, List<GraphEdge>> = edges.groupBy { it.target }
     private val outgoing: Map<String, List<GraphEdge>> = edges.groupBy { it.source }
@@ -31,11 +48,30 @@ class BranchGate(edges: List<GraphEdge>) {
     /** The edges whose answer has been given, and which therefore lead somewhere. */
     private val taken = mutableSetOf<GraphEdge>()
 
-    /** A node nothing points at is a beginning, and beginnings always run. */
+    /**
+     * A node nothing points at is a beginning, and beginnings always run —
+     * unless this run was told it does not begin here.
+     *
+     * Nothing else is needed to close the branch behind it. A node the gate
+     * refuses never gets to [follow], so no edge out of it is taken, and
+     * everything it led to is refused in turn when the order reaches it.
+     */
     fun mayRun(nodeKey: String): Boolean {
+        if (nodeKey in blocked) return false
         val into = incoming[nodeKey] ?: return true
         return into.isEmpty() || into.any { it in taken }
     }
+
+    /**
+     * Why a node the gate refused is not running, in the words the run's log
+     * uses.
+     *
+     * Here rather than in either engine because there are two of them walking
+     * the plan, and a run that explained itself differently depending on which
+     * one carried it is the kind of difference nobody can act on.
+     */
+    fun refusal(nodeKey: String): String =
+        if (nodeKey in blocked) "it is not the trigger that fired" else "the condition before it went the other way"
 
     /**
      * What a node's own outcome opens up.

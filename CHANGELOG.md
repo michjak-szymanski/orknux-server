@@ -15,6 +15,22 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.6
+
+### 🔧 Changed
+
+- ⚠️ **A workflow with two triggers now runs only the branch belonging to the
+  trigger that fired.** It used to run both. A trigger node has nothing pointing
+  at it, so every one of them counted as a beginning: one message arrived, both
+  branches went, both agents were charged, and the send that succeeded belonged
+  to the trigger that had not fired — with no way to tell which message would be
+  the one that went out. **Republish the workflow to get the new behaviour**: a
+  published copy is what an event runs and is never rewritten, so one published
+  before this release goes on running both branches until it is published again.
+  Runs nobody triggered — a person pressing Run, an API asking for the workflow
+  itself — still begin at every trigger, since nothing says which half to prefer.
+  Repeating a run repeats the half the original ran.
+
 ## 0.9.5
 
 ### ✨ Added

@@ -37,5 +37,12 @@ interface ExecutionEngine {
          * the run so it can point back at it. See [StartExecutionInput].
          */
         startedFrom: Long? = null,
+        /**
+         * Which trigger definition fired, where one did. Null for a run nobody
+         * was triggered into — a person pressing Run, an API asking directly —
+         * and for a re-run, which repeats a graph rather than an event. See
+         * [StartExecutionInput].
+         */
+        firedTriggerId: Long? = null,
     ): WorkflowExecution
 }

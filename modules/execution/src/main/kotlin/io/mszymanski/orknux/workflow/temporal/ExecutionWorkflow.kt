@@ -59,6 +59,16 @@ data class RunPlan @JsonCreator constructor(
      * and reading the earlier run again mid-flight could answer differently.
      */
     @JsonProperty("carried") val carried: List<PlanExit> = emptyList(),
+    /**
+     * The nodes this run does not begin at, though nothing points at them:
+     * every trigger node but the one that fired.
+     *
+     * Defaulted, and deliberately so. A run already in flight when this field
+     * was added replays from a history written without it, and an absent list
+     * has to read as the run it has been all along — every trigger a beginning
+     * — rather than as a plan that cannot be understood.
+     */
+    @JsonProperty("blocked") val blocked: List<String> = emptyList(),
 )
 
 /** One step an earlier run took, and which way out of it that run went. */
@@ -148,7 +158,7 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
          * does - a run that took different paths depending on which engine
          * carried it would be the worst kind of difference.
          */
-        val gate = BranchGate(plan.edges.map { GraphEdge(it.source, it.target, it.branch) })
+        val gate = BranchGate(plan.edges.map { GraphEdge(it.source, it.target, it.branch) }, plan.blocked.toSet())
 
         // A run that begins partway down starts with the exits an earlier run
         // took already open, or the first step it walks would have nothing
@@ -159,9 +169,7 @@ class ExecutionWorkflowImpl : ExecutionWorkflow {
             val unreached = plan.steps.size - index - 1
 
             if (!gate.mayRun(nodeKey)) {
-                activities.skipStep(
-                    SkipStepCommand(plan.executionId, nodeKey, "the condition before it went the other way"),
-                )
+                activities.skipStep(SkipStepCommand(plan.executionId, nodeKey, gate.refusal(nodeKey)))
                 continue
             }
 

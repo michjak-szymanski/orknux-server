@@ -37,8 +37,11 @@ class TemporalExecutionEngine(
         version: GraphVersion?,
         resumeFrom: ResumePoint?,
         startedFrom: Long?,
+        firedTriggerId: Long?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom, startedFrom)
+        val plan = planner.plan(
+            workspaceId, workflowId, trigger, input, version, resumeFrom, startedFrom, firedTriggerId,
+        )
         val executionId = requireNotNull(plan.execution.id)
 
         val workflow = client.newWorkflowStub(
@@ -60,6 +63,7 @@ class TemporalExecutionEngine(
             input = input,
             edges = plan.edges.map { PlanEdge(it.source, it.target, it.branch) },
             carried = plan.carried.map { PlanExit(it.nodeKey, it.branch) },
+            blocked = plan.blocked.toList(),
         ))
 
         return plan.execution

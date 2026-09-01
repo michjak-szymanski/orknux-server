@@ -84,6 +84,7 @@ class ExecutionService(
                 version = input.version,
                 resumeFrom = input.resumeFrom,
                 startedFrom = input.startedFrom,
+                firedTriggerId = input.firedTriggerId,
             ),
         )
 
@@ -133,6 +134,17 @@ data class StartExecutionInput(
      * resume point still records the link.
      */
     val startedFrom: Long? = null,
+    /**
+     * Which trigger definition fired, where one did.
+     *
+     * A workflow may be drawn with two triggers, and the run belongs to one of
+     * them: without this the engine cannot tell which half of the graph it is,
+     * so it runs both. Null where nothing fired — a person pressed Run, an API
+     * asked for the workflow itself, or a run is being repeated, which repeats
+     * a graph rather than an event — and a run with none behaves as every run
+     * did before triggers were told apart: every trigger node is a beginning.
+     */
+    val firedTriggerId: Long? = null,
 )
 
 data class ExecutionView(

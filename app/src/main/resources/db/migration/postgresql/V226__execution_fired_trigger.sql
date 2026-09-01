@@ -1,0 +1,32 @@
+-- Which trigger a run belongs to.
+
+-- A workflow may be drawn with two triggers, and until now a run could not say
+-- which of them started it: the engine was handed a coarse WEBHOOK / SCHEDULE /
+-- MANUAL / API word and nothing else, so every trigger node was a beginning and
+-- both branches ran. One message arrived, two agents were charged, and the send
+-- that succeeded belonged to the trigger that had not fired.
+--
+-- The run now carries the trigger definition it came from, and the branch
+-- belonging to any other trigger is closed before it starts.
+--
+-- Kept on the row rather than only passed to the engine because of re-running.
+-- Repeating a run means repeating what it did, and a re-run is recorded as
+-- manual - a person pressed it - so without this the repeat would have nothing
+-- to go on and would run both halves of a graph the original ran one half of.
+-- Doing more the second time is the one thing a repeat must not do.
+--
+-- Nullable, and null is not a gap to be filled in. It is every run nothing
+-- triggered - somebody pressed Run, an API asked for the workflow itself - and
+-- every run recorded before this column existed. Both mean the same thing to
+-- the engine: nothing here says which trigger fired, so no trigger is silenced
+-- and the run behaves exactly as it always did.
+--
+-- No foreign key to workflow_trigger. A run is a record of what happened, and
+-- it should not become unreadable, or quietly lose the fact, because somebody
+-- deleted a trigger afterwards. The id is kept for what it says about the run,
+-- not as a live reference.
+--
+-- No index. It is read off a row already fetched by id, on the one path that
+-- re-runs an earlier run.
+
+ALTER TABLE workflow_execution ADD COLUMN fired_trigger_id BIGINT;

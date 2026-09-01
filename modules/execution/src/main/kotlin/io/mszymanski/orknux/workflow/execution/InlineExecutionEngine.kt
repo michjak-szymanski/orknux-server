@@ -42,8 +42,11 @@ class InlineExecutionEngine(
         version: GraphVersion?,
         resumeFrom: ResumePoint?,
         startedFrom: Long?,
+        firedTriggerId: Long?,
     ): WorkflowExecution {
-        val plan = planner.plan(workspaceId, workflowId, trigger, input, version, resumeFrom, startedFrom)
+        val plan = planner.plan(
+            workspaceId, workflowId, trigger, input, version, resumeFrom, startedFrom, firedTriggerId,
+        )
         val executionId = requireNotNull(plan.execution.id)
 
         /*
@@ -53,7 +56,7 @@ class InlineExecutionEngine(
          * reached if something that actually happened leads to it, so the gate
          * is asked before each one and told what each one decided.
          */
-        val gate = BranchGate(plan.edges)
+        val gate = BranchGate(plan.edges, plan.blocked)
 
         // A run that begins partway down starts with the exits an earlier run
         // took already open, or the first step it walks would have nothing
@@ -62,7 +65,7 @@ class InlineExecutionEngine(
 
         for ((index, step) in plan.steps.withIndex()) {
             if (!gate.mayRun(step.nodeKey)) {
-                steps.skipStep(executionId, step.nodeKey, "the condition before it went the other way")
+                steps.skipStep(executionId, step.nodeKey, gate.refusal(step.nodeKey))
                 continue
             }
 

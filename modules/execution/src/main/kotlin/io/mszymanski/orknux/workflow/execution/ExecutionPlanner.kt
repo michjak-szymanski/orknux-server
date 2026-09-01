@@ -29,6 +29,15 @@ data class ExecutionPlan(
      * going to say so.
      */
     val carried: List<CarriedExit> = emptyList(),
+    /**
+     * The nodes this run does not begin at, though nothing points at them.
+     *
+     * Every trigger node but the one that fired. Empty where nothing fired — a
+     * person pressed Run, or an API asked — and empty for a graph published
+     * before trigger nodes carried their id, both of which mean the run behaves
+     * as it always did.
+     */
+    val blocked: Set<String> = emptySet(),
 )
 
 /**
@@ -91,6 +100,7 @@ class ExecutionPlanner(
         asked: GraphVersion? = null,
         resumeFrom: ResumePoint? = null,
         startedFrom: Long? = null,
+        firedTriggerId: Long? = null,
     ): ExecutionPlan {
         /*
          * A person pressing Run means the graph on their screen; anything else
@@ -102,6 +112,18 @@ class ExecutionPlanner(
         val version = asked ?: if (trigger == ExecutionTrigger.MANUAL) GraphVersion.DRAFT else GraphVersion.PUBLISHED
         val graph = graphs.graph(workspaceId, workflowId, version)
         val order = graph.runOrder()
+        /*
+         * Which trigger this run belongs to: the one that fired, or — where
+         * this run is a repeat — the one the run it repeats belonged to.
+         *
+         * A re-run is recorded as manual, because a person pressed it, so it
+         * arrives here with nothing fired. Left at that, repeating a run of a
+         * two-trigger workflow would run both halves of a graph the original
+         * ran one half of, and doing more the second time is the one thing a
+         * repeat must not do.
+         */
+        val fired = firedTriggerId ?: repeated(startedFrom ?: resumeFrom?.executionId)
+        val blocked = notBegunAt(graph, fired)
 
         // Read and checked before anything is written down, so a re-run that
         // cannot honestly be started leaves no half-run behind to explain.
@@ -127,6 +149,9 @@ class ExecutionPlanner(
                  * lose the link by forgetting to.
                  */
                 startedFrom = startedFrom ?: resumeFrom?.executionId,
+                // Carried onto the run so a repeat of *this* one has the same
+                // thing to go on that this one had.
+                firedTriggerId = fired,
             ),
         )
         val executionId = requireNotNull(execution.id)
@@ -187,7 +212,50 @@ class ExecutionPlanner(
 
         // Only what this run is to carry out. A carried-over step has already
         // happened, and handing it to an engine would perform it a second time.
-        return ExecutionPlan(execution, recorded.filterNot { it.carriedOver }, graph.edges, earlier?.exits.orEmpty())
+        return ExecutionPlan(
+            execution,
+            recorded.filterNot { it.carriedOver },
+            graph.edges,
+            earlier?.exits.orEmpty(),
+            blocked,
+        )
+    }
+
+    /**
+     * The trigger nodes this run is not: every one but the one that fired.
+     *
+     * A trigger node has nothing pointing at it, so the gate would otherwise
+     * call each of them a beginning and run both halves of a two-trigger graph.
+     * Naming the others here is what closes the branch that has no business
+     * running, and it closes it at the top: the gate refuses the node, so
+     * nothing it leads to is reached either.
+     *
+     * Two ways out lead back to what a run always did, and both are meant.
+     * Nothing fired — somebody pressed Run, or an API asked for the workflow
+     * rather than a trigger — and there is no half to prefer. Or no node in the
+     * graph claims the trigger that fired, which is what a snapshot published
+     * before nodes carried a trigger id looks like: it cannot say which node
+     * fired, so it is not entitled to silence any of them.
+     */
+    /**
+     * The trigger an earlier run belonged to, for a run that repeats it.
+     *
+     * Read off the record rather than worked out again: which trigger fired is
+     * a fact about what happened, and the graph may have been redrawn since.
+     * Null where the run is not a repeat, where the earlier run is gone, and
+     * where that run had no trigger of its own either — all of which mean the
+     * same thing, that there is nothing here to prefer one trigger over another.
+     */
+    private fun repeated(executionId: Long?): Long? =
+        executionId?.let { executions.findByIdOrNull(it) }?.firedTriggerId
+
+    private fun notBegunAt(graph: WorkflowGraph, firedTriggerId: Long?): Set<String> {
+        if (firedTriggerId == null) return emptySet()
+
+        val triggers = graph.nodes.filter { it.kind == NodeKind.TRIGGER }
+        if (triggers.none { it.triggerId == firedTriggerId }) return emptySet()
+
+        return triggers.filterNot { it.triggerId == firedTriggerId }.map { it.key }.toSet()
     }
 
     /**

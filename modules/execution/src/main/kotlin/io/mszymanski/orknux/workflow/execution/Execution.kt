@@ -102,6 +102,26 @@ class WorkflowExecution(
     val startedFrom: Long? = null,
 
     /**
+     * The trigger definition this run came from, where one fired.
+     *
+     * [trigger] says what kind of thing started the run; this says which one,
+     * and a workflow drawn with two triggers needs the difference — the branch
+     * belonging to the other one has no business running.
+     *
+     * Kept on the row for the sake of re-running. A re-run is recorded as
+     * manual, because a person pressed it, so nothing else on the row would say
+     * which trigger the run it repeats belonged to; without this a repeat would
+     * run both halves of a graph the original ran one half of, which is the one
+     * thing repeating something must not do.
+     *
+     * Null for every run nothing triggered, and for every run recorded before
+     * this was kept. Both mean the same to the engine: nothing says which
+     * trigger fired, so none of them is silenced.
+     */
+    @Column(name = "fired_trigger_id")
+    val firedTriggerId: Long? = null,
+
+    /**
      * What the run is carrying now: everything produced so far, under the names
      * the nodes gave it.
      *

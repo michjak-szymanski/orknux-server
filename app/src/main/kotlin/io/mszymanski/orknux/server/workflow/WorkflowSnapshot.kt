@@ -38,6 +38,7 @@ object WorkflowSnapshot {
                     "agentId" to node.agentId,
                     "actionId" to node.actionId,
                     "conditionId" to node.conditionId,
+                    "triggerId" to node.triggerId,
                     "outputName" to node.outputName,
                     "mappings" to node.mappings.mapValues { (_, binding) ->
                         mapOf(
@@ -78,6 +79,15 @@ object WorkflowSnapshot {
                     agentId = number(node, "agentId"),
                     actionId = number(node, "actionId"),
                     conditionId = number(node, "conditionId"),
+                    /*
+                     * Absent from every snapshot published before a run could
+                     * tell two triggers apart, and read as the graph declining
+                     * to say. A workflow published then goes on doing what it
+                     * did — both triggers are beginnings, both branches run —
+                     * until somebody publishes it again, which is the only
+                     * moment a snapshot is ever rewritten.
+                     */
+                    triggerId = number(node, "triggerId"),
                     outputName = text(node, "outputName"),
                     mappings = node.path("mappings").properties().associate { (name, binding) ->
                         name to NodeBinding(

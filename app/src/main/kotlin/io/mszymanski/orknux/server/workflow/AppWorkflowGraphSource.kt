@@ -129,6 +129,11 @@ class AppWorkflowGraphSource(
                     agentId = node.agentId,
                     actionId = node.actionId,
                     conditionId = node.conditionId,
+                    // Which trigger this node stands for, so a run started by
+                    // one of two triggers can tell which half of the graph is
+                    // its own. Nothing runs a trigger node; this is only how it
+                    // is recognised.
+                    triggerId = node.triggerId,
                     outputName = node.outputName,
                     // What this node passes, decided on the node. Seeded from the
                     // action when the node was placed, its own from then on.

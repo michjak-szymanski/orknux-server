@@ -45,6 +45,19 @@ data class GraphNode(
     /** The condition a [NodeKind.CONDITION] node asks. */
     val conditionId: Long? = null,
     /**
+     * The trigger definition a [NodeKind.TRIGGER] node stands for.
+     *
+     * Carried so a run can tell two trigger nodes apart. A trigger node does no
+     * work — nothing runs it — but which one fired decides which half of a
+     * two-trigger graph the run is, and without the id here the engine could
+     * not tell them apart even when it was told.
+     *
+     * Null on a graph published before this was recorded, which is read as the
+     * graph saying nothing about it: every trigger is a beginning, exactly as
+     * it was.
+     */
+    val triggerId: Long? = null,
+    /**
      * What the node calls what it produces, so a later node can name it.
      *
      * Null hands the output on unchanged; a name wraps it in an object with that

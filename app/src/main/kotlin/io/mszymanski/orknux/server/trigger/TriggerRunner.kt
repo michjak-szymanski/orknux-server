@@ -259,6 +259,9 @@ class TriggerRunner(
                         TriggerType.INCOMING_CONNECTION, TriggerType.WEBHOOK -> ExecutionTrigger.WEBHOOK
                     },
                     payload = payload,
+                    // Which trigger this is. A workflow may be drawn with two,
+                    // and only the half belonging to this one should run.
+                    firedTriggerId = trigger.id,
                 ),
             )
             auditRecorder.recordAutomated(

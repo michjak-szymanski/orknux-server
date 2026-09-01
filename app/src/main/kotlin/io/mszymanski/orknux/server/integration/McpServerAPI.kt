@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.integration
 
 import io.mszymanski.orknux.connector.connection.CreateMcpServerInput
+import io.mszymanski.orknux.connector.connection.McpServerCheck
 import io.mszymanski.orknux.connector.connection.McpServerService
 import io.mszymanski.orknux.connector.connection.McpServerView
 import io.mszymanski.orknux.connector.connection.UpdateMcpServerInput
@@ -39,6 +40,25 @@ class McpServerAPI(
     @QueryMapping
     fun mcpServer(@Argument id: Long): McpServerView? =
         servers.mcpServer(id)?.takeIf { access.canSee(it.workspaceId) }
+
+    /**
+     * Asks the server whether it is there, on somebody's behalf.
+     *
+     * A mutation rather than a query because it is an outbound call somebody
+     * pressed a button to make, not a fact about the workspace that can be
+     * asked for again at will — and a client that re-fetched queries would
+     * otherwise open handshakes nobody asked for.
+     *
+     * Not audited. It reads: the same handshake an agent makes every time it
+     * calls a tool, and an entry every time somebody presses Check would drown
+     * the entries that record a change.
+     */
+    @MutationMapping
+    fun checkMcpServer(@Argument id: Long): McpServerCheck {
+        val server = servers.mcpServer(id) ?: throw McpServerNotFoundException(id)
+        requireWorkspaceAccess(server.workspaceId)
+        return servers.checkMcpServer(id)
+    }
 
     @MutationMapping
     fun createMcpServer(@Argument input: CreateMcpServerInput): McpServerView {

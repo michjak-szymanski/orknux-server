@@ -18,6 +18,8 @@ class McpServerService(
      * workspace one - see [SecretReferences].
      */
     private val references: SecretReferences,
+    /** What answers the check: the same client an agent's tool call goes through. */
+    private val client: McpClient,
 ) {
 
     fun mcpServers(workspaceId: Long): List<McpServerView> =
@@ -39,6 +41,43 @@ class McpServerService(
         servers.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId)
             .map { CredentialReader(requireNotNull(it.id), it.name) }
             .sortedBy { it.name }
+
+    /**
+     * Asks the server whether it is there, and says what it answered.
+     *
+     * The same handshake and the same `tools/list` an agent makes, deliberately
+     * so: a check that proved something the real path does not do proves
+     * nothing. It is where the reason for a failure gets said out loud - until
+     * now the only way to find out that a token had expired was to grant the
+     * server to an agent and watch a conversation quietly lose a capability.
+     *
+     * Counting the tools rather than listing them. What somebody pressing this
+     * needs to know is that the address, the credential and the protocol all
+     * work; the tools themselves are on the screen already.
+     */
+    fun checkMcpServer(id: Long): McpServerCheck {
+        val server = servers.findByIdOrNull(id) ?: throw McpServerNotFoundException(id)
+
+        return when (val listing = client.tools(server)) {
+            is McpListing.Tools -> {
+                log.info("MCP server {} answered a check with {} tool(s)", server.name, listing.tools.size)
+                McpServerCheck(
+                    reachable = true,
+                    detail = when (listing.tools.size) {
+                        0 -> "Connected. The server offers no tools."
+                        1 -> "Connected. The server offers one tool."
+                        else -> "Connected. The server offers ${listing.tools.size} tools."
+                    },
+                    tools = listing.tools.size,
+                )
+            }
+
+            is McpListing.Failed -> {
+                log.info("MCP server {} failed a check: {}", server.name, listing.reason)
+                McpServerCheck(reachable = false, detail = listing.reason, tools = null)
+            }
+        }
+    }
 
     @Transactional
     fun createMcpServer(input: CreateMcpServerInput): McpServerView {
@@ -132,6 +171,20 @@ class McpServerService(
         val log = LoggerFactory.getLogger(McpServerService::class.java)
     }
 }
+
+/**
+ * What pressing Check on an MCP server found.
+ *
+ * One sentence rather than a status and a code, because the reader is somebody
+ * who has just typed an address and a token and wants to know which of the two
+ * is wrong.
+ */
+data class McpServerCheck(
+    val reachable: Boolean,
+    val detail: String,
+    /** How many tools it offered, on a check that got that far; null otherwise. */
+    val tools: Int? = null,
+)
 
 data class CreateMcpServerInput(
     val workspaceId: Long,

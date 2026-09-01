@@ -31,6 +31,32 @@ sealed interface McpListing {
     data class Failed(val reason: String) : McpListing
 }
 
+/**
+ * How the handshake went, and what the server said about itself while it went.
+ *
+ * A boolean, or a session id and null, was what this used to be, and every way
+ * a handshake can fail arrived as the same sentence: the server did not
+ * complete the MCP handshake. That is true of a wrong address, an expired
+ * token, a server speaking a protocol version this does not, and a proxy
+ * answering on its behalf — four different things to go and fix, told apart by
+ * nothing.
+ */
+sealed interface McpHandshake {
+
+    /**
+     * @param session the server's session id, or empty where it started none.
+     *   Optional in the protocol, so an empty string is a working session and
+     *   not a failure.
+     * @param server what the server called itself, where it said.
+     * @param protocol the version it answered with, which need not be the one
+     *   it was asked for.
+     */
+    data class Open(val session: String, val server: String?, val protocol: String?) : McpHandshake
+
+    /** Why it did not open, in a sentence somebody can act on. */
+    data class Refused(val reason: String) : McpHandshake
+}
+
 @ConfigurationProperties(prefix = "orknux.mcp")
 data class McpProperties(
     /** How long a server has to answer before the call is given up on. */
@@ -81,8 +107,12 @@ class McpClient(
     fun tools(server: McpServer): McpListing {
         refusal(server)?.let { return McpListing.Failed(it) }
 
-        val session = open(server) ?: return McpListing.Failed("The server did not complete the MCP handshake")
-        val answer = send(server, session, "tools/list", mapper.createObjectNode(), id = 2)
+        val opened = when (val handshake = open(server)) {
+            is McpHandshake.Refused -> return McpListing.Failed(handshake.reason)
+            is McpHandshake.Open -> handshake
+        }
+
+        val answer = send(server, opened.session, "tools/list", mapper.createObjectNode(), id = 2)
             ?: return McpListing.Failed("The server did not answer tools/list")
 
         answer.path("error").takeIf { !it.isMissingNode }?.let { error ->
@@ -104,14 +134,16 @@ class McpClient(
     fun call(server: McpServer, tool: String, arguments: String): String {
         refusal(server)?.let { return failure(it) }
 
-        val session = open(server)
-            ?: return failure("${server.name} did not complete the MCP handshake")
+        val opened = when (val handshake = open(server)) {
+            is McpHandshake.Refused -> return failure("${server.name} could not be asked: ${handshake.reason}")
+            is McpHandshake.Open -> handshake
+        }
 
         val params = mapper.createObjectNode()
         params.put("name", tool)
         params.set("arguments", argumentsOf(arguments))
 
-        val answer = send(server, session, "tools/call", params, id = 3)
+        val answer = send(server, opened.session, "tools/call", params, id = 3)
             ?: return failure("${server.name} did not answer")
 
         answer.path("error").takeIf { !it.isMissingNode }?.let { error ->
@@ -154,29 +186,92 @@ class McpClient(
      * not start one. A server that returns no session id is still usable —
      * the header is optional — so an empty string stands for "no session".
      */
-    private fun open(server: McpServer): String? {
+    private fun open(server: McpServer): McpHandshake {
         val params = mapper.createObjectNode()
         params.put("protocolVersion", PROTOCOL_VERSION)
         params.putObject("capabilities")
         params.putObject("clientInfo").put("name", CLIENT_NAME).put("version", CLIENT_VERSION)
 
-        val response = post(server, session = null, body = request("initialize", params, id = 1)) ?: return null
+        log.debug("MCP handshake with {} at {}, asking for protocol {}", server.name, server.address, PROTOCOL_VERSION)
+
+        val response = post(server, session = null, body = request("initialize", params, id = 1))
+            ?: return McpHandshake.Refused("${server.address} could not be reached")
+
         if (response.statusCode() !in 200..299) {
-            log.warn("MCP server {} answered {} to initialize", server.name, response.statusCode())
-            return null
+            /*
+             * The body, not only the status. What a server says when it refuses
+             * is where the reason lives - an expired token, a path that is not
+             * the MCP endpoint, a proxy explaining it will not forward this -
+             * and throwing it away left a number and nothing to do about it.
+             */
+            val said = detail(response.body())
+            log.warn("MCP server {} answered {} to initialize: {}", server.name, response.statusCode(), said)
+            return McpHandshake.Refused("The server answered ${response.statusCode()} to initialize: $said")
         }
 
+        val body = parse(response.body())
+            ?: return McpHandshake.Refused("The server answered initialize with something that is not JSON-RPC")
+
+        /*
+         * A refusal can arrive with a 200 on it. JSON-RPC carries the error in
+         * the body, so a server that will not talk to this client answers
+         * successfully and says no inside - which used to read here as a
+         * handshake that worked, followed by a tools/list that mysteriously did
+         * not.
+         */
+        body.path("error").takeIf { !it.isMissingNode }?.let { error ->
+            val said = error.path("message").stringValue() ?: error.toString()
+            log.warn("MCP server {} refused initialize: {}", server.name, said)
+            return McpHandshake.Refused("The server refused the handshake: $said")
+        }
+
+        val result = body.path("result")
+        val named = result.path("serverInfo").path("name").stringValue()
+        val spoke = result.path("protocolVersion").stringValue()
         val session = response.headers().firstValue(SESSION_HEADER).orElse("")
+
+        log.debug(
+            "MCP server {} completed the handshake as {} speaking {}, session {}",
+            server.name,
+            named ?: "a server that did not name itself",
+            spoke ?: "no stated version",
+            session.takeIf { it.isNotEmpty() } ?: "none",
+        )
+
         // The notification that the handshake is done. It has no reply, and a
-        // server that ignores it is not a server that is broken.
-        runCatching { post(server, session, request("notifications/initialized", mapper.createObjectNode(), id = null)) }
-        return session
+        // server that ignores it is not a server that is broken - but which of
+        // them ignored it is worth being able to find out.
+        runCatching {
+            post(server, session, request("notifications/initialized", mapper.createObjectNode(), id = null))
+        }.onFailure { log.debug("MCP server {} did not take notifications/initialized", server.name, it) }
+
+        return McpHandshake.Open(session, named, spoke)
+    }
+
+    /**
+     * As much of a body as belongs in a log line or a sentence on a screen.
+     *
+     * Servers answer failures with anything from a word to an HTML page, and
+     * neither a stack of markup in the log nor a paragraph in a dialog helps
+     * anybody. Blank bodies are common enough to be worth saying so explicitly,
+     * since "answered 401: " reads like the line was cut off.
+     */
+    private fun detail(body: String?): String {
+        val said = body?.trim().orEmpty().replace(WHITESPACE, " ")
+        if (said.isEmpty()) return "no body"
+        return if (said.length <= DETAIL_LENGTH) said else said.take(DETAIL_LENGTH) + "…"
     }
 
     private fun send(server: McpServer, session: String, method: String, params: ObjectNode, id: Int): JsonNode? {
         val response = post(server, session, request(method, params, id)) ?: return null
         if (response.statusCode() !in 200..299) {
-            log.warn("MCP server {} answered {} to {}", server.name, response.statusCode(), method)
+            log.warn(
+                "MCP server {} answered {} to {}: {}",
+                server.name,
+                response.statusCode(),
+                method,
+                detail(response.body()),
+            )
             return null
         }
         return parse(response.body())
@@ -194,7 +289,10 @@ class McpClient(
 
         client.send(builder.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString())
     } catch (failure: Exception) {
-        log.warn("Could not reach MCP server {}", server.name, failure)
+        // The address as well as the name. A name is what somebody called it;
+        // the address is the thing that did not answer, and the two disagree
+        // exactly when this is worth reading.
+        log.warn("Could not reach MCP server {} at {}", server.name, server.address, failure)
         null
     }
 
@@ -262,6 +360,10 @@ class McpClient(
         const val CLIENT_NAME = "ordilumen"
         const val CLIENT_VERSION = "1.0"
         val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(10)
+
+        /** How much of a server's own words is worth repeating. */
+        const val DETAIL_LENGTH = 300
+        val WHITESPACE = Regex("\\s+")
 
         val log = LoggerFactory.getLogger(McpClient::class.java)
     }

@@ -17,6 +17,20 @@ have failed.
 
 ## 0.9.6
 
+### ✨ Added
+
+- 🔌 **An MCP server can be asked whether it is there, and says what went
+  wrong.** There was no way to check one: an address that was wrong or a token
+  that had expired showed up as an agent quietly having fewer tools than its
+  screen listed, with nothing anywhere saying so. Check on the server's page
+  opens the same handshake and asks for the same tool list an agent does, and
+  reports what it found. Every failure used to arrive as the same eight words —
+  *the server did not complete the MCP handshake* — for a wrong address, a
+  refused credential, a rejected protocol version and a proxy answering instead;
+  each now says which, quoting what the server itself said. A handshake refused
+  inside a 200, which JSON-RPC allows and which used to read as success, is
+  reported as the refusal it is.
+
 ### 🔧 Changed
 
 - ⚠️ **A workflow with two triggers now runs only the branch belonging to the

@@ -1257,6 +1257,14 @@ type Mutation {
     createMcpServer(input: CreateMcpServerInput!): McpServer!
     updateMcpServer(id: ID!, input: UpdateMcpServerInput!): McpServer!
     """
+    Opens a handshake and asks the server for its tools, and says what happened.
+
+    The same two calls an agent makes, so what this proves is what an agent will
+    find. A mutation because it is an outbound call somebody asked for, not a
+    fact about the workspace to be re-fetched at will.
+    """
+    checkMcpServer(id: ID!): McpServerCheck!
+    """
     Removes the server and takes the grant off every agent that held it.
 
     The names of those agents come back, so somebody can see what just lost a
@@ -3562,6 +3570,15 @@ type McpServer {
     secretVariableCatalog: String
     "A reference pointing at nothing, reported rather than assumed away."
     secretVariableMissing: Boolean!
+}
+
+"What pressing Check on an MCP server found."
+type McpServerCheck {
+    reachable: Boolean!
+    "One sentence: what worked, or which part did not and what the server said about it."
+    detail: String!
+    "How many tools it offered, on a check that got that far."
+    tools: Int
 }
 
 input CreateMcpServerInput {

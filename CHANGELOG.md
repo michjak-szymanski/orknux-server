@@ -33,6 +33,18 @@ have failed.
 
 ### 🔧 Changed
 
+- ⚠️ **The quick chat panel now writes down what it did.** It ran a tool loop of
+  its own that nothing recorded, so a panel given permission to write could
+  start a run and leave no account of having started one — the one loop here
+  whose authority is a switch was the one loop with no transcript. Each round
+  now goes into an LLM session, one per person per workspace, filed under
+  `quick-chat`: the question, every tool it called with what it was passed and
+  what came back, and the answer. It records through the same recorder every
+  other loop uses, so the same redaction applies to it — a credential in a
+  tool's arguments is starred out on the way in rather than by a second pass
+  that could reach a different answer. The session is written and never read
+  back, so the panel still has no memory of its own.
+
 - ⚠️ **A workflow with two triggers now runs only the branch belonging to the
   trigger that fired.** It used to run both. A trigger node has nothing pointing
   at it, so every one of them counted as a beginning: one message arrived, both

@@ -74,6 +74,7 @@ class QuickChatRoundsTest(
             mayWrite = true,
             page = null,
             said = listOf(ChatTurn("user", "Can you finish this function?")),
+            asker = "alice",
         )
 
         // An answer, not a refusal about the panel.

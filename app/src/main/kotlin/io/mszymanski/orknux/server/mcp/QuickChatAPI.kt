@@ -5,11 +5,13 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.ModelChatClient
+import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.stereotype.Service
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
@@ -19,21 +21,37 @@ import org.springframework.web.bind.annotation.RestController
 /**
  * The chat that opens beside whatever somebody is looking at.
  *
- * Not the Chat page in miniature: it holds no history, belongs to no workspace
- * conversation and is never written down. What it has instead is where the
- * person is — the page they have open — and orknux's own tools, so "why did
- * last night's sync fail" can be answered by going and looking rather than by
- * asking them to fetch the run themselves.
+ * Not the Chat page in miniature: it carries no history of its own — the panel
+ * sends the conversation up each time — and belongs to no workspace
+ * conversation. What it has instead is where the person is, the page they have
+ * open, and orknux's own tools, so "why did last night's sync fail" can be
+ * answered by going and looking rather than by asking them to fetch the run
+ * themselves.
  *
  * Whether it may do anything, or only look things up, is the workspace's to
  * decide. It reads by default: the panel opens over whatever somebody is
  * reading, and a model that decides "run it" from a question is a worse mistake
  * there than on a page with a button on it.
+ *
+ * What it does is written down, into an LLM session like every other loop that
+ * calls tools. It used to be written down nowhere at all: a panel that could be
+ * given permission to start a run left no account of having started one, which
+ * is the wrong way round for the one loop here with a switch on its authority.
+ * Recording through [LlmSessionRecorder] rather than into something of its own
+ * is what makes the redaction the same redaction - the recorder redacts on the
+ * way in, so this cannot drift into a second answer about what a credential
+ * looks like.
+ *
+ * Written to and never read back. The panel's history comes up with the
+ * request, so reading the session in would hand the model yesterday's panel as
+ * well as today's question; what the session is for here is somebody reading it
+ * afterwards.
  */
 @Service
 class QuickChat(
     private val models: ModelChatClient,
     private val orknux: OrknuxTools,
+    private val sessions: LlmSessionRecorder,
 ) {
 
     /**
@@ -59,12 +77,19 @@ class QuickChat(
         val toolSuggestion: ToolSuggestion? = null,
     )
 
+    /**
+     * @param asker who is at the panel, which names the session and stands
+     *   against every line this round writes into it. A transcript of tool
+     *   calls with nobody attached answers "what happened" and not "who", and
+     *   the second question is the one asked about a panel that may write.
+     */
     fun answer(
         modelId: Long,
         workspaceId: Long,
         mayWrite: Boolean,
         page: PageContext?,
         said: List<ChatTurn>,
+        asker: String,
     ): Answer {
         /*
          * Somebody is at a screen here, which is what makes offering a change
@@ -77,6 +102,24 @@ class QuickChat(
         val offered = orknux.specs(scope)
         val conversation = mutableListOf(ChatTurn(role = "system", content = briefing(page, mayWrite)))
         conversation += said
+
+        /*
+         * One session per person per workspace, so what somebody's panel has
+         * been doing reads as one thing rather than as a session per question.
+         *
+         * A transcript that cannot be written is not a reason to refuse to
+         * answer - the recorder itself takes that view line by line, and a
+         * session that cannot be opened at all is the same judgement one level
+         * up. What it costs is a round nobody can read afterwards, which is
+         * what this was before.
+         */
+        val session = runCatching { sessions.open(workspaceId, SESSION_PREFIX, asker) }
+            .onFailure { log.warn("Quick chat could not open a session for {}", asker, it) }
+            .getOrNull()
+
+        // The question, before the model is asked it: a round that dies waiting
+        // on a provider should still leave what was asked.
+        session?.let { held -> said.lastOrNull { it.role == "user" }?.let { sessions.userSaid(held, asker, it.content) } }
 
         var spent = 0L
         var calls = 0
@@ -92,9 +135,17 @@ class QuickChat(
              */
             val last = round == MAX_ROUNDS - 1
             when (val answer = models.complete(modelId, conversation, if (last) emptyList() else offered)) {
-                is ChatCompletion.Failed -> return Answer(answer)
-                is ChatCompletion.Answered ->
+                is ChatCompletion.Failed -> {
+                    // Written down as well, because a panel that answered
+                    // nothing is a thing somebody comes asking about.
+                    session?.let { sessions.note(it, "The model could not answer: ${answer.reason}") }
+                    return Answer(answer)
+                }
+
+                is ChatCompletion.Answered -> {
+                    session?.let { sessions.agentSaid(it, QUICK_CHAT, answer.content) }
                     return Answer(answer.copy(millis = spent + answer.millis), offering, offeringTool)
+                }
                 is ChatCompletion.CalledTools -> {
                     spent += answer.millis
                     calls += answer.calls.size
@@ -113,9 +164,26 @@ class QuickChat(
                         if (call.name == "orknux_suggest_tool_code") {
                             orknux.toolSuggestionIn(scope, call.arguments)?.let { offeringTool = it }
                         }
+
+                        /*
+                         * Recorded before it is run, and answered onto the same
+                         * line afterwards, exactly as an agent's round is. The
+                         * order is the point: a call that never came back is
+                         * the one somebody is looking for, and a line written
+                         * only on success would be missing precisely then.
+                         *
+                         * The recorder redacts what it is handed, so nothing
+                         * here has to - and nothing here should, since a second
+                         * redaction is a second answer about what a credential
+                         * looks like.
+                         */
+                        val line = session?.let { sessions.toolCalled(it, call.name, call.arguments) }
+                        val got = orknux.run(scope, call.name, call.arguments)
+                        sessions.toolReturned(line, got)
+
                         conversation += ChatTurn(
                             role = "user",
-                            content = orknux.run(scope, call.name, call.arguments),
+                            content = got,
                             respondingTo = call.id,
                         )
                     }
@@ -129,6 +197,7 @@ class QuickChat(
          * conversation that went on too long.
          */
         log.warn("Quick chat asked for tools on its last round after {} calls", calls)
+        session?.let { sessions.note(it, "The model asked for a tool when it was offered none, after $calls calls.") }
         return Answer(ChatCompletion.Failed("That could not be answered here. Try the Chat page."))
     }
 
@@ -310,6 +379,16 @@ class QuickChat(
          * is the one asked without tools.
          */
         const val MAX_ROUNDS = 8
+
+        /**
+         * What the panel's sessions are filed under, so they sort together and
+         * are obviously not somebody's workflow conversation.
+         */
+        const val SESSION_PREFIX = "quick-chat"
+
+        /** The name every line this loop writes stands under. */
+        const val QUICK_CHAT = "Quick chat"
+
         val log = LoggerFactory.getLogger(QuickChat::class.java)
     }
 }
@@ -343,7 +422,18 @@ class QuickChatAPI(
             .map { ChatTurn(role = if (it.role == "assistant") "assistant" else "user", content = it.content) }
         if (turns.isEmpty()) return refuse(HttpStatus.BAD_REQUEST, "There is nothing to answer.")
 
-        val said = quickChat.answer(modelId, workspaceId, workspace.quickChatMayWrite, asked.page, turns)
+        val said = quickChat.answer(
+            modelId,
+            workspaceId,
+            workspace.quickChatMayWrite,
+            asked.page,
+            turns,
+            // Who is at the panel. Resolved here rather than deeper down: this
+            // is the layer that has a request and therefore a person, and a
+            // service reaching into the security context to find out who it is
+            // working for is a service that cannot be called from anywhere else.
+            asker = SecurityContextHolder.getContext().authentication?.name ?: "somebody",
+        )
         return when (val answer = said.completion) {
             is ChatCompletion.Answered -> ResponseEntity.ok(
                 buildMap {

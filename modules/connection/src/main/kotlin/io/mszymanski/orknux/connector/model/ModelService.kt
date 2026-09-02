@@ -272,6 +272,7 @@ class ModelService(
                 inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal(),
                 outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal(),
                 voice = input.voice?.trim()?.ifEmpty { null },
+                skipEmptyLines = input.skipEmptyLines ?: false,
                 imageCostPerImage = input.imageCostPerImage?.toBigDecimal(),
             ),
         )
@@ -305,6 +306,9 @@ class ModelService(
         model.inputCostPerMillion = input.inputCostPerMillion?.toBigDecimal()
         model.outputCostPerMillion = input.outputCostPerMillion?.toBigDecimal()
         model.voice = input.voice?.trim()?.ifEmpty { null }
+        // Absent means off, as it does on the form: the box is either ticked or
+        // it is not, and there is no third thing for a null to mean.
+        model.skipEmptyLines = input.skipEmptyLines ?: false
         model.imageCostPerImage = input.imageCostPerImage?.toBigDecimal()
         return LlmModelView(model, provider)
     }
@@ -577,6 +581,8 @@ data class CreateModelInput(
     val outputCostPerMillion: Double? = null,
     /** Only meaningful for a SPEECH model; the names belong to the provider. */
     val voice: String? = null,
+    /** Whether a SPEECH model is handed text with its empty lines taken out. */
+    val skipEmptyLines: Boolean? = null,
     /** Only meaningful for an IMAGE model, which is billed per picture rather than per token. */
     val imageCostPerImage: Double? = null,
 )
@@ -592,6 +598,8 @@ data class UpdateModelInput(
     val outputCostPerMillion: Double? = null,
     /** Only meaningful for a SPEECH model; the names belong to the provider. */
     val voice: String? = null,
+    /** Whether a SPEECH model is handed text with its empty lines taken out. */
+    val skipEmptyLines: Boolean? = null,
     /** Only meaningful for an IMAGE model, which is billed per picture rather than per token. */
     val imageCostPerImage: Double? = null,
 )
@@ -687,6 +695,8 @@ data class LlmModelView(
     val outputCostPerMillion: Double?,
     /** Which voice a SPEECH model reads in; null sends none. */
     val voice: String?,
+    /** Whether a SPEECH model is handed text with its empty lines taken out. */
+    val skipEmptyLines: Boolean,
     /** What one picture costs on an IMAGE model; null is not recorded, which is not free. */
     val imageCostPerImage: Double?,
 ) {
@@ -707,6 +717,7 @@ data class LlmModelView(
         inputCostPerMillion = model.inputCostPerMillion?.toDouble(),
         outputCostPerMillion = model.outputCostPerMillion?.toDouble(),
         voice = model.voice,
+        skipEmptyLines = model.skipEmptyLines,
         imageCostPerImage = model.imageCostPerImage?.toDouble(),
     )
 }

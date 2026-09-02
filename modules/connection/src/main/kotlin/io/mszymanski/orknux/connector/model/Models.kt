@@ -365,6 +365,30 @@ class LlmModel(
     var voice: String? = null,
 
     /**
+     * Whether a [ModelKind.SPEECH] model is handed text with its empty lines
+     * taken out.
+     *
+     * A blank line is a thing the eye reads and the ear cannot. Readers differ
+     * on what to do with one - some pause for an uncomfortably long time, some
+     * treat it as the end of the utterance and clip what follows, and some read
+     * the answer's shape as hesitation that was never in the words. Which of
+     * those happens is the reader's business and not something worth detecting,
+     * so this is a switch rather than a rule.
+     *
+     * On the model rather than on the workspace because it is a fact about the
+     * reader: the same answer sent to two speech models wants this on for one
+     * and off for the other, and a workspace setting would make somebody choose
+     * for both.
+     *
+     * False, so an installation that has not been asked reads exactly what it
+     * read before. What it changes is the text handed over, never where an
+     * answer is cut - the cuts are made before this, and under paragraph
+     * chunking they are made *on* these lines.
+     */
+    @Column(name = "speech_skip_empty_lines", nullable = false)
+    var skipEmptyLines: Boolean = false,
+
+    /**
      * What one picture costs on a [ModelKind.IMAGE] model; null is not recorded.
      *
      * Its own price rather than the two beside it because these models are not

@@ -31,6 +31,17 @@ have failed.
   inside a 200, which JSON-RPC allows and which used to read as success, is
   reported as the refusal it is.
 
+- 🔊 **A speech model can be told not to read the blank lines.** Readers do not
+  agree on what an empty line is: some pause on one for far longer than the
+  sentence deserves, some take it for the end of the utterance and clip what
+  follows, and an answer written in paragraphs is full of them. Skip empty lines
+  when reading, on the model's own card, hands the reader the lines with the
+  blank ones taken out and the rest in their own order — the line breaks between
+  them stay, because that is where a reader draws breath. It is a fact about the
+  reader rather than about the answer, so it sits on the model and two speech
+  models in one workspace can differ. Off unless it is turned on, so nothing
+  reads differently until somebody asks for it.
+
 ### 🔧 Changed
 
 - ⚠️ **The quick chat panel now writes down what it did.** It ran a tool loop of

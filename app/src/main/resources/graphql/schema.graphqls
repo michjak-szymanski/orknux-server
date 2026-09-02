@@ -3761,6 +3761,14 @@ type Model {
     "Which voice a SPEECH model reads in; null sends none and takes the provider's."
     voice: String
     """
+    Whether a SPEECH model is handed text with its empty lines taken out.
+
+    A blank line is a thing the eye reads and the ear cannot, and readers differ
+    on what to do with one. It governs the text handed over, never where an
+    answer is cut.
+    """
+    skipEmptyLines: Boolean!
+    """
     What one picture costs on an IMAGE model. Null means nobody recorded it,
     which is not the same as free - these models are billed per picture and
     report no tokens, so the per-million prices beside this would cost a month
@@ -3885,6 +3893,8 @@ input CreateModelInput {
     outputCostPerMillion: Float
     "Which voice a SPEECH model reads in; the names are the provider's own."
     voice: String
+    "Whether a SPEECH model is handed text with its empty lines taken out. Absent is off."
+    skipEmptyLines: Boolean
     "What one picture costs on an IMAGE model; null is not recorded, which is not free."
     imageCostPerImage: Float
 }
@@ -3899,6 +3909,8 @@ input UpdateModelInput {
     outputCostPerMillion: Float
     "Which voice a SPEECH model reads in; the names are the provider's own."
     voice: String
+    "Whether a SPEECH model is handed text with its empty lines taken out. Absent is off."
+    skipEmptyLines: Boolean
     "What one picture costs on an IMAGE model; null is not recorded, which is not free."
     imageCostPerImage: Float
 }

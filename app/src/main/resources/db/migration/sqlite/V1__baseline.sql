@@ -393,6 +393,7 @@ CREATE TABLE llm_model
     input_cost_per_million       numeric(12,4),
     output_cost_per_million      numeric(12,4),
     voice                        varchar(80),
+    speech_skip_empty_lines      boolean not null default false,
     image_cost_per_image         numeric(12,4),
     constraint uk_llm_model_name UNIQUE (provider_id, name),
     constraint ck_llm_model_kind CHECK (((kind) IN ('CHAT', 'EMBEDDING', 'COMPLETION', 'TRANSCRIPTION', 'SPEECH', 'IMAGE'))),

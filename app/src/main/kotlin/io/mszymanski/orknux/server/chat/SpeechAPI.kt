@@ -52,9 +52,25 @@ class SpeechAPI(
             return refuse(HttpStatus.PAYLOAD_TOO_LARGE, "That answer is too long to read in one piece.")
         }
 
-        val voice = models.findByIdOrNull(modelId)?.voice
+        val model = models.findByIdOrNull(modelId)
 
-        return when (val spoken = speaker.speak(modelId, text, voice)) {
+        /*
+         * The lines this reader is not to be given, where it has been said so.
+         *
+         * Done here rather than in the browser because it is a fact about the
+         * reader, not about the answer: the same text sent to two speech models
+         * wants this for one and not the other, and the piece has already been
+         * decided by then. It cannot move a cut either - under paragraph
+         * chunking the cuts are made *on* these lines, before any of this.
+         */
+        /*
+         * Never empty, whatever comes out: `text` is trimmed and was refused
+         * above if it was blank, so something on it is not whitespace and the
+         * line holding it survives.
+         */
+        val reading = if (model?.skipEmptyLines == true) withoutEmptyLines(text) else text
+
+        return when (val spoken = speaker.speak(modelId, reading, model?.voice)) {
             is Speech.Spoke -> ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(spoken.contentType))
                 .header("Content-Length", spoken.audio.size.toString())
@@ -67,6 +83,25 @@ class SpeechAPI(
             is Speech.Failed -> refuse(HttpStatus.BAD_GATEWAY, spoken.reason)
         }
     }
+
+    /**
+     * The same text with its empty lines gone.
+     *
+     * Lines that are blank or nothing but spaces come out; the rest keep their
+     * own order and their own line breaks, because a line break is where a
+     * reader draws breath and taking those out too would run a list together
+     * into one sentence.
+     *
+     * Trailing spaces go with them, so a line of two spaces is empty here in
+     * the way it looks empty on the screen rather than in the way a byte count
+     * would have it.
+     */
+    private fun withoutEmptyLines(text: String): String = text
+        .lineSequence()
+        .map { it.trimEnd() }
+        .filter { it.isNotBlank() }
+        .joinToString("\n")
+        .trim()
 
     private fun refuse(status: HttpStatus, says: String): ResponseEntity<Any> =
         ResponseEntity.status(status).body(mapOf("error" to says))

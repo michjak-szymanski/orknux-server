@@ -11,6 +11,16 @@ import tools.jackson.databind.node.ArrayNode
 import tools.jackson.databind.node.ObjectNode
 import java.net.URI
 import java.net.http.HttpClient
+import java.security.KeyStore
+import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
+import java.util.concurrent.ConcurrentHashMap
+import java.security.cert.CertPathBuilderException
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLException
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
@@ -93,7 +103,37 @@ class McpClient(
     private val proxies: ProxyRouter,
 ) {
 
-    private val client: HttpClient = proxies.builder()
+    private val client: HttpClient = newClient(null)
+
+    /**
+     * One client per certificate authority, made once and kept.
+     *
+     * A client carries a connection pool, so building one per request would
+     * throw away every connection and open a new one for each call - and the
+     * whole reason [ProxyRouter] hands out a builder is that the crossing is
+     * expensive. Keyed by the PEM itself rather than by the server, because two
+     * servers behind one internal CA are one trust decision and should share the
+     * pool.
+     *
+     * Unbounded, deliberately: the key space is the set of certificates
+     * administrators have pasted into this installation, which is a handful, and
+     * is not reachable by anything a remote server does.
+     */
+    private val trusting = ConcurrentHashMap<String, HttpClient>()
+
+    /**
+     * The client to reach this server with: the ordinary one, or one that also
+     * trusts the certificate authority somebody pasted onto it.
+     *
+     * A server with no CA of its own goes through the shared client and is
+     * unaffected by any of this, which is every server that worked before.
+     */
+    private fun clientFor(server: McpServer): HttpClient {
+        val pem = server.caCertificate?.trim()?.ifEmpty { null } ?: return client
+        return trusting.computeIfAbsent(pem) { newClient(it) }
+    }
+
+    private fun newClient(pem: String?): HttpClient = proxies.builder()
         .connectTimeout(CONNECT_TIMEOUT)
         // Not followed, for the reason the probe does not follow one either: a
         // redirect can leave the host somebody configured and take the stored
@@ -101,7 +141,48 @@ class McpClient(
         // ends up delivering a bearer token to whoever answered. The first
         // response is the answer.
         .followRedirects(HttpClient.Redirect.NEVER)
+        .also { builder -> pem?.let { builder.sslContext(trustingContext(it)) } }
         .build()
+
+    /**
+     * An SSL context that trusts the given authority *as well as* the ones the
+     * JVM already trusts.
+     *
+     * As well as, not instead of. A server that trusts only what was pasted
+     * would stop being able to reach anything with an ordinary certificate the
+     * moment somebody added an internal CA, which is a change nobody asked for
+     * and would be found the hard way.
+     *
+     * Everything else about TLS is left alone. The hostname is still checked,
+     * the chain is still built, expiry is still enforced - what changes is the
+     * set of roots the chain may end at. There is no "trust everything" here and
+     * there should not be: that is the setting people reach for at four in the
+     * afternoon and never take off again.
+     */
+    private fun trustingContext(pem: String): SSLContext {
+        val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null) }
+
+        // The JVM's own roots first, so this adds to them rather than replaces.
+        val defaults = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            .apply { init(null as KeyStore?) }
+        defaults.trustManagers.filterIsInstance<X509TrustManager>().forEach { manager ->
+            manager.acceptedIssuers.forEachIndexed { at, issuer ->
+                store.setCertificateEntry("default-$at-${issuer.serialNumber}", issuer)
+            }
+        }
+
+        // A PEM file may hold a chain, and an internal CA usually is one.
+        val factory = CertificateFactory.getInstance("X.509")
+        val added = pem.byteInputStream(Charsets.UTF_8).use { factory.generateCertificates(it) }
+        if (added.isEmpty()) throw CertificateException("no certificate in it")
+        added.forEachIndexed { at, certificate ->
+            store.setCertificateEntry("added-$at", certificate)
+        }
+
+        val managers = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            .apply { init(store) }
+        return SSLContext.getInstance("TLS").apply { init(null, managers.trustManagers, null) }
+    }
 
     /** What this server offers, or why it could not say. */
     fun tools(server: McpServer): McpListing {
@@ -195,7 +276,7 @@ class McpClient(
         log.debug("MCP handshake with {} at {}, asking for protocol {}", server.name, server.address, PROTOCOL_VERSION)
 
         val response = post(server, session = null, body = request("initialize", params, id = 1))
-            ?: return McpHandshake.Refused("${server.address} could not be reached")
+            ?: return McpHandshake.Refused(lastRefusal.get() ?: "${server.address} could not be reached")
 
         if (response.statusCode() !in 200..299) {
             /*
@@ -287,13 +368,48 @@ class McpClient(
         target.requestHeaders().forEach { (name, value) -> builder.header(name, value) }
         session?.takeIf { it.isNotEmpty() }?.let { builder.header(SESSION_HEADER, it) }
 
-        client.send(builder.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString())
+        clientFor(server)
+            .send(builder.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString())
     } catch (failure: Exception) {
         // The address as well as the name. A name is what somebody called it;
         // the address is the thing that did not answer, and the two disagree
         // exactly when this is worth reading.
         log.warn("Could not reach MCP server {} at {}", server.name, server.address, failure)
+        lastRefusal.set(unreachable(server, failure))
         null
+    }
+
+    /**
+     * Why the last request from this thread did not go out.
+     *
+     * A thread local rather than a returned value because [post] already answers
+     * with a response or nothing, and three callers read that; threading a
+     * second answer through all of them to carry a sentence only one of them
+     * prints would be a worse shape than this. Set on the way out of the catch
+     * and read immediately by the caller that is about to refuse, on the same
+     * thread, inside the same call.
+     */
+    private val lastRefusal = ThreadLocal<String?>()
+
+    /**
+     * What to say about a request that never got an answer.
+     *
+     * The TLS case is called out by name because it is the one somebody can
+     * actually fix and the one the JVM describes worst. *Unable to find
+     * certification path to requested target* is what it says when a certificate
+     * is self-signed or signed by an internal CA - which is the ordinary case
+     * for an MCP server inside somebody's own network - and those eight words
+     * name no server, no certificate and no remedy. Issue #322.
+     */
+    private fun unreachable(server: McpServer, failure: Exception): String {
+        val tls = generateSequence(failure as Throwable?) { it.cause }
+            .any { it is SSLException || it is CertificateException || it is CertPathBuilderException }
+        if (tls) {
+            return "${server.address} presented a certificate this installation does not trust. " +
+                "If it is signed by an internal authority, paste that authority's certificate into " +
+                "the server's own settings."
+        }
+        return "${server.address} could not be reached"
     }
 
     /**

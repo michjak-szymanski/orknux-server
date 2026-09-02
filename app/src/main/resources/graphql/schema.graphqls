@@ -3597,6 +3597,22 @@ type McpServer {
     secretVariableCatalog: String
     "A reference pointing at nothing, reported rather than assumed away."
     secretVariableMissing: Boolean!
+    """
+    A certificate authority to trust for this server, as PEM, or null for the
+    ones the JVM already trusts.
+
+    An MCP server inside somebody's own network is usually behind a private
+    authority or a self-signed certificate, and until this the only answer was to
+    put the authority into the JVM's own trust store - which an administrator
+    running a container image cannot do without rebuilding it. Trusted *as well
+    as* the usual roots, never instead of them, and everything else about TLS is
+    unchanged: the hostname is still checked and the chain still has to build.
+
+    Not a secret. A certificate authority's certificate is what a server hands
+    every client that connects; the key that signs with it is the secret, and it
+    never comes near this.
+    """
+    caCertificate: String
 }
 
 "What pressing Check on an MCP server found."
@@ -3621,6 +3637,22 @@ input CreateMcpServerInput {
     """
     secretVariableId: ID
     headers: [HttpHeaderInput!]
+    """
+    A certificate authority to trust for this server, as PEM, or null for the
+    ones the JVM already trusts.
+
+    An MCP server inside somebody's own network is usually behind a private
+    authority or a self-signed certificate, and until this the only answer was to
+    put the authority into the JVM's own trust store - which an administrator
+    running a container image cannot do without rebuilding it. Trusted *as well
+    as* the usual roots, never instead of them, and everything else about TLS is
+    unchanged: the hostname is still checked and the chain still has to build.
+
+    Not a secret. A certificate authority's certificate is what a server hands
+    every client that connects; the key that signs with it is the secret, and it
+    never comes near this.
+    """
+    caCertificate: String
 }
 
 input UpdateMcpServerInput {
@@ -3635,6 +3667,14 @@ input UpdateMcpServerInput {
     """
     secretVariableId: ID
     headers: [HttpHeaderInput!]
+    """
+    A certificate authority to trust for this server, as PEM.
+
+    Null leaves what is stored alone; empty clears it, so the server goes back to
+    the roots the JVM trusts. Same rule as `secret` above, and for the same
+    reason: a form that did not draw the field must not be able to wipe it.
+    """
+    caCertificate: String
 }
 
 """

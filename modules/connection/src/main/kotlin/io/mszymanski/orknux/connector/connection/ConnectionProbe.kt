@@ -7,6 +7,9 @@ import org.springframework.stereotype.Service
 import java.net.InetAddress
 import java.net.URI
 import java.net.http.HttpClient
+import java.security.cert.CertPathBuilderException
+import java.security.cert.CertificateException
+import javax.net.ssl.SSLException
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
@@ -271,8 +274,29 @@ class ConnectionProbe(
                 else -> CheckResult(CheckOutcome.FAILED, "The service answered $status")
             }
         } catch (failure: Exception) {
-            CheckResult(CheckOutcome.FAILED, failure.message ?: "The service could not be reached")
+            CheckResult(CheckOutcome.FAILED, reasonFor(failure))
         }
+    }
+
+    /**
+     * What to tell somebody about a call that never got an answer.
+     *
+     * Passing `failure.message` through is right for most of these - a refused
+     * connection and an unknown host both say so in words anybody can act on -
+     * and wrong for exactly one. A certificate the JVM cannot chain to a root it
+     * knows arrives as *unable to find certification path to requested target*,
+     * which is eight words naming no service, no certificate and nothing to do
+     * about it, and it is the ordinary case for anything run inside somebody's
+     * own network behind a private authority. Issue #322.
+     */
+    private fun reasonFor(failure: Exception): String {
+        val untrusted = generateSequence(failure as Throwable?) { it.cause }
+            .any { it is SSLException || it is CertificateException || it is CertPathBuilderException }
+        if (untrusted) {
+            return "It presented a certificate this installation does not trust. If it is signed by an " +
+                "internal authority, that authority's certificate has to be given to whatever calls it."
+        }
+        return failure.message ?: "The service could not be reached"
     }
 
     /** Null when the host is fine to call. */

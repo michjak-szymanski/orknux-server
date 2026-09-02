@@ -42,6 +42,18 @@ have failed.
   nobody asked for. It is named for what it came from, numbered if that is
   taken, so pressing it twice makes a second copy instead of a refusal.
 
+- 🔐 **An MCP server behind a private or self-signed certificate can be
+  reached.** It could not be: the failure was *unable to find certification path
+  to requested target*, eight words of Java naming no server, no certificate and
+  no remedy — and the only fix was the JVM's own trust store, which an
+  administrator running a container image cannot reach without rebuilding it.
+  There is now a **Certificate authority** box on the server's own page: paste
+  the authority's certificate in PEM and it is trusted **as well as** the roots
+  already trusted, never instead of them, so nothing that worked before stops.
+  The hostname is still checked and the chain still has to build — there is no
+  "trust everything" here, deliberately. A server left without one behaves
+  exactly as it always did, and the refusal now says what to do.
+
 - 🔌 **An MCP server can be asked whether it is there, and says what went
   wrong.** There was no way to check one: an address that was wrong or a token
   that had expired showed up as an agent quietly having fewer tools than its

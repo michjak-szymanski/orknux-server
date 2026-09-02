@@ -10,6 +10,7 @@ import io.mszymanski.orknux.connector.connection.McpListing
 import io.mszymanski.orknux.connector.connection.McpProperties
 import io.mszymanski.orknux.connector.connection.McpServer
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.OutboundTrust
 import io.mszymanski.orknux.connector.proxy.ProxyRuleSource
 import io.mszymanski.orknux.connector.security.SecretCipher
 import io.mszymanski.orknux.server.security.plainCredentials
@@ -56,6 +57,10 @@ class McpAddressGuardTest {
         // No server here reads a workspace secret; each holds its own.
         plainCredentials(),
         proxies,
+        // Nothing added, so the JVM's own roots are what is trusted - which is
+        // every installation that has not been given an internal authority, and
+        // is what this test is about anyway.
+        OutboundTrust { null },
     )
 
     @BeforeEach

@@ -375,27 +375,4 @@ class McpServer(
     @OrderColumn(name = "position")
     var headers: MutableList<HttpHeader> = mutableListOf(),
 
-    /**
-     * A certificate authority to trust for this server, as PEM, or null for the
-     * ones the JVM already trusts.
-     *
-     * An MCP server run inside somebody's own network is behind a private CA or
-     * a self-signed certificate more often than not, and until this the only
-     * answer was to put the CA into the JVM's own trust store - which an
-     * administrator running a container image cannot do without rebuilding it.
-     * The failure was eight words of Java naming no server and no remedy.
-     *
-     * Per server rather than per installation, because that is the honest
-     * scope: trusting a CA for everything this server talks to, in order to
-     * reach one MCP server, is a wider grant than anybody meant to make. It sits
-     * beside the address and the credential, on the page where somebody is
-     * already looking. Issue #322.
-     *
-     * Not a secret. A CA certificate is public by construction - it is what a
-     * server hands to every client that connects - so it is stored in the clear
-     * and shown on the page. What is secret is the key that signs with it, and
-     * that never comes near this.
-     */
-    @Column(name = "ca_certificate", columnDefinition = "text")
-    var caCertificate: String? = null,
 )

@@ -427,6 +427,17 @@ CREATE TABLE llm_session_event
     constraint llm_session_event_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE CASCADE
 );
 
+CREATE TABLE trusted_certificate
+(
+    id               integer not null primary key autoincrement,
+    name             varchar(120) not null,
+    pem              text not null,
+    subject          varchar(500) not null,
+    expires_at       timestamp,
+    added_at         timestamp not null default current_timestamp,
+    added_by         varchar(120) not null
+);
+
 CREATE TABLE mcp_server
 (
     id                           integer not null primary key autoincrement,
@@ -436,7 +447,6 @@ CREATE TABLE mcp_server
     auth_type                    varchar(16) not null default 'NONE',
     secret                       varchar(4000),
     secret_variable_id           integer,
-    ca_certificate               text,
     constraint uk_mcp_server_workspace_name UNIQUE (workspace_id, name),
     constraint ck_mcp_server_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
     constraint ck_mcp_server_secret CHECK (secret_variable_id IS NULL OR secret IS NULL)

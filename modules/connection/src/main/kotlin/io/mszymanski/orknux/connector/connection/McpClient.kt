@@ -2,6 +2,7 @@ package io.mszymanski.orknux.connector.connection
 
 import org.slf4j.LoggerFactory
 import io.mszymanski.orknux.connector.proxy.ProxyRouter
+import io.mszymanski.orknux.connector.proxy.OutboundTrust
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.stereotype.Service
@@ -11,16 +12,10 @@ import tools.jackson.databind.node.ArrayNode
 import tools.jackson.databind.node.ObjectNode
 import java.net.URI
 import java.net.http.HttpClient
-import java.security.KeyStore
+import java.util.concurrent.atomic.AtomicReference
 import java.security.cert.CertificateException
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
-import java.util.concurrent.ConcurrentHashMap
 import java.security.cert.CertPathBuilderException
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLException
-import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509TrustManager
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
@@ -101,87 +96,43 @@ class McpClient(
     /** The one place a stored credential is read; see [ConnectionCredentials]. */
     private val credentials: ConnectionCredentials,
     private val proxies: ProxyRouter,
+    /** What this installation trusts on the way out; see [OutboundTrust]. */
+    private val trusted: OutboundTrust,
 ) {
 
-    private val client: HttpClient = newClient(null)
-
     /**
-     * One client per certificate authority, made once and kept.
+     * The client, made once, trusting whatever the installation trusts.
      *
-     * A client carries a connection pool, so building one per request would
-     * throw away every connection and open a new one for each call - and the
-     * whole reason [ProxyRouter] hands out a builder is that the crossing is
-     * expensive. Keyed by the PEM itself rather than by the server, because two
-     * servers behind one internal CA are one trust decision and should share the
-     * pool.
+     * Made lazily rather than in the constructor because the trusted list is
+     * read from the database, and a bean that queried during construction would
+     * have to be ordered against the schema being there. Made once after that: a
+     * client carries a connection pool, and one per request would open a fresh
+     * connection every call.
      *
-     * Unbounded, deliberately: the key space is the set of certificates
-     * administrators have pasted into this installation, which is a handful, and
-     * is not reachable by anything a remote server does.
+     * Rebuilt when the list changes, which is what the generation is for. An
+     * administrator who adds an authority and then presses Check expects the
+     * check to use it, and a client cached for the life of the process would
+     * make them restart the server to find that out.
      */
-    private val trusting = ConcurrentHashMap<String, HttpClient>()
+    private val held = AtomicReference<Pair<Int, HttpClient>?>(null)
 
-    /**
-     * The client to reach this server with: the ordinary one, or one that also
-     * trusts the certificate authority somebody pasted onto it.
-     *
-     * A server with no CA of its own goes through the shared client and is
-     * unaffected by any of this, which is every server that worked before.
-     */
-    private fun clientFor(server: McpServer): HttpClient {
-        val pem = server.caCertificate?.trim()?.ifEmpty { null } ?: return client
-        return trusting.computeIfAbsent(pem) { newClient(it) }
-    }
+    private fun client(): HttpClient {
+        val wanted = trusted.context()
+        val generation = System.identityHashCode(wanted)
+        held.get()?.takeIf { it.first == generation }?.let { return it.second }
 
-    private fun newClient(pem: String?): HttpClient = proxies.builder()
-        .connectTimeout(CONNECT_TIMEOUT)
-        // Not followed, for the reason the probe does not follow one either: a
-        // redirect can leave the host somebody configured and take the stored
-        // credential with it, which is how a request meant for an MCP server
-        // ends up delivering a bearer token to whoever answered. The first
-        // response is the answer.
-        .followRedirects(HttpClient.Redirect.NEVER)
-        .also { builder -> pem?.let { builder.sslContext(trustingContext(it)) } }
-        .build()
-
-    /**
-     * An SSL context that trusts the given authority *as well as* the ones the
-     * JVM already trusts.
-     *
-     * As well as, not instead of. A server that trusts only what was pasted
-     * would stop being able to reach anything with an ordinary certificate the
-     * moment somebody added an internal CA, which is a change nobody asked for
-     * and would be found the hard way.
-     *
-     * Everything else about TLS is left alone. The hostname is still checked,
-     * the chain is still built, expiry is still enforced - what changes is the
-     * set of roots the chain may end at. There is no "trust everything" here and
-     * there should not be: that is the setting people reach for at four in the
-     * afternoon and never take off again.
-     */
-    private fun trustingContext(pem: String): SSLContext {
-        val store = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null) }
-
-        // The JVM's own roots first, so this adds to them rather than replaces.
-        val defaults = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-            .apply { init(null as KeyStore?) }
-        defaults.trustManagers.filterIsInstance<X509TrustManager>().forEach { manager ->
-            manager.acceptedIssuers.forEachIndexed { at, issuer ->
-                store.setCertificateEntry("default-$at-${issuer.serialNumber}", issuer)
-            }
-        }
-
-        // A PEM file may hold a chain, and an internal CA usually is one.
-        val factory = CertificateFactory.getInstance("X.509")
-        val added = pem.byteInputStream(Charsets.UTF_8).use { factory.generateCertificates(it) }
-        if (added.isEmpty()) throw CertificateException("no certificate in it")
-        added.forEachIndexed { at, certificate ->
-            store.setCertificateEntry("added-$at", certificate)
-        }
-
-        val managers = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-            .apply { init(store) }
-        return SSLContext.getInstance("TLS").apply { init(null, managers.trustManagers, null) }
+        val made = proxies.builder()
+            .connectTimeout(CONNECT_TIMEOUT)
+            // Not followed, for the reason the probe does not follow one either: a
+            // redirect can leave the host somebody configured and take the stored
+            // credential with it, which is how a request meant for an MCP server
+            // ends up delivering a bearer token to whoever answered. The first
+            // response is the answer.
+            .followRedirects(HttpClient.Redirect.NEVER)
+            .also { builder -> wanted?.let { builder.sslContext(it) } }
+            .build()
+        held.set(generation to made)
+        return made
     }
 
     /** What this server offers, or why it could not say. */
@@ -368,7 +319,7 @@ class McpClient(
         target.requestHeaders().forEach { (name, value) -> builder.header(name, value) }
         session?.takeIf { it.isNotEmpty() }?.let { builder.header(SESSION_HEADER, it) }
 
-        clientFor(server)
+        client()
             .send(builder.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString())
     } catch (failure: Exception) {
         // The address as well as the name. A name is what somebody called it;

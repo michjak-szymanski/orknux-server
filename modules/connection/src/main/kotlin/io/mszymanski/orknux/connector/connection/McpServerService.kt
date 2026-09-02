@@ -99,7 +99,6 @@ class McpServerService(
                 secret = if (variable == null) own else null,
                 secretVariableId = variable,
                 headers = input.headers.orEmpty().toHttpHeaders(),
-                caCertificate = input.caCertificate?.trim()?.ifEmpty { null },
             ),
         )
         return view(server)
@@ -139,13 +138,6 @@ class McpServerService(
             }
         }
         input.headers?.let { server.headers = it.toHttpHeaders() }
-        /*
-         * Absent leaves it alone and an empty string clears it, which is the
-         * rule the secret above follows and for the same reason: a form that
-         * did not draw the field must not be able to wipe it, and somebody who
-         * emptied the box meant to.
-         */
-        input.caCertificate?.let { server.caCertificate = it.trim().ifEmpty { null } }
         return view(server)
     }
 
@@ -203,8 +195,6 @@ data class CreateMcpServerInput(
     /** A workspace secret to read the credential from instead of keeping a copy. */
     val secretVariableId: Long? = null,
     val headers: List<HttpHeaderInput>? = null,
-    /** A certificate authority to trust for this server, as PEM. Null trusts what the JVM does. */
-    val caCertificate: String? = null,
 )
 
 data class UpdateMcpServerInput(
@@ -219,8 +209,6 @@ data class UpdateMcpServerInput(
      */
     val secretVariableId: Long? = null,
     val headers: List<HttpHeaderInput>? = null,
-    /** A certificate authority to trust for this server, as PEM. Null trusts what the JVM does. */
-    val caCertificate: String? = null,
 )
 
 data class McpServerView(
@@ -239,15 +227,6 @@ data class McpServerView(
     val secretVariableCatalog: String?,
     /** A reference pointing at nothing, reported rather than assumed away. */
     val secretVariableMissing: Boolean,
-    /**
-     * The certificate authority trusted for this server, as PEM, or null.
-     *
-     * Handed back in full rather than masked. A CA certificate is what the
-     * server presents to every client that connects, so there is nothing here to
-     * protect - and a masked box would mean nobody could check which authority
-     * was pasted in, which is the question somebody debugging this has.
-     */
-    val caCertificate: String?,
 ) {
     constructor(server: McpServer, held: HeldSecret? = null) : this(
         id = requireNotNull(server.id),
@@ -261,7 +240,6 @@ data class McpServerView(
         secretVariableName = held?.name,
         secretVariableCatalog = held?.catalog,
         secretVariableMissing = server.secretVariableId != null && held == null,
-        caCertificate = server.caCertificate,
     )
 }
 

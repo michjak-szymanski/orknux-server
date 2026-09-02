@@ -137,6 +137,19 @@ type Query {
     """
     proxyRules: [ProxyRule!]!
     """
+    The certificate authorities this installation trusts, beyond the JVM's own.
+
+    Administrators only. Trusting an authority changes what every outbound
+    connection in the installation will accept, which is not a workspace's
+    decision to make on everybody else's behalf.
+
+    Added to what the JVM already trusts, never instead of it, and everything
+    else about TLS is unchanged: the hostname is still checked, the chain still
+    has to build, and an expired certificate is still expired. There is no
+    a trust-everything switch here.
+    """
+    trustedCertificates: [TrustedCertificate!]!
+    """
     Which rule one URL would go through, and which rules it beat to it.
 
     Answered by the thing that actually routes requests rather than worked out
@@ -1236,6 +1249,27 @@ type Mutation {
     """
     moveProxyRule(id: ID!, up: Boolean!): [ProxyRule!]!
     deleteProxyRule(id: ID!): Boolean!
+    """
+    Trusts a certificate authority across this whole installation.
+
+    Refused if what was pasted is not a certificate this can read, which is
+    checked here rather than at the first handshake: a paste that went wrong is
+    the ordinary way this fails, and being told on the next connection - as one
+    more failure among the ones being debugged - is the worst moment for it.
+
+    `name` is what an administrator calls it. A list of PEM blocks is a list
+    nobody can read, and the name is how one is told from another when it comes
+    time to take one off.
+    """
+    trustCertificate(name: String!, pem: String!): TrustedCertificate!
+    """
+    Stops trusting one.
+
+    Takes effect on the next connection rather than at the next restart:
+    somebody who removes an authority has decided something, and a client kept
+    for the life of the process would go on accepting it.
+    """
+    untrustCertificate(id: ID!): Boolean!
     "Adds a machine this installation can run commands on. Administrators only."
     createShell(input: ShellInput!): Shell!
     """
@@ -3105,6 +3139,28 @@ input ConnectionInput {
 }
 
 """
+One certificate authority this installation trusts, beyond the JVM's own.
+
+Nothing here is a secret and nothing is masked: a certificate authority's
+certificate is what a server hands every client that connects, and being able to
+read back which one was added is the point of the screen.
+"""
+type TrustedCertificate {
+    id: ID!
+    "What an administrator called it, since PEM blocks all look alike."
+    name: String!
+    pem: String!
+    "What the certificate says about itself, read once when it was added."
+    subject: String!
+    "ISO-8601 offset date-time, or null where the certificate carries no expiry."
+    expiresAt: String
+    addedAt: String!
+    addedBy: String!
+    "Whether it has already run out, so the row says so rather than quietly not working."
+    expired: Boolean!
+}
+
+"""
 One installation-wide answer to "does this address need a proxy".
 
 Installation-wide because the reason a proxy exists is the network this process
@@ -3597,22 +3653,6 @@ type McpServer {
     secretVariableCatalog: String
     "A reference pointing at nothing, reported rather than assumed away."
     secretVariableMissing: Boolean!
-    """
-    A certificate authority to trust for this server, as PEM, or null for the
-    ones the JVM already trusts.
-
-    An MCP server inside somebody's own network is usually behind a private
-    authority or a self-signed certificate, and until this the only answer was to
-    put the authority into the JVM's own trust store - which an administrator
-    running a container image cannot do without rebuilding it. Trusted *as well
-    as* the usual roots, never instead of them, and everything else about TLS is
-    unchanged: the hostname is still checked and the chain still has to build.
-
-    Not a secret. A certificate authority's certificate is what a server hands
-    every client that connects; the key that signs with it is the secret, and it
-    never comes near this.
-    """
-    caCertificate: String
 }
 
 "What pressing Check on an MCP server found."
@@ -3637,22 +3677,6 @@ input CreateMcpServerInput {
     """
     secretVariableId: ID
     headers: [HttpHeaderInput!]
-    """
-    A certificate authority to trust for this server, as PEM, or null for the
-    ones the JVM already trusts.
-
-    An MCP server inside somebody's own network is usually behind a private
-    authority or a self-signed certificate, and until this the only answer was to
-    put the authority into the JVM's own trust store - which an administrator
-    running a container image cannot do without rebuilding it. Trusted *as well
-    as* the usual roots, never instead of them, and everything else about TLS is
-    unchanged: the hostname is still checked and the chain still has to build.
-
-    Not a secret. A certificate authority's certificate is what a server hands
-    every client that connects; the key that signs with it is the secret, and it
-    never comes near this.
-    """
-    caCertificate: String
 }
 
 input UpdateMcpServerInput {
@@ -3667,14 +3691,6 @@ input UpdateMcpServerInput {
     """
     secretVariableId: ID
     headers: [HttpHeaderInput!]
-    """
-    A certificate authority to trust for this server, as PEM.
-
-    Null leaves what is stored alone; empty clears it, so the server goes back to
-    the roots the JVM trusts. Same rule as `secret` above, and for the same
-    reason: a form that did not draw the field must not be able to wipe it.
-    """
-    caCertificate: String
 }
 
 """

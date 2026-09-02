@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpsConfigurator
 import com.sun.net.httpserver.HttpsServer
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
+import io.mszymanski.orknux.connector.proxy.TrustedCertificateRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
@@ -54,6 +55,7 @@ class McpServerCertificateTest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    @Autowired val trusted: TrustedCertificateRepository,
 ) {
 
     private var workspaceId: Long = 0
@@ -64,6 +66,9 @@ class McpServerCertificateTest(
     fun start() {
         audit.deleteAll()
         workspaces.deleteAll()
+        // Installation-wide, so one test's authority would otherwise be every
+        // later test's - including the one about a server nothing trusts.
+        trusted.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
 
         val made = selfSigned()
@@ -101,7 +106,7 @@ class McpServerCertificateTest(
     /** Without the authority, refused - and the refusal says what to do about it. */
     @Test
     fun `a certificate nothing trusts is refused, and the reason names the remedy`() {
-        val id = mcpServer("Private", address(), certificate = null)
+        val id = mcpServer("Private", address())
 
         val answer = check(id)
         answer.path("checkMcpServer.reachable").entity(Boolean::class.java).isEqualTo(false)
@@ -117,7 +122,8 @@ class McpServerCertificateTest(
     /** With it, reached. */
     @Test
     fun `a server whose authority was pasted in is reached`() {
-        val id = mcpServer("Private", address(), certificate = pem)
+        val id = mcpServer("Private", address())
+        trust("Internal")
 
         val answer = check(id)
         answer.path("checkMcpServer.detail").entity(String::class.java).satisfies({ said ->
@@ -135,11 +141,12 @@ class McpServerCertificateTest(
      */
     @Test
     fun `the pasted authority is trusted as well as the usual ones, not instead`() {
-        val id = mcpServer("Private", address(), certificate = pem)
+        val id = mcpServer("Private", address())
+        trust("Internal")
 
         // A public host with an ordinary certificate, refused for any reason
         // except one about trust. Nothing here needs it to answer.
-        val elsewhere = mcpServer("Public", "https://example.invalid/mcp", certificate = pem)
+        val elsewhere = mcpServer("Public", "https://example.invalid/mcp")
 
         check(id).path("checkMcpServer.reachable").entity(Boolean::class.java).isEqualTo(true)
         check(elsewhere).path("checkMcpServer.detail").entity(String::class.java).satisfies({ said ->
@@ -152,16 +159,27 @@ class McpServerCertificateTest(
     private fun check(id: Long) =
         graphQlTester.document("mutation { checkMcpServer(id: $id) { reachable detail tools } }").execute()
 
-    private fun mcpServer(name: String, address: String, certificate: String?): Long {
-        val ca = certificate?.let { ", caCertificate: \"\"\"$it\"\"\"" } ?: ""
-        return graphQlTester.document(
-            """
-            mutation {
-              createMcpServer(input: { workspaceId: $workspaceId, name: "$name", address: "$address"$ca }) { id }
-            }
-            """,
-        ).execute().path("createMcpServer.id").entity(Long::class.java).get()
-    }
+    private fun mcpServer(name: String, address: String): Long = graphQlTester.document(
+        """
+        mutation {
+          createMcpServer(input: { workspaceId: $workspaceId, name: "$name", address: "$address" }) { id }
+        }
+        """,
+    ).execute().path("createMcpServer.id").entity(Long::class.java).get()
+
+    /**
+     * Adds the authority to the installation's list, which is where it lives.
+     *
+     * The PEM goes through a variable rather than into the document. It is
+     * multi-line and full of characters GraphQL's lexer has opinions about, and
+     * a document built by pasting one in is a document that fails to parse for
+     * reasons that have nothing to do with what is being tested.
+     */
+    private fun trust(name: String) = graphQlTester
+        .document("mutation(\$name: String!, \$pem: String!) { trustCertificate(name: \$name, pem: \$pem) { id } }")
+        .variable("name", name)
+        .variable("pem", pem)
+        .execute().path("trustCertificate.id").entity(Long::class.java).get()
 
     private data class Made(val pem: String, val context: SSLContext)
 

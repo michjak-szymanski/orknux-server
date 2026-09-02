@@ -56,6 +56,16 @@ have failed.
   that could reach a different answer. The session is written and never read
   back, so the panel still has no memory of its own.
 
+- ⚠️ **Leaving an issue now returns to the list you were on, filters and
+  all.** The filters live in the address so that a narrowed tracker is a link
+  somebody can send - but every way out of an issue named the list by its bare
+  address, so filtering down to the handful that matter and opening one of them
+  put you back at Open, newest first with the filtering to do again. The arrow,
+  the leave guard and the way out after a delete all return to the list that was
+  left. The issue's own address is unchanged: it carries no filters, because a
+  link to an issue is what people paste to each other and two that differ only
+  by somebody else's filtering would look like two different pages.
+
 - ⚠️ **Asking for the answer again, in voice mode, is now read aloud.** It was
   not. The composer and the voice panel are two doors into the model and only
   one of them was wired to the reader, so a conversation being held out loud

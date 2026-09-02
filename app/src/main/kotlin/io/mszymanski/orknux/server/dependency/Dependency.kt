@@ -43,7 +43,15 @@ enum class DependencyKind {
     /** Only ever an answer, and one held beside a credential. */
     CONNECTION,
 
-    /** Only ever an answer. */
+    /**
+     * A server an agent is granted, and one that is asked what uses it.
+     *
+     * The one of these four with a dependant of its own: an agent names it, by
+     * name, and removing the server takes the capability away from every agent
+     * holding it. That was silent - see `McpServerAPI.removeMcpServer`, which
+     * un-grants without asking - so the page had to be able to say who would
+     * lose something first. Issue #318.
+     */
     MCP_SERVER,
 
     /** Only ever an answer. */
@@ -56,12 +64,12 @@ enum class DependencyKind {
     /**
      * Whether "what uses this?" is a question this kind has an answer to.
      *
-     * False for the four that are only ever the far end of an arrow. Asked before
+     * False for the three that are only ever the far end of an arrow. Asked before
      * the component is looked up, so that a workflow id nothing points at is
      * refused for the reason it is refused for and not as a missing row.
      */
     val askable: Boolean
-        get() = this !in setOf(WORKFLOW, CONNECTION, MCP_SERVER, MODEL_PROVIDER)
+        get() = this !in setOf(WORKFLOW, CONNECTION, MODEL_PROVIDER)
 }
 
 /**

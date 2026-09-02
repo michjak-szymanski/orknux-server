@@ -31,6 +31,15 @@ have failed.
   inside a 200, which JSON-RPC allows and which used to read as success, is
   reported as the refusal it is.
 
+- 🔌 **An MCP server's page says which agents hold it.** It was the one
+  registered thing with no *Used by* panel, because an MCP server was counted
+  among the things nothing points at - and an agent names one in its grants.
+  Removing a server takes that capability off every agent holding it and does
+  not ask, so the page most likely to be looked at before a Remove was the page
+  that said nothing about what a Remove would cost. The panel sits directly
+  above the Danger Zone, and each row opens the agent that holds it. A server
+  nobody was granted says so in words.
+
 - 🔊 **A speech model can be told not to read the blank lines.** Readers do not
   agree on what an empty line is: some pause on one for far longer than the
   sentence deserves, some take it for the end of the utterance and clip what

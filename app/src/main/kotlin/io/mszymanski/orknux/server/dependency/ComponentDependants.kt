@@ -93,9 +93,9 @@ class ComponentDependants(
         DependencyKind.OBJECT -> ofObject(id)
         DependencyKind.VARIABLE -> ofVariable(id)
         DependencyKind.LIBRARY -> ofLibrary(id)
+        DependencyKind.MCP_SERVER -> ofMcpServer(id)
         DependencyKind.WORKFLOW,
         DependencyKind.CONNECTION,
-        DependencyKind.MCP_SERVER,
         DependencyKind.MODEL_PROVIDER,
         -> throw DependencyKindNotAskableException(kind)
     }
@@ -119,6 +119,7 @@ class ComponentDependants(
         DependencyKind.OBJECT -> objects.findByIdOrNull(id)?.workspaceId
         DependencyKind.VARIABLE -> variables.findByIdOrNull(id)?.workspaceId
         DependencyKind.LIBRARY -> null
+        DependencyKind.MCP_SERVER -> mcpServers.mcpServer(id)?.workspaceId
         else -> null
     }
 
@@ -135,6 +136,7 @@ class ComponentDependants(
         DependencyKind.OBJECT -> objects.existsById(id)
         DependencyKind.VARIABLE -> variables.existsById(id)
         DependencyKind.LIBRARY -> libraries.existsById(id)
+        DependencyKind.MCP_SERVER -> mcpServers.mcpServer(id) != null
         else -> false
     }
 
@@ -317,6 +319,27 @@ class ComponentDependants(
     }
 
     /** An entry a refusal names by its bare name, which is most of them. */
+    /**
+     * The agents granted this server.
+     *
+     * The whole answer, because an agent is the only thing that holds one. A
+     * task can be given a server for the length of one run, but a run is
+     * history rather than something that would break, which is the definition
+     * this class keeps.
+     *
+     * Matched by name, because that is how the grant is stored - see
+     * [AgentRepository.findGrantedMcpServer], and the reason it is spelled
+     * exactly: a grant differing by a letter's case already resolves to nothing
+     * at the moment the tools are gathered, so a list here that was looser than
+     * that would name agents which do not in fact have it.
+     */
+    private fun ofMcpServer(id: Long): List<Dependant> {
+        val server = mcpServers.mcpServer(id) ?: return emptyList()
+        return agents.findGrantedMcpServer(server.workspaceId, server.name)
+            .map { plain(DependencyKind.AGENT, it.id, it.name, it.workspaceId) }
+            .sortedBy { it.name }
+    }
+
     private fun plain(kind: DependencyKind, id: Long?, name: String, workspaceId: Long?) =
         qualified(kind, id, name, workspaceId, name)
 

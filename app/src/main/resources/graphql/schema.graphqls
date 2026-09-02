@@ -1740,9 +1740,13 @@ a reason - a variable, a library and a connection all hold something that cannot
 travel. This one is what can point at what, and those three are exactly the
 interesting cases.
 
-`WORKFLOW`, `CONNECTION`, `MCP_SERVER` and `MODEL_PROVIDER` are only ever
-answers: nothing in this product points at one, so asking about them is refused
-rather than answered with an empty list, which would read as "nothing uses it".
+`WORKFLOW`, `CONNECTION` and `MODEL_PROVIDER` are only ever answers: nothing in
+this product points at one, so asking about them is refused rather than answered
+with an empty list, which would read as "nothing uses it".
+
+`MCP_SERVER` was among them and is not any more. An agent names a server in its
+grants, and removing the server takes that capability away from every agent
+holding it, so there is a real answer to give and it was worth giving.
 """
 enum DependencyKind {
     OBJECT
@@ -1760,6 +1764,7 @@ enum DependencyKind {
     VARIABLE
     LIBRARY
     CONNECTION
+    "An agent is granted one by name, which is what asking about it answers."
     MCP_SERVER
     MODEL_PROVIDER
 }

@@ -21,3 +21,13 @@ CREATE TABLE trusted_certificate
     added_at         TIMESTAMPTZ  NOT NULL DEFAULT now(),
     added_by         VARCHAR(120) NOT NULL
 );
+
+-- And the column V228 added to mcp_server, which this replaces.
+--
+-- V228 shipped nowhere, but it did run on a development database before the
+-- decision moved: trusting an authority changes what every outbound connection
+-- makes of a certificate, which is one decision for the installation rather
+-- than one per server. It is left in place and undone here rather than edited,
+-- because a migration that has been applied anywhere is a migration whose
+-- checksum is already written down.
+ALTER TABLE mcp_server DROP COLUMN IF EXISTS ca_certificate;

@@ -19,6 +19,17 @@ have failed.
 
 ### ✨ Added
 
+- 🧩 **An Object node with fields of its own now says so.** That mode has been
+  there all along - a node with no saved shape holds whatever fields you name on
+  it - but the Shape picker listed the workspace's saved objects and nothing
+  else, so the mode had no name on screen: an untouched node read *Choose a
+  shape…*, which is what a control somebody forgot to fill in looks like, and
+  choosing a saved shape was one-way because there was no row to go back to.
+  **Custom** is now a row in that list, marked apart from the saved shapes, and
+  choosing it brings the fields editor back. Nothing about what is stored
+  changed, so a node drawn before this reads as Custom because that is what it
+  is.
+
 - 🔁 **A workflow can be duplicated.** Trying a change to a workflow that is
   already in use meant either redrawing it node by node or editing the one that
   works. The copy button on a workflow's row takes the graph whole - every node

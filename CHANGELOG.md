@@ -56,6 +56,16 @@ have failed.
   that could reach a different answer. The session is written and never read
   back, so the panel still has no memory of its own.
 
+- ⚠️ **Asking for the answer again, in voice mode, is now read aloud.** It was
+  not. The composer and the voice panel are two doors into the model and only
+  one of them was wired to the reader, so a conversation being held out loud
+  went silent at exactly the press that says the last answer was not good
+  enough — the panel had never been told a turn was happening, and sat there
+  listening while an answer nobody would hear was written behind it. The press
+  now goes through the panel, which reads the second answer the way it reads
+  every other, and cuts short the reading of the one being replaced rather than
+  finishing it first.
+
 - ⚠️ **A workflow with two triggers now runs only the branch belonging to the
   trigger that fired.** It used to run both. A trigger node has nothing pointing
   at it, so every one of them counted as a beginning: one message arrived, both

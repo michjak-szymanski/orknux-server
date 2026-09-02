@@ -18,8 +18,12 @@
  *
  * 1. Load this plugin and accept `SLACK_READ_THREAD`.
  * 2. Point its `slack` parameter at the workspace's Slack connection.
- * 3. Use `slack_isFirstReply` as a function condition, or `slack_thread` from
- *    anywhere a function is called.
+ * 3. Use `slack_isFirstReply` as a function condition.
+ *
+ * Nothing here wraps `orknux.slack.thread` for the sake of it. That call is the
+ * API and is available to any plugin granted the capability; a function that
+ * only forwarded its arguments to it would be a name to look up in exchange for
+ * nothing. What is here is what the call does not answer on its own.
  *
  * ## Why the connection is an argument and not just a setting
  *
@@ -68,19 +72,6 @@ export default class Slack extends OrknuxPlugin {
 
   functions() {
     return [
-      new OrknuxFunction({
-        name: 'thread',
-        description: 'The messages in a Slack thread, oldest first, with the reply count.',
-        params: [
-          { name: 'connection', type: 'map' },
-          { name: 'channel', type: 'string' },
-          { name: 'threadTs', type: 'string' },
-        ],
-        returnType: 'map',
-        run: (connection, channel, threadTs) =>
-          orknux.slack.thread(connection ?? this.settings.slack, channel, threadTs),
-      }),
-
       new OrknuxFunction({
         name: 'isFirstReply',
         description:

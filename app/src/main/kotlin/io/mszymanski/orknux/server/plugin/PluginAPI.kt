@@ -513,6 +513,83 @@ class PluginUploadAPI(
             /** A Slack connection, which is what the Slack helpers take. */
             type SlackConnection = OrknuxConnection<'SLACK'>;
 
+            /** One message in a Slack thread, as much of it as anything here needs. */
+            interface SlackThreadMessage {
+              /** Slack's timestamp, which is also the message's id. */
+              ts: string;
+              /** Who wrote it, or the bot that did. Null where Slack said neither. */
+              user: string | null;
+              text: string;
+              /** Whether this is the message the thread hangs under rather than a reply. */
+              parent: boolean;
+            }
+
+            /** A thread that was read, or why it could not be. */
+            type SlackThread =
+              | {
+                  messages: SlackThreadMessage[];
+                  /**
+                   * Slack's own count of the replies under the parent.
+                   *
+                   * Not `messages.length - 1`: a page holds what was asked for and
+                   * the count is of the whole thread. It is the number a filter
+                   * wants - `replies === 1` is the first reply.
+                   */
+                  replies: number;
+                  error?: undefined;
+                }
+              | {
+                  /**
+                   * Why not, in Slack's own words where they were Slack's:
+                   * `not_in_channel`, `thread_not_found`, and the rest.
+                   *
+                   * A refusal rather than a thrown error, so a plugin can say
+                   * something useful about it. Check for it before reading
+                   * `messages`.
+                   */
+                  error: string;
+                  messages?: undefined;
+                  replies?: undefined;
+                };
+
+            /**
+             * What the server will do on a plugin's behalf.
+             *
+             * A plugin has no network and no way to ask for one: GraalJS has no
+             * `fetch` and no sockets, and giving it either would mean handing it a
+             * host object it could reflect from. So the calls that have to reach
+             * outside are made by the server, under a capability the plugin
+             * declares and a person accepts, and what crosses is data.
+             *
+             * Every call here needs its capability. Without it the call answers
+             * `{ error }` saying so, rather than reaching anything.
+             */
+            declare const orknux: {
+              slack: {
+                /**
+                 * The messages in one Slack thread, oldest first.
+                 *
+                 * Needs the `SLACK_READ_THREAD` capability.
+                 *
+                 * @param connection which Slack to read through. A workspace with
+                 *   two Slack connections has two Slacks, and a reply that arrived
+                 *   on one has to be read through that one - so pass the connection
+                 *   the trigger says its event came in on rather than assuming.
+                 * @param channel the channel's id, as the trigger gives it.
+                 * @param threadTs the parent's timestamp - Slack's `thread_ts`,
+                 *   which every reply in the thread carries.
+                 * @param limit how many to fetch; the count comes back whatever
+                 *   this is. Capped by the server.
+                 */
+                thread(
+                  connection: SlackConnection,
+                  channel: string,
+                  threadTs: string,
+                  limit?: number,
+                ): SlackThread;
+              };
+            };
+
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;
 

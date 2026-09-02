@@ -42,6 +42,15 @@ have failed.
   nobody asked for. It is named for what it came from, numbered if that is
   taken, so pressing it twice makes a second copy instead of a refusal.
 
+- ⚠️ **A signature edited in the code now moves the panel beside it.** The two
+  are one thing with two controls, and only one direction was wired: editing a
+  parameter in the panel rewrote the declaration, editing the declaration left
+  the panel showing the old parameters - and it is the panel that is saved. So
+  typing the change into the code, which is what anybody writing code reaches
+  for, produced a function whose stored signature was whatever the panel still
+  believed. It is read back after a pause rather than on each keystroke, and a
+  declaration that is mid-edit leaves the panel alone rather than emptying it.
+
 - 🔐 **An MCP server behind a private or self-signed certificate can be
   reached.** It could not be: the failure was *unable to find certification path
   to requested target*, eight words of Java naming no server, no certificate and

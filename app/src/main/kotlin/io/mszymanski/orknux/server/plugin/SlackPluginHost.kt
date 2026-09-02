@@ -1,0 +1,95 @@
+package io.mszymanski.orknux.server.plugin
+
+import io.mszymanski.orknux.connector.connection.SlackThreads
+import io.mszymanski.orknux.connector.connection.Thread
+import io.mszymanski.orknux.workflow.script.PluginCapability
+import io.mszymanski.orknux.workflow.script.PluginHost
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Component
+import tools.jackson.databind.ObjectMapper
+
+/**
+ * What the server does on a plugin's behalf.
+ *
+ * The far side of the one door a plugin has out of its sandbox. It is here
+ * rather than in the execution module because this is where the connections and
+ * their credentials are, and the execution module goes on knowing nothing about
+ * Slack — it knows only that a capability was granted and that something answers
+ * it.
+ *
+ * **Everything crosses as JSON, both ways.** A plugin handed a live object could
+ * walk from it to a class loader; a plugin handed a string can read the string.
+ * That is what keeps this a door rather than a hole, and it is why nothing here
+ * returns anything richer than text.
+ *
+ * A refusal is data rather than an exception. A plugin asking about a connection
+ * that has been deleted needs to be able to say so — "that connection is gone"
+ * is a sentence a workflow can act on, and an exception here would come out as a
+ * plugin that failed for reasons nobody can read. Issue #316.
+ */
+@Component
+class SlackPluginHost(
+    private val threads: SlackThreads,
+    private val mapper: ObjectMapper,
+) : PluginHost {
+
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    override fun ask(capability: PluginCapability, argument: String): String = when (capability) {
+        PluginCapability.SLACK_READ_THREAD -> readThread(argument)
+    }
+
+    /**
+     * `[connectionId, channel, threadTs, limit]`, as the contract's helper sends
+     * it.
+     *
+     * Read defensively and refused in words. This is the boundary a plugin
+     * writes to, so what arrives is whatever somebody's JavaScript passed, and
+     * every shape of wrong has to come back as something they can act on.
+     */
+    private fun readThread(argument: String): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 3) {
+            return refusal("that call takes a connection, a channel and a thread")
+        }
+
+        val connectionId = given.get(0)?.takeIf { it.isNumber }?.asLong()
+            ?: return refusal("the first argument has to be a Slack connection")
+        val channel = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a channel")
+        val threadTs = given.get(2)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the third argument has to be a thread")
+        val limit = given.get(3)?.takeIf { it.isNumber }?.asInt()
+
+        return when (val read = threads.read(connectionId, channel, threadTs, limit ?: DEFAULT_LIMIT)) {
+            is Thread.Read -> {
+                val answer = mapper.createObjectNode()
+                val messages = answer.putArray("messages")
+                read.messages.forEach { held ->
+                    messages.addObject()
+                        .put("ts", held.ts)
+                        .put("user", held.user)
+                        .put("text", held.text)
+                        .put("parent", held.parent)
+                }
+                answer.put("replies", read.replies)
+                mapper.writeValueAsString(answer)
+            }
+
+            // Both refusals, said in the words they came with. A plugin deciding
+            // what to do about "not_in_channel" needs to be told that and not a
+            // sentence somebody rewrote.
+            is Thread.NotPossible -> refusal(read.reason)
+            is Thread.Refused -> refusal(read.reason)
+        }.also { log.debug("A plugin read thread {} in {} on connection {}", threadTs, channel, connectionId) }
+    }
+
+    private fun refusal(why: String): String =
+        mapper.writeValueAsString(mapper.createObjectNode().put("error", why))
+
+    private companion object {
+        /** What the connector uses when nothing says otherwise; repeated so the door has its own answer. */
+        const val DEFAULT_LIMIT = 50
+    }
+}

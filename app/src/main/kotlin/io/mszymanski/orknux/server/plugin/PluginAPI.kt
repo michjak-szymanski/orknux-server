@@ -58,6 +58,8 @@ class PluginUploadAPI(
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
     private val permissions: PluginPermissions,
+    /** What it asks the server to do for it; see [PluginCapabilities]. */
+    private val capabilities: PluginCapabilities,
 ) {
 
     /**
@@ -110,6 +112,16 @@ class PluginUploadAPI(
                      * at one of a workspace's variables, and a variable holds a
                      * scalar. The template offers exactly what the loader accepts.
                      */
+                    /*
+                     * The connection kinds a `connection` parameter may name,
+                     * written from the enumeration that does the accepting so the
+                     * editor and the loader cannot come to disagree about which
+                     * exist.
+                     */
+                    .replace(
+                        "@CONNECTION_TYPE_UNION@",
+                        declarations.connectionTypes().joinToString(" | ") { "'$it'" },
+                    )
                     .replace(
                         "@PARAMETER_TYPE_UNION@",
                         declarations.parameterTypes().joinToString(" | ") { "'$it'" },
@@ -240,6 +252,19 @@ class PluginUploadAPI(
             throw PluginPermissionsNotAcceptedException(permissions.viewOf(wanted))
         }
 
+        /*
+         * The same three steps for what the plugin asks the *server* to do, and
+         * deliberately not folded into the ones above: a capability reaches
+         * outside the sandbox where a permission does not, so accepting one must
+         * never be able to cover the other.
+         */
+        val wantedCapabilities = capabilities.validated(inspected.capabilities)
+        val heldCapabilities = plugins.findByKey(key)?.let { capabilities.read(it.acceptedCapabilities) } ?: emptySet()
+        val agreeingCapabilities = wantedCapabilities.isNotEmpty() && !heldCapabilities.containsAll(wantedCapabilities)
+        if (agreeingCapabilities && capabilities.accepted(accept) != wantedCapabilities) {
+            throw PluginCapabilitiesNotAcceptedException(capabilities.viewOf(wantedCapabilities))
+        }
+
         val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
 
         val existing = plugins.findByKey(key)
@@ -267,6 +292,8 @@ class PluginUploadAPI(
             this.declaredParameters = parameters
             this.declaredPermissions = permissions.write(wanted)
             this.acceptedPermissions = permissions.write(wanted)
+            this.declaredCapabilities = capabilities.write(wantedCapabilities)
+            this.acceptedCapabilities = capabilities.write(wantedCapabilities)
             this.permissionsAcceptedAt = acceptedAt
             this.permissionsAcceptedBy = acceptedBy
             this.sha256 = digest(source)
@@ -289,6 +316,8 @@ class PluginUploadAPI(
              * agreed to, or there was nothing to agree to.
              */
             acceptedPermissions = permissions.write(wanted),
+            declaredCapabilities = capabilities.write(wantedCapabilities),
+            acceptedCapabilities = capabilities.write(wantedCapabilities),
             permissionsAcceptedAt = acceptedAt,
             permissionsAcceptedBy = acceptedBy,
             sha256 = digest(source),
@@ -457,8 +486,32 @@ class PluginUploadAPI(
                * point at, which is what makes the parameter list a readable answer
                * to "what can this thing get at?".
                */
-              readonly settings: Readonly<Record<string, string | number | boolean>>;
+              readonly settings: Readonly<Record<string, string | number | boolean | OrknuxConnection<ConnectionType>>>;
             }
+
+            /** The kinds of connection a workspace can hold. */
+            type ConnectionType = @CONNECTION_TYPE_UNION@;
+
+            /**
+             * A connection the workspace configured, handed to a plugin as a handle.
+             *
+             * An id and a type and nothing else. A plugin cannot open a socket - the
+             * sandbox has no network and no permission can ask for one - so what
+             * crosses is a name for a connection the server will use on the plugin's
+             * behalf, never the connection itself and never its credential.
+             *
+             * The type parameter is what makes `SlackConnection` mean something: it
+             * appears as a member, so a Jira connection is not assignable where a
+             * Slack one is wanted and the mistake is caught where it is written
+             * rather than at the first call.
+             */
+            declare class OrknuxConnection<T extends ConnectionType> {
+              readonly id: number;
+              readonly type: T;
+            }
+
+            /** A Slack connection, which is what the Slack helpers take. */
+            type SlackConnection = OrknuxConnection<'SLACK'>;
 
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;
@@ -482,7 +535,7 @@ class PluginUploadAPI(
             }
 
             /** What a parameter may be: exactly what a workspace variable can hold. */
-            type OrknuxParameterType = @PARAMETER_TYPE_UNION@;
+            type OrknuxParameterType = @PARAMETER_TYPE_UNION@ | 'connection';
 
             declare class OrknuxParameter {
               constructor(declaration: {
@@ -508,6 +561,20 @@ class PluginUploadAPI(
                  * this installation keeps things it encrypts.
                  */
                 secret?: boolean;
+                /**
+                 * Which kind of connection, and required when `type` is
+                 * `'connection'`.
+                 *
+                 * It narrows the picker to the connections the plugin can
+                 * actually use: a Slack plugin handed a Jira connection has been
+                 * handed a credential it cannot read and fails at the first call,
+                 * which is a worse answer than a list that never offered it.
+                 *
+                 * What arrives in `settings` is then an `OrknuxConnection<T>` -
+                 * an id and a type, never the connection's credential. The
+                 * sandbox has no network; the server makes the call.
+                 */
+                connectionType?: ConnectionType;
               });
             }
 
@@ -628,6 +695,8 @@ class PluginAPI(
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
     private val permissions: PluginPermissions,
+    /** What it asks the server to do for it; see [PluginCapabilities]. */
+    private val capabilities: PluginCapabilities,
 ) {
 
     /** Everything loaded into this installation, by name. */

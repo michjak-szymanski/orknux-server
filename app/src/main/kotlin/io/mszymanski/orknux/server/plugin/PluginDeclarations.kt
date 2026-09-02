@@ -292,7 +292,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
         val returnType: ValueType,
     )
 
-    private companion object {
+    companion object {
         /** The same rule a workspace's own function names are held to. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
 

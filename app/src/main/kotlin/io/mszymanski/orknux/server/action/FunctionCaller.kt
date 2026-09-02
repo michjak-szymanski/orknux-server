@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
@@ -38,6 +39,7 @@ class FunctionCaller(
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
     private val pluginPermissions: PluginPermissions,
+    private val pluginCapabilities: PluginCapabilities,
     private val externals: VariableArguments,
 ) {
 
@@ -144,6 +146,10 @@ class FunctionCaller(
             // call from this plugin's row, so one plugin's agreement cannot reach
             // another's context.
             pluginPermissions.grantedTo(plugin),
+            // And what it may ask the server to do, read the same way and
+            // from its own row: a capability reaches outside the sandbox, so
+            // it is granted apart from the permissions above.
+            pluginCapabilities.grantedTo(plugin),
         )
     }
 }

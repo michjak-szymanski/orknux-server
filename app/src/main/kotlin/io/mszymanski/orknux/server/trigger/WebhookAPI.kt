@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.plugin.PluginParameters
+import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
@@ -66,6 +67,7 @@ class WebhookAPI(
     private val plugins: PluginRepository,
     private val pluginParameters: PluginParameters,
     private val pluginPermissions: PluginPermissions,
+    private val pluginCapabilities: PluginCapabilities,
     private val externals: VariableArguments,
     private val mapper: ObjectMapper,
 ) {
@@ -266,6 +268,10 @@ class WebhookAPI(
             // per call from this plugin's row, so one plugin's agreement cannot
             // reach another's context.
             pluginPermissions.grantedTo(plugin),
+            // And what it may ask the server to do, read the same way and
+            // from its own row: a capability reaches outside the sandbox, so
+            // it is granted apart from the permissions above.
+            pluginCapabilities.grantedTo(plugin),
         )
     }
 

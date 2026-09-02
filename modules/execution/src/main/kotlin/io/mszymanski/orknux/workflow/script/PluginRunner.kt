@@ -10,6 +10,8 @@ import org.graalvm.polyglot.Source
 import org.graalvm.polyglot.Value
 import org.graalvm.polyglot.io.IOAccess
 import org.springframework.boot.context.properties.ConfigurationProperties
+import org.graalvm.polyglot.proxy.ProxyExecutable
+import org.graalvm.polyglot.proxy.ProxyObject
 import org.springframework.stereotype.Service
 import java.util.concurrent.atomic.AtomicReference
 
@@ -36,7 +38,18 @@ import java.util.concurrent.atomic.AtomicReference
  * filled in, which is the point of it having to declare them.
  */
 @Service
-class PluginRunner(private val properties: PluginProperties) {
+class PluginRunner(
+    private val properties: PluginProperties,
+    /**
+     * What a plugin may ask the server to do on its behalf, or null where
+     * nothing offers it.
+     *
+     * Optional so this module goes on standing up without one - a plugin with no
+     * capabilities never reaches it, which is every plugin until one declares
+     * something. See [PluginHost].
+     */
+    private val host: PluginHost? = null,
+) {
 
     /**
      * Its own engine, so plugin sources — which are bundles, and large — do not
@@ -119,12 +132,16 @@ class PluginRunner(private val properties: PluginProperties) {
         arguments: List<String>,
         settings: String = "{}",
         permissions: Set<PluginPermission> = emptySet(),
+        capabilities: Set<PluginCapability> = emptySet(),
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, { newContext(permissions) }) {
-                ScriptResult.Returned(invoke(it, source, functionName, arguments, settings), millis(started))
+                ScriptResult.Returned(
+                    invoke(it, source, functionName, arguments, settings, capabilities),
+                    millis(started),
+                )
             }
         } catch (failure: PolyglotException) {
             ScriptResult.Failed(
@@ -152,6 +169,7 @@ class PluginRunner(private val properties: PluginProperties) {
         functionName: String,
         arguments: List<String>,
         settings: String,
+        capabilities: Set<PluginCapability>,
     ): String? {
         polyglot.eval("js", CONTRACT)
 
@@ -169,6 +187,7 @@ class PluginRunner(private val properties: PluginProperties) {
         // As text, like everything else that crosses, so the harness stays one
         // cached source rather than being respliced per call.
         bindings.putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
+        bind(bindings, capabilities)
         polyglot.eval("js", CALL)
 
         val error = bindings.getMember(ERROR)
@@ -252,6 +271,7 @@ class PluginRunner(private val properties: PluginProperties) {
                 type = text(one, "type") ?: return PluginInspection.Unreadable("a parameter has no type"),
                 required = flag(one, "required", default = true),
                 secret = flag(one, "secret", default = false),
+                connectionType = text(one, "connectionType"),
             )
         }
 
@@ -261,6 +281,22 @@ class PluginRunner(private val properties: PluginProperties) {
          * person is shown this list and agrees to it — and a list discovered on the
          * first call would be a list nobody was ever shown.
          */
+        val wantedCapabilities = if (plugin.hasMember("capabilities")) {
+            val declaredCapabilities = plugin.invokeMember("capabilities")
+            if (!declaredCapabilities.hasArrayElements()) {
+                return PluginInspection.Unreadable("capabilities() did not answer with an array")
+            }
+            (0 until declaredCapabilities.arraySize).map { at ->
+                val one = declaredCapabilities.getArrayElement(at)
+                if (!one.isString) {
+                    return PluginInspection.Unreadable("capabilities() answered with something that is not a name")
+                }
+                one.asString()
+            }
+        } else {
+            emptyList()
+        }
+
         val asked = plugin.invokeMember("permissions")
         if (!asked.hasArrayElements()) {
             return PluginInspection.Unreadable("permissions() did not answer with an array")
@@ -280,6 +316,7 @@ class PluginRunner(private val properties: PluginProperties) {
             functions = functions,
             parameters = parameters,
             permissions = permissions,
+            capabilities = wantedCapabilities,
         )
     }
 
@@ -380,6 +417,43 @@ class PluginRunner(private val properties: PluginProperties) {
      * The options are applied last and only from the enumeration, so nothing a
      * plugin wrote reaches this builder as text.
      */
+    /**
+     * The `orknux` object, holding exactly what this plugin was granted.
+     *
+     * A [ProxyExecutable] rather than a Java object: a proxy is a polyglot value
+     * the engine calls directly, so nothing here is host reflection and none of
+     * the denials in [newContext] has to be relaxed for it. A plugin granted
+     * nothing gets no host behind the `orknux` helpers, so they refuse in words
+     * rather than reaching anything. The helpers themselves are part of the
+     * contract and always there: a plugin calling one ungranted should be told
+     * so, not thrown whatever a call on undefined throws.
+     *
+     * Everything crosses as JSON text, both ways. A plugin handed a live object
+     * could walk from it to a class loader; a plugin handed a string can read
+     * the string.
+     */
+    private fun bind(bindings: Value, capabilities: Set<PluginCapability>) {
+        val server = host
+        if (capabilities.isEmpty() || server == null) return
+
+        val granted = LinkedHashMap<String, Any>()
+        capabilities.forEach { capability ->
+            granted[capability.name.lowercase()] = ProxyExecutable { given ->
+                /*
+                 * One argument, already JSON, because the contract hands it that
+                 * way. A plugin calling this by hand with something else is
+                 * refused rather than guessed at: the host is about to make a
+                 * call on a workspace's behalf, and inventing what was meant is
+                 * the wrong instinct there.
+                 */
+                val argument = given.firstOrNull()?.takeIf { it.isString }?.asString()
+                    ?: return@ProxyExecutable REFUSED
+                server.ask(capability, argument)
+            }
+        }
+        bindings.putMember(HOST, ProxyObject.fromMap(granted))
+    }
+
     private fun newContext(permissions: Set<PluginPermission>): Context = Context.newBuilder("js")
         .engine(engine)
         .allowExperimentalOptions(true)
@@ -436,6 +510,12 @@ class PluginRunner(private val properties: PluginProperties) {
         const val RESULT = "__orknuxPluginResult"
         const val ERROR = "__orknuxPluginError"
         const val RESULT_LIMIT = "__orknuxPluginResultLimit"
+
+        /** What the granted capabilities are bound as, and what the contract calls them. */
+        const val HOST = "__orknuxHost"
+
+        /** Said when a capability is called with something other than JSON. */
+        const val REFUSED = """{"error":"that call needs its arguments as JSON"}"""
 
         /** More than a plugin has any business offering, and a bound on the answer. */
         const val MAX_FUNCTIONS = 100
@@ -548,6 +628,56 @@ class PluginRunner(private val properties: PluginProperties) {
               permissions() {
                 return [];
               }
+
+              /**
+               * What this plugin asks the server to do on its behalf.
+               *
+               * Separate from permissions(), which only ever turns on a language
+               * builtin. These reach outside - so they are declared apart,
+               * granted apart, and shown apart to whoever accepts the plugin.
+               */
+              capabilities() {
+                return [];
+              }
+            };
+
+            /*
+             * What the server does on a plugin's behalf, holding exactly what
+             * this plugin was granted.
+             *
+             * Absent when it was granted nothing, which is why the helpers below
+             * say so rather than throwing whatever a call on undefined throws.
+             * Every one of them hands its arguments over as JSON and reads JSON
+             * back: nothing that crosses is an object either side could walk
+             * from.
+             */
+            globalThis.orknux = {
+              slack: {
+                /**
+                 * The messages in one Slack thread, oldest first.
+                 *
+                 * Takes the connection the workspace pointed this plugin at - or
+                 * the one a trigger says its event arrived on - so a workspace
+                 * with two Slacks reads the right one.
+                 *
+                 * Answers `{ messages: [{ ts, user, text, parent }], replies }`,
+                 * or `{ error }` saying why not. A refusal is data rather than a
+                 * thrown error because a plugin has to be able to say something
+                 * useful about it.
+                 */
+                thread(connection, channel, threadTs, limit) {
+                  const host = globalThis.__orknuxHost;
+                  if (host === undefined || host.slack_read_thread === undefined) {
+                    return { error: 'this plugin was not granted SLACK_READ_THREAD' };
+                  }
+                  const id = connection === null || typeof connection !== 'object'
+                    ? connection
+                    : connection.id;
+                  return JSON.parse(
+                    host.slack_read_thread(JSON.stringify([id, channel, threadTs, limit ?? null])),
+                  );
+                },
+              },
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {
@@ -561,6 +691,8 @@ class PluginRunner(private val properties: PluginProperties) {
                 this.type = declared.type;
                 this.required = declared.required === undefined ? true : declared.required;
                 this.secret = declared.secret === undefined ? false : declared.secret;
+                this.connectionType =
+                  declared.connectionType === undefined ? null : declared.connectionType;
 
                 if (typeof this.name !== 'string' || this.name.length === 0) {
                   throw new Error('an OrknuxParameter needs a name');
@@ -573,6 +705,15 @@ class PluginRunner(private val properties: PluginProperties) {
                 }
                 if (typeof this.secret !== 'boolean') {
                   throw new Error(this.name + ' says secret is neither true nor false');
+                }
+                // Said here as well as on the server, so a plugin author is told
+                // which half is wrong at the moment they write it rather than at
+                // the moment somebody tries to load it.
+                if (this.type === 'connection' && typeof this.connectionType !== 'string') {
+                  throw new Error(this.name + ' is a connection, so it needs a connectionType');
+                }
+                if (this.connectionType !== null && this.type !== 'connection') {
+                  throw new Error(this.name + ' names a connectionType but is not a connection');
                 }
               }
             };
@@ -653,6 +794,15 @@ sealed interface PluginInspection {
          * reason.
          */
         val permissions: List<String> = emptyList(),
+        /**
+         * What it asks the server to do on its behalf, exactly as it wrote it.
+         *
+         * Names for the reason the permissions above are names: one this server
+         * does not have is a refusal with a sentence in it, not something to drop
+         * quietly - and dropping it would load a plugin having granted it less
+         * than it asked for, which fails later for no stated reason.
+         */
+        val capabilities: List<String> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */
@@ -688,6 +838,17 @@ data class DeclaredParameter(
     val type: String,
     val required: Boolean,
     val secret: Boolean,
+    /**
+     * Which kind of connection, when [type] is `connection`.
+     *
+     * A connection parameter is answered by pointing at one of the workspace's
+     * connections rather than by typing anything, and the kind is what narrows
+     * the list to the ones the plugin can actually use: a Slack plugin handed a
+     * Jira connection has been handed a credential it cannot read and will fail
+     * at the first call, which is a worse answer than a picker that never
+     * offered it. Null for every other type.
+     */
+    val connectionType: String? = null,
 )
 
 @ConfigurationProperties(prefix = "orknux.plugin")

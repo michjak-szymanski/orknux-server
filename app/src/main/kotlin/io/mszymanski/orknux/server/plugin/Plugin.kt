@@ -115,6 +115,21 @@ class Plugin(
     @Column(name = "accepted_permissions", nullable = false, columnDefinition = "text")
     var acceptedPermissions: String = "[]",
 
+    /**
+     * What it asks the *server* to do on its behalf, as JSON, as of this load.
+     *
+     * Kept apart from [declaredPermissions] because they are different in kind
+     * and the difference is the point: a permission turns on a language builtin
+     * and reaches nothing, while a capability is the server making a call for
+     * the plugin. Two lists, granted separately, shown separately. Issue #316.
+     */
+    @Column(name = "declared_capabilities", nullable = false, columnDefinition = "text")
+    var declaredCapabilities: String = "[]",
+
+    /** What a person agreed to of those, as JSON. Read the note on acceptedPermissions. */
+    @Column(name = "accepted_capabilities", nullable = false, columnDefinition = "text")
+    var acceptedCapabilities: String = "[]",
+
     /** Null for a plugin that asks for nothing: there was nothing to accept. */
     @Column(name = "permissions_accepted_at")
     var permissionsAcceptedAt: OffsetDateTime? = null,

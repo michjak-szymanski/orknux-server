@@ -572,6 +572,8 @@ CREATE TABLE plugin
     declared_parameters          text not null default '[]',
     declared_permissions         text not null default '[]',
     accepted_permissions         text not null default '[]',
+    declared_capabilities        text not null default '[]',
+    accepted_capabilities        text not null default '[]',
     permissions_accepted_at      timestamp,
     permissions_accepted_by      varchar(120)
 );

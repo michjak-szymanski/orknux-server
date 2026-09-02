@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.plugin
 
+import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
@@ -26,6 +27,8 @@ class PluginParameters(
     private val settings: PluginParameterSettingRepository,
     private val variables: WorkspaceVariableRepository,
     private val declarations: PluginDeclarations,
+    /** Where a connection parameter's handle is checked against a real row. */
+    private val connections: WorkspaceConnectionService,
     private val mapper: ObjectMapper,
 ) {
 
@@ -174,6 +177,26 @@ class PluginParameters(
      */
     private fun resolved(parameter: PluginParameterView, setting: PluginParameterSetting?): String? {
         if (setting == null) return null
+
+        /*
+         * A connection parameter names a row rather than holding a value, and
+         * what crosses into the sandbox is a handle: the id and the kind, and
+         * nothing else. Never the credential - the plugin has no network to use
+         * it on, and the server is what makes the call.
+         *
+         * Checked against the connections this workspace actually has, so a
+         * connection deleted after somebody pointed at it reads as unanswered
+         * rather than as a handle to nothing. Issue #316.
+         */
+        if (parameter.type.equals(PluginDeclarations.CONNECTION, ignoreCase = true)) {
+            val id = setting.literalValue?.toLongOrNull() ?: return null
+            val connection = connections.workspaceConnection(id) ?: return null
+            if (parameter.connectionType != null && connection.type.name != parameter.connectionType) return null
+            val handle = mapper.createObjectNode()
+            handle.put("id", id)
+            handle.put("type", connection.type.name)
+            return mapper.writeValueAsString(handle)
+        }
 
         setting.literalValue?.let { return asJson(parameter.type, it) }
 

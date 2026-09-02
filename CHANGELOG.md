@@ -98,6 +98,28 @@ have failed.
   models in one workspace can differ. Off unless it is turned on, so nothing
   reads differently until somebody asks for it.
 
+- 🧩 **A plugin can ask the server to read a Slack thread.** Slack's message
+  event carries no reply count, so *is this the first reply* - the commonest
+  thing anybody gates a workflow on - cannot be answered from what arrives; the
+  thread has to be read, and reading it needs the network a plugin deliberately
+  does not have. So the server makes the call, under a capability the plugin
+  declares and somebody accepts. Capabilities are a second list beside the
+  permissions and are accepted separately, because the two differ in kind: a
+  permission turns on a language feature and reaches nothing, while a capability
+  is this server acting on the plugin''''s behalf. Nothing about the sandbox is
+  relaxed to do it.  is
+  declared in the plugin template, so any editor completes it and refuses a
+  connection of the wrong kind.
+
+- 🔗 **A Slack trigger says which connection its event arrived on, and a function
+  condition can be handed arguments.** Both are what the above needs to be
+  correct rather than merely possible: a workspace with two Slack connections has
+  two Slacks, and a thread read through the wrong one is somebody else''''s. A
+  condition now takes one argument per parameter its function declares - a
+  written value, or a reference to a field the run carries, such as the trigger''''s
+  thread and the connection it came in on. A condition with none behaves exactly
+  as it did.
+
 ### 🔧 Changed
 
 - ⚠️ **The quick chat panel now writes down what it did.** It ran a tool loop of

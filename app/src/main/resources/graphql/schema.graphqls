@@ -5371,6 +5371,25 @@ enum ConditionCheck {
     WORKSPACEMATE
 }
 
+"""
+One argument a function condition passes.
+
+The same three fields a node's mapping has, because it is the same decision: a
+value written in, or the name of a field the run is carrying, and which of the
+two it is.
+"""
+type ConditionArgument {
+    name: String!
+    expression: String!
+    mode: MappingMode!
+}
+
+input ConditionArgumentInput {
+    name: String!
+    expression: String!
+    mode: MappingMode!
+}
+
 "A question a workspace asks about what a run is carrying, defined once."
 type Condition {
     id: ID!
@@ -5387,6 +5406,8 @@ type Condition {
     functionName: String
     "What the check compares against."
     values: [String!]!
+    "What a function condition passes, one per parameter, in the function's order."
+    arguments: [ConditionArgument!]!
     "The conditions a composite is made of."
     members: [ID!]!
     memberNames: [String!]!
@@ -5413,6 +5434,15 @@ input CreateConditionInput {
     negate: Boolean
     functionId: ID
     values: [String!]
+    """
+    What a function condition passes, one per parameter, in the function's order.
+
+    Empty is what every condition written before this holds, and it means what it
+    always meant: the function is handed what the run is carrying, as one
+    argument, then the workspace values it declared. A condition only starts
+    passing arguments once somebody fills them in.
+    """
+    arguments: [ConditionArgumentInput!]
     members: [ID!]
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
@@ -5426,6 +5456,15 @@ input UpdateConditionInput {
     negate: Boolean
     functionId: ID
     values: [String!]
+    """
+    What a function condition passes, one per parameter, in the function's order.
+
+    Empty is what every condition written before this holds, and it means what it
+    always meant: the function is handed what the run is carrying, as one
+    argument, then the workspace values it declared. A condition only starts
+    passing arguments once somebody fills them in.
+    """
+    arguments: [ConditionArgumentInput!]
     members: [ID!]
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String

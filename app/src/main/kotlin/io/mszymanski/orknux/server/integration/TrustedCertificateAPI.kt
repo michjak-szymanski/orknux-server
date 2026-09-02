@@ -48,6 +48,24 @@ class TrustedCertificateAPI(
         return certificates.add(name, pem, currentUser())
     }
 
+    /** One, for the page that edits it. */
+    @QueryMapping
+    fun trustedCertificate(@Argument id: Long): TrustedCertificateView? {
+        access.requireAdmin()
+        return certificates.list().firstOrNull { it.id == id }
+    }
+
+    /** Renames one, replaces the certificate on it, or both. */
+    @MutationMapping
+    fun updateTrustedCertificate(
+        @Argument id: Long,
+        @Argument name: String,
+        @Argument pem: String,
+    ): TrustedCertificateView {
+        access.requireAdmin()
+        return certificates.update(id, name, pem)
+    }
+
     /**
      * Stops trusting one.
      *

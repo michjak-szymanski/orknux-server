@@ -62,7 +62,9 @@ have failed.
   stops. The hostname is still checked and the chain still has to build; there is
   no trust-everything switch, deliberately. An authority that has expired says so
   on its row rather than quietly not working, and removing one takes effect on
-  the next connection rather than at the next restart.
+  the next connection rather than at the next restart. A paste that is not a
+  certificate is refused in words that say what to do rather than as Java'''s own
+  *No certificate data found*.
 
 - 🔌 **An MCP server can be asked whether it is there, and says what went
   wrong.** There was no way to check one: an address that was wrong or a token

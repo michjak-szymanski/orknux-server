@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.plugin
 
+import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
 import io.mszymanski.orknux.workflow.script.DeclaredParameter
@@ -128,12 +129,58 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 throw PluginDeclarationInvalidException("it declares the parameter ${parameter.name} more than once")
             }
 
+            /*
+             * A connection is the one parameter that is neither typed in nor
+             * read from a variable: it points at a row the workspace already
+             * has, and what crosses into the sandbox is a handle to it rather
+             * than anything the connection holds. So it is checked here on its
+             * own terms and never against [SETTABLE], which is about scalars.
+             */
+            if (parameter.type.trim().equals(CONNECTION, ignoreCase = true)) {
+                val kind = connectionType(parameter.connectionType)
+                    ?: throw PluginDeclarationInvalidException(
+                        "the parameter ${parameter.name} is a connection but does not say which kind. " +
+                            "It has to name one of ${connectionTypes().joinToString(", ")}.",
+                    )
+                if (parameter.secret) {
+                    /*
+                     * Refused rather than ignored. A connection parameter holds
+                     * no secret - it names a row, and the credential on that row
+                     * is decrypted on the far side of the sandbox and never
+                     * crosses it - so a plugin marking one secret has
+                     * misunderstood what it is being given, and letting that
+                     * through would leave the screen promising a protection that
+                     * means nothing here.
+                     */
+                    throw PluginDeclarationInvalidException(
+                        "the parameter ${parameter.name} is a connection and cannot be a secret: it names a " +
+                            "connection rather than holding one's credential.",
+                    )
+                }
+
+                val node = array.addObject()
+                node.put("name", parameter.name)
+                parameter.description?.let { node.put("description", it) }
+                node.put("type", CONNECTION)
+                node.put("connectionType", kind.name)
+                node.put("required", parameter.required)
+                node.put("secret", false)
+                return@forEach
+            }
+
+            if (parameter.connectionType != null) {
+                throw PluginDeclarationInvalidException(
+                    "the parameter ${parameter.name} names a connection kind but is a \"${parameter.type}\".",
+                )
+            }
+
             val type = valueType(parameter.type)
             if (type == null || type !in SETTABLE) {
                 throw PluginDeclarationInvalidException(
-                    "the parameter ${parameter.name} is a \"${parameter.type}\". A parameter is either typed in " +
-                        "or points at one of the workspace's variables, so it has to be one of " +
-                        "${parameterTypes().joinToString(", ")}.",
+                    "the parameter ${parameter.name} is a \"${parameter.type}\". A parameter is either typed in, " +
+                        "points at one of the workspace's variables, or names one of the workspace's " +
+                        "connections, so it has to be one of " +
+                        "${(parameterTypes() + CONNECTION).joinToString(", ")}.",
                 )
             }
 
@@ -171,6 +218,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                  */
                 required = node.get("required")?.asBoolean() ?: false,
                 secret = node.get("secret")?.asBoolean() ?: false,
+                connectionType = node.get("connectionType")?.asString(),
             )
         }
     }.getOrElse { emptyList() }
@@ -231,6 +279,12 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
     private fun valueType(name: String): ValueType? =
         ValueType.entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
 
+    /** The connection kinds a plugin may name, as it should write them. */
+    fun connectionTypes(): List<String> = ConnectionType.entries.map { it.name }
+
+    private fun connectionType(name: String?): ConnectionType? =
+        name?.trim()?.let { wanted -> ConnectionType.entries.firstOrNull { it.name.equals(wanted, ignoreCase = true) } }
+
     private data class Checked(
         val name: String,
         val description: String?,
@@ -249,6 +303,13 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
          * order, since this is also what the template offers.
          */
         val SETTABLE = listOf(ValueType.STRING, ValueType.NUMBER, ValueType.BOOLEAN)
+
+        /**
+         * How a plugin spells a parameter that names one of the workspace's
+         * connections. Not a [ValueType]: those are what a value can be, and
+         * this is a reference to a row.
+         */
+        const val CONNECTION = "connection"
     }
 }
 

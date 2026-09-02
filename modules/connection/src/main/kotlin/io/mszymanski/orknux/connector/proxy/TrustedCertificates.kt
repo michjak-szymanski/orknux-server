@@ -84,8 +84,7 @@ data class TrustedCertificateView(
     val expired: Boolean,
 )
 
-class CertificateInvalidException(why: String) :
-    RuntimeException("That is not a certificate this can read: $why")
+class CertificateInvalidException(why: String) : RuntimeException(why)
 
 class TrustedCertificateNotFoundException(id: Long) :
     RuntimeException("No trusted certificate with id $id")
@@ -153,7 +152,7 @@ class TrustedCertificates(private val certificates: TrustedCertificateRepository
     @Transactional
     fun add(name: String, pem: String, by: String): TrustedCertificateView {
         val wanted = name.trim()
-        if (wanted.isEmpty()) throw CertificateInvalidException("it has no name")
+        if (wanted.isEmpty()) throw CertificateInvalidException("Give it a name, so it can be told from the others.")
 
         val text = pem.trim()
         val read = read(text)
@@ -170,6 +169,34 @@ class TrustedCertificates(private val certificates: TrustedCertificateRepository
         rebuild()
         log.info("Trusting certificate {} ({}), added by {}", saved.name, saved.subject, by)
         return view(saved)
+    }
+
+    /**
+     * Renames one, replaces the certificate on it, or both.
+     *
+     * The same row rather than a delete and an add, because the row is what a
+     * page is open on: an authority whose certificate was rotated is the same
+     * authority, and making somebody remove it and add it back would lose the
+     * name they chose and the record of who put it there.
+     */
+    @Transactional
+    fun update(id: Long, name: String, pem: String): TrustedCertificateView {
+        val row = certificates.findByIdOrNull(id) ?: throw TrustedCertificateNotFoundException(id)
+
+        val wanted = name.trim()
+        if (wanted.isEmpty()) throw CertificateInvalidException("Give it a name, so it can be told from the others.")
+
+        val text = pem.trim()
+        val read = read(text)
+
+        row.name = wanted
+        row.pem = text
+        row.subject = read.subjectX500Principal.name.take(SUBJECT_LENGTH)
+        row.expiresAt = read.notAfter.toInstant().atOffset(OffsetDateTime.now().offset)
+        certificates.save(row)
+        rebuild()
+        log.info("Trusted certificate {} updated ({})", row.name, row.subject)
+        return view(row)
     }
 
     @Transactional
@@ -190,13 +217,31 @@ class TrustedCertificates(private val certificates: TrustedCertificateRepository
      * next handshake — as one more failure among the ones being debugged — is
      * the worst possible moment.
      */
-    private fun read(pem: String): X509Certificate = try {
-        val factory = java.security.cert.CertificateFactory.getInstance("X.509")
-        val all = pem.byteInputStream(Charsets.UTF_8).use { factory.generateCertificates(it) }
-        all.filterIsInstance<X509Certificate>().firstOrNull()
-            ?: throw CertificateInvalidException("there is no certificate in it")
-    } catch (failure: CertificateException) {
-        throw CertificateInvalidException(failure.message ?: "it could not be parsed")
+    private fun read(pem: String): X509Certificate {
+        if (pem.isEmpty()) throw CertificateInvalidException("Paste the certificate in PEM.")
+        if (!pem.contains(PEM_HEADER)) {
+            /*
+             * Said by shape rather than by what the parser answered. Java's own
+             * words for this are "No certificate data found", which is true and
+             * tells somebody who has pasted a private key, a DER file or the
+             * wrong half of a bundle nothing whatever about which of those they
+             * did.
+             */
+            throw CertificateInvalidException(
+                "That does not look like PEM. It has to start with $PEM_HEADER - if what you have is a .der " +
+                    "or .cer file, convert it first.",
+            )
+        }
+        return try {
+            val factory = java.security.cert.CertificateFactory.getInstance("X.509")
+            val all = pem.byteInputStream(Charsets.UTF_8).use { factory.generateCertificates(it) }
+            all.filterIsInstance<X509Certificate>().firstOrNull()
+                ?: throw CertificateInvalidException("There is no certificate in that, only its headers.")
+        } catch (failure: CertificateException) {
+            throw CertificateInvalidException(
+                "That certificate could not be read: ${failure.message ?: "the text between the headers is not valid base64"}.",
+            )
+        }
     }
 
     /**
@@ -260,5 +305,7 @@ class TrustedCertificates(private val certificates: TrustedCertificateRepository
     private companion object {
         /** A distinguished name can run long; the column is what bounds it. */
         const val SUBJECT_LENGTH = 500
+
+        const val PEM_HEADER = "-----BEGIN CERTIFICATE-----"
     }
 }

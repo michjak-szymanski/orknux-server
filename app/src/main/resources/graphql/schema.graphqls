@@ -149,6 +149,8 @@ type Query {
     a trust-everything switch here.
     """
     trustedCertificates: [TrustedCertificate!]!
+    "One of them, for the page that edits it. Administrators only."
+    trustedCertificate(id: ID!): TrustedCertificate
     """
     Which rule one URL would go through, and which rules it beat to it.
 
@@ -1262,6 +1264,14 @@ type Mutation {
     time to take one off.
     """
     trustCertificate(name: String!, pem: String!): TrustedCertificate!
+    """
+    Renames one, replaces the certificate on it, or both.
+
+    The same row rather than a delete and an add: an authority whose certificate
+    was rotated is the same authority, and removing it and adding it back would
+    lose the name it was given and the record of who put it there.
+    """
+    updateTrustedCertificate(id: ID!, name: String!, pem: String!): TrustedCertificate!
     """
     Stops trusting one.
 

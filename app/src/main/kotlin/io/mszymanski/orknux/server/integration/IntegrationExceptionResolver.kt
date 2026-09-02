@@ -10,6 +10,7 @@ import io.mszymanski.orknux.connector.connection.ConnectionUrlInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerAddressInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerNameInvalidException
 import io.mszymanski.orknux.connector.connection.McpServerNameTakenException
+import io.mszymanski.orknux.connector.proxy.CertificateInvalidException
 import io.mszymanski.orknux.connector.proxy.ProxyRuleNameInvalidException
 import io.mszymanski.orknux.connector.proxy.ProxyRuleNameTakenException
 import io.mszymanski.orknux.connector.proxy.ProxyRulePatternInvalidException
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Component
 import io.mszymanski.orknux.connector.connection.ConnectionNotFoundException as ModuleConnectionNotFound
 import io.mszymanski.orknux.connector.connection.McpServerNotFoundException as ModuleMcpServerNotFound
 import io.mszymanski.orknux.connector.proxy.ProxyRuleNotFoundException as ModuleProxyRuleNotFound
+import io.mszymanski.orknux.connector.proxy.TrustedCertificateNotFoundException as ModuleTrustedCertificateNotFound
 import io.mszymanski.orknux.connector.shell.ShellNotFoundException as ModuleShellNotFound
 
 /**
@@ -55,6 +57,8 @@ class IntegrationExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ShellAddressInvalidException,
             is ShellKeyInvalidException,
             is ShellLimitInvalidException,
+            // A paste that went wrong, which is the ordinary way this fails.
+            is CertificateInvalidException,
             -> ErrorType.BAD_REQUEST
 
             // A machine that will not answer is not the caller's mistake, and
@@ -69,6 +73,7 @@ class IntegrationExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ModuleConnectionNotFound,
             is ModuleMcpServerNotFound,
             is ModuleProxyRuleNotFound,
+            is ModuleTrustedCertificateNotFound,
             is ModuleShellNotFound,
             is ShellSessionNotFoundException,
             -> ErrorType.NOT_FOUND

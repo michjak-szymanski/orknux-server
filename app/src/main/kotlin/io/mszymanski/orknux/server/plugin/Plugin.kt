@@ -202,6 +202,15 @@ data class PluginParameterView(
     val type: String,
     val required: Boolean,
     val secret: Boolean,
+    /**
+     * Which kind of connection this names, when [type] is `connection`.
+     *
+     * What the settings form narrows its picker by. Null for every other type,
+     * and null on a declaration written before connection parameters existed —
+     * which is the same thing said twice, since such a declaration has no
+     * connection parameter to be missing it.
+     */
+    val connectionType: String? = null,
 )
 
 /**

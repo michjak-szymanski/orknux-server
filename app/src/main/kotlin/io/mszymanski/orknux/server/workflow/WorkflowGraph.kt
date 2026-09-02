@@ -101,7 +101,11 @@ class NodeMapping(
      */
     @Column(name = "source_node_key", length = 64)
     var sourceNodeKey: String? = null,
-)
+) {
+
+    /** A separate one saying the same thing, for a node being copied. */
+    fun copy() = NodeMapping(name = name, expression = expression, mode = mode, sourceNodeKey = sourceNodeKey)
+}
 
 /** Whether a parameter holds something written or something read. */
 enum class MappingMode {
@@ -314,7 +318,45 @@ class WorkflowNode(
      */
     @Column(name = "retry_budget_seconds")
     var retryBudgetSeconds: Int? = null,
-)
+) {
+
+    /**
+     * The same node, drawn in another workflow.
+     *
+     * Here rather than beside the duplicating so that a column added above is
+     * one edit and not two: a copy that quietly stopped carrying a field would
+     * look like a duplicate that worked, and be a workflow that did something
+     * else. The key is kept, because it is only ever unique within a workflow
+     * and the edges being copied name it.
+     */
+    fun copyInto(workflowId: Long) = WorkflowNode(
+        workflowId = workflowId,
+        nodeKey = nodeKey,
+        kind = kind,
+        name = name,
+        description = description,
+        agentId = agentId,
+        triggerId = triggerId,
+        outputName = outputName,
+        orientation = orientation,
+        icon = icon,
+        mappings = mappings.map { it.copy() }.toMutableList(),
+        actionId = actionId,
+        conditionId = conditionId,
+        objectId = objectId,
+        positionX = positionX,
+        positionY = positionY,
+        yesLabel = yesLabel,
+        noLabel = noLabel,
+        fallbackEnabled = fallbackEnabled,
+        retryAttempts = retryAttempts,
+        retryBackoffSeconds = retryBackoffSeconds,
+        retryMultiplier = retryMultiplier,
+        retryMaxWaitSeconds = retryMaxWaitSeconds,
+        retryJitter = retryJitter,
+        retryBudgetSeconds = retryBudgetSeconds,
+    )
+}
 
 @Entity
 @Table(name = "workflow_edge")
@@ -343,7 +385,12 @@ class WorkflowEdge(
     @Enumerated(EnumType.STRING)
     @Column(length = 8)
     val branch: EdgeBranch? = null,
-)
+) {
+
+    /** The same edge, drawn in another workflow. See [WorkflowNode.copyInto]. */
+    fun copyInto(workflowId: Long) =
+        WorkflowEdge(workflowId = workflowId, sourceKey = sourceKey, targetKey = targetKey, branch = branch)
+}
 
 /** The ways out of a node, as the edges leaving it are labelled. */
 enum class EdgeBranch {

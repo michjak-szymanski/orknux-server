@@ -936,6 +936,28 @@ type Mutation {
     deleteWorkspace(id: ID!): Boolean!
     "Creates the workflow definition and assigns it to the workspace."
     createWorkflow(input: CreateWorkflowInput!): WorkspaceWorkflow!
+    """
+    The same workflow again under another name, in the same workspace.
+
+    The graph comes with it: every node with its settings, its mappings and
+    where it sits, and every edge with the branch it leaves by. The triggers are
+    pointed at rather than copied - two workflows may name one trigger, and a
+    duplicated trigger would be a second webhook path nobody asked for.
+
+    **The copy is a draft**, whatever the original was, which is what makes it
+    safe to copy a workflow that has triggers on it: an event runs the published
+    copy and this has never been published, so nothing starts it until somebody
+    publishes it.
+
+    `name` is optional. Left out, it is the original's with *(copy)* after it,
+    and a number after that if it is taken - names are unique across the
+    installation, so a duplicate that refused on the name would refuse on
+    exactly the press somebody makes twice.
+
+    Neither the publications nor the runs are carried: one belongs to the
+    workflow that was published, and the other happened to the original.
+    """
+    duplicateWorkflow(id: ID!, name: String): WorkspaceWorkflow!
     setWorkflowEnabled(id: ID!, enabled: Boolean!): WorkspaceWorkflow!
     "Saves the workflow settings form; the definition is shared by every workspace using it."
     updateWorkflow(id: ID!, input: UpdateWorkflowInput!): WorkspaceWorkflow!

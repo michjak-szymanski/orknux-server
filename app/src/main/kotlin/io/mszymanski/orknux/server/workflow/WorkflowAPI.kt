@@ -47,6 +47,7 @@ class WorkflowAPI(
     private val assignments: WorkspaceWorkflowRepository,
     private val runs: ExecutionService,
     private val nodes: WorkflowNodeRepository,
+    private val edges: WorkflowEdgeRepository,
     private val triggers: WorkflowTriggerRepository,
     private val workspaces: WorkspaceRepository,
     private val access: WorkspaceAccess,
@@ -86,6 +87,78 @@ class WorkflowAPI(
         val assignment = assignments.save(WorkspaceWorkflow(workspaceId = input.workspaceId, workflow = workflow, enabled = true))
         auditRecorder.record(input.workspaceId, WorkspaceAuditCategory.WORKFLOW, "Workflow $name created")
         return WorkspaceWorkflowView(assignment)
+    }
+
+    /**
+     * The same workflow again, under another name, to change without risking the
+     * one that works.
+     *
+     * A workflow is the one thing here somebody edits *while it is in use*, and
+     * the way to try a change safely was to redraw it node by node. So this
+     * copies the graph whole: every node with its settings, its mappings and
+     * where it sits, and every edge with the branch it leaves by.
+     *
+     * **The copy is a draft, whatever the original was.** That is what makes it
+     * safe to copy a workflow with triggers on it: an event runs the published
+     * copy, and this has never been published, so nothing starts it until
+     * somebody says so. The triggers themselves are pointed at, not copied -
+     * two workflows may name one trigger, and duplicating the trigger would be
+     * a second webhook path nobody asked for.
+     *
+     * The name is the caller's, or *(copy)* with a number after it when that is
+     * taken too. Workflow names are unique across the installation, so a
+     * duplicate that refused on the name would refuse on exactly the press
+     * somebody makes twice.
+     *
+     * Nothing else is carried: not the publications, which belong to the
+     * workflow that was published, and not the runs, which are history and
+     * happened to the original.
+     */
+    @MutationMapping
+    @Transactional
+    fun duplicateWorkflow(@Argument id: Long, @Argument name: String?): WorkspaceWorkflowView {
+        val assignment = assignments.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw WorkflowNotFoundException(id)
+
+        val source = assignment.workflow
+        val sourceId = requireNotNull(source.id)
+        val wanted = name?.trim()?.ifEmpty { null }
+        if (name != null && wanted == null) throw WorkflowNameInvalidException()
+        if (wanted != null && workflows.findByName(wanted) != null) throw WorkflowNameTakenException(wanted)
+
+        val copy = workflows.save(
+            Workflow(name = wanted ?: freeName(source.name), description = source.description),
+        )
+        val copyId = requireNotNull(copy.id)
+
+        nodes.saveAll(nodes.findByWorkflowId(sourceId).map { it.copyInto(copyId) })
+        edges.saveAll(edges.findByWorkflowId(sourceId).map { it.copyInto(copyId) })
+
+        val made = assignments.save(
+            WorkspaceWorkflow(workspaceId = assignment.workspaceId, workflow = copy, enabled = assignment.enabled),
+        )
+        auditRecorder.record(
+            assignment.workspaceId,
+            WorkspaceAuditCategory.WORKFLOW,
+            "Workflow ${source.name} duplicated as ${copy.name}",
+        )
+        return WorkspaceWorkflowView(made)
+    }
+
+    /**
+     * "Triage (copy)", or the first number after it that is free.
+     *
+     * Counted rather than made unique with a timestamp or an id, because the
+     * name is what somebody reads in a list. A second copy of one workflow is
+     * *(copy 2)*, which says what it is; a name with a number of the machine's
+     * choosing in it says only that the machine was here.
+     */
+    private fun freeName(from: String): String {
+        val first = "$from (copy)"
+        if (workflows.findByName(first) == null) return first
+        var at = 2
+        while (workflows.findByName("$from (copy $at)") != null) at += 1
+        return "$from (copy $at)"
     }
 
     /** Backs the workflow settings form. The definition is shared, so a rename is org-wide. */

@@ -19,6 +19,18 @@ have failed.
 
 ### ✨ Added
 
+- 🔁 **A workflow can be duplicated.** Trying a change to a workflow that is
+  already in use meant either redrawing it node by node or editing the one that
+  works. The copy button on a workflow's row takes the graph whole - every node
+  with its settings, its mappings and where it sits, every edge with the branch
+  it leaves by - and opens the copy's canvas. **The copy is always a draft**,
+  whatever the original was, which is what makes this safe to press on a
+  workflow with triggers on it: an event runs the published copy, so nothing
+  starts the duplicate until somebody publishes it. The triggers are pointed at
+  rather than copied, since a duplicated trigger would be a second webhook path
+  nobody asked for. It is named for what it came from, numbered if that is
+  taken, so pressing it twice makes a second copy instead of a refusal.
+
 - 🔌 **An MCP server can be asked whether it is there, and says what went
   wrong.** There was no way to check one: an address that was wrong or a token
   that had expired showed up as an agent quietly having fewer tools than its

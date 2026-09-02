@@ -210,6 +210,8 @@ class SlackListener(
                 mention.ts?.let { put("ts", it) }
                 // Where a reply goes: the thread if there is one, else the message.
                 (mention.threadTs ?: mention.ts)?.let { put("threadTs", it) }
+                // The same as for a message: which Slack this came from.
+                put("connection", connectionId.toString())
                 slackWorkspaceId?.let { put("slackWorkspaceId", it) }
             },
         )
@@ -284,6 +286,15 @@ class SlackListener(
             // `channel`, `im`, `mpim`, `group` - what a workflow reads to tell a
             // direct message from a channel, which the channel id does not say.
             message.channelType?.let { put("channelType", it) }
+            /*
+             * Which connection this arrived on.
+             *
+             * So a later node can answer back, or read the thread, through the
+             * one it came from rather than through whichever the workspace
+             * happens to list first: two Slack connections are two Slacks, and
+             * the difference only shows up as somebody else's messages.
+             */
+            put("connection", connectionId.toString())
             slackWorkspaceId?.let { put("slackWorkspaceId", it) }
         }
 

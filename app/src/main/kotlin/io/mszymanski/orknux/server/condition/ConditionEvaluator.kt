@@ -17,6 +17,7 @@ import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
 import tools.jackson.databind.JsonNode
 import tools.jackson.databind.ObjectMapper
+import io.mszymanski.orknux.server.workflow.MappingMode
 import java.time.Clock
 import java.time.OffsetDateTime
 import java.time.LocalTime
@@ -67,6 +68,22 @@ class ConditionEvaluator(
     }
 
     /**
+     * One field of what the run is carrying, as JSON.
+     *
+     * `null` for a field that is not there, which is the same answer a node's
+     * reference gives: a condition asking about a thread on a message that has
+     * none should decide, not fail. A dotted name walks into nested objects, as
+     * everywhere else a reference is written.
+     */
+    private fun reference(path: String, input: String?): String {
+        val carried = runCatching { mapper.readTree(input ?: "null") }.getOrNull() ?: return "null"
+        val found = path.split('.').fold<String, JsonNode?>(carried) { held, step ->
+            if (held == null || !held.isObject) null else held.get(step)
+        }
+        return found?.toString() ?: "null"
+    }
+
+    /**
      * Runs the workspace's function in the sandbox and takes its answer.
      *
      * The function is handed what the run is carrying, and has to say true or
@@ -77,10 +94,27 @@ class ConditionEvaluator(
         val function = condition.functionId?.let { functions.findByIdOrNull(it) }
             ?: throw ConditionNotDecidableException("${condition.name} names a function that has been deleted")
 
-        // What the run is carrying, then the workspace's own values: a condition
-        // checking something against a stored secret is the same shape as an
-        // action doing it.
-        val arguments = listOf(input ?: "null") + externals.of(function)
+        /*
+         * What the condition says to pass, then the workspace's own values.
+         *
+         * A condition with nothing written on it passes what the run is
+         * carrying, as one argument — which is what every condition did before
+         * arguments existed, and is why one written last week goes on meaning
+         * what it meant. A condition that names its arguments passes those
+         * instead: a reference reads a field out of what the run carries, so
+         * "the thread this arrived on" and "the connection it came from" can be
+         * handed in rather than dug out of the payload by the function.
+         *
+         * The workspace's values come last either way, because that is where a
+         * function declares them and where its declaration expects them.
+         */
+        val written = condition.arguments.map { argument ->
+            when (argument.mode) {
+                MappingMode.VALUE -> mapper.writeValueAsString(argument.expression)
+                MappingMode.REFERENCE -> reference(argument.expression, input)
+            }
+        }
+        val arguments = written.ifEmpty { listOf(input ?: "null") } + externals.of(function)
         /*
          * A plugin's function is not this workspace's JavaScript — its source
          * column holds a note saying where the implementation lives — so it is

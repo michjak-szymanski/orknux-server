@@ -3,7 +3,9 @@ package io.mszymanski.orknux.server.condition
 import io.mszymanski.orknux.server.graphql.Refusal
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
+import io.mszymanski.orknux.server.workflow.MappingMode
 import jakarta.persistence.ElementCollection
+import jakarta.persistence.Embeddable
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
 import jakarta.persistence.Enumerated
@@ -78,6 +80,27 @@ enum class ConditionCheck {
 }
 
 /**
+ * One argument a function condition passes, as written on the condition.
+ *
+ * Deliberately the same three fields `NodeMapping` has rather than something of
+ * its own: a value written in, or the name of a field the run is carrying, and
+ * which of the two it is. Two spellings of one idea would be two things to keep
+ * in step and two places for a reference to stop resolving.
+ */
+@Embeddable
+class ConditionArgument(
+    @Column(name = "name", nullable = false, length = 64)
+    var name: String = "",
+
+    @Column(name = "expression", nullable = false, columnDefinition = "text")
+    var expression: String = "",
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "mode", nullable = false, length = 16)
+    var mode: MappingMode = MappingMode.VALUE,
+)
+
+/**
  * A question a workspace asks about what a run is carrying, defined once.
  *
  * Conditions are used from two places — a wait that holds until one holds, and a
@@ -126,6 +149,26 @@ class WorkflowCondition(
     @OrderColumn(name = "position")
     @Column(name = "value", length = 500)
     var values: MutableList<String> = mutableListOf(),
+
+    /**
+     * What a [ConditionType.FUNCTION] condition passes to its function, one per
+     * parameter, in the function's own order.
+     *
+     * Empty is what every condition written before this holds, and it means what
+     * it always meant: the function is handed what the run is carrying, as one
+     * argument, followed by the workspace values it declared. So nothing that
+     * worked stops working, and a condition only starts passing arguments when
+     * somebody fills them in.
+     *
+     * The same shape a node's mappings have - a written value or a reference to
+     * a field the run carries - because it is the same decision: a condition
+     * asking "is this the first reply" needs the thread and the connection it
+     * arrived on, and those are fields of the run rather than constants.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "workflow_condition_argument", joinColumns = [JoinColumn(name = "condition_id")])
+    @OrderColumn(name = "position")
+    var arguments: MutableList<ConditionArgument> = mutableListOf(),
 
     /** The conditions a composite is made of, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)

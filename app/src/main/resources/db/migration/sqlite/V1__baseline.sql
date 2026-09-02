@@ -936,6 +936,17 @@ CREATE TABLE workflow_condition
     constraint workflow_condition_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE workflow_condition_argument
+(
+    condition_id integer not null,
+    position     integer not null,
+    name         varchar(64) not null,
+    expression   text not null,
+    mode         varchar(16) not null,
+    primary key (condition_id, position),
+    constraint workflow_condition_argument_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE CASCADE
+);
+
 CREATE TABLE workflow_condition_member
 (
     condition_id                 integer not null,

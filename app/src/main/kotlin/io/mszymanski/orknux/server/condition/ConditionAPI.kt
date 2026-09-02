@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.dependency.ComponentDependants
 import io.mszymanski.orknux.server.dependency.DependencyKind
 import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.workflow.MappingMode
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -67,6 +68,7 @@ class ConditionAPI(
                 negate = input.negate ?: false,
                 functionId = input.functionId,
                 values = input.values.orEmpty().clean(),
+                arguments = input.arguments.orEmpty().toArguments(),
                 members = input.members.orEmpty().toMutableList(),
                 icon = input.icon?.trim()?.ifEmpty { null },
             ).also { validate(it, itsOwnId = null) },
@@ -96,6 +98,7 @@ class ConditionAPI(
         input.negate?.let { condition.negate = it }
         input.functionId?.let { condition.functionId = it }
         input.values?.let { condition.values = it.clean() }
+        input.arguments?.let { condition.arguments = it.toArguments() }
         input.members?.let { condition.members = it.toMutableList() }
         // Sent whenever the form saves, so null is "no icon" rather than "not
         // mentioned" — which is what lets Clear clear it.
@@ -157,6 +160,9 @@ class ConditionAPI(
             functionId = condition.functionId,
             functionName = function?.name,
             values = condition.values.toList(),
+            arguments = condition.arguments.map {
+                ConditionArgumentView(name = it.name, expression = it.expression, mode = it.mode)
+            },
             members = condition.members.toList(),
             icon = condition.icon,
             memberNames = names,
@@ -345,9 +351,30 @@ data class CreateConditionInput(
     val negate: Boolean? = null,
     val functionId: Long? = null,
     val values: List<String>? = null,
+    /** What a function condition passes, one per parameter, in the function's order. */
+    val arguments: List<ConditionArgumentInput>? = null,
     val members: List<Long>? = null,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String? = null,
+)
+
+/** One argument a function condition passes: a written value, or a field of the run. */
+/**
+ * The rows a form sent, as the entity keeps them.
+ *
+ * A row with no name is dropped, exactly as an unnamed value is: the form draws
+ * one per parameter and a parameter nobody filled in is not an argument.
+ */
+private fun List<ConditionArgumentInput>.toArguments(): MutableList<ConditionArgument> =
+    filter { it.name.trim().isNotEmpty() }
+        .map { ConditionArgument(name = it.name.trim(), expression = it.expression, mode = it.mode) }
+        .toMutableList()
+
+/** One argument a function condition passes: a written value, or a field of the run. */
+data class ConditionArgumentInput(
+    val name: String,
+    val expression: String,
+    val mode: MappingMode,
 )
 
 data class UpdateConditionInput(
@@ -358,9 +385,18 @@ data class UpdateConditionInput(
     val negate: Boolean? = null,
     val functionId: Long? = null,
     val values: List<String>? = null,
+    /** What a function condition passes. Absent leaves what is stored alone. */
+    val arguments: List<ConditionArgumentInput>? = null,
     val members: List<Long>? = null,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String? = null,
+)
+
+/** One of them, as the screen reads it back. */
+data class ConditionArgumentView(
+    val name: String,
+    val expression: String,
+    val mode: MappingMode,
 )
 
 data class ConditionView(
@@ -375,6 +411,8 @@ data class ConditionView(
     val functionId: Long?,
     val functionName: String?,
     val values: List<String>,
+    /** What a function condition passes, one per parameter, in the function's order. */
+    val arguments: List<ConditionArgumentView>,
     val members: List<Long>,
     val memberNames: List<String>,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */

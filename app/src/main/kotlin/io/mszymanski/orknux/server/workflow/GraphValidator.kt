@@ -486,7 +486,15 @@ class GraphValidator(
 
         val fromFiring = when (trigger.type) {
             TriggerType.SCHEDULED -> listOf("cron", "firedAt")
-            TriggerType.INCOMING_CONNECTION -> listOf("action", "text", "channel", "user", "ts", "threadTs")
+            /*
+             * `connection` is the connection the event arrived on, and it is
+             * offered for the same reason the channel and the thread are: a
+             * later node has to be able to answer back through the one it came
+             * from. A workspace with two Slack connections has two Slacks, and
+             * reading a thread through the wrong one reads somebody else's.
+             */
+            TriggerType.INCOMING_CONNECTION ->
+                listOf("action", "text", "channel", "user", "ts", "threadTs", "connection")
             // A webhook's fields are whatever its contract says, below.
             TriggerType.WEBHOOK -> emptyList()
         }.map { ActionParamView(it, ValueType.STRING) }

@@ -273,6 +273,17 @@ jobs:
         working-directory: orknux-ui
         run: node scripts/suite/fixture.mjs >> "$GITHUB_ENV"
 
+      # What the checks took last time, so the runner can put the cheap ones
+      # first and a broken build says so early rather than forty minutes in.
+      # Restored best-effort: with no cache the run is in declaration order,
+      # which is exactly what it was before. Issue #308.
+      - name: What the checks cost last time
+        uses: actions/cache@v4
+        with:
+          path: orknux-ui/scripts/suite/results/timings.json
+          key: browser-suite-timings-${{ github.run_id }}
+          restore-keys: browser-suite-timings-
+
       - name: Run the browser suite
         working-directory: orknux-ui
         run: node scripts/suite/run.mjs --ci

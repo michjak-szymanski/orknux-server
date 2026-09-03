@@ -198,6 +198,8 @@ class ConditionEvaluator(
             // from its own row: a capability reaches outside the sandbox, so
             // it is granted apart from the permissions above.
             pluginCapabilities.grantedTo(plugin),
+        
+            on = condition.workspaceId,
         )
     }
 

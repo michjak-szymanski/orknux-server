@@ -31,12 +31,29 @@ import tools.jackson.databind.ObjectMapper
 class SlackPluginHost(
     private val threads: SlackThreads,
     private val mapper: ObjectMapper,
+    /**
+     * The other thing the server does on a caller's behalf; see
+     * [NetworkPluginHost].
+     *
+     * One host object answers every capability, so this is where the second one
+     * is reached from. A host per capability would mean the runner holding a
+     * list and deciding which to ask, which is a decision with nothing in it.
+     */
+    private val network: NetworkPluginHost,
 ) : PluginHost {
 
     private val log = LoggerFactory.getLogger(javaClass)
 
     override fun ask(capability: PluginCapability, argument: String, on: Long?): String = when (capability) {
         PluginCapability.SLACK_READ_THREAD -> readThread(argument, on)
+        /*
+         * No workspace scoping, and the reason is not that it was forgotten: a
+         * request names an address rather than one of the workspace's own
+         * things, so there is nothing here for a workspace to be the boundary
+         * of. What bounds this is the grant and the proxy rules, which is said
+         * at length on the capability and on NetworkPluginHost.
+         */
+        PluginCapability.NETWORK_REQUEST -> network.request(argument)
     }
 
     /**

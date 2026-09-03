@@ -685,6 +685,47 @@ class PluginRunner(
                   );
                 },
               },
+
+              http: {
+                /**
+                 * One HTTP request, made by the server on this plugin's behalf.
+                 *
+                 * Granted per plugin and accepted by an administrator, in the
+                 * words on NETWORK_REQUEST. Where it may get to is the
+                 * installation's proxy rules, which this cannot see and cannot
+                 * argue with.
+                 *
+                 * Answers `{ status, headers, body }`, or `{ error }` saying why
+                 * not. A refusal is data, like everywhere else here: a plugin has
+                 * to be able to say something useful about one.
+                 *
+                 * `body` is text. Anything that is not text is refused rather
+                 * than guessed at - a plugin that wanted bytes would have to say
+                 * what it meant to do with them in a sandbox that has no files.
+                 */
+                request(what) {
+                  const host = globalThis.__orknuxHost;
+                  if (host === undefined || host.network_request === undefined) {
+                    return { error: 'this plugin was not granted NETWORK_REQUEST' };
+                  }
+                  const asked = what === null || typeof what !== 'object' ? { url: what } : what;
+                  return JSON.parse(
+                    host.network_request(
+                      JSON.stringify([
+                        asked.url ?? null,
+                        (asked.method ?? 'GET').toUpperCase(),
+                        asked.headers ?? {},
+                        asked.body ?? null,
+                      ]),
+                    ),
+                  );
+                },
+
+                /** The same, for the request nearly everybody wants. */
+                get(url, headers) {
+                  return globalThis.orknux.http.request({ url, method: 'GET', headers });
+                },
+              },
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {

@@ -112,6 +112,27 @@ have failed.
   connection of the wrong kind, because a `SlackConnection` carries its kind in
   its type.
 
+- 🌐 **A plugin an administrator agrees to can make requests.** A plugin knows one
+  outside service, and until now it could only ask the server about Slack. It can
+  now ask for **`NETWORK_REQUEST`** — the widest thing on the capability list, and
+  the summary says so where somebody reads it before accepting: *make requests to
+  any address this server can reach*. Off until it is granted, granted per plugin,
+  and every request goes out through the proxy rules, so an installation's own
+  rules govern where it gets to — the same rules an MCP call and a Slack call obey.
+
+  **The sandbox did not change.** There is still no socket, no `fetch` and no way
+  to ask for one: a capability is a function the server implements, and what
+  crosses is a url in and a status, some headers and a string back. So a package
+  that calls `require('net')` is exactly as uninstallable as it was, which is
+  worth knowing before reaching for this to fix one. `file:` and anything else
+  that is not http is refused, and a plugin cannot set the headers that would
+  make this server's request look like somebody else's.
+
+  A workspace's **functions** do not get this one. They get the Slack call,
+  because that can only reach connections belonging to the workspace the run is
+  in — but a function is written by whoever can write one and runs the moment it
+  is saved, and there is nobody in that story to agree to anything.
+
 - 📦 **A package that is more than one file can now be installed.** Most
   published packages are: an entry that requires a file beside it, or a second
   package, was answered with *build a bundle and upload it* — and the person

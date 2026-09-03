@@ -30,6 +30,21 @@ package io.mszymanski.orknux.workflow.script
 enum class PluginCapability(
     /** What it gives, as a person deciding whether to accept a plugin reads it. */
     val summary: String,
+    /**
+     * Whether a workspace's own functions get this without anybody accepting it.
+     *
+     * **The difference is that a plugin has somebody to ask and a function does
+     * not.** A plugin is loaded once for the installation and an administrator
+     * accepts what it declares, in the words above; a function is written by
+     * whoever can write one and runs the moment it is saved. So a capability is
+     * offered to functions only where it is safe *without* a grant - which
+     * means bounded by something other than somebody's judgement.
+     *
+     * Reading a thread qualifies: it can only reach connections belonging to the
+     * workspace the run is in, which the runner takes from the run. Making a
+     * request does not: its bound is the grant, and there is nobody to give one.
+     */
+    val forScripts: Boolean,
 ) {
 
     /**
@@ -39,7 +54,35 @@ enum class PluginCapability(
      * handle comes from a `connection` parameter somebody filled in, so a plugin
      * granted this can still only reach the Slack a workspace handed it.
      */
-    SLACK_READ_THREAD("Read a Slack thread, through a connection it was given"),
+    SLACK_READ_THREAD("Read a Slack thread, through a connection it was given", forScripts = true),
+
+    /**
+     * Make an HTTP request, to an address of the plugin's choosing.
+     *
+     * **The widest thing on this list, and the summary says so** — because the
+     * summary is what somebody reads in the moment they decide. Everything else
+     * here is narrow by construction: reading a thread reaches Slack, through a
+     * connection a workspace pointed at, and nowhere else. This reaches whatever
+     * the plugin asks for, which is the point of it and also the whole of its
+     * risk — a plugin granted this can address anything the *server* can, which
+     * on most installations includes things the person accepting it cannot.
+     *
+     * Three things hold it in, and none of them is the sandbox:
+     *
+     *   the grant   an administrator accepts it, in these words, per plugin. It
+     *               is off until somebody says otherwise
+     *   the rules   every request goes out through `ProxyRouter`, so an
+     *               installation's proxy rules govern where it gets to — the
+     *               same rules an MCP call and a Slack call obey
+     *   the shape   a request is a call the server makes and an answer that
+     *               comes back as data. The plugin never holds a socket, so
+     *               there is nothing to keep open, to listen on, or to hand about
+     *
+     * What this deliberately is **not** is a network for the sandbox. A package
+     * calling `require('net')` still cannot be installed and never will be: it
+     * wants Node's socket API, and this is a function.
+     */
+    NETWORK_REQUEST("Make requests to any address this server can reach", forScripts = false),
 
     ;
 

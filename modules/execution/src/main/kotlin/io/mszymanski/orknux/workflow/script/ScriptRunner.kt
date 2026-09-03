@@ -496,7 +496,13 @@ class ScriptRunner(
         val bindings = polyglot.getBindings("js")
         if (server != null) {
             val granted = LinkedHashMap<String, Any>()
-            PluginCapability.entries.forEach { capability ->
+            /*
+             * Only what a function may have without anybody accepting it. A
+             * plugin declares what it wants and an administrator agrees to it;
+             * a function is written and runs, so what it gets has to be bounded
+             * by something other than somebody's judgement. See `forScripts`.
+             */
+            PluginCapability.entries.filter { it.forScripts }.forEach { capability ->
                 granted[capability.name.lowercase()] = ProxyExecutable { given ->
                     val argument = given.firstOrNull()?.takeIf { it.isString }?.asString()
                         ?: return@ProxyExecutable REFUSED

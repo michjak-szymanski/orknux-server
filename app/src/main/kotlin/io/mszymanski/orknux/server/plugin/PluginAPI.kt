@@ -588,7 +588,50 @@ class PluginUploadAPI(
                   limit?: number,
                 ): SlackThread;
               };
+
+              http: {
+                /**
+                 * One HTTP request, made by the server on this plugin's behalf.
+                 *
+                 * Needs the `NETWORK_REQUEST` capability, which is the widest
+                 * thing a plugin can ask for and the one an administrator will
+                 * think hardest about: it reaches anything the server can. Ask
+                 * for it only if the plugin is about an outside service, and say
+                 * in the plugin's description which one.
+                 *
+                 * Where a request may get to is the installation's proxy rules,
+                 * which this cannot see and cannot argue with. The body comes
+                 * back as text; there are no bytes here, because there is
+                 * nowhere in the sandbox to put them.
+                 *
+                 * @param what the url on its own, or the whole request.
+                 */
+                request(
+                  what:
+                    | string
+                    | {
+                        url: string;
+                        method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
+                        headers?: Record<string, string>;
+                        body?: string;
+                      },
+                ): OrknuxResponse;
+
+                /** The same, for the request nearly everybody wants. */
+                get(url: string, headers?: Record<string, string>): OrknuxResponse;
+              };
             };
+
+            /**
+             * What came back, or why nothing did.
+             *
+             * A refusal is data rather than a thrown error, so a plugin can say
+             * something useful about it - and so a condition that could not be
+             * decided does not quietly decide.
+             */
+            type OrknuxResponse =
+              | { status: number; headers: Record<string, string>; body: string; error?: undefined }
+              | { error: string; status?: undefined; headers?: undefined; body?: undefined };
 
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;

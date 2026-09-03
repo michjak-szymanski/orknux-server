@@ -158,8 +158,16 @@ class LibraryBundleTest {
         assertThat(bundle).doesNotContain("THIS SHOULD NOT BE HERE")
     }
 
+    /**
+     * With no compiler handed in, an ES module cannot go in a bundle.
+     *
+     * Which is what the default `rewrite` says, and what this asserts: the unit
+     * tests here describe what a bundle *is* and do not want three megabytes of
+     * Babel to do it. The compiled path is `LibraryBundleInstallTest`, where a
+     * package published only as an ES module installs and runs.
+     */
     @Test
-    fun `an ES module is refused, by name`() {
+    fun `an ES module is refused where nothing can rewrite it`() {
         assertThatThrownBy {
             LibraryBundle.of(
                 mapOf(
@@ -171,10 +179,32 @@ class LibraryBundleTest {
             )
         }
             .isInstanceOf(LibraryBundleEsmException::class.java)
-            // The file is named, at the end: for a package four levels down in a
-            // graph it is the only way to know which of them it was.
+            // The file is named: for a package four levels down in a graph it is
+            // the only way to know which of them it was.
             .hasMessageContaining("index.js")
-            .hasMessageContaining("newer module format")
+    }
+
+    /**
+     * A file the compiler could rewrite goes in rewritten, and says so.
+     *
+     * The compiler itself is a parameter, so this can describe what the bundler
+     * does with one without loading Babel: what is asserted is that the rewritten
+     * text is what was emitted, and that the header names the file it happened
+     * to. `LibraryBundleInstallTest` is where a real one runs.
+     */
+    @Test
+    fun `a rewritten file goes in rewritten, and the header names it`() {
+        val bundle = LibraryBundle.of(
+            mapOf("index.js" to "export default 1;"),
+            entry = "index.js",
+            named = "modern",
+            rewrite = { _, _ -> "module.exports = { was: 'rewritten' };" },
+        )
+
+        assertThat(bundle).contains("was: 'rewritten'")
+        assertThat(bundle).doesNotContain("export default 1;")
+        assertThat(bundle).contains("rewritten as CommonJS by Babel")
+        assertThat(members(bundle)).containsExactly("was")
     }
 
     @Test

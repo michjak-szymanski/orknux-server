@@ -20,20 +20,25 @@ package io.mszymanski.orknux.server.library
  * ## What it does, and what it refuses
  *
  * It walks the graph from an entry, following `require` literals, and emits every
- * file it reaches inside one registry with a `require` of its own. **The module
- * bodies are copied byte for byte.** Nothing is rewritten, minified or
- * transformed — which is the property that makes a bundle this server built
- * something an administrator can still read, and is why resolution is a table
- * rather than a rewrite: each module is handed a map from the specifier it
- * actually wrote to the file that answered it.
+ * file it reaches inside one registry with a `require` of its own. **A CommonJS
+ * file is copied byte for byte** - nothing is minified and no specifier is
+ * rewritten, which is why resolution is a table rather than a rewrite: each
+ * module is handed a map from the specifier it actually wrote to the file that
+ * answered it.
+ *
+ * An ES module is the one exception, and the bundle says which files it was:
+ * `import` is syntax, so those are rewritten as CommonJS by a compiler on the
+ * way in. A bundle an administrator cannot read back to what was published is
+ * worth much less, so the files that are the published file and the ones that
+ * are not are told apart in the header.
  *
  * Three things are refused rather than guessed at, all of them by name:
  *
- *   an ES module    anywhere in the graph. Turning `import` into `require` is
- *                   transpiling, and a regular expression that thinks it can is
- *                   the thing that quietly breaks somebody's library six months
- *                   later. A single ES module needs no bundling and never
- *                   reaches here at all.
+ *   an ES module    only where the compiler cannot parse it. `import` is syntax
+ *                   and cannot be handed a `require`, so an ES module is
+ *                   rewritten as CommonJS before it goes in - by Babel, which
+ *                   does that for a living, and never by a regular expression
+ *                   written here.
  *   a missing file  a specifier nothing in the set answers, said with the file
  *                   that asked for it - which is the sentence somebody who
  *                   forgot to select a file needs
@@ -69,7 +74,8 @@ object LibraryBundle {
         entry: String,
         named: String,
         packages: Map<String, String> = emptyMap(),
-    ): String = bundle(modules, entry, named, packages).source
+        rewrite: (String, String) -> String? = { _, _ -> null },
+    ): String = bundle(modules, entry, named, packages, rewrite).source
 
     /**
      * The same thing, with the list of what actually went in.
@@ -84,11 +90,22 @@ object LibraryBundle {
         entry: String,
         named: String,
         packages: Map<String, String> = emptyMap(),
+        /**
+         * An ES module, as CommonJS, or null where that cannot be done.
+         *
+         * Passed in rather than reached for, so this stays a function of its
+         * arguments and its own tests do not need a three-megabyte compiler to
+         * say what a bundle looks like. The default refuses, which is what this
+         * did before there was a compiler at all.
+         */
+        rewrite: (String, String) -> String? = { _, _ -> null },
     ): Bundled {
         require(modules.containsKey(entry)) { "the entry $entry is not among the files" }
 
         val reached = LinkedHashMap<String, MutableMap<String, String>>()
-        walk(entry, modules, packages, named, reached)
+        /** What the compiler made of a file, where it had to make anything. */
+        val rewritten = LinkedHashMap<String, String>()
+        walk(entry, modules, packages, named, reached, rewrite, rewritten)
 
         val emitted = StringBuilder()
         emitted.append("/*\n")
@@ -96,11 +113,17 @@ object LibraryBundle {
         emitted.append(if (reached.size == 1) "file" else "files")
         emitted.append(". Entry: $entry\n")
         emitted.append(" *\n")
-        emitted.append(" * Every file below is the file as it arrived. Nothing is rewritten: each one\n")
-        emitted.append(" * is handed a require that looks its own specifiers up in the table beside it.\n")
+        emitted.append(" * Each file below is the file as it arrived, handed a require that looks its\n")
+        emitted.append(" * own specifiers up in the table beside it.\n")
+        if (rewritten.isNotEmpty()) {
+            emitted.append(" *\n")
+            emitted.append(" * These were published as ES modules and rewritten as CommonJS by Babel, since\n")
+            emitted.append(" * `import` is syntax and a bundle has nothing to hand it:\n")
+            rewritten.keys.forEach { emitted.append(" *   ").append(it).append("\n") }
+        }
         emitted.append(" */\n")
         emitted.append("var __orknux_modules = {\n")
-        for ((path, source) in reached.keys.associateWith { requireNotNull(modules[it]) }) {
+        for ((path, source) in reached.keys.associateWith { rewritten[it] ?: requireNotNull(modules[it]) }) {
             emitted.append("  ").append(quoted(path)).append(": function (module, exports, require) {\n")
             /*
              * A JSON file is data and not code: dropped in as it stands it would
@@ -128,7 +151,24 @@ object LibraryBundle {
         emitted.append("};\n")
 
         emitted.append(RUNTIME)
-        emitted.append("module.exports = __orknux_require(").append(quoted(entry)).append(");\n")
+        /*
+         * The interop every bundler has, and for the reason they all have it.
+         *
+         * A file that was an ES module comes out of the compiler exporting under
+         * `.default`, with `__esModule` set to say so - that is what the spelling
+         * means. Handed on as it stands, a library whose entry was an ES module
+         * would export `{ __esModule, default }` and every call into it would
+         * read `imports.thing.default.something`. So the default is unwrapped,
+         * which is what `import thing from` would have given; a module with named
+         * exports and no default is handed on whole.
+         */
+        emitted.append("var __orknux_entry = __orknux_require(").append(quoted(entry)).append(");\n")
+        emitted.append(
+            "module.exports =\n" +
+                "  __orknux_entry && __orknux_entry.__esModule && 'default' in __orknux_entry\n" +
+                "    ? __orknux_entry.default\n" +
+                "    : __orknux_entry;\n",
+        )
         return Bundled(emitted.toString(), reached.keys.toList())
     }
 
@@ -149,9 +189,11 @@ object LibraryBundle {
         packages: Map<String, String>,
         named: String,
         reached: MutableMap<String, MutableMap<String, String>>,
+        rewrite: (String, String) -> String?,
+        rewritten: MutableMap<String, String>,
     ) {
         if (reached.containsKey(path)) return
-        val source = modules[path] ?: return
+        var source = modules[path] ?: return
         val specifiers = LinkedHashMap<String, String>()
         reached[path] = specifiers
 
@@ -174,7 +216,10 @@ object LibraryBundle {
          * that is neither spelling. A file with a `require` and no exports would
          * be refused as modern when what is wrong with it is what it requires.
          */
-        if (LibrarySource.esm(source)) throw LibraryBundleEsmException(named, path)
+        if (LibrarySource.esm(source)) {
+            source = rewrite(source, path) ?: throw LibraryBundleEsmException(named, path)
+            rewritten[path] = source
+        }
 
         for (specifier in LibrarySource.requires(source)) {
             if (specifiers.containsKey(specifier)) continue
@@ -183,7 +228,7 @@ object LibraryBundle {
             val answered = resolve(specifier, path, modules, packages)
                 ?: throw LibraryBundleMissingException(named, path, specifier)
             specifiers[specifier] = answered
-            walk(answered, modules, packages, named, reached)
+            walk(answered, modules, packages, named, reached, rewrite, rewritten)
         }
     }
 
@@ -322,28 +367,22 @@ object LibraryBundle {
 }
 
 /**
- * A file in the graph is written in the newer module format.
+ * A file could not be made into the spelling a bundle holds.
  *
- * **The wording is the whole of this class.** It used to say that a file "is an
- * ES module, and turning import into require is a job for a bundler rather than
- * for this", and offer to have the install pointed at the package's CommonJS
- * build. Both halves were wrong for the person reading it: the first is a
- * sentence about this server's internals, and the second names a thing that
- * often does not exist - `http-proxy-agent@9.1.0` is `"type": "module"` with one
- * entry, so there is no other build to point at and no control here that would
- * point at one.
+ * **This used to be the refusal for every ES module and is now only for a file
+ * the compiler cannot read.** The old text said the package was "published only
+ * in the newer module format" and offered to have the install pointed at a
+ * CommonJS build — which was a sentence about this server's limits, and named a
+ * thing that often does not exist. Both are gone: an ES module is compiled now,
+ * and what is left here is a file with something in it that is not JavaScript.
  *
- * So it says which package, that the package is published in one format only,
- * and the two things somebody can actually do about it: an earlier version, or a
- * file built elsewhere. The path is still named, at the end, because for a
- * package four levels down in a graph that is the only way to know which one of
- * them it was.
+ * The compiler's own reason is logged where it was found, with the line and the
+ * column. What is said here is which file, because in a graph forty files deep
+ * that is the part nothing else can tell you.
  */
 class LibraryBundleEsmException(named: String, path: String) : RuntimeException(
-    "$named is published only in the newer module format, and a library here has to be the older one " +
-        "— nothing in this server rewrites one into the other, because getting that wrong breaks a " +
-        "library quietly rather than loudly. Try an earlier version if the package still published both, " +
-        "or build it into a single file with a bundler and upload that. (The file is $path.)",
+    "$named could not be bundled: $path could not be read as JavaScript. The server log has the " +
+        "compiler's own reason, with the line it stopped at.",
 )
 
 /** Something was required that is not among the files. */

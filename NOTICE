@@ -56,3 +56,18 @@ Trademark law governs those separately, whatever a licence says about code.
 
 A commercial licence — which lifts the attribution requirement above and the
 source obligations of the AGPL — is available from the copyright holder.
+
+
+BUNDLED THIRD-PARTY CODE
+------------------------
+
+modules/execution/src/main/resources/js/babel.min.js is @babel/standalone
+7.26.4, distributed under the MIT licence, copyright (c) 2014-present Sebastian
+McKenzie and other contributors. Its source and licence are at
+https://github.com/babel/babel.
+
+It is vendored rather than fetched because installing a library has to work on
+an installation with no way out to a network, and because what compiles a
+library should not change under it. It is used for one transform - turning an ES
+module into CommonJS so that a library made of several files can be bundled into
+the one file a library has to be - and it never runs anything it compiles.

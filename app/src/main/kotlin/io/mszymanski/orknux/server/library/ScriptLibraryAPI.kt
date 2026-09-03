@@ -8,7 +8,9 @@ import io.mszymanski.orknux.server.dependency.DependencyAPI
 import io.mszymanski.orknux.server.dependency.DependencyKind
 import io.mszymanski.orknux.server.dependency.phrases
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.workflow.script.EsModules
 import io.mszymanski.orknux.workflow.script.LibraryInspection
+import io.mszymanski.orknux.workflow.script.Rewritten
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
@@ -58,7 +60,24 @@ class ScriptLibraryUploadAPI(
     private val libraries: ScriptLibraryRepository,
     private val access: WorkspaceAccess,
     private val store: LibraryStore,
+    /** Turns an ES module into the spelling a bundle can hold; see [EsModules]. */
+    private val modules: EsModules,
 ) {
+    /**
+     * One ES module as CommonJS, or null where the compiler could not read it.
+     *
+     * The shape [LibraryBundle] wants: it does not know what a compiler is and
+     * should not, so it asks for a file and gets one back or nothing. What is
+     * lost by answering null is only the reason, and the reason is logged where
+     * it was found - by Babel, which is the only thing here that knows what is
+     * wrong with somebody's syntax.
+     */
+    private fun asCommonJs(source: String, path: String): String? =
+        when (val held = modules.toCommonJs(source, path)) {
+            is Rewritten.Done -> held.source
+            is Rewritten.Refused -> null
+        }
+
 
     @PostMapping("/api/libraries")
     @Transactional
@@ -141,7 +160,7 @@ class ScriptLibraryUploadAPI(
         val chosen = entry.trim().removePrefix("./").removePrefix("/")
         if (!modules.containsKey(chosen)) throw LibraryBundleMissingException(named, "the form", chosen)
 
-        val made = LibraryBundle.bundle(modules, chosen, named)
+        val made = LibraryBundle.bundle(modules, chosen, named, rewrite = ::asCommonJs)
         val stored = store.store(
             key = named,
             filename = chosen,
@@ -345,7 +364,23 @@ class ScriptLibraryAPI(
     private val mapper: ObjectMapper,
     private val registry: NpmRegistry,
     private val store: LibraryStore,
+    private val modules: EsModules,
 ) {
+    /**
+     * One ES module as CommonJS, or null where the compiler could not read it.
+     *
+     * The shape [LibraryBundle] wants: it does not know what a compiler is and
+     * should not, so it asks for a file and gets one back or nothing. What is
+     * lost by answering null is only the reason, and the reason is logged where
+     * it was found - by Babel, which is the only thing here that knows what is
+     * wrong with somebody's syntax.
+     */
+    private fun asCommonJs(source: String, path: String): String? =
+        when (val held = modules.toCommonJs(source, path)) {
+            is Rewritten.Done -> held.source
+            is Rewritten.Refused -> null
+        }
+
 
     /**
      * Whether a package can be named here, and where one would come from.
@@ -424,7 +459,7 @@ class ScriptLibraryAPI(
      */
     private fun bundled(spec: String, allowed: Boolean, why: LibraryDependsException): ScriptLibraryInstall {
         val gathered = registry.gather(spec)
-        val made = LibraryBundle.bundle(gathered.modules, gathered.entry, spec, gathered.packages)
+        val made = LibraryBundle.bundle(gathered.modules, gathered.entry, spec, gathered.packages, ::asCommonJs)
         val parts = gathered.parts.map {
             LibraryPartView(it.packageName, it.version, it.entry, it.integrity)
         }

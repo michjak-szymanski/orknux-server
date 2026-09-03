@@ -122,16 +122,26 @@ have failed.
   several files at once does the same thing, and asks which of them it is
   entered by rather than guessing.
 
-  The files go in as they arrived — nothing is rewritten, minified or
-  transpiled — and what went in is listed on the row afterwards, because a
-  bundle is an artefact **this installation assembled**: no registry published
-  it, and nobody outside can hash it to the same thing. That is why it is
-  offered rather than done quietly. An ES module in the graph is refused by
-  name rather than transpiled, and so is a file reaching for Node's `fs`; two
-  packages needing different versions of a third are refused with both versions,
-  since one file cannot hold two. Where a package publishes a `browser` map — the
-  field saying what to do with a file where there is no Node — it is honoured,
-  because that is exactly the environment a library runs in. Nothing about the sandbox changed: a bundle is
+  A CommonJS file goes in exactly as it arrived — nothing minified, no specifier
+  rewritten — and what went in is listed on the row afterwards, because a bundle
+  is an artefact **this installation assembled**: no registry published it, and
+  nobody outside can hash it to the same thing. That is why it is offered rather
+  than done quietly.
+
+  **A package published only as an ES module works too.** `import` is syntax and
+  a bundle has nothing to hand it, so those files are rewritten as CommonJS on
+  the way in — by Babel, which does that for a living, vendored so an
+  installation with no network still installs libraries. The bundle's header
+  names every file that happened to, so what is the published file and what is
+  not can still be told apart. The first library that needs the compiler waits
+  about two and a half seconds for it to load, once, ever.
+
+  A file reaching for Node's `fs` is still refused by name, and so is one the
+  compiler cannot parse; two packages needing different versions of a third are
+  refused with both versions, since one file cannot hold two. Where a package
+  publishes a `browser` map — the field saying what to do with a file where there
+  is no Node — it is honoured, because that is exactly the environment a library
+  runs in. Nothing about the sandbox changed: a bundle is
   CommonJS and is wrapped on the way in exactly as any other CommonJS library
   is.
 

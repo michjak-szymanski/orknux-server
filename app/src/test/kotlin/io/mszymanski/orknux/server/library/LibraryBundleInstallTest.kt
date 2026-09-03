@@ -182,7 +182,38 @@ class LibraryBundleInstallTest(
     }
 
     /**
-     * A package publishing only an ES build is refused rather than mangled.
+     * A package published only as an ES module, installed.
+     *
+     * `import` is syntax and a bundle has nothing to hand it, so this is the one
+     * kind of file that does not go in as it was published: Babel rewrites it on
+     * the way in. The assertion is the members, read off the evaluated value in
+     * the sandbox - so a rewrite that produced text and not a working module
+     * fails here rather than passes.
+     */
+    @Test
+    fun `a package published only as an ES module is compiled and bundled`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "modern@1.0.0", bundle: true) {
+                installed { key members { name } }
+              }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.installed.key").entity(String::class.java).isEqualTo("modern")
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java)
+            .containsExactly("shout")
+
+        val stored = requireNotNull(libraries.findByKey("modern"))
+        // Which files are not the published ones, said in the bundle: one nobody
+        // can read back to a package is worth much less than one they can.
+        assertThat(stored.source).contains("rewritten as CommonJS")
+        assertThat(stored.source).contains("lib/loud.js")
+    }
+
+    /**
+     * A file the compiler cannot parse is refused rather than mangled.
      *
      * Turning `import` into `require` is transpiling, and a regular expression
      * that thinks it can is the thing that breaks somebody's library quietly six
@@ -190,9 +221,9 @@ class LibraryBundleInstallTest(
      * the install at a CommonJS build.
      */
     @Test
-    fun `an ES module that needs bundling is refused, naming the file`() {
+    fun `a file the compiler cannot read is refused, naming it`() {
         graphQlTester.document(
-            """mutation { installScriptLibrary(spec: "modern@1.0.0", bundle: true) { installed { key } } }""",
+            """mutation { installScriptLibrary(spec: "broken@1.0.0", bundle: true) { installed { key } } }""",
         ).execute()
             /*
              * Asserted on what somebody can act on rather than on the wording:
@@ -201,11 +232,17 @@ class LibraryBundleInstallTest(
              * message worth rewriting - "point it at the CommonJS build" names
              * something that does not exist for it.
              */
+            /*
+             * Asserted on what somebody can act on: which package, which file,
+             * and where the reason is. The compiler's own message names the line
+             * and goes to the log rather than to a person who asked to install
+             * something.
+             */
             .errors().expect { said ->
                 val message = said.message.orEmpty()
-                message.contains("modern@1.0.0") &&
-                    message.contains("newer module format") &&
-                    message.contains("earlier version")
+                message.contains("broken@1.0.0") &&
+                    message.contains("index.js") &&
+                    message.contains("could not be read as JavaScript")
             }.verify()
 
         assertThat(libraries.findAll()).isEmpty()
@@ -227,6 +264,12 @@ class LibraryBundleInstallTest(
         private val COUNTS = """
             var abs = require('bits/abs');
             module.exports = { away: function (n) { return abs(n); } };
+        """.trimIndent()
+
+        /** Published as an ES module, with a graph: neither file goes in as it is. */
+        private val MODERN = """
+            import { loud } from './lib/loud.js';
+            export default { shout: (what) => loud(what) };
         """.trimIndent()
 
         private val CHATTY = """
@@ -310,11 +353,26 @@ class LibraryBundleInstallTest(
                     "inspect.js" to "module.exports = require('util').inspect;",
                 ),
             ),
+            /*
+             * Published only as ES modules, with a graph: neither file can go
+             * into a bundle as it stands, because `import` is syntax and there
+             * is nothing to hand it. Babel rewrites both on the way in.
+             */
             ("modern" to "1.0.0") to NpmFixture.tarball(
                 mapOf(
-                    "package.json" to """{"name":"modern","version":"1.0.0","main":"index.js"}""",
-                    "index.js" to "import x from './x.js';\nexport default x;",
-                    "x.js" to "export default 1;",
+                    "package.json" to
+                        """{"name":"modern","version":"1.0.0","type":"module","main":"index.js"}""",
+                    "index.js" to MODERN,
+                    "lib/loud.js" to "export function loud(what) { return String(what).toUpperCase(); }",
+                ),
+            ),
+            /* And one the compiler cannot parse, which is still a refusal. */
+            ("broken" to "1.0.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to
+                        """{"name":"broken","version":"1.0.0","type":"module","main":"index.js"}""",
+                    "index.js" to "import { loud } from './lib/loud.js';\nexport default function ((( {}",
+                    "lib/loud.js" to "export function loud(what) { return what; }",
                 ),
             ),
         )

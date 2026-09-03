@@ -192,7 +192,7 @@ class NpmRegistry(
          */
         val candidates = existing(root)
         if (candidates.isEmpty()) throw LibraryNoEntryException("$name@${root.version}")
-        val entry = commonjs(root, "")
+        val entry = entryOf(root, "")
             ?: throw LibraryBundleEsmException("$name@${root.version}", candidates.first())
         parts += root.part(entry)
         versions[name] = root.version
@@ -248,7 +248,7 @@ class NpmRegistry(
                  * actually reaches. A dependency shipping a modern build it never
                  * enters is not this installation's problem.
                  */
-                val within = commonjs(fetched, prefix)
+                val within = entryOf(fetched, prefix)
                 if (within != null) packages[dependency] = within
                 parts += fetched.part(within ?: "")
                 versions[dependency] = resolved
@@ -341,22 +341,30 @@ class NpmRegistry(
     }
 
     /**
-     * The candidate a package would be bundled from: its CommonJS one.
+     * The file a package is entered by when it is bundled.
      *
-     * The other way round from [entryOf], and deliberately. A single-file install
-     * prefers an ES module because the sandbox runs one natively; a bundle cannot
-     * use one at all, since turning `import` into `require` is transpiling. So
-     * the candidates are walked for the first that is genuinely CommonJS, and a
-     * package publishing only an ES build is refused rather than mangled.
+     * Its CommonJS build where it publishes one, because that goes into the
+     * bundle exactly as it was published. An ES build otherwise - which used to
+     * be a refusal and is now a compile, since `import` is syntax and cannot be
+     * handed a `require`. The one-file install still prefers the ES module for
+     * the opposite reason: the sandbox runs one natively and nothing has to
+     * touch it at all.
      */
-    private fun commonjs(one: One, prefix: String): String? = existing(one)
+    private fun entryOf(one: One, prefix: String): String? = existing(one)
         /*
          * Through the file rules rather than by exact name. A manifest naming
          * `./index` means `index.js` - `ms` does exactly that, and looked up by
          * name alone the most ordinary CommonJS package there is came back as
          * one that had published nothing this could enter.
          */
-        .firstOrNull { found -> one.files[found]?.let { !LibrarySource.esm(it) } == true }
+        /*
+         * A CommonJS build first where there is one, because it goes into the
+         * bundle as it was published; an ES one otherwise, which the compiler
+         * rewrites on the way in. Preferring the published spelling is not
+         * fussiness - it is the difference between a bundle somebody can compare
+         * with the package and one they have to take on trust.
+         */
+        .let { held -> held.firstOrNull { one.files[it]?.let { text -> !LibrarySource.esm(text) } == true } ?: held.firstOrNull() }
         ?.let { prefix + it }
 
     /**

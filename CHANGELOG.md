@@ -112,6 +112,27 @@ have failed.
   connection of the wrong kind, because a `SlackConnection` carries its kind in
   its type.
 
+- 📦 **A package that is more than one file can now be installed.** Most
+  published packages are: an entry that requires a file beside it, or a second
+  package, was answered with *build a bundle and upload it* — and the person
+  reading that had to go and install Node to do something the server was already
+  holding the archive for. **Libraries** now offers to bundle instead. It says
+  what would go in, with every package at the version its range resolved to, and
+  makes them into the one file a library has to be if you say so. Choosing
+  several files at once does the same thing, and asks which of them it is
+  entered by rather than guessing.
+
+  The files go in as they arrived — nothing is rewritten, minified or
+  transpiled — and what went in is listed on the row afterwards, because a
+  bundle is an artefact **this installation assembled**: no registry published
+  it, and nobody outside can hash it to the same thing. That is why it is
+  offered rather than done quietly. An ES module in the graph is refused by
+  name rather than transpiled, and so is a file reaching for Node's `fs`; two
+  packages needing different versions of a third are refused with both versions,
+  since one file cannot hold two. Nothing about the sandbox changed: a bundle is
+  CommonJS and is wrapped on the way in exactly as any other CommonJS library
+  is.
+
 - 💬 **A long chat can be summarised instead of failing.** A conversation that
   outgrew its model's window stopped working, and it stopped with a number —
   *maximum context length is 128000 tokens* — which is true and useless: the

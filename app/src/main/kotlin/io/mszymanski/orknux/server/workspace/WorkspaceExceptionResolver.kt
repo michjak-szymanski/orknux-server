@@ -31,6 +31,11 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ModelNotSpeechException,
             is ModelNotImageException,
             is ModelNotChatException,
+            // The caller's to fix: a threshold of zero, a summary with no room,
+            // or one allowed to be as long as the conversation it replaces.
+            is CompactionThresholdInvalidException,
+            is CompactionSummaryInvalidException,
+            is CompactionSummaryTooLongException,
             -> ErrorType.BAD_REQUEST
             is WorkspaceNotFoundException,
             is ModelNotFoundForWorkspaceException,

@@ -99,6 +99,42 @@ class Workspace(
     var speechModelId: Long? = null,
 
     /**
+     * How much of a chat may pile up before the older half is summarised, in
+     * tokens; null leaves it alone.
+     *
+     * A conversation that outgrows its model's window fails on the next turn,
+     * and the failure names a limit rather than the thing to do about it. Above
+     * this, everything but the last few turns is replaced by one summary of
+     * itself and the chat carries on.
+     *
+     * Null rather than a number that means off, because "not set up" and "set to
+     * never" are the same thing here and one spelling is enough. Off is what
+     * every workspace has until somebody asks for it. Issue #286.
+     */
+    @Column(name = "compact_after_tokens")
+    var compactAfterTokens: Int? = null,
+
+    /**
+     * How long the summary may be, in tokens.
+     *
+     * The whole point is a conversation that fits, so a summary with no bound is
+     * a compaction that may not compact - a model asked to summarise forty turns
+     * will happily write ten. Null is a sensible default rather than no limit.
+     */
+    @Column(name = "compaction_summary_tokens")
+    var compactionSummaryTokens: Int? = null,
+
+    /**
+     * Which model writes the summary; null uses the one the chat is held with.
+     *
+     * Its own setting because summarising is not the conversation: it is a
+     * cheaper job than answering, done once in a while, and a workspace talking
+     * to an expensive model has every reason to summarise with a small one.
+     */
+    @Column(name = "compaction_model_id")
+    var compactionModelId: Long? = null,
+
+    /**
      * The model that draws a picture, for the picture button in a chat.
      *
      * The third of the three that sit on the Chat card, chosen the same way and

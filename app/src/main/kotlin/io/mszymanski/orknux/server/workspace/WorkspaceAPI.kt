@@ -333,6 +333,63 @@ class WorkspaceAPI(
     }
 
     /**
+     * When a chat is summarised, how short the summary has to be, and what
+     * writes it.
+     *
+     * One mutation for the three because they are one decision: a threshold
+     * without a summariser is a setting that does nothing, and a summariser
+     * without a threshold is a model nobody calls. Null for `afterTokens` turns
+     * it off, which is where every workspace starts.
+     *
+     * The model is refused unless it is a chat model, for the reason the three
+     * above are refused: an image model asked to summarise a conversation draws
+     * something, and finding that out is a compaction that has already thrown
+     * the older half away. Issue #286.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceCompaction(
+        @Argument workspaceId: Long,
+        @Argument afterTokens: Int?,
+        @Argument summaryTokens: Int?,
+        @Argument modelId: Long?,
+    ): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        if (afterTokens != null && afterTokens <= 0) throw CompactionThresholdInvalidException()
+        if (summaryTokens != null && summaryTokens <= 0) throw CompactionSummaryInvalidException()
+        /*
+         * A summary as long as the conversation is not a summary. Refused rather
+         * than clamped, because the two numbers together are the setting and
+         * silently changing one of them is a screen that does not say what it
+         * did.
+         */
+        if (afterTokens != null && summaryTokens != null && summaryTokens >= afterTokens) {
+            throw CompactionSummaryTooLongException()
+        }
+
+        val chosen = modelId?.let { models.model(it) ?: throw ModelNotFoundForWorkspaceException(it) }
+        if (chosen != null && chosen.workspaceId != workspaceId) throw ModelNotFoundForWorkspaceException(modelId)
+        if (chosen != null && chosen.kind != ModelKind.CHAT) throw ModelNotChatException(chosen.name)
+
+        workspace.compactAfterTokens = afterTokens
+        workspace.compactionSummaryTokens = summaryTokens
+        workspace.compactionModelId = chosen?.id
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.MODEL,
+            if (afterTokens == null) {
+                "Chat compaction turned off"
+            } else {
+                "Chat compaction set to $afterTokens tokens" +
+                    (chosen?.let { ", summarised by ${it.name}" } ?: "")
+            },
+        )
+        return workspace
+    }
+
+    /**
      * Chooses the model the workspace draws with.
      *
      * The third of the trio, refused the same way: only an image model will do,
@@ -809,3 +866,24 @@ object VoiceTurnTaking {
  */
 class WorkspaceVoiceTurnTakingUnusableException(message: String) : RuntimeException(message)
 
+
+/**
+ * The three refusals compaction has of its own.
+ *
+ * Said in numbers somebody can act on rather than as "invalid": what is wrong
+ * with a threshold of zero is that it would compact every turn, and a screen
+ * that only says the value was rejected leaves that to be guessed.
+ */
+class CompactionThresholdInvalidException : RuntimeException(
+    "Compaction fires above a number of tokens, so that number has to be more than zero. " +
+        "Leave it empty to turn compaction off.",
+)
+
+class CompactionSummaryInvalidException : RuntimeException(
+    "A summary has to be allowed some length, so its budget has to be more than zero.",
+)
+
+class CompactionSummaryTooLongException : RuntimeException(
+    "The summary is allowed to be as long as the conversation that triggers compaction, " +
+        "which would compact nothing. Give it a smaller budget than the threshold.",
+)

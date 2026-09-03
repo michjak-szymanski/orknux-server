@@ -54,7 +54,7 @@ have failed.
 - 🔐 **A server behind a private or self-signed certificate can be reached.** It
   could not be: the failure was *unable to find certification path to requested
   target*, eight words of Java naming no server, no certificate and no remedy —
-  and the only fix was the JVM'''s own trust store, which an administrator running
+  and the only fix was the JVM's own trust store, which an administrator running
   a container image cannot reach without rebuilding it. **Admin → Networking**
   now holds the list of certificate authorities this installation trusts: give
   one a name, paste its certificate in PEM, and it is trusted **as well as** the
@@ -63,7 +63,7 @@ have failed.
   no trust-everything switch, deliberately. An authority that has expired says so
   on its row rather than quietly not working, and removing one takes effect on
   the next connection rather than at the next restart. A paste that is not a
-  certificate is refused in words that say what to do rather than as Java'''s own
+  certificate is refused in words that say what to do rather than as Java's own
   *No certificate data found*.
 
 - 🔌 **An MCP server can be asked whether it is there, and says what went
@@ -111,6 +111,22 @@ have failed.
   declared in the plugin template, so any editor completes it — and refuses a
   connection of the wrong kind, because a `SlackConnection` carries its kind in
   its type.
+
+- 💬 **A long chat can be summarised instead of failing.** A conversation that
+  outgrew its model's window stopped working, and it stopped with a number —
+  *maximum context length is 128000 tokens* — which is true and useless: the
+  only thing anybody could do about it was start again and lose everything.
+  **Workspace → Settings → Chat Compaction** now holds a threshold: above it,
+  everything but the last few turns is replaced by one summary of itself and the
+  chat carries on. **Those messages are gone**, which is what compacting means —
+  so it is off until somebody sets a threshold, and every workspace starts off.
+  The summary's length is a setting too, and so is the model that writes it:
+  summarising is a cheaper job than answering and happens once in a while, so a
+  workspace talking to an expensive model can summarise with a small one.
+  Compaction happens before a turn is sent rather than after one fails, and a
+  summariser that will not answer leaves the conversation alone — a chat that is
+  still too long is a better outcome than one whose older half was thrown away
+  by a network error.
 
 - 🔗 **A Slack trigger says which connection its event arrived on, and a function
   condition can be handed arguments.** Both are what the above needs to be

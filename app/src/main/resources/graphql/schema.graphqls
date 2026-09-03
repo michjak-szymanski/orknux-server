@@ -1131,6 +1131,25 @@ type Mutation {
     setWorkspaceSpeechModel(workspaceId: ID!, modelId: ID): Workspace!
     "Chooses the model the workspace draws with; null takes the picture button away."
     setWorkspaceImageModel(workspaceId: ID!, modelId: ID): Workspace!
+    """
+    When a chat is summarised, how short the summary has to be, and what writes it.
+
+    One mutation for the three because they are one decision: a threshold with no
+    summariser does nothing, and a summariser with no threshold is never called.
+    `afterTokens` null turns compaction off, which is where every workspace
+    starts.
+
+    Refused if the summary is allowed to be as long as the conversation that
+    triggers it, which would compact nothing, and refused if the model is not a
+    chat model - an image model asked to summarise draws something, and finding
+    that out is a compaction that has already thrown the older half away.
+    """
+    setWorkspaceCompaction(
+        workspaceId: ID!,
+        afterTokens: Int,
+        summaryTokens: Int,
+        modelId: ID
+    ): Workspace!
     "Chooses the model behind the quick chat; null takes the button away."
     setWorkspaceQuickChatModel(workspaceId: ID!, modelId: ID): Workspace!
     "Whether the quick chat may start things, or only look them up."
@@ -1452,6 +1471,19 @@ type Workspace {
     not offered, which is right where there is nothing to read it with.
     """
     speechModelId: ID
+    """
+    Above how many tokens a chat in this workspace is summarised; null is off.
+
+    A conversation that outgrows its model fails on the next turn, naming a limit
+    rather than what to do about it. Above this, everything but the last few
+    turns is replaced by one summary of itself - and those messages are gone,
+    which is what compacting means and why it is off until somebody asks.
+    """
+    compactAfterTokens: Int
+    "How long that summary may be, in tokens."
+    compactionSummaryTokens: Int
+    "Which model writes it; null uses the one the chat is held with."
+    compactionModelId: ID
     """
     The model that draws a picture for the picture button in a chat. Null means
     the button is not offered, which is right where there is nothing to draw

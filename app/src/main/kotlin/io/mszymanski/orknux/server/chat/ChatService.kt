@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.chat
 
 import io.mszymanski.orknux.connector.model.ChatCompletion
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.connector.model.Hangup
 import io.mszymanski.orknux.connector.model.ModelChatClient
@@ -54,6 +55,9 @@ class ChatService(
     private val llmSessions: LlmSessionRepository,
     private val recorder: LlmSessionRecorder,
     private val budgets: SessionMemoryBudgets,
+    /** Keeps a long chat inside the window its model will accept; see [ChatCompaction]. */
+    private val compaction: ChatCompaction,
+    private val workspaces: WorkspaceRepository,
 ) {
 
     /**
@@ -695,6 +699,16 @@ class ChatService(
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val message = text.trim().ifEmpty { throw ChatMessageEmptyException() }
         val modelId = session.modelId ?: throw ChatModelNotChosenException()
+
+        /*
+         * Compacted before the turn is built rather than after one lands, so
+         * the turn that would have overflowed is the one that fits. A workspace
+         * that has not asked for it is untouched, which is every workspace until
+         * somebody sets a threshold. Issue #286.
+         */
+        workspaces.findByIdOrNull(session.workspaceId)?.let { workspace ->
+            compaction.compactIfNeeded(workspace, session.conversationId, modelId)
+        }
 
         val thread = history.findByConversationId(session.conversationId)
         history.saveAll(session.conversationId, thread + UserMessage(message))

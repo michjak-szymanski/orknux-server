@@ -183,8 +183,17 @@ class NpmRegistry(
         val versions = LinkedHashMap<String, String>()
 
         modules.putAll(root.files)
+        /*
+         * The root has to have one - it is the thing being installed, and a
+         * library is entered somewhere. The two ways it can fail are different
+         * and are said differently: a package whose manifest points at nothing
+         * that is in it has published nothing this can install, and one whose
+         * entry is an ES module has published something this will not transpile.
+         */
+        val candidates = existing(root)
+        if (candidates.isEmpty()) throw LibraryNoEntryException("$name@${root.version}")
         val entry = commonjs(root, "")
-            ?: throw LibraryBundleEsmException("$name@${root.version}", entered(root))
+            ?: throw LibraryBundleEsmException("$name@${root.version}", candidates.first())
         parts += root.part(entry)
         versions[name] = root.version
 
@@ -225,10 +234,23 @@ class NpmRegistry(
                 val prefix = "node_modules/$dependency/"
                 modules.putAll(fetched.files.mapKeys { prefix + it.key })
 
+                /*
+                 * A dependency need not have a root entry, and refusing one that
+                 * has none was wrong. `math-intrinsics` publishes `"main": false`
+                 * and a dozen subpaths, and what reaches for it reaches for
+                 * `math-intrinsics/abs` - which resolves as a file like any
+                 * other. So the entry is recorded where there is one and left
+                 * alone where there is not: a bare `require` for a package with
+                 * no entry is then refused by the bundler, naming the file that
+                 * asked, and one that is never required does not block anything.
+                 *
+                 * The ES module check moves with it, to the files the graph
+                 * actually reaches. A dependency shipping a modern build it never
+                 * enters is not this installation's problem.
+                 */
                 val within = commonjs(fetched, prefix)
-                    ?: throw LibraryBundleEsmException("$dependency@$resolved", prefix + entered(fetched))
-                packages[dependency] = within
-                parts += fetched.part(within)
+                if (within != null) packages[dependency] = within
+                parts += fetched.part(within ?: "")
                 versions[dependency] = resolved
 
                 if (modules.size > MAX_FILES) throw LibraryBundleTooManyException(spec, MAX_PACKAGES)
@@ -281,25 +303,26 @@ class NpmRegistry(
      * the candidates are walked for the first that is genuinely CommonJS, and a
      * package publishing only an ES build is refused rather than mangled.
      */
-    private fun commonjs(one: One, prefix: String): String? = modules(one.described)
+    private fun commonjs(one: One, prefix: String): String? = existing(one)
         /*
          * Through the file rules rather than by exact name. A manifest naming
          * `./index` means `index.js` - `ms` does exactly that, and looked up by
          * name alone the most ordinary CommonJS package there is came back as
          * one that had published nothing this could enter.
          */
-        .mapNotNull { candidate -> LibraryBundle.fileAt(candidate) { one.files.containsKey(it) } }
         .firstOrNull { found -> one.files[found]?.let { !LibrarySource.esm(it) } == true }
         ?.let { prefix + it }
 
     /**
-     * What the package said its entry was, for a refusal to name.
+     * The files the manifest points at that are actually in the package.
      *
-     * The manifest's own first candidate rather than "its entry": somebody told
-     * a package cannot be bundled has to be able to go and look at the file it
-     * is about.
+     * Empty means the package names nothing this could enter - `"main": false`
+     * and subpath exports alone, which is a real and increasingly common way to
+     * publish. That is a different refusal from an entry this will not
+     * transpile, and the two used to arrive as the same sentence.
      */
-    private fun entered(one: One): String = modules(one.described).firstOrNull() ?: "its entry"
+    private fun existing(one: One): List<String> = modules(one.described)
+        .mapNotNull { candidate -> LibraryBundle.fileAt(candidate) { one.files.containsKey(it) } }
 
     /**
      * Which versions of a package the registry has published.
@@ -409,8 +432,8 @@ class NpmRegistry(
         val root = if (exports.isObject) (if (exports.has(".")) exports.path(".") else exports) else null
         if (root != null) conditions(root, found, 0, PREFERRED)
 
-        file(described.path("module").asString(""))?.let(found::add)
-        val main = file(described.path("main").asString(""))
+        file(text(described.path("module")))?.let(found::add)
+        val main = file(text(described.path("main")))
         if (described.path("type").asString("") == "module") main?.let(found::add)
 
         if (root != null) conditions(root, found, 0, REQUIRED)
@@ -437,6 +460,18 @@ class NpmRegistry(
             if (node.has(condition)) conditions(node.path(condition), into, depth + 1, asked)
         }
     }
+
+    /**
+     * A field's value, but only where it actually is one.
+     *
+     * `asString("")` **coerces**: asked of `"main": false` it answers `"false"`,
+     * and a package was then looked for in a file of that name. npm's spelling
+     * for "this package has no root entry" is exactly `"main": false`, and
+     * `math-intrinsics` publishes it — so the one case this most needed to
+     * handle was the one it invented a filename for. Found against the real
+     * registry.
+     */
+    private fun text(node: JsonNode): String = if (node.isTextual) node.asString("") else ""
 
     /** A path inside the package, or null for anything that is not a plain file. */
     private fun file(named: String): String? {

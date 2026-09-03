@@ -132,6 +132,31 @@ class LibraryBundleInstallTest(
     }
 
     /**
+     * A dependency with no root entry is not a reason to refuse.
+     *
+     * `"main": false` with subpath exports is how a growing number of packages
+     * publish, and what reaches for one reaches for `bits/abs` — a file like any
+     * other. Refusing the whole bundle because that package could not be
+     * *entered* was refusing something nothing had asked to do.
+     */
+    @Test
+    fun `a dependency reached only by a subpath needs no entry of its own`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "counts@1.0.0", bundle: true) {
+                installed { key members { name } bundledFrom { name version } }
+              }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java)
+            .containsExactly("away")
+            .path("installScriptLibrary.installed.bundledFrom[*].name").entityList(String::class.java)
+            .containsExactly("counts", "bits")
+    }
+
+    /**
      * A package publishing only an ES build is refused rather than mangled.
      *
      * Turning `import` into `require` is transpiling, and a regular expression
@@ -154,6 +179,12 @@ class LibraryBundleInstallTest(
         private val SAY = "module.exports = function (who) { return 'hi ' + who; };"
 
         private val MS = "module.exports = function (n) { return n + 'ms'; };"
+
+        /** Reaches its dependency by a subpath, never by the bare name. */
+        private val COUNTS = """
+            var abs = require('bits/abs');
+            module.exports = { away: function (n) { return abs(n); } };
+        """.trimIndent()
 
         private val CHATTY = """
             var say = require('./lib/say');
@@ -200,6 +231,27 @@ class LibraryBundleInstallTest(
                     "index.js" to MS,
                 ),
             ),
+            /*
+             * A package with no root entry at all: `"main": false` and subpaths.
+             * That is npm's own spelling for it and `math-intrinsics` publishes
+             * exactly this, which is how it was found - the coercion in
+             * `asString("")` turned the `false` into a filename and the refusal
+             * named a file called `false` that no package has ever held.
+             */
+            ("bits" to "1.1.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to
+                        """{"name":"bits","version":"1.1.0","main":false,"exports":{"./abs":"./abs.js"}}""",
+                    "abs.js" to "module.exports = function (n) { return n < 0 ? -n : n; };",
+                ),
+            ),
+            ("counts" to "1.0.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to
+                        """{"name":"counts","version":"1.0.0","main":"index.js","dependencies":{"bits":"^1.0.0"}}""",
+                    "index.js" to COUNTS,
+                ),
+            ),
             ("modern" to "1.0.0") to NpmFixture.tarball(
                 mapOf(
                     "package.json" to """{"name":"modern","version":"1.0.0","main":"index.js"}""",
@@ -209,8 +261,11 @@ class LibraryBundleInstallTest(
             ),
         )
 
-        /** What `ms` has published, which is what a range is resolved against. */
-        private val published = listOf("2.0.0", "2.1.0", "2.1.3", "3.0.0")
+        /** What each dependency has published, which is what a range is resolved against. */
+        private val published = mapOf(
+            "ms" to listOf("2.0.0", "2.1.0", "2.1.3", "3.0.0"),
+            "bits" to listOf("1.0.0", "1.1.0"),
+        )
 
         private fun served(path: String): ByteArray? {
             val asked = path.trimStart('/').replace("%2f", "/")
@@ -232,9 +287,9 @@ class LibraryBundleInstallTest(
              * something anybody typed, and it has to be resolved against what is
              * actually there.
              */
-            if (asked == "ms") {
-                val versions = published.joinToString(",") { """"$it":{"version":"$it"}""" }
-                return """{"name":"ms","versions":{$versions}}""".toByteArray(StandardCharsets.UTF_8)
+            published[asked]?.let { all ->
+                val versions = all.joinToString(",") { """"$it":{"version":"$it"}""" }
+                return """{"name":"$asked","versions":{$versions}}""".toByteArray(StandardCharsets.UTF_8)
             }
             return null
         }

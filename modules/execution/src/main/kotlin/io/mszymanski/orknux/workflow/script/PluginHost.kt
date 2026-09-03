@@ -19,6 +19,13 @@ package io.mszymanski.orknux.workflow.script
  * Slack thread — that cannot be answered from the payload alone. The choice is
  * between the server making that call under a named grant and the feature not
  * existing. Issue #316.
+ *
+ * **A workspace's functions have the same door**, and that is what made the
+ * scoping below necessary. A plugin is loaded once for the installation and
+ * pointed at a connection by somebody with a plugin screen in front of them; a
+ * function is written by anybody who can write one, in any workspace. Handing
+ * every function a call that takes a bare connection id would have been a way
+ * to read another workspace's Slack by guessing a number.
  */
 enum class PluginCapability(
     /** What it gives, as a person deciding whether to accept a plugin reads it. */
@@ -60,12 +67,17 @@ fun interface PluginHost {
 
     /**
      * @param capability what is being asked for, already checked against what the
-     *   plugin was granted.
+     *   caller was granted.
      * @param argument the call's arguments, as a JSON array.
+     * @param on which workspace is asking, or null for a caller that belongs to
+     *   no one workspace. **This is a boundary and not a hint**: what it names is
+     *   the only workspace whose connections the answer may come from, and the
+     *   implementation refuses anything else. The script never sees it and
+     *   cannot set it — the runner takes it from the run, not from the call.
      * @return the answer as JSON, or a JSON object with an `error` on it. A
-     *   refusal is data rather than an exception because the plugin has to be
+     *   refusal is data rather than an exception because the caller has to be
      *   able to say something useful about it: "that connection is gone" is a
      *   sentence a workflow can act on.
      */
-    fun ask(capability: PluginCapability, argument: String): String
+    fun ask(capability: PluginCapability, argument: String, on: Long?): String
 }

@@ -138,6 +138,8 @@ class ConditionEvaluator(
                     contextFor(condition),
                     resolved.modules,
                     resolved.imports,
+                
+                    on = condition.workspaceId,
                 )
             }
         }

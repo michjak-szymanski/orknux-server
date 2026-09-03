@@ -322,16 +322,28 @@ object LibraryBundle {
 }
 
 /**
- * A file in the graph is an ES module.
+ * A file in the graph is written in the newer module format.
  *
- * Named with the file, because the way out is to point the install at the
- * package's CommonJS build or to bundle it where bundles are built, and neither
- * is possible for somebody who has not been told which of the files it was.
+ * **The wording is the whole of this class.** It used to say that a file "is an
+ * ES module, and turning import into require is a job for a bundler rather than
+ * for this", and offer to have the install pointed at the package's CommonJS
+ * build. Both halves were wrong for the person reading it: the first is a
+ * sentence about this server's internals, and the second names a thing that
+ * often does not exist - `http-proxy-agent@9.1.0` is `"type": "module"` with one
+ * entry, so there is no other build to point at and no control here that would
+ * point at one.
+ *
+ * So it says which package, that the package is published in one format only,
+ * and the two things somebody can actually do about it: an earlier version, or a
+ * file built elsewhere. The path is still named, at the end, because for a
+ * package four levels down in a graph that is the only way to know which one of
+ * them it was.
  */
 class LibraryBundleEsmException(named: String, path: String) : RuntimeException(
-    "$named cannot be bundled here: $path is an ES module, and turning import into require is a job " +
-        "for a bundler rather than for this. Point it at the package's CommonJS build, or build the " +
-        "bundle elsewhere and upload the one file.",
+    "$named is published only in the newer module format, and a library here has to be the older one " +
+        "— nothing in this server rewrites one into the other, because getting that wrong breaks a " +
+        "library quietly rather than loudly. Try an earlier version if the package still published both, " +
+        "or build it into a single file with a bundler and upload that. (The file is $path.)",
 )
 
 /** Something was required that is not among the files. */

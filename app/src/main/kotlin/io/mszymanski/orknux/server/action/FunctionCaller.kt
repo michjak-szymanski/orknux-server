@@ -104,7 +104,9 @@ class FunctionCaller(
                 context,
                 resolved.modules,
                 resolved.imports,
-            )
+            
+                    on = workspaceId,
+                )
         }
     }
 

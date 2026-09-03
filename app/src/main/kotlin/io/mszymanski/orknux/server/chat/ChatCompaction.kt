@@ -11,6 +11,16 @@ import org.springframework.ai.chat.memory.ChatMemoryRepository
 import org.springframework.stereotype.Service
 
 /**
+ * What one compaction came to, for the chat it happened in to say so.
+ *
+ * A compaction throws messages away. Doing that silently is the behaviour people
+ * remember as "it lost my conversation", so the numbers travel out of here and
+ * onto the screen: how many turns were replaced, how many were kept word for
+ * word, and roughly what the thread had grown to.
+ */
+data class Compacted(val replaced: Int, val kept: Int, val tokens: Int)
+
+/**
  * Keeps a long chat inside the window the model will accept.
  *
  * A conversation that outgrows its model fails on the next turn, and it fails
@@ -52,21 +62,38 @@ class ChatCompaction(
      * that would have overflowed is the one that fits. Answers whether anything
      * was done, which is what the caller says out loud.
      */
-    fun compactIfNeeded(workspace: Workspace, conversationId: String, fallbackModelId: Long?): Boolean {
-        val threshold = workspace.compactAfterTokens?.takeIf { it > 0 } ?: return false
+    fun compactIfNeeded(
+        workspace: Workspace,
+        conversationId: String,
+        fallbackModelId: Long?,
+        /**
+         * Called the moment before the summariser is asked, and only then.
+         *
+         * A chat that is about to be compacted goes quiet for as long as a model
+         * takes to read forty turns, and until this there was nothing on screen
+         * to say why - somebody pressed Send and watched nothing happen. The
+         * stream announces it from here rather than guessing beforehand, because
+         * whether it is going to happen at all is only known once the thread has
+         * been measured. Issue #286.
+         */
+        beginning: () -> Unit = {},
+    ): Compacted? {
+        val threshold = workspace.compactAfterTokens?.takeIf { it > 0 } ?: return null
 
         val thread = history.findByConversationId(conversationId)
-        if (thread.size <= KEEP + 1) return false
+        if (thread.size <= KEEP + 1) return null
 
         val carried = tokensIn(thread)
-        if (carried < threshold) return false
+        if (carried < threshold) return null
 
         val older = thread.dropLast(KEEP)
         val recent = thread.takeLast(KEEP)
 
-        val modelId = workspace.compactionModelId ?: fallbackModelId ?: return false
+        val modelId = workspace.compactionModelId ?: fallbackModelId ?: return null
+
+        beginning()
         val summary = summarise(modelId, older, workspace.compactionSummaryTokens ?: DEFAULT_SUMMARY_TOKENS)
-            ?: return false
+            ?: return null
 
         /*
          * Written as an assistant turn rather than a system one. A system
@@ -82,7 +109,7 @@ class ChatCompaction(
             carried,
             KEEP,
         )
-        return true
+        return Compacted(replaced = older.size, kept = recent.size, tokens = carried)
     }
 
     /**

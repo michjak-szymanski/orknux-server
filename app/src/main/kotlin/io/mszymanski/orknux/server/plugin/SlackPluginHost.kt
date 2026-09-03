@@ -35,8 +35,8 @@ class SlackPluginHost(
 
     private val log = LoggerFactory.getLogger(javaClass)
 
-    override fun ask(capability: PluginCapability, argument: String): String = when (capability) {
-        PluginCapability.SLACK_READ_THREAD -> readThread(argument)
+    override fun ask(capability: PluginCapability, argument: String, on: Long?): String = when (capability) {
+        PluginCapability.SLACK_READ_THREAD -> readThread(argument, on)
     }
 
     /**
@@ -47,7 +47,7 @@ class SlackPluginHost(
      * writes to, so what arrives is whatever somebody's JavaScript passed, and
      * every shape of wrong has to come back as something they can act on.
      */
-    private fun readThread(argument: String): String {
+    private fun readThread(argument: String, on: Long?): String {
         val given = runCatching { mapper.readTree(argument) }.getOrNull()
             ?: return refusal("the arguments were not JSON")
         if (!given.isArray || given.size() < 3) {
@@ -62,7 +62,7 @@ class SlackPluginHost(
             ?: return refusal("the third argument has to be a thread")
         val limit = given.get(3)?.takeIf { it.isNumber }?.asInt()
 
-        return when (val read = threads.read(connectionId, channel, threadTs, limit ?: DEFAULT_LIMIT)) {
+        return when (val read = threads.read(connectionId, channel, threadTs, limit ?: DEFAULT_LIMIT, on)) {
             is Thread.Read -> {
                 val answer = mapper.createObjectNode()
                 val messages = answer.putArray("messages")

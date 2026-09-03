@@ -8,6 +8,8 @@ import org.graalvm.polyglot.ResourceLimits
 import org.graalvm.polyglot.Source
 import org.graalvm.polyglot.Value
 import org.graalvm.polyglot.io.IOAccess
+import org.graalvm.polyglot.proxy.ProxyExecutable
+import org.graalvm.polyglot.proxy.ProxyObject
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
@@ -47,7 +49,22 @@ import java.util.concurrent.atomic.AtomicReference
  * a filesystem to follow one with.
  */
 @Service
-class ScriptRunner(private val properties: ScriptProperties) {
+class ScriptRunner(
+    private val properties: ScriptProperties,
+    /**
+     * The server, for the one thing a script may ask it to do on its behalf.
+     *
+     * The same door a plugin has and the same [PluginHost] behind it — because
+     * it is the same question. A function condition asking "is this the first
+     * reply in the thread" needs the thread read, the sandbox has no network and
+     * is not getting one, and the only honest answer is the server making the
+     * call. What crosses is JSON, both ways.
+     *
+     * Null in the execution module's own tests and anywhere the door is not
+     * wired: the helper is still defined, and refuses in words.
+     */
+    private val host: PluginHost? = null,
+) {
 
     private val engine: Engine = Engine.newBuilder("js")
         // Community GraalJS runs in the interpreter on a stock JDK, which is
@@ -89,13 +106,21 @@ class ScriptRunner(private val properties: ScriptProperties) {
         context: String = "{}",
         modules: List<ScriptModule> = emptyList(),
         imports: Map<String, String> = emptyMap(),
+        /**
+         * Which workspace this run belongs to.
+         *
+         * The boundary on everything [host] will answer: the only connections a
+         * script can reach through it are this workspace's. Taken from the run
+         * rather than from the script, so nothing anybody writes changes it.
+         */
+        on: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, ::newContext) {
                 ScriptResult.Returned(
-                    evaluate(it, source, functionName, arguments, context, modules, imports),
+                    evaluate(it, source, functionName, arguments, context, modules, imports, on),
                     millisSince(started),
                 )
             }
@@ -359,8 +384,10 @@ class ScriptRunner(private val properties: ScriptProperties) {
         context: String,
         modules: List<ScriptModule>,
         imports: Map<String, String>,
+        on: Long?,
     ): String? {
         load(polyglot, modules)
+        serve(polyglot, on)
 
         val module = polyglot.eval(module(prelude(imports) + source))
         val function = module.getMember("default")
@@ -452,6 +479,35 @@ class ScriptRunner(private val properties: ScriptProperties) {
      * something else on the way past. Read once, here — a module that tampered with
      * the registry afterwards would be tampering with a copy nobody looks at again.
      */
+    /**
+     * The one door out, bound before anything is evaluated.
+     *
+     * A mirror of `PluginRunner.bind`, and deliberately the same shape: the
+     * host is a callable taking JSON and answering JSON, so there is no live
+     * object on either side to reflect through, and nothing in [newContext] is
+     * relaxed to put it there.
+     *
+     * The `orknux` helper is defined whether or not there is a host behind it.
+     * A script calling it where the door is not wired should be told so in a
+     * sentence rather than thrown whatever a call on undefined throws.
+     */
+    private fun serve(polyglot: Context, on: Long?) {
+        val server = host
+        val bindings = polyglot.getBindings("js")
+        if (server != null) {
+            val granted = LinkedHashMap<String, Any>()
+            PluginCapability.entries.forEach { capability ->
+                granted[capability.name.lowercase()] = ProxyExecutable { given ->
+                    val argument = given.firstOrNull()?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable REFUSED
+                    server.ask(capability, argument, on)
+                }
+            }
+            bindings.putMember(HOST, ProxyObject.fromMap(granted))
+        }
+        polyglot.eval("js", SERVICES)
+    }
+
     private fun prelude(imports: Map<String, String>): String {
         if (imports.isEmpty()) return ""
         val entries = imports.entries.joinToString(", ") { (name, key) -> "$name: globalThis.$MODULES[\"$key\"]" }
@@ -467,6 +523,39 @@ class ScriptRunner(private val properties: ScriptProperties) {
 
     private companion object {
         val log = LoggerFactory.getLogger(ScriptRunner::class.java)
+
+        const val HOST = "__orknuxHost"
+
+        /** What a call gets when it was made with something that is not a string. */
+        const val REFUSED = """{"error":"that call takes one JSON argument"}"""
+
+        /**
+         * `orknux`, as a function sees it.
+         *
+         * The same helper a plugin gets, written once here for scripts. It reads
+         * a connection out of an object or takes a bare id, so a function handed
+         * `trigger.connection` and one handed a number both work — which is the
+         * difference between a helper somebody can use and one they have to read
+         * this file to call.
+         */
+        val SERVICES = """
+            globalThis.orknux = {
+              slack: {
+                thread(connection, channel, threadTs, limit) {
+                  const host = globalThis.__orknuxHost;
+                  if (host === undefined || host.slack_read_thread === undefined) {
+                    return { error: 'this installation cannot read Slack threads from a script' };
+                  }
+                  const id = connection === null || typeof connection !== 'object'
+                    ? connection
+                    : connection.id;
+                  return JSON.parse(
+                    host.slack_read_thread(JSON.stringify([id, channel, threadTs, limit ?? null])),
+                  );
+                },
+              },
+            };
+        """.trimIndent()
 
         /**
          * More members than a library's export has any business having, and a

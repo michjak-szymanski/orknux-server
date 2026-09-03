@@ -80,6 +80,8 @@ class WorkspaceToolCaller(
             context = context(agent, tool),
             modules = resolved.modules,
             imports = resolved.imports,
+        
+            on = agent.workspaceId,
         )
         return when (result) {
             is ScriptResult.Returned -> result.json ?: mapper.writeValueAsString(mapOf("result" to null))

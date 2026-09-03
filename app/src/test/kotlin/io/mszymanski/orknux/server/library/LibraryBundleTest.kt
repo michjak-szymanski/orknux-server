@@ -171,7 +171,10 @@ class LibraryBundleTest {
             )
         }
             .isInstanceOf(LibraryBundleEsmException::class.java)
+            // The file is named, at the end: for a package four levels down in a
+            // graph it is the only way to know which of them it was.
             .hasMessageContaining("index.js")
+            .hasMessageContaining("newer module format")
     }
 
     @Test

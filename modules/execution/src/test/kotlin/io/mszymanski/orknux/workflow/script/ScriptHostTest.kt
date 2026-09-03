@@ -1,0 +1,80 @@
+package io.mszymanski.orknux.workflow.script
+
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.Test
+
+/**
+ * A workflow function reaching the one door out, exactly as a plugin does.
+ *
+ * The capability was a plugin's alone at first, and that was the wrong line to
+ * have drawn: a function condition is what people actually write - #316's own
+ * example, *is this the first reply in the thread*, is a condition - and getting
+ * at it meant packaging a plugin and having somebody accept it.
+ *
+ * Three things, and the third is the one that had to be built before the other
+ * two were safe:
+ *
+ *   the helper    a script calls `orknux.slack.thread(...)` and gets the answer
+ *   as data       what crosses is JSON both ways, so there is no host object on
+ *                 either side to walk from
+ *   the boundary  the workspace the run belongs to reaches the host, and the
+ *                 script neither sees it nor can set it. Without that, a
+ *                 function could read another workspace's Slack by guessing a
+ *                 connection id - which is why the plugin's own host is scoped
+ *                 the same way now.
+ */
+class ScriptHostTest {
+
+    private val asked = mutableListOf<Triple<PluginCapability, String, Long?>>()
+
+    private val host = PluginHost { capability, argument, on ->
+        asked += Triple(capability, argument, on)
+        """{"messages":[{"ts":"1.1","text":"hello"}],"replies":1}"""
+    }
+
+    private val runner = ScriptRunner(ScriptProperties(timeoutMillis = 10_000, statementLimit = 2_000_000), host)
+
+    private val source = """
+        export default function read(channel) {
+          return orknux.slack.thread({ id: 7, type: 'SLACK' }, channel, '1.0');
+        }
+    """.trimIndent()
+
+    @Test
+    fun `a function can read a thread through the server`() {
+        val answer = runner.call(source, "read", listOf("\"#general\""), on = 12)
+
+        assertThat(answer).isInstanceOf(ScriptResult.Returned::class.java)
+        assertThat((answer as ScriptResult.Returned).json).contains("\"replies\":1")
+    }
+
+    /**
+     * The boundary, and it is the whole reason this is safe to offer at all.
+     *
+     * The workspace comes from the run. A script that wants to read somewhere
+     * else has nothing to write: there is no argument for it and no global
+     * holding it.
+     */
+    @Test
+    fun `the workspace the run belongs to is what reaches the server`() {
+        runner.call(source, "read", listOf("\"#general\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_READ_THREAD)
+            assertThat(on).describedAs("the run's workspace, not the script's idea of one").isEqualTo(12L)
+            // Everything crosses as JSON: no host object on either side.
+            assertThat(argument).isEqualTo("""[7,"#general","1.0",null]""")
+        })
+    }
+
+    /** With no host wired, the helper is still there and says so in a sentence. */
+    @Test
+    fun `a script where the door is not wired is told, rather than thrown at`() {
+        val alone = ScriptRunner(ScriptProperties(timeoutMillis = 10_000, statementLimit = 2_000_000))
+
+        val answer = alone.call(source, "read", listOf("\"#general\""), on = 12)
+
+        assertThat(answer).isInstanceOf(ScriptResult.Returned::class.java)
+        assertThat((answer as ScriptResult.Returned).json).contains("cannot read Slack threads")
+    }
+}

@@ -194,7 +194,19 @@ class LibraryBundleInstallTest(
         graphQlTester.document(
             """mutation { installScriptLibrary(spec: "modern@1.0.0", bundle: true) { installed { key } } }""",
         ).execute()
-            .errors().expect { it.message?.contains("ES module") == true }.verify()
+            /*
+             * Asserted on what somebody can act on rather than on the wording:
+             * the version, that it is published in one format only, and the two
+             * ways out. `http-proxy-agent@9.1.0` is the package that made this
+             * message worth rewriting - "point it at the CommonJS build" names
+             * something that does not exist for it.
+             */
+            .errors().expect { said ->
+                val message = said.message.orEmpty()
+                message.contains("modern@1.0.0") &&
+                    message.contains("newer module format") &&
+                    message.contains("earlier version")
+            }.verify()
 
         assertThat(libraries.findAll()).isEmpty()
     }

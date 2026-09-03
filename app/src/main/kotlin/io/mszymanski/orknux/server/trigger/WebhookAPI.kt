@@ -215,6 +215,8 @@ class WebhookAPI(
                     arguments = arguments,
                     modules = resolved.modules,
                     imports = resolved.imports,
+                
+                    on = trigger.workspaceId,
                 )
             }
         }

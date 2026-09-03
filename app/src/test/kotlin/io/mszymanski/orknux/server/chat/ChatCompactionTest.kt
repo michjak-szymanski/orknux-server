@@ -107,7 +107,7 @@ class ChatCompactionTest(
     fun `a workspace that has not asked for compaction is left alone`() {
         val workspace = workspaces.findById(workspaceId).orElseThrow()
 
-        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isFalse()
+        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isNull()
         assertThat(history.findByConversationId(conversation)).hasSize(20)
         assertThat(asked).isEmpty()
     }
@@ -117,7 +117,7 @@ class ChatCompactionTest(
         compactionSetTo(afterTokens = 1_000_000, summaryTokens = 200)
 
         val workspace = workspaces.findById(workspaceId).orElseThrow()
-        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isFalse()
+        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isNull()
         assertThat(history.findByConversationId(conversation)).hasSize(20)
     }
 
@@ -133,7 +133,15 @@ class ChatCompactionTest(
         compactionSetTo(afterTokens = 100, summaryTokens = 50)
 
         val workspace = workspaces.findById(workspaceId).orElseThrow()
-        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isTrue()
+        /*
+         * The numbers, not just that it happened: they are what the chat prints
+         * to say so, and a compaction nobody is told about is the thing people
+         * remember as the product having lost their conversation.
+         */
+        val done = compaction.compactIfNeeded(workspace, conversation, modelId)
+        assertThat(done).isNotNull()
+        assertThat(done?.replaced).isEqualTo(14)
+        assertThat(done?.kept).isEqualTo(6)
 
         val thread = history.findByConversationId(conversation)
         assertThat(thread).hasSize(7)
@@ -170,7 +178,7 @@ class ChatCompactionTest(
         answering = false
 
         val workspace = workspaces.findById(workspaceId).orElseThrow()
-        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isFalse()
+        assertThat(compaction.compactIfNeeded(workspace, conversation, modelId)).isNull()
         assertThat(history.findByConversationId(conversation)).hasSize(20)
     }
 

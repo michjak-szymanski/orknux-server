@@ -695,7 +695,13 @@ class ChatService(
      * part. They are not written to the history — that store keeps text, and a
      * base64 image in a conversation log is a conversation log nobody can read.
      */
-    fun beginSend(id: Long, text: String, images: List<String> = emptyList()): ChatSendStart {
+    fun beginSend(
+        id: Long,
+        text: String,
+        images: List<String> = emptyList(),
+        /** Called before the summariser is asked, so the stream can say so. */
+        compacting: () -> Unit = {},
+    ): ChatSendStart {
         val session = sessions.findByIdOrNull(id) ?: throw ChatSessionNotFoundException(id)
         val message = text.trim().ifEmpty { throw ChatMessageEmptyException() }
         val modelId = session.modelId ?: throw ChatModelNotChosenException()
@@ -706,8 +712,8 @@ class ChatService(
          * that has not asked for it is untouched, which is every workspace until
          * somebody sets a threshold. Issue #286.
          */
-        workspaces.findByIdOrNull(session.workspaceId)?.let { workspace ->
-            compaction.compactIfNeeded(workspace, session.conversationId, modelId)
+        val compacted = workspaces.findByIdOrNull(session.workspaceId)?.let { workspace ->
+            compaction.compactIfNeeded(workspace, session.conversationId, modelId, beginning = compacting)
         }
 
         val thread = history.findByConversationId(session.conversationId)
@@ -728,6 +734,7 @@ class ChatService(
                 thread.map { ChatTurn(role(it), it.text.orEmpty()) } +
                 recalled(session, into) +
                 ChatTurn("user", message, images),
+            compacted = compacted,
         )
     }
 
@@ -1123,4 +1130,13 @@ data class ChatSendStart(
      * cannot ask it again.
      */
     val llmSessionId: Long? = null,
+    /**
+     * What compaction did to this conversation on the way in, or null.
+     *
+     * Carried out to the stream because the chat has to say it. Everything else
+     * this feature does is invisible by design - messages are replaced by a
+     * summary and the old ones are gone - and invisible is exactly how a person
+     * comes to believe the product lost their conversation.
+     */
+    val compacted: Compacted? = null,
 )

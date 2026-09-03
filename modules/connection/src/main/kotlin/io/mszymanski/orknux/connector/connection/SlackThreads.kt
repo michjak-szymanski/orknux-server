@@ -74,9 +74,34 @@ class SlackThreads(
      *   thousands and nothing that reads one here is trying to hold all of it;
      *   [Thread.Read.replies] answers "how many" without paging.
      */
-    fun read(connectionId: Long, channel: String, threadTs: String, limit: Int = DEFAULT_LIMIT): Thread {
+    fun read(
+        connectionId: Long,
+        channel: String,
+        threadTs: String,
+        limit: Int = DEFAULT_LIMIT,
+        /**
+         * The only workspace whose connections this may read, or null for a
+         * caller that answers to no one workspace.
+         *
+         * **A boundary rather than a filter.** What reaches this is a number a
+         * script passed, and a script is written by anybody who can write one -
+         * so without this, reading another workspace's Slack was a matter of
+         * guessing an id. Null is the installation-level caller and is not a way
+         * to opt out: nothing that takes a workspace passes null.
+         */
+        on: Long? = null,
+    ): Thread {
         val connection = connections.findByIdOrNull(connectionId)
             ?: return Thread.NotPossible("the connection it would read through has been deleted")
+
+        /*
+         * Said as though it were not there, which is what it is to this caller.
+         * A refusal that distinguished "not yours" from "not there" would answer
+         * the question somebody guessing ids was asking.
+         */
+        if (on != null && connection.workspaceId != on) {
+            return Thread.NotPossible("the connection it would read through has been deleted")
+        }
 
         if (connection.type != ConnectionType.SLACK) {
             return Thread.NotPossible("${connection.type} connections have no threads to read")

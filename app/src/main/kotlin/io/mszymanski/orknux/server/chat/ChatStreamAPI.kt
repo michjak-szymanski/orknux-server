@@ -93,9 +93,19 @@ class ChatStreamAPI(
 
         // Tied to the chat here, and read for anything the model can look at.
         val sent = attachments.attach(session, request.attachmentIds)
+        /*
+         * Built inside the stream rather than before it, because compacting a
+         * long conversation takes as long as a model takes to read forty turns -
+         * and until this that time was spent with the response not yet open and
+         * nothing on screen. The frames are the first thing the chat hears.
+         *
+         * Everything that can be refused cheaply has been refused already, above:
+         * the chat exists, it is this person's, and the installation has a chat
+         * at all. What is left inside the body is the work.
+         */
         return answering(
             id,
-            chats.beginSend(id, request.text, attachments.imagesOf(sent)),
+            { send -> chats.beginSend(id, request.text, attachments.imagesOf(sent)) { send("compacting", mapOf<String, Any>()) } },
             request.text,
             response,
             session,
@@ -121,7 +131,7 @@ class ChatStreamAPI(
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        return answering(id, chats.beginRegenerate(id), said = null, response = response, session = session) {
+        return answering(id, { chats.beginRegenerate(id) }, said = null, response = response, session = session) {
             chats.abandonRegenerate(id)
         }
     }
@@ -141,7 +151,15 @@ class ChatStreamAPI(
      */
     private fun answering(
         id: Long,
-        start: ChatSendStart,
+        /**
+         * The turn to send, built once the stream is open.
+         *
+         * A value until compaction needed somewhere to announce itself from: it
+         * happens while this is being built, so the thing that builds it has to
+         * run where frames can be sent. It is handed `send` for that and for
+         * nothing else.
+         */
+        begin: (send: (String, Any) -> Unit) -> ChatSendStart,
         said: String?,
         response: HttpServletResponse,
         session: ChatSession,
@@ -187,6 +205,21 @@ class ChatStreamAPI(
             val hangup = Hangup()
 
             try {
+                /*
+                 * The turn, built here so that compacting can be announced while
+                 * it happens. `compacting` goes out before the summariser is
+                 * asked and `compacted` after it, with what it came to - and a
+                 * conversation nowhere near its threshold produces neither, which
+                 * is every conversation until somebody turns it on. Issue #286.
+                 */
+                val start = begin { event, payload -> send(event, payload) }
+                start.compacted?.let { held ->
+                    send(
+                        "compacted",
+                        mapOf("replaced" to held.replaced, "kept" to held.kept, "tokens" to held.tokens),
+                    )
+                }
+
                 /*
                  * An agent's answer still arrives as one chunk, and its working
                  * does not.

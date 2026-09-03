@@ -133,13 +133,19 @@ class PluginRunner(
         settings: String = "{}",
         permissions: Set<PluginPermission> = emptySet(),
         capabilities: Set<PluginCapability> = emptySet(),
+        /**
+         * Which workspace this run belongs to, which is the only one whose
+         * connections a capability may reach. Taken from the run rather than
+         * from the plugin, so nothing a plugin can write changes it.
+         */
+        on: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, { newContext(permissions) }) {
                 ScriptResult.Returned(
-                    invoke(it, source, functionName, arguments, settings, capabilities),
+                    invoke(it, source, functionName, arguments, settings, capabilities, on),
                     millis(started),
                 )
             }
@@ -170,6 +176,7 @@ class PluginRunner(
         arguments: List<String>,
         settings: String,
         capabilities: Set<PluginCapability>,
+        on: Long?,
     ): String? {
         polyglot.eval("js", CONTRACT)
 
@@ -187,7 +194,7 @@ class PluginRunner(
         // As text, like everything else that crosses, so the harness stays one
         // cached source rather than being respliced per call.
         bindings.putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
-        bind(bindings, capabilities)
+        bind(bindings, capabilities, on)
         polyglot.eval("js", CALL)
 
         val error = bindings.getMember(ERROR)
@@ -432,7 +439,7 @@ class PluginRunner(
      * could walk from it to a class loader; a plugin handed a string can read
      * the string.
      */
-    private fun bind(bindings: Value, capabilities: Set<PluginCapability>) {
+    private fun bind(bindings: Value, capabilities: Set<PluginCapability>, on: Long?) {
         val server = host
         if (capabilities.isEmpty() || server == null) return
 
@@ -448,7 +455,7 @@ class PluginRunner(
                  */
                 val argument = given.firstOrNull()?.takeIf { it.isString }?.asString()
                     ?: return@ProxyExecutable REFUSED
-                server.ask(capability, argument)
+                server.ask(capability, argument, on)
             }
         }
         bindings.putMember(HOST, ProxyObject.fromMap(granted))

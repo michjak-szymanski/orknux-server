@@ -31,7 +31,7 @@ class PluginCapabilityTest {
     private val asked = mutableListOf<Pair<PluginCapability, String>>()
 
     /** A server that answers, and writes down what it was asked. */
-    private val host = PluginHost { capability, argument ->
+    private val host = PluginHost { capability, argument, _ ->
         asked += capability to argument
         """{"messages":[{"ts":"1.1","text":"hello"}],"replies":1}"""
     }
@@ -116,7 +116,7 @@ class PluginCapabilityTest {
     fun `a refusal from the server arrives as an answer rather than as a failure`() {
         val refusing = PluginRunner(
             PluginProperties(timeoutMillis = 5_000, statementLimit = 2_000_000),
-            { _, _ -> """{"error":"that connection has been deleted"}""" },
+            { _, _, _ -> """{"error":"that connection has been deleted"}""" },
         )
 
         val answer = refusing.call(

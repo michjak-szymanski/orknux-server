@@ -731,8 +731,15 @@ class NpmRegistry(
          * how large that may be, so what these stop is the *fetching* — a
          * dependency graph that would have this server pulling half a registry
          * before finding out the result was too large to keep.
+         *
+         * It was 25 until `qs` was tried against the real registry and came to
+         * 22 — a small, extremely ordinary package four levels deep in
+         * single-function dependencies, which is how the ecosystem is now built.
+         * A ceiling a package like that nearly touches is one that would refuse
+         * on the day rather than on the absurdity, and the size limit on the row
+         * is the honest guard.
          */
-        const val MAX_PACKAGES = 25
+        const val MAX_PACKAGES = 60
 
         const val MAX_FILES = 400
 

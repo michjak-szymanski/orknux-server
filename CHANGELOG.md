@@ -129,7 +129,9 @@ have failed.
   offered rather than done quietly. An ES module in the graph is refused by
   name rather than transpiled, and so is a file reaching for Node's `fs`; two
   packages needing different versions of a third are refused with both versions,
-  since one file cannot hold two. Nothing about the sandbox changed: a bundle is
+  since one file cannot hold two. Where a package publishes a `browser` map — the
+  field saying what to do with a file where there is no Node — it is honoured,
+  because that is exactly the environment a library runs in. Nothing about the sandbox changed: a bundle is
   CommonJS and is wrapped on the way in exactly as any other CommonJS library
   is.
 

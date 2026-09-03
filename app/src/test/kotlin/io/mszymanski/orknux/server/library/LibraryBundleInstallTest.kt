@@ -157,6 +157,31 @@ class LibraryBundleInstallTest(
     }
 
     /**
+     * A package's own `browser` map is honoured, so a Node-only file is not a wall.
+     *
+     * `{"./inspect.js": false}` is the author saying that file is unavailable
+     * where there is no Node — which is exactly where a library runs. Refusing
+     * the bundle for a `require("util")` inside it was refusing something the
+     * package had already arranged not to do.
+     */
+    @Test
+    fun `a file a package says is not there outside Node is left out`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "looks@1.0.0", bundle: true) { installed { key members { name } } }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java)
+            .containsExactly("at")
+
+        // The stub says what it is, so a bundle is not quietly different from the
+        // archive whose name and hash are on the row beside it.
+        assertThat(libraries.findByKey("looks")?.source).contains("browser map says")
+    }
+
+    /**
      * A package publishing only an ES build is refused rather than mangled.
      *
      * Turning `import` into `require` is transpiling, and a regular expression
@@ -179,6 +204,12 @@ class LibraryBundleInstallTest(
         private val SAY = "module.exports = function (who) { return 'hi ' + who; };"
 
         private val MS = "module.exports = function (n) { return n + 'ms'; };"
+
+        /** Requires the file its own browser map says is not there outside Node. */
+        private val LOOKS = """
+            var inspect = require('./inspect.js');
+            module.exports = { at: function (held) { return typeof inspect; } };
+        """.trimIndent()
 
         /** Reaches its dependency by a subpath, never by the bare name. */
         private val COUNTS = """
@@ -250,6 +281,21 @@ class LibraryBundleInstallTest(
                     "package.json" to
                         """{"name":"counts","version":"1.0.0","main":"index.js","dependencies":{"bits":"^1.0.0"}}""",
                     "index.js" to COUNTS,
+                ),
+            ),
+            /*
+             * A package that ships a Node-only file and a `browser` map saying
+             * so. `object-inspect` publishes exactly this shape, and without it
+             * `qs` - four packages away - was refused for requiring `util`, which
+             * the author had already said would not happen outside Node.
+             */
+            ("looks" to "1.0.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to
+                        """{"name":"looks","version":"1.0.0","main":"index.js",""" +
+                        """"browser":{"./inspect.js":false}}""",
+                    "index.js" to LOOKS,
+                    "inspect.js" to "module.exports = require('util').inspect;",
                 ),
             ),
             ("modern" to "1.0.0") to NpmFixture.tarball(

@@ -291,7 +291,53 @@ class NpmRegistry(
         val described = files["package.json"]?.let { mapper.readTree(it) }
             ?: throw LibraryRegistrySilentException("$name@$resolved", "its file holds no package.json")
 
-        return One(name, resolved, tarball, integrity, described, files)
+        return One(name, resolved, tarball, integrity, described, shimmed(described, files))
+    }
+
+    /**
+     * A package's own `browser` map, applied to its files.
+     *
+     * **What it is, and why honouring it is right here.** It is the field a
+     * package publishes to say what to do with a file where there is no Node —
+     * `{"./util.inspect.js": false}` means *this one is not available, use
+     * nothing*. That is exactly the environment a library runs in: no files, no
+     * network, no Node. `object-inspect` publishes precisely this, and without it
+     * `qs` — four packages away — was refused for requiring `util`, which the
+     * author had already said would not happen outside Node.
+     *
+     * Two forms and no third. `false` is the file replaced by an empty module,
+     * which is what the author asked for, and the stub says so in a comment so a
+     * bundle is not quietly different from the archive it names. A path is the
+     * file replaced by another, and only where that other sits in the same
+     * directory: a replacement from elsewhere would take its own relative
+     * `require`s with it and resolve them against the wrong place, and a bundle
+     * that resolved somebody's specifier to the wrong file is worse than one that
+     * refused.
+     *
+     * A string `browser` — an alternative entry rather than a map — is
+     * deliberately not read. It would change which file an ordinary one-file
+     * install picks, and that is a working feature this has no business moving.
+     */
+    private fun shimmed(described: JsonNode, files: Map<String, String>): Map<String, String> {
+        val browser = described.path("browser")
+        if (!browser.isObject) return files
+
+        val held = LinkedHashMap(files)
+        for (named in browser.propertyNames()) {
+            val from = file(named)?.let { LibraryBundle.fileAt(it) { path -> held.containsKey(path) } } ?: continue
+            val asked = browser.path(named)
+
+            if (asked.isBoolean && !asked.asBoolean()) {
+                held[from] = EMPTY_MODULE
+                continue
+            }
+            val target = file(text(asked))?.let { LibraryBundle.fileAt(it) { path -> held.containsKey(path) } }
+                ?: continue
+            if (target.substringBeforeLast('/', "") == from.substringBeforeLast('/', "")) {
+                held[from] = requireNotNull(held[target])
+            }
+        }
+        return held
     }
 
     /**
@@ -692,6 +738,18 @@ class NpmRegistry(
 
         /** What could be a module. A README could not, and a package is full of them. */
         val MODULE_FILES = listOf(".js", ".cjs", ".mjs", ".json")
+
+        /**
+         * What a file replaced by a package's `browser: false` becomes.
+         *
+         * The comment is not decoration. A bundle names the archives it came out
+         * of, and one file in it is not the file that was published - so it says
+         * so, where somebody reading the bundle would be looking.
+         */
+        val EMPTY_MODULE = """
+            // The package's own browser map says this file is not available outside Node.
+            module.exports = {};
+        """.trimIndent()
 
         /** npm's own abbreviated packument: the version numbers without the prose. */
         const val ABBREVIATED = "application/vnd.npm.install-v1+json"

@@ -71,8 +71,23 @@ class SlackPluginHost(
             return refusal("that call takes a connection, a channel and a thread")
         }
 
-        val connectionId = given.get(0)?.takeIf { it.isNumber }?.asLong()
-            ?: return refusal("the first argument has to be a Slack connection")
+        /*
+         * A number or a string of one, because both are what actually arrive.
+         *
+         * A trigger publishes its connection as `"7"` - everything on a payload
+         * is text, since that is what a payload is - so a function handed
+         * `trigger.connection` and passing it straight on was refused for giving
+         * the very thing the product told it to give. Accepting only the shape
+         * the plugin template happens to declare would have made the documented
+         * path the one that does not work.
+         */
+        val connectionId = given.get(0)?.let { held ->
+            when {
+                held.isNumber -> held.asLong()
+                held.isTextual -> held.asString().trim().toLongOrNull()
+                else -> null
+            }
+        } ?: return refusal("the first argument has to be a Slack connection")
         val channel = given.get(1)?.takeIf { it.isTextual }?.asString()
             ?: return refusal("the second argument has to be a channel")
         val threadTs = given.get(2)?.takeIf { it.isTextual }?.asString()

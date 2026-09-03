@@ -126,6 +126,9 @@ class AgentTools(
         ValueType.BOOLEAN -> "true or false."
         ValueType.OBJECT, ValueType.MAP -> "A JSON object."
         ValueType.ARRAY -> "A JSON array."
+        // Said as what a model can actually supply: it has no picker, so what it
+        // has to produce is the number on the connection's page.
+        ValueType.CONNECTION -> "The id of one of this workspace's connections."
         // Never stored on a parameter; only a function's return type is nothing.
         ValueType.NONE -> "Nothing."
     }

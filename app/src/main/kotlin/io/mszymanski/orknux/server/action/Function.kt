@@ -49,6 +49,26 @@ enum class ValueType {
     ARRAY,
 
     /**
+     * One of the workspace's connections, as the thing that calls this hands it
+     * over.
+     *
+     * **What arrives is the connection's id, and this type is about saying so.**
+     * A payload carries text, so a trigger publishes the connection it arrived
+     * on as `"7"`; a function declaring `string` would take that and work, and
+     * nobody reading the function would know what the string was for. This is
+     * the same value with a name on it: the panel offers the workspace's
+     * connections rather than a free box, and the editor annotates the parameter
+     * as something to hand to a call that takes one.
+     *
+     * It is deliberately not a type per kind of connection. Which Slack a
+     * workspace means is a question about a row, and a function handed the wrong
+     * kind is told so by the call it makes - `SlackThreads` refuses a Jira
+     * connection in a sentence - rather than by an annotation this would have to
+     * keep in step with every connection type ever added.
+     */
+    CONNECTION,
+
+    /**
      * Nothing at all.
      *
      * A function that posts a message or writes a row has no answer to give,
@@ -75,6 +95,13 @@ fun typeScriptType(type: ValueType, objectName: String? = null): String = when (
     ValueType.STRING -> "string"
     ValueType.NUMBER -> "number"
     ValueType.BOOLEAN -> "boolean"
+    /*
+     * A connection, however it reached the function: the id as text off a
+     * payload, as a number where somebody typed one, or the whole object from a
+     * plugin's settings. The editor declares that union; naming it here rather
+     * than spelling it out keeps the two ends saying one thing.
+     */
+    ValueType.CONNECTION -> "OrknuxConnectionRef"
     // The object's own name, which the editor declares as an interface. Falls back
     // to the loose shape if the object it named has since been deleted — an
     // annotation that does not resolve would light up code that still runs.

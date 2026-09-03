@@ -4754,6 +4754,15 @@ enum ValueType {
     "Keys and values with no defined shape. What OBJECT meant before objects could be named."
     MAP
     ARRAY
+    """
+    One of the workspace's connections.
+
+    What crosses is the connection's id - a payload carries text, so a trigger
+    publishes the one its event arrived on as a string. The type is about saying
+    what the value is for: the panel offers the workspace's connections rather
+    than a free box, and a call that takes one accepts it.
+    """
+    CONNECTION
     "Nothing at all: a function that acts rather than answers."
     NONE
 }

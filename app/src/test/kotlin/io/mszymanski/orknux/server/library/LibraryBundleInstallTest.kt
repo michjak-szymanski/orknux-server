@@ -1,0 +1,246 @@
+package io.mszymanski.orknux.server.library
+
+import com.sun.net.httpserver.HttpServer
+import org.assertj.core.api.Assertions.assertThat
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.graphql.test.autoconfigure.tester.AutoConfigureGraphQlTester
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
+import org.springframework.security.test.context.support.WithMockUser
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
+
+/**
+ * A package that is more than one file, installed anyway.
+ *
+ * Issue #319. Until this, an entry that reached a second file — which is most
+ * published packages — was answered with *build a bundle and upload it*, and the
+ * person reading that had to go and install Node to do something this server was
+ * already holding the archive for.
+ *
+ * The registry is a stub on loopback for the reason [LibraryInstallTest] gives:
+ * a suite that reached the real npm would go red on the day somebody unpublished
+ * something. What it serves is the shape this feature is about — a package whose
+ * entry requires a file beside it *and* a second package, whose version is a
+ * range rather than something anybody typed.
+ *
+ * Five things:
+ *
+ *   the question    a package that needs bundling is not refused and not
+ *                   silently bundled: it comes back saying what it would take,
+ *                   with the packages named
+ *   nothing yet     and nothing is stored while the question is unanswered
+ *   the answer      `bundle: true` installs it, and what is stored *runs* -
+ *                   asserted through the members, which are read off the value
+ *                   in the sandbox rather than off the text
+ *   the range       the dependency's range resolved to a version, and that
+ *                   version is on the row rather than the range
+ *   the receipt     what went in is readable afterwards, because a bundle whose
+ *                   contents nobody can list is a black box in a table whose
+ *                   whole purpose is answering what code is running here
+ */
+@SpringBootTest
+@AutoConfigureGraphQlTester
+@WithMockUser(username = "alice", roles = ["ADMINS"])
+class LibraryBundleInstallTest(
+    @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
+    @Autowired val libraries: ScriptLibraryRepository,
+) {
+
+    @BeforeEach
+    fun reset() {
+        libraries.deleteAll()
+    }
+
+    @Test
+    fun `a package that is more than one file asks before it is bundled`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "chatty@2.0.0") {
+                installed { key }
+                proposed { spec why files parts { name version entry integrity } }
+              }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.installed").valueIsNull()
+            .path("installScriptLibrary.proposed.spec").entity(String::class.java).isEqualTo("chatty@2.0.0")
+            // Three: the entry, the file beside it, and the package it needs.
+            .path("installScriptLibrary.proposed.files").entity(Int::class.java).isEqualTo(3)
+            .path("installScriptLibrary.proposed.parts[*].name").entityList(String::class.java)
+            .containsExactly("chatty", "ms")
+            // The range resolved, so what is being agreed to is a version.
+            .path("installScriptLibrary.proposed.parts[1].version").entity(String::class.java).isEqualTo("2.1.3")
+
+        assertThat(libraries.findAll()).describedAs("nothing is stored while it is still a question").isEmpty()
+    }
+
+    /**
+     * The sentence that made it a question, kept rather than reworded.
+     *
+     * It names the file and the specifier, which is the part somebody who did not
+     * expect a package to be several files actually needs.
+     */
+    @Test
+    fun `the question says what made it more than one file`() {
+        graphQlTester.document(
+            """mutation { installScriptLibrary(spec: "chatty@2.0.0") { proposed { why } } }""",
+        ).execute()
+            .path("installScriptLibrary.proposed.why").entity(String::class.java)
+            .satisfies({ assertThat(it).contains("./lib/say") })
+    }
+
+    @Test
+    fun `saying yes bundles it into one library that runs`() {
+        graphQlTester.document(
+            """
+            mutation {
+              installScriptLibrary(spec: "chatty@2.0.0", bundle: true) {
+                installed { key format members { name } bundledFrom { name version entry } }
+              }
+            }
+            """,
+        ).execute()
+            .path("installScriptLibrary.installed.key").entity(String::class.java).isEqualTo("chatty")
+            // A bundle is CommonJS and is wrapped on the way into the sandbox,
+            // exactly as any other CommonJS library is.
+            .path("installScriptLibrary.installed.format").entity(String::class.java).isEqualTo("COMMONJS")
+            /*
+             * The assertion that matters. These are read off the evaluated value
+             * in the sandbox, so a bundle that was text-perfect and threw on
+             * evaluation would fail here rather than pass.
+             */
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java)
+            .containsExactly("say", "took")
+            .path("installScriptLibrary.installed.bundledFrom[*].name").entityList(String::class.java)
+            .containsExactly("chatty", "ms")
+            .path("installScriptLibrary.installed.bundledFrom[1].version").entity(String::class.java)
+            .isEqualTo("2.1.3")
+
+        val stored = requireNotNull(libraries.findByKey("chatty"))
+        // The files went in as they arrived: nothing here transpiles or minifies,
+        // which is what makes a bundle something an administrator can still read.
+        assertThat(stored.source).contains(SAY)
+        assertThat(stored.source).contains(MS)
+        assertThat(stored.origin).isEqualTo(ScriptLibrary.ORIGIN_REGISTRY)
+    }
+
+    /**
+     * A package publishing only an ES build is refused rather than mangled.
+     *
+     * Turning `import` into `require` is transpiling, and a regular expression
+     * that thinks it can is the thing that breaks somebody's library quietly six
+     * months later. The refusal names the file, because the way out is to point
+     * the install at a CommonJS build.
+     */
+    @Test
+    fun `an ES module that needs bundling is refused, naming the file`() {
+        graphQlTester.document(
+            """mutation { installScriptLibrary(spec: "modern@1.0.0", bundle: true) { installed { key } } }""",
+        ).execute()
+            .errors().expect { it.message?.contains("ES module") == true }.verify()
+
+        assertThat(libraries.findAll()).isEmpty()
+    }
+
+    companion object {
+
+        private val SAY = "module.exports = function (who) { return 'hi ' + who; };"
+
+        private val MS = "module.exports = function (n) { return n + 'ms'; };"
+
+        private val CHATTY = """
+            var say = require('./lib/say');
+            var ms = require('ms');
+            module.exports = { say: say, took: function (n) { return ms(n); } };
+        """.trimIndent()
+
+        private val npm: HttpServer = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+            .apply {
+                createContext("/") { exchange ->
+                    val body = served(exchange.requestURI.path)
+                    if (body == null) {
+                        exchange.sendResponseHeaders(404, -1)
+                    } else {
+                        exchange.sendResponseHeaders(200, body.size.toLong())
+                        exchange.responseBody.use { it.write(body) }
+                    }
+                    exchange.close()
+                }
+                start()
+            }
+
+        private val archives: Map<Pair<String, String>, ByteArray> = mapOf(
+            ("chatty" to "2.0.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to
+                        """{"name":"chatty","version":"2.0.0","main":"index.js","dependencies":{"ms":"^2.1.0"}}""",
+                    "index.js" to CHATTY,
+                    "lib/say.js" to SAY,
+                    // Never reached from the entry, so never bundled: what goes in
+                    // is what the graph touches rather than what the archive holds.
+                    "test/say.test.js" to "throw new Error('a test file was bundled');",
+                ),
+            ),
+            ("ms" to "2.1.3") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to """{"name":"ms","version":"2.1.3","main":"index.js"}""",
+                    "index.js" to MS,
+                ),
+            ),
+            ("modern" to "1.0.0") to NpmFixture.tarball(
+                mapOf(
+                    "package.json" to """{"name":"modern","version":"1.0.0","main":"index.js"}""",
+                    "index.js" to "import x from './x.js';\nexport default x;",
+                    "x.js" to "export default 1;",
+                ),
+            ),
+        )
+
+        /** What `ms` has published, which is what a range is resolved against. */
+        private val published = listOf("2.0.0", "2.1.0", "2.1.3", "3.0.0")
+
+        private fun served(path: String): ByteArray? {
+            val asked = path.trimStart('/').replace("%2f", "/")
+
+            for ((named, archive) in archives) {
+                val (name, version) = named
+                if (path == tarballPath(name, version)) return archive
+                if (asked == "$name/$version") {
+                    return ("""{"name":"$name","version":"$version","dist":{""" +
+                        """"tarball":"${registryUrl()}${tarballPath(name, version)}",""" +
+                        """"integrity":"${NpmFixture.integrity(archive)}"}}""")
+                        .toByteArray(StandardCharsets.UTF_8)
+                }
+            }
+
+            /*
+             * The packument: which versions exist. Asked only for a dependency,
+             * because a dependency's version is a range npm published rather than
+             * something anybody typed, and it has to be resolved against what is
+             * actually there.
+             */
+            if (asked == "ms") {
+                val versions = published.joinToString(",") { """"$it":{"version":"$it"}""" }
+                return """{"name":"ms","versions":{$versions}}""".toByteArray(StandardCharsets.UTF_8)
+            }
+            return null
+        }
+
+        private fun tarballPath(name: String, version: String) = "/$name/-/$name-$version.tgz"
+
+        private fun registryUrl() = "http://${npm.address.hostString}:${npm.address.port}"
+
+        @JvmStatic
+        @DynamicPropertySource
+        fun registry(properties: DynamicPropertyRegistry) {
+            properties.add("orknux.library.registry.url") { registryUrl() }
+        }
+    }
+}

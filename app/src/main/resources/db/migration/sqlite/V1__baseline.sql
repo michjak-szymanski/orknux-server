@@ -651,6 +651,9 @@ CREATE TABLE script_library
     -- came from - the file is stored exactly as it arrived so that sha256 and
     -- origin_integrity stay claims anybody holding the same package can check.
     source_format                varchar(16) not null default 'ESM',
+    -- What went into it, when it was made out of more than one file. Null for
+    -- every library that is one file, which is the ordinary one.
+    bundled_from                 text,
     constraint uq_script_library_key UNIQUE (library_key),
     constraint ck_script_library_origin CHECK ((origin) IN ('UPLOAD', 'REGISTRY')),
     constraint ck_script_library_source_format CHECK ((source_format) IN ('ESM', 'COMMONJS'))

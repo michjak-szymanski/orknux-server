@@ -1,0 +1,12 @@
+-- What went into a library that was made out of more than one file.
+--
+-- Null for every library there is today, and for every one that goes on being
+-- one file: a bundle is the exception, and a column that read as "a bundle of
+-- one" for an ordinary upload would say something untrue about it.
+--
+-- The columns beside this one describe the package a bundle was *entered* by,
+-- which is not the same as what is in it, and its sha256 is a hash of something
+-- only this installation holds. So the bill of materials is written down here —
+-- every package with the version its range resolved to and the hash its registry
+-- claimed, or every file that was uploaded. Issue #319.
+ALTER TABLE script_library ADD COLUMN bundled_from TEXT;

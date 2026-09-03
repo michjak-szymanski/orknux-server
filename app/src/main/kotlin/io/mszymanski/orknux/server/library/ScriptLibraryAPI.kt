@@ -94,6 +94,68 @@ class ScriptLibraryUploadAPI(
         return ResponseEntity.ok(mapOf("id" to requireNotNull(saved.id), "key" to saved.key, "replaced" to replaced))
     }
 
+    /**
+     * Several files, made into one library.
+     *
+     * The other half of #319. A registry install has a manifest to read and this
+     * has nothing: which of the files is the entry is a question only the person
+     * choosing them can answer, so it is asked rather than guessed at — a folder
+     * of six files has no `index.js` often enough that guessing would be wrong on
+     * the day it mattered.
+     *
+     * [paths] is what keeps `require("./lib/parse")` working. A browser sends a
+     * file's basename and nothing else, so a form that sent only files would turn
+     * `lib/parse.js` into `parse.js` and the specifier would answer nothing; the
+     * interface sends each file's path beside it, in the same order.
+     *
+     * The permission is asked here too, and for the same reason as on an install:
+     * what comes out is an artefact this server assembled, which is a different
+     * thing from the file somebody chose. Refused rather than offered, though —
+     * unlike an install there is nothing to fetch and nothing to describe that
+     * the person did not just select themselves, so the answer is to say so and
+     * suggest the one file.
+     */
+    @PostMapping("/api/libraries/bundle")
+    @Transactional
+    fun bundle(
+        @RequestParam("files") files: List<MultipartFile>,
+        @RequestParam("paths", required = false) paths: List<String>?,
+        @RequestParam("entry") entry: String,
+        @RequestParam("key", required = false) key: String?,
+        @RequestParam("bundle", required = false) allowed: Boolean?,
+    ): ResponseEntity<Any> {
+        access.requireAdmin()
+
+        if (files.isEmpty() || files.all { it.isEmpty }) throw LibraryEmptyException()
+        val named = key?.trim()?.ifEmpty { null } ?: entry.substringAfterLast('/').removeSuffix(".js")
+        if (files.size > 1 && allowed != true) throw LibraryBundleNotAllowedException(named, files.size)
+
+        val modules = LinkedHashMap<String, String>()
+        files.forEachIndexed { at, file ->
+            val path = paths?.getOrNull(at)?.trim()?.ifEmpty { null }
+                ?: file.originalFilename?.trim()?.ifEmpty { null }
+                ?: throw LibraryEmptyException()
+            modules[path.removePrefix("./").removePrefix("/")] = text(file.bytes)
+        }
+
+        val chosen = entry.trim().removePrefix("./").removePrefix("/")
+        if (!modules.containsKey(chosen)) throw LibraryBundleMissingException(named, "the form", chosen)
+
+        val made = LibraryBundle.bundle(modules, chosen, named)
+        val stored = store.store(
+            key = named,
+            filename = chosen,
+            source = made.source,
+            sizeBytes = made.source.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+            // No version and no hash: an upload has no provenance this
+            // installation can vouch for, and what went in is all it can say.
+            parts = made.files.map { LibraryPartView(it, version = null, entry = null, integrity = null) },
+        )
+        return ResponseEntity.ok(
+            mapOf("id" to requireNotNull(stored.id), "key" to stored.key, "files" to made.files.size),
+        )
+    }
+
     /** The library as it was written, for downloading. TypeScript where there is any. */
     @GetMapping("/api/libraries/{id}/source")
     fun download(@PathVariable id: Long): ResponseEntity<String> {
@@ -115,6 +177,10 @@ class ScriptLibraryUploadAPI(
         LibraryNotTextException::class,
         LibraryKeyInvalidException::class,
         LibraryUnreadableException::class,
+        LibraryBundleEsmException::class,
+        LibraryBundleMissingException::class,
+        LibraryBundleBuiltinException::class,
+        LibraryBundleNotAllowedException::class,
     )
     fun refused(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.badRequest().body(mapOf("message" to (failure.message ?: "That file could not be loaded")))
@@ -166,6 +232,18 @@ class LibraryStore(
         typescript: String? = null,
         sizeBytes: Long,
         fetched: Fetched? = null,
+        /**
+         * What went into this, where it was made out of more than one file.
+         *
+         * Null is the ordinary library and is not the same as an empty list. What
+         * it changes here is the self-containment check below: a bundle's
+         * `require` calls are calls into itself, answered by a table the bundler
+         * built, and refusing them would refuse the thing this feature exists to
+         * produce. Every one of them was resolved before this was called, which
+         * is a stronger check than the one being skipped rather than a weaker
+         * one. Issue #319.
+         */
+        parts: List<LibraryPartView>? = null,
     ): ScriptLibrary {
         if (!KEY.matches(key)) throw LibraryKeyInvalidException(key)
         if (sizeBytes > MAX_SIZE) throw LibraryTooLargeException(MAX_SIZE / 1024)
@@ -178,7 +256,7 @@ class LibraryStore(
         // first use. An ES module is never asked, because a bundle mentions
         // `require` inside a shim it never reaches - see LibrarySource.required.
         val format = LibrarySource.formatOf(source)
-        if (format == LibrarySource.COMMONJS) {
+        if (format == LibrarySource.COMMONJS && parts == null) {
             LibrarySource.required(source)?.let {
                 throw LibraryUnreadableException(
                     "it calls require(\"$it\"), and a library has to be one self-contained file. " +
@@ -226,6 +304,10 @@ class LibraryStore(
                 this.originUrl = fetched?.url
                 this.originIntegrity = fetched?.integrity
                 this.originEntry = fetched?.entry
+                // Rewritten both ways round for the reason above it: a re-upload
+                // over a bundle is not a bundle any more, and a row still listing
+                // packages that are no longer in it would be believed.
+                this.bundledFrom = parts?.let { mapper.writeValueAsString(it) }
             },
         )
     }
@@ -296,10 +378,22 @@ class ScriptLibraryAPI(
      */
     @MutationMapping
     @Transactional
-    fun installScriptLibrary(@Argument spec: String): ScriptLibraryView {
+    fun installScriptLibrary(@Argument spec: String, @Argument bundle: Boolean?): ScriptLibraryInstall {
         access.requireAdmin()
 
-        val fetched = registry.fetch(spec)
+        /*
+         * The one-file install first, unchanged, and a package that is one file
+         * never reaches anything below. What tells the two apart is the refusal
+         * that used to be the end of it: `LibraryDependsException` is thrown for
+         * an entry that reaches a second file, which is precisely the case
+         * bundling exists for. Issue #319.
+         */
+        val fetched = try {
+            registry.fetch(spec)
+        } catch (needsMore: LibraryDependsException) {
+            return bundled(spec, bundle == true, needsMore)
+        }
+
         val stored = store.store(
             // The key and the size are the store's rules, not this one's: a
             // library is a library however it arrived here.
@@ -309,7 +403,60 @@ class ScriptLibraryAPI(
             sizeBytes = fetched.source.toByteArray(StandardCharsets.UTF_8).size.toLong(),
             fetched = fetched,
         )
-        return describe(stored, usersOf(requireNotNull(stored.id)))
+        return ScriptLibraryInstall(installed = describe(stored, usersOf(requireNotNull(stored.id))))
+    }
+
+    /**
+     * A package that is more than one file: what would be bundled, or the bundle.
+     *
+     * **Asked rather than taken**, which is what [allowed] is. The permission is
+     * not about safety — the archives have already been fetched and verified, and
+     * nothing runs until it is stored. It is about what the row is going to *be*:
+     * a bundle is an artefact this server assembled, which no registry published
+     * and nobody else can hash to the same thing, and every provenance column
+     * beside it describes the package it was entered by rather than the whole of
+     * what is in it. That is a different bargain from the one an install usually
+     * makes, so it is offered.
+     *
+     * What comes back when it has not been allowed is the offer itself and not an
+     * error: the packages that would go in, at the versions their ranges resolved
+     * to. A refusal is what an error is for, and this is a question.
+     */
+    private fun bundled(spec: String, allowed: Boolean, why: LibraryDependsException): ScriptLibraryInstall {
+        val gathered = registry.gather(spec)
+        val made = LibraryBundle.bundle(gathered.modules, gathered.entry, spec, gathered.packages)
+        val parts = gathered.parts.map {
+            LibraryPartView(it.packageName, it.version, it.entry, it.integrity)
+        }
+
+        if (!allowed) {
+            return ScriptLibraryInstall(
+                proposed = LibraryBundlePlan(
+                    // The one somebody typed, so the question names what they asked
+                    // for rather than only what it dragged in behind it.
+                    spec = spec,
+                    why = why.message.orEmpty(),
+                    files = made.files.size,
+                    parts = parts,
+                ),
+            )
+        }
+
+        val root = gathered.root
+        val stored = store.store(
+            key = keyOf(root.packageName),
+            filename = "${root.packageName}@${root.version}/${root.entry}",
+            source = made.source,
+            sizeBytes = made.source.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+            /*
+             * The provenance of the package it was entered by, which is true and
+             * is not the whole truth - the bundle is not the file that hash is
+             * of. `bundledFrom` is the rest of it, and the two are read together.
+             */
+            fetched = Fetched(root.packageName, root.version, root.url, root.integrity, root.entry, made.source),
+            parts = parts,
+        )
+        return ScriptLibraryInstall(installed = describe(stored, usersOf(requireNotNull(stored.id))))
     }
 
     /** Everything loaded, with what imports it. Administrators. */
@@ -374,6 +521,16 @@ class ScriptLibraryAPI(
         uploadedAt = library.uploadedAt.toString(),
         uploadedBy = library.uploadedBy,
         registry = registryOf(library),
+        bundledFrom = library.bundledFrom?.let { written ->
+            mapper.readTree(written).values().map { held ->
+                LibraryPartView(
+                    name = held.path("name").asString(""),
+                    version = held.path("version").asString("").ifEmpty { null },
+                    entry = held.path("entry").asString("").ifEmpty { null },
+                    integrity = held.path("integrity").asString("").ifEmpty { null },
+                )
+            }
+        },
     )
 
     /**
@@ -440,6 +597,17 @@ class ScriptLibraryExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is LibraryIntegrityException,
             is LibraryNoEntryException,
             is LibraryDependsException,
+            // Every way a bundle can be refused, and each one carries a sentence
+            // naming the file or the package it is about - which is the whole of
+            // what somebody can act on.
+            is LibraryBundleEsmException,
+            is LibraryBundleMissingException,
+            is LibraryBundleBuiltinException,
+            is LibraryBundleNotAllowedException,
+            is LibraryBundleConflictException,
+            is LibraryBundleUnsatisfiedException,
+            is LibraryBundleTooManyException,
+            is LibraryRangeUnreadableException,
             -> ErrorType.BAD_REQUEST
 
             is LibraryNotFoundException,

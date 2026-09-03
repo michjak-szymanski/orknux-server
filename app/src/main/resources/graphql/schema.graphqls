@@ -731,13 +731,21 @@ type Mutation {
     `exports` as it runs, and the file is stored as the registry served it so the
     hash on the row stays a claim anybody can check.
 
+    A package that is more than one file is neither installed nor refused: it
+    comes back as `proposed`, saying what bundling it would mean and which
+    packages would go in, and the same call with `bundle: true` does it. The
+    permission is not about safety - the archives are fetched and verified either
+    way - it is about what the row would be: a bundle is an artefact this server
+    assembled, which no registry published and nobody else can hash to the same
+    thing.
+
     Refused, with a sentence saying why, when: nothing the package's `exports`,
-    `module` or `main` names is actually in it; its entry imports or requires a
-    second package, because a library has to be one self-contained file and this
-    installation does not bundle; the file does not hash to what the registry said
-    it would; or the registry cannot be reached.
+    `module` or `main` names is actually in it; a file in it is an ES module,
+    which cannot be bundled without transpiling it; two packages in the graph need
+    different versions of a third; the file does not hash to what the registry
+    said it would; or the registry cannot be reached.
     """
-    installScriptLibrary(spec: String!): ScriptLibrary!
+    installScriptLibrary(spec: String!, bundle: Boolean): ScriptLibraryInstall!
     """
     Answers one of a plugin's parameters, for one workspace.
 
@@ -5075,6 +5083,61 @@ type ScriptLibrary {
     blanks would read as though it had.
     """
     registry: LibraryRegistry
+    """
+    What went into it, or null where it is one file.
+
+    Null rather than a list of one: "this is the file" and "this is a bundle of
+    one thing" are different claims and only the first is true of an ordinary
+    library. Where it is a list, it is the bill of materials - every package at
+    the version its range resolved to, or every file that was uploaded - because
+    the columns beside it describe the package the bundle was entered by rather
+    than the whole of what is in it.
+    """
+    bundledFrom: [LibraryPart!]
+}
+
+"""
+What an install came to: the library, or the question it has to ask first.
+
+Exactly one of the two is set. A package that is one file installs and there is
+nothing to ask; one that is several is answered with what bundling it would mean,
+which is a question rather than an error.
+"""
+type ScriptLibraryInstall {
+    "The library, where nothing had to be asked."
+    installed: ScriptLibrary
+    "What would be bundled, where it does. Say yes with `bundle: true`."
+    proposed: LibraryBundlePlan
+}
+
+"What would go into a bundle, so somebody can say yes to it."
+type LibraryBundlePlan {
+    "What was typed, so the question names what was asked for."
+    spec: String!
+    """
+    Why one file was not enough, in the sentence the install refused with: it
+    names the file and the specifier that made this more than one file.
+    """
+    why: String!
+    "How many files would end up inside it - reached, rather than fetched."
+    files: Int!
+    parts: [LibraryPart!]!
+}
+
+"""
+One thing that went into a bundle.
+
+`version` and `integrity` are null for a file somebody uploaded, which has
+neither: an upload has no provenance this installation can vouch for, and a blank
+where a version would be is the honest way to say so.
+"""
+type LibraryPart {
+    name: String!
+    version: String
+    "Which file in it the bundle enters it by."
+    entry: String
+    "The registry's own hash of the file it served."
+    integrity: String
 }
 
 """

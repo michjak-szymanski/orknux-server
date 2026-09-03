@@ -201,6 +201,22 @@ class ScriptLibrary(
      */
     @Column(name = "origin_entry", length = 255)
     var originEntry: String? = null,
+
+    /**
+     * What went into this, when it was made out of more than one file.
+     *
+     * JSON, and null for the ordinary library that is one file somebody uploaded
+     * or one module out of one package. A bundle is an artefact **this server
+     * assembled**: no registry published it, its [sha256] is a hash of something
+     * only this installation has, and the columns above it describe the package
+     * it was entered by rather than the whole of what is in it. So what is in it
+     * is written down here — every package with the version its range resolved
+     * to, or every file that was uploaded — because otherwise "what code is
+     * running in here" would have a bundle for an answer, which is no answer.
+     * Issue #319.
+     */
+    @Column(name = "bundled_from", columnDefinition = "text")
+    var bundledFrom: String? = null,
 ) {
     companion object {
         const val ORIGIN_UPLOAD = "UPLOAD"
@@ -265,6 +281,28 @@ data class ScriptLibraryView(
      * inventing a row of blanks for it would read as though it had.
      */
     val registry: LibraryRegistryView?,
+    /**
+     * What went into it, or null where it is one file.
+     *
+     * Null rather than a list of one, because "this is the file" and "this is a
+     * bundle of one thing" are different claims and only the first is true of an
+     * ordinary library.
+     */
+    val bundledFrom: List<LibraryPartView>?,
+)
+
+/**
+ * One thing that went into a bundle.
+ *
+ * [version] and [integrity] are null for a file somebody uploaded, which has
+ * neither — an upload has no provenance this installation can vouch for, and a
+ * blank where a version would be is the honest way to say so.
+ */
+data class LibraryPartView(
+    val name: String,
+    val version: String?,
+    val entry: String?,
+    val integrity: String?,
 )
 
 /**
@@ -284,6 +322,36 @@ data class LibraryRegistryView(
     val integrity: String,
     /** Which file inside the package is the one that runs. */
     val entry: String,
+)
+
+/**
+ * What an install came to: the library, or the question it has to ask first.
+ *
+ * Exactly one of the two. A package that is one file installs and there is
+ * nothing to ask; a package that is several is not refused — it is answered with
+ * what bundling it would mean, which is a question and not an error. An error
+ * would have been the easy shape and the wrong one: nothing has gone wrong, and
+ * a screen that has to read a sentence to find out what it is being offered
+ * cannot show a list of it. Issue #319.
+ */
+data class ScriptLibraryInstall(
+    val installed: ScriptLibraryView? = null,
+    val proposed: LibraryBundlePlan? = null,
+)
+
+/**
+ * What would go into a bundle, so somebody can say yes to it.
+ *
+ * [why] is the sentence the one-file install refused with, kept rather than
+ * reworded: it names the file and the specifier that made this more than one
+ * file, which is the part somebody who did not expect this needs.
+ */
+data class LibraryBundlePlan(
+    val spec: String,
+    val why: String,
+    /** How many files would end up inside it, reached rather than fetched. */
+    val files: Int,
+    val parts: List<LibraryPartView>,
 )
 
 /** Whether this installation can fetch a package, and from where. */

@@ -151,6 +151,168 @@ class NpmRegistry(
     }
 
     /**
+     * A package and everything it needs, fetched, ready to be made into one file.
+     *
+     * **The install that used to be a refusal.** A package whose entry reaches a
+     * second file — which is most packages — was answered with *build a bundle
+     * and upload it*, and the person reading that had to install Node to do
+     * something this server was already holding the archive for. Issue #319.
+     *
+     * The three rules at the top of this file are unchanged and this is held to
+     * all of them, once per package rather than once: every archive is verified
+     * against the hash its registry named, every version ends up written down,
+     * and it all goes out through [ProxyRouter]. The one worth saying again is
+     * the version. A dependency's range is not something anybody typed — npm
+     * publishes ranges — so it is resolved here, by [NpmVersions], against what
+     * the registry has published, and the version it resolved to goes on the
+     * row. The bundle is then an artefact with a bill of materials rather than a
+     * black box.
+     *
+     * Flat, and a conflict is refused rather than nested. Node would install two
+     * copies of a package at two versions; one file cannot hold two, and a bundle
+     * that silently gave one of them the other's code would be the worst kind of
+     * wrong. So it says which package, and both versions.
+     */
+    fun gather(spec: String): Gathered {
+        val (name, version) = resolve(spec)
+        val root = one(name, version)
+
+        val modules = LinkedHashMap<String, String>()
+        val packages = LinkedHashMap<String, String>()
+        val parts = mutableListOf<BundlePart>()
+        val versions = LinkedHashMap<String, String>()
+
+        modules.putAll(root.files)
+        val entry = commonjs(root, "")
+            ?: throw LibraryBundleEsmException("$name@${root.version}", modules(root.described).firstOrNull() ?: "it")
+        parts += root.part(entry)
+        versions[name] = root.version
+
+        /*
+         * Breadth first, so what is fetched is the graph nearest the package
+         * somebody actually asked for - and so a limit on how many packages is a
+         * limit on how far this wanders rather than on which branch it happened
+         * to take first.
+         */
+        val queue = ArrayDeque<Pair<String, JsonNode>>()
+        queue.addLast(name to root.described)
+
+        while (queue.isNotEmpty()) {
+            val (owner, described) = queue.removeFirst()
+            val needs = described.path("dependencies")
+            if (!needs.isObject) continue
+
+            for (dependency in needs.propertyNames()) {
+                val range = needs.path(dependency).asString("").trim()
+                val already = versions[dependency]
+                if (already != null) {
+                    /*
+                     * The same package wanted at two versions. Node nests a copy
+                     * of each; one file cannot, and choosing one of them for both
+                     * is choosing somebody's bug on their behalf.
+                     */
+                    if (!NpmVersions.allows(range, already)) {
+                        throw LibraryBundleConflictException(spec, dependency, already, range)
+                    }
+                    continue
+                }
+                if (parts.size >= MAX_PACKAGES) throw LibraryBundleTooManyException(spec, MAX_PACKAGES)
+
+                val resolved = NpmVersions.best(range, versionsOf(dependency))
+                    ?: throw LibraryBundleUnsatisfiedException(spec, owner, dependency, range)
+
+                val fetched = one(dependency, resolved)
+                val prefix = "node_modules/$dependency/"
+                modules.putAll(fetched.files.mapKeys { prefix + it.key })
+
+                val within = commonjs(fetched, prefix)
+                    ?: throw LibraryBundleEsmException("$dependency@$resolved", "${prefix}its entry")
+                packages[dependency] = within
+                parts += fetched.part(within)
+                versions[dependency] = resolved
+
+                if (modules.size > MAX_FILES) throw LibraryBundleTooManyException(spec, MAX_PACKAGES)
+                queue.addLast(dependency to fetched.described)
+            }
+        }
+
+        return Gathered(entry = entry, modules = modules, packages = packages, parts = parts)
+    }
+
+    /**
+     * One package's archive, verified, with every file in it that could be a
+     * module.
+     *
+     * `.js`, `.cjs`, `.mjs` and `.json`, and nothing else: what is being built is
+     * a module graph, and a package's README, its type declarations and its
+     * source maps are the megabytes no entry could ever reach.
+     */
+    private fun one(name: String, version: String): One {
+        val registry = registry ?: throw LibraryRegistryOffException()
+        val named = "$name@$version"
+
+        val manifest = json("$registry/${encoded(name)}/$version", named)
+        val distribution = manifest.path("dist")
+        val tarball = distribution.path("tarball").asString("").trim()
+        if (!tarball.startsWith("http://") && !tarball.startsWith("https://")) {
+            throw LibraryRegistrySilentException(named, "it named no file to download")
+        }
+
+        val resolved = manifest.path("version").asString(version).ifBlank { version }
+        val archive = bytes(tarball, "$name@$resolved")
+        val integrity = verify(archive, distribution, "$name@$resolved")
+
+        val files = read(archive, MAX_FILES) { path ->
+            path.startsWith("package/") && MODULE_FILES.any { path.endsWith(it) }
+        }.mapKeys { it.key.removePrefix("package/") }
+
+        val described = files["package.json"]?.let { mapper.readTree(it) }
+            ?: throw LibraryRegistrySilentException("$name@$resolved", "its file holds no package.json")
+
+        return One(name, resolved, tarball, integrity, described, files)
+    }
+
+    /**
+     * The candidate a package would be bundled from: its CommonJS one.
+     *
+     * The other way round from [entryOf], and deliberately. A single-file install
+     * prefers an ES module because the sandbox runs one natively; a bundle cannot
+     * use one at all, since turning `import` into `require` is transpiling. So
+     * the candidates are walked for the first that is genuinely CommonJS, and a
+     * package publishing only an ES build is refused rather than mangled.
+     */
+    private fun commonjs(one: One, prefix: String): String? = modules(one.described)
+        .firstOrNull { candidate -> one.files[candidate]?.let { !LibrarySource.esm(it) } == true }
+        ?.let { prefix + it }
+
+    /**
+     * Which versions of a package the registry has published.
+     *
+     * The abbreviated packument, which is what npm's own client asks for: the
+     * full document for a popular package is megabytes of changelogs and
+     * maintainer lists, and what is wanted here is a list of version numbers.
+     */
+    private fun versionsOf(name: String): List<String> {
+        val registry = registry ?: throw LibraryRegistryOffException()
+        val packument = json("$registry/${encoded(name)}", name, ABBREVIATED)
+        val versions = packument.path("versions")
+        if (!versions.isObject) throw LibraryPackageMissingException(name)
+        return versions.propertyNames().toList()
+    }
+
+    /** One package, fetched and verified, with its files. */
+    private data class One(
+        val name: String,
+        val version: String,
+        val url: String,
+        val integrity: String,
+        val described: JsonNode,
+        val files: Map<String, String>,
+    ) {
+        fun part(entry: String) = BundlePart(name, version, url, integrity, entry)
+    }
+
+    /**
      * A package name and an exact version, or a sentence about why that is not
      * what was typed.
      *
@@ -299,8 +461,8 @@ class NpmRegistry(
         return "sha1-$shasum"
     }
 
-    private fun json(url: String, named: String): JsonNode {
-        val answered = get(url, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), named)
+    private fun json(url: String, named: String, accept: String = "application/json"): JsonNode {
+        val answered = get(url, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8), named, accept)
         if (answered.statusCode() == 404) throw LibraryPackageMissingException(named)
         if (answered.statusCode() !in 200..299) {
             throw LibraryRegistrySilentException(named, "the registry answered ${answered.statusCode()}")
@@ -324,10 +486,15 @@ class NpmRegistry(
         return body
     }
 
-    private fun <T> get(url: String, handler: HttpResponse.BodyHandler<T>, named: String): HttpResponse<T> {
+    private fun <T> get(
+        url: String,
+        handler: HttpResponse.BodyHandler<T>,
+        named: String,
+        accept: String = "application/json",
+    ): HttpResponse<T> {
         val request = HttpRequest.newBuilder(URI.create(url))
             .timeout(properties.timeout)
-            .header("Accept", "application/json")
+            .header("Accept", accept)
             .header("User-Agent", "orknux")
             .GET()
             .build()
@@ -341,22 +508,31 @@ class NpmRegistry(
         }
     }
 
+    /** One named file out of a gzipped tar, as text, or null. */
+    internal fun entry(archive: ByteArray, path: String): String? = read(archive, 1) { it == path }[path]
+
     /**
-     * One file out of a gzipped tar, as text, or null when it is not in there.
+     * Every file in a gzipped tar that is asked for, as text.
      *
-     * A reader rather than a library, because this reads two files out of one
-     * archive and needs no more of tar than that. It knows regular files, the
-     * PAX and GNU records that carry a name too long for a header, and how to
-     * skip everything else; what it will not do is read past [MAX_ENTRY] or past
-     * the archive, so a file that claims to be enormous costs a refusal rather
+     * A reader rather than a library, because this needs no more of tar than
+     * reading files out of one. It knows regular files, the PAX and GNU records
+     * that carry a name too long for a header, and how to skip everything else;
+     * what it will not do is read past [MAX_ENTRY], past [upTo] files or past the
+     * archive, so an archive that claims to be enormous costs a refusal rather
      * than the heap.
+     *
+     * One walk whether one file is wanted or four hundred, since #319 made the
+     * second a thing that happens: a bundle is every file a package's entry
+     * reaches, and opening the archive again per file would be a gzip stream per
+     * module.
      */
-    internal fun entry(archive: ByteArray, path: String): String? {
+    internal fun read(archive: ByteArray, upTo: Int, wanted: (String) -> Boolean): Map<String, String> {
+        val found = LinkedHashMap<String, String>()
         GZIPInputStream(ByteArrayInputStream(archive)).use { stream ->
             var override: String? = null
             while (true) {
-                val header = block(stream) ?: return null
-                if (header.all { it == 0.toByte() }) return null
+                val header = block(stream) ?: return found
+                if (header.all { it == 0.toByte() }) return found
 
                 val size = octal(header, 124, 12)
                 val padded = ((size + BLOCK - 1) / BLOCK) * BLOCK
@@ -375,11 +551,13 @@ class NpmRegistry(
                     // A regular file: "0" in ustar, and NUL in the older
                     // spelling, which is still what some writers produce.
                     '0', '\u0000' -> {
-                        if (name == path) {
-                            if (size > MAX_ENTRY) return null
-                            return String(read(stream, size.toInt()), StandardCharsets.UTF_8)
+                        if (size <= MAX_ENTRY && wanted(name)) {
+                            found[name] = String(read(stream, size.toInt()), StandardCharsets.UTF_8)
+                            skip(stream, padded - size)
+                            if (found.size >= upTo) return found
+                        } else {
+                            skip(stream, padded)
                         }
-                        skip(stream, padded)
                     }
 
                     else -> skip(stream, padded)
@@ -449,6 +627,25 @@ class NpmRegistry(
         const val MAX_CONDITIONS = 8
 
         /**
+         * How many packages one bundle may draw in, and how many files.
+         *
+         * Not a guess at what is reasonable so much as a floor under what is
+         * absurd. A library is one stored row and there is already a limit on
+         * how large that may be, so what these stop is the *fetching* — a
+         * dependency graph that would have this server pulling half a registry
+         * before finding out the result was too large to keep.
+         */
+        const val MAX_PACKAGES = 25
+
+        const val MAX_FILES = 400
+
+        /** What could be a module. A README could not, and a package is full of them. */
+        val MODULE_FILES = listOf(".js", ".cjs", ".mjs", ".json")
+
+        /** npm's own abbreviated packument: the version numbers without the prose. */
+        const val ABBREVIATED = "application/vnd.npm.install-v1+json"
+
+        /**
          * The `exports` conditions that name an ES module, best first.
          *
          * `require` is missing here and has [REQUIRED] to itself, because the two
@@ -490,4 +687,72 @@ data class Fetched(
     val integrity: String,
     val entry: String,
     val source: String,
+)
+
+/**
+ * A package and its dependencies, fetched, as the files a bundle is made of.
+ *
+ * The paths are the ones the bundle will be keyed by: a package's own files at
+ * the paths it published them at, and everything it needs under
+ * `node_modules/<name>/`, which is where a `require` for a bare name would look
+ * for it. [packages] is the part [LibraryBundle] cannot work out for itself —
+ * *which* file `require("ms")` means is a question about `ms`'s manifest, and
+ * reading manifests is this file's job.
+ *
+ * [parts] is the bill of materials, and it is the reason this is worth doing at
+ * all rather than telling somebody to go and run a bundler: every package that
+ * went in is named, at the version it resolved to, with the hash its registry
+ * claimed for it. Issue #319.
+ */
+data class Gathered(
+    val entry: String,
+    val modules: Map<String, String>,
+    val packages: Map<String, String>,
+    val parts: List<BundlePart>,
+) {
+    /** The one somebody asked for. The rest arrived because it needed them. */
+    val root: BundlePart get() = parts.first()
+}
+
+/** One package inside a bundle, at the version it resolved to. */
+data class BundlePart(
+    val packageName: String,
+    val version: String,
+    val url: String,
+    val integrity: String,
+    /** Which file in it the bundle enters it by. */
+    val entry: String,
+)
+
+/**
+ * Two packages need the same third one, and not the same version of it.
+ *
+ * Node installs a copy of each, nested where they are needed. One file cannot
+ * hold two, and picking one of the two versions for both callers is picking
+ * somebody's bug on their behalf — so this is said out loud, with both versions,
+ * because what to do about it is a decision for whoever is installing.
+ */
+class LibraryBundleConflictException(spec: String, dependency: String, held: String, wanted: String) :
+    RuntimeException(
+        "$spec cannot be bundled: it needs $dependency at $held and at \"$wanted\" at the same time, and one " +
+            "file can only hold one of them.",
+    )
+
+/** Nothing published satisfies a range something in the graph asked for. */
+class LibraryBundleUnsatisfiedException(spec: String, owner: String, dependency: String, range: String) :
+    RuntimeException(
+        "$spec cannot be bundled: $owner needs $dependency \"$range\", and the registry has published no " +
+            "version that satisfies it.",
+    )
+
+/**
+ * The graph is larger than this will fetch.
+ *
+ * A number rather than a size, because what is being stopped is the fetching:
+ * finding out at the end that the result is too large to store would mean having
+ * pulled all of it first.
+ */
+class LibraryBundleTooManyException(spec: String, most: Int) : RuntimeException(
+    "$spec draws in more than $most packages, which is more than this will fetch to make one library. " +
+        "Build the bundle elsewhere and upload the one file.",
 )

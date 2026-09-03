@@ -52,20 +52,20 @@ class LibraryInstallTest(
         graphQlTester.document(
             """
             mutation {
-              installScriptLibrary(spec: "slugs@1.2.3") {
+              installScriptLibrary(spec: "slugs@1.2.3") { installed {
                 key callable members { name callable }
                 registry { packageName version entry integrity url }
-              }
+              } }
             }
             """,
         ).execute()
-            .path("installScriptLibrary.key").entity(String::class.java).isEqualTo("slugs")
+            .path("installScriptLibrary.installed.key").entity(String::class.java).isEqualTo("slugs")
             // Read off the value in the sandbox, exactly as an uploaded file is.
-            .path("installScriptLibrary.members[*].name").entityList(String::class.java).containsExactly("of")
-            .path("installScriptLibrary.registry.packageName").entity(String::class.java).isEqualTo("slugs")
-            .path("installScriptLibrary.registry.version").entity(String::class.java).isEqualTo("1.2.3")
-            .path("installScriptLibrary.registry.entry").entity(String::class.java).isEqualTo("dist/slugs.mjs")
-            .path("installScriptLibrary.registry.integrity").entity(String::class.java)
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java).containsExactly("of")
+            .path("installScriptLibrary.installed.registry.packageName").entity(String::class.java).isEqualTo("slugs")
+            .path("installScriptLibrary.installed.registry.version").entity(String::class.java).isEqualTo("1.2.3")
+            .path("installScriptLibrary.installed.registry.entry").entity(String::class.java).isEqualTo("dist/slugs.mjs")
+            .path("installScriptLibrary.installed.registry.integrity").entity(String::class.java)
             .satisfies({ assertThat(it).startsWith("sha512-") })
 
         // The artefact is the row, and the row is the thing that runs. Asserted
@@ -91,19 +91,19 @@ class LibraryInstallTest(
         graphQlTester.document(
             """
             mutation {
-              installScriptLibrary(spec: "b64@1.5.1") {
+              installScriptLibrary(spec: "b64@1.5.1") { installed {
                 key format callable members { name callable } registry { entry version }
-              }
+              } }
             }
             """,
         ).execute()
-            .path("installScriptLibrary.key").entity(String::class.java).isEqualTo("b64")
-            .path("installScriptLibrary.format").entity(String::class.java).isEqualTo("COMMONJS")
+            .path("installScriptLibrary.installed.key").entity(String::class.java).isEqualTo("b64")
+            .path("installScriptLibrary.installed.format").entity(String::class.java).isEqualTo("COMMONJS")
             // Read off the value in the sandbox, through the wrapper, exactly as
             // an ES module's members are read off it without one.
-            .path("installScriptLibrary.members[*].name").entityList(String::class.java).containsExactly("of", "tag")
-            .path("installScriptLibrary.registry.entry").entity(String::class.java).isEqualTo("index.js")
-            .path("installScriptLibrary.registry.version").entity(String::class.java).isEqualTo("1.5.1")
+            .path("installScriptLibrary.installed.members[*].name").entityList(String::class.java).containsExactly("of", "tag")
+            .path("installScriptLibrary.installed.registry.entry").entity(String::class.java).isEqualTo("index.js")
+            .path("installScriptLibrary.installed.registry.version").entity(String::class.java).isEqualTo("1.5.1")
 
         val stored = requireNotNull(libraries.findByKey("b64"))
         assertThat(stored.source).isEqualTo(COMMONJS)
@@ -115,10 +115,10 @@ class LibraryInstallTest(
     @Test
     fun `a scoped package loads under a key that can be said out loud`() {
         graphQlTester.document(
-            """mutation { installScriptLibrary(spec: "@acme/slugs@1.2.3") { key registry { packageName } } }""",
+            """mutation { installScriptLibrary(spec: "@acme/slugs@1.2.3") { installed { key registry { packageName } } } }""",
         ).execute()
-            .path("installScriptLibrary.key").entity(String::class.java).isEqualTo("acme-slugs")
-            .path("installScriptLibrary.registry.packageName").entity(String::class.java).isEqualTo("@acme/slugs")
+            .path("installScriptLibrary.installed.key").entity(String::class.java).isEqualTo("acme-slugs")
+            .path("installScriptLibrary.installed.registry.packageName").entity(String::class.java).isEqualTo("@acme/slugs")
     }
 
     /**
@@ -134,8 +134,8 @@ class LibraryInstallTest(
         val before = requireNotNull(libraries.findByKey("slugs")?.id)
         assertThat(libraries.findByKey("slugs")?.registryOrNull()).isNull()
 
-        graphQlTester.document("""mutation { installScriptLibrary(spec: "slugs@1.2.3") { id } }""").execute()
-            .path("installScriptLibrary.id").entity(Long::class.java).isEqualTo(before)
+        graphQlTester.document("""mutation { installScriptLibrary(spec: "slugs@1.2.3") { installed { id } } }""").execute()
+            .path("installScriptLibrary.installed.id").entity(Long::class.java).isEqualTo(before)
 
         assertThat(libraries.findAll()).hasSize(1)
         assertThat(libraries.findByKey("slugs")?.originVersion).isEqualTo("1.2.3")
@@ -155,7 +155,7 @@ class LibraryInstallTest(
      */
     @Test
     fun `a package whose module exports nothing is refused where somebody is looking`() {
-        graphQlTester.document("""mutation { installScriptLibrary(spec: "hollow@1.0.0") { key } }""").execute()
+        graphQlTester.document("""mutation { installScriptLibrary(spec: "hollow@1.0.0") { installed { key } } }""").execute()
             .errors().expect { it.message?.contains("no default export") == true }.verify()
 
         assertThat(libraries.findAll()).isEmpty()
@@ -164,7 +164,7 @@ class LibraryInstallTest(
     /** Refused before anything is fetched, and the sentence says what to type. */
     @Test
     fun `a version that is not one version is refused with a sentence`() {
-        graphQlTester.document("""mutation { installScriptLibrary(spec: "slugs@latest") { key } }""").execute()
+        graphQlTester.document("""mutation { installScriptLibrary(spec: "slugs@latest") { installed { key } } }""").execute()
             .errors().expect { it.message?.contains("exact version") == true }.verify()
     }
 

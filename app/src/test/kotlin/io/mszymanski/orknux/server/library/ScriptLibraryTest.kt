@@ -9,6 +9,7 @@ import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
+import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -53,6 +54,65 @@ class ScriptLibraryTest(
         audit.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
+    }
+
+    /**
+     * Several files chosen at once, made into one library. Issue #319.
+     *
+     * The paths are the point. A browser sends a file's basename and nothing
+     * else, so a form that sent only files would turn `lib/parse.js` into
+     * `parse.js` and `require("./lib/parse")` would answer nothing - the
+     * interface sends each file's path beside it, and this is what says so.
+     */
+    @Test
+    fun `several files chosen at once become one library`() {
+        val answered = upload.bundle(
+            files = listOf(
+                MockMultipartFile("files", "index.js", "text/plain", ENTRY.toByteArray()),
+                MockMultipartFile("files", "parse.js", "text/plain", PARSE.toByteArray()),
+            ),
+            paths = listOf("index.js", "lib/parse.js"),
+            entry = "index.js",
+            key = "sums",
+            allowed = true,
+        )
+
+        assertThat(answered.statusCode.value()).isEqualTo(200)
+        val stored = requireNotNull(libraries.findByKey("sums"))
+        assertThat(stored.sourceFormat).isEqualTo(LibrarySource.COMMONJS)
+        // Read off the evaluated value in the sandbox, so a bundle that did not
+        // run would fail here rather than be stored.
+        assertThat(stored.declaredMembers).contains("total")
+        // What went in, so a bundle is not a black box in the one table whose
+        // job is answering what code is running here.
+        assertThat(stored.bundledFrom).contains("index.js").contains("lib/parse.js")
+    }
+
+    /**
+     * Bundling is offered rather than taken, even here.
+     *
+     * What comes out is an artefact this server assembled, which is a different
+     * thing from the file somebody chose - so more than one file without
+     * permission is refused, and the refusal says what to do instead.
+     */
+    @Test
+    fun `more than one file without permission is refused`() {
+        assertThatThrownBy {
+            upload.bundle(
+                files = listOf(
+                    MockMultipartFile("files", "index.js", "text/plain", ENTRY.toByteArray()),
+                    MockMultipartFile("files", "parse.js", "text/plain", PARSE.toByteArray()),
+                ),
+                paths = listOf("index.js", "lib/parse.js"),
+                entry = "index.js",
+                key = "sums",
+                allowed = null,
+            )
+        }
+            .isInstanceOf(LibraryBundleNotAllowedException::class.java)
+            .hasMessageContaining("on its own")
+
+        assertThat(libraries.findByKey("sums")).isNull()
     }
 
     @Test
@@ -353,4 +413,15 @@ class ScriptLibraryTest(
 
     private fun file(name: String, source: String) =
         MockMultipartFile("file", name, "text/plain", source.toByteArray())
+
+    private companion object {
+        /** An entry that reaches a second file, which is what makes it a bundle. */
+        val ENTRY = """
+            var parse = require('./lib/parse');
+            module.exports = { total: function (t) { return parse(t) + 1; } };
+        """.trimIndent()
+
+        const val PARSE = "module.exports = function (t) { return Number(t) || 0; };"
+    }
+
 }

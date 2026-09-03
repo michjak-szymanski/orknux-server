@@ -51,10 +51,23 @@ object LibrarySource {
      * exporting an empty object, which installs and is worth nothing.
      */
     fun formatOf(source: String): String = when {
-        ESM_EXPORT.containsMatchIn(source) || STATIC_IMPORT.containsMatchIn(source) -> ESM
+        esm(source) -> ESM
         COMMONJS_MARKERS.any { it.containsMatchIn(source) } -> COMMONJS
         else -> ESM
     }
+
+    /**
+     * Whether this file really is an ES module, rather than being read as one.
+     *
+     * The first branch of [formatOf] on its own, and the distinction matters in
+     * exactly one place: [formatOf] answers [ESM] for a file that is neither, as
+     * a refusal to guess, and [LibraryBundle] must not turn that into "this is an
+     * ES module and cannot be bundled". A file holding `require` and no exports
+     * is not modern, it is unfinished, and the sentence it deserves is about
+     * what it requires.
+     */
+    fun esm(source: String): Boolean =
+        ESM_EXPORT.containsMatchIn(source) || STATIC_IMPORT.containsMatchIn(source)
 
     /**
      * The text as the sandbox is given it.
@@ -120,6 +133,17 @@ object LibrarySource {
      * one.
      */
     fun required(source: String): String? = REQUIRE.find(source)?.groupValues?.get(1)
+
+    /**
+     * Every package this file requires, in the order it requires them.
+     *
+     * [required] answers the question a single-file library asks — is there one
+     * at all — and this answers the one [LibraryBundle] asks, which is which. The
+     * same literals and the same care: a mention is not a call, and only a
+     * literal is looked for.
+     */
+    fun requires(source: String): List<String> =
+        REQUIRE.findAll(source).map { it.groupValues[1] }.toList()
 
     /**
      * One line, so a stack trace is out by one.

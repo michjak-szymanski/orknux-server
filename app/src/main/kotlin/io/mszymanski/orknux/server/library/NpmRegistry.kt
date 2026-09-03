@@ -184,7 +184,7 @@ class NpmRegistry(
 
         modules.putAll(root.files)
         val entry = commonjs(root, "")
-            ?: throw LibraryBundleEsmException("$name@${root.version}", modules(root.described).firstOrNull() ?: "it")
+            ?: throw LibraryBundleEsmException("$name@${root.version}", entered(root))
         parts += root.part(entry)
         versions[name] = root.version
 
@@ -226,7 +226,7 @@ class NpmRegistry(
                 modules.putAll(fetched.files.mapKeys { prefix + it.key })
 
                 val within = commonjs(fetched, prefix)
-                    ?: throw LibraryBundleEsmException("$dependency@$resolved", "${prefix}its entry")
+                    ?: throw LibraryBundleEsmException("$dependency@$resolved", prefix + entered(fetched))
                 packages[dependency] = within
                 parts += fetched.part(within)
                 versions[dependency] = resolved
@@ -282,8 +282,24 @@ class NpmRegistry(
      * package publishing only an ES build is refused rather than mangled.
      */
     private fun commonjs(one: One, prefix: String): String? = modules(one.described)
-        .firstOrNull { candidate -> one.files[candidate]?.let { !LibrarySource.esm(it) } == true }
+        /*
+         * Through the file rules rather than by exact name. A manifest naming
+         * `./index` means `index.js` - `ms` does exactly that, and looked up by
+         * name alone the most ordinary CommonJS package there is came back as
+         * one that had published nothing this could enter.
+         */
+        .mapNotNull { candidate -> LibraryBundle.fileAt(candidate) { one.files.containsKey(it) } }
+        .firstOrNull { found -> one.files[found]?.let { !LibrarySource.esm(it) } == true }
         ?.let { prefix + it }
+
+    /**
+     * What the package said its entry was, for a refusal to name.
+     *
+     * The manifest's own first candidate rather than "its entry": somebody told
+     * a package cannot be bundled has to be able to go and look at the file it
+     * is about.
+     */
+    private fun entered(one: One): String = modules(one.described).firstOrNull() ?: "its entry"
 
     /**
      * Which versions of a package the registry has published.

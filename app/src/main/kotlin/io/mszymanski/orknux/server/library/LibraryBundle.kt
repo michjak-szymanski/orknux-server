@@ -216,6 +216,17 @@ object LibraryBundle {
         return candidates(joined).firstOrNull { modules.containsKey(it) }
     }
 
+    /**
+     * Which file a path is, by the extensions and index rules Node would try.
+     *
+     * Public because [NpmRegistry] has the same question and must not answer it
+     * differently: a manifest naming `./index` means `index.js`, and a package
+     * whose entry was looked up by exact name alone reads as having published
+     * nothing - which is how `ms` came back as unbundlable when it is the most
+     * ordinary CommonJS file there is.
+     */
+    fun fileAt(path: String, has: (String) -> Boolean): String? = candidates(path).firstOrNull(has)
+
     /** What a path could be a file at, in the order Node would try them. */
     private fun candidates(path: String): List<String> = listOf(
         path,

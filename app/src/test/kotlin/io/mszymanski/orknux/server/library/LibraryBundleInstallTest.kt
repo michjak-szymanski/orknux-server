@@ -190,7 +190,13 @@ class LibraryBundleInstallTest(
             ),
             ("ms" to "2.1.3") to NpmFixture.tarball(
                 mapOf(
-                    "package.json" to """{"name":"ms","version":"2.1.3","main":"index.js"}""",
+                    /*
+                     * `./index`, with no extension, which is what the real `ms`
+                     * publishes - and looked up by exact name it was a package
+                     * that had published nothing this could enter. Found against
+                     * the real registry, so the fixture is the real spelling.
+                     */
+                    "package.json" to """{"name":"ms","version":"2.1.3","main":"./index"}""",
                     "index.js" to MS,
                 ),
             ),

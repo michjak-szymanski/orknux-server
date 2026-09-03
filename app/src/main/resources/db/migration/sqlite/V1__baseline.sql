@@ -143,7 +143,7 @@ CREATE TABLE agent_tool_param
     object_id                    integer,
     primary key (tool_id, position),
     constraint ck_agent_tool_param_object CHECK (((((type) = 'OBJECT') AND (object_id IS NOT NULL)) OR (((type) != 'OBJECT') AND (object_id IS NULL)))),
-    constraint ck_agent_tool_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY'))),
+    constraint ck_agent_tool_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY', 'CONNECTION'))),
     constraint agent_tool_param_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE
 );
 
@@ -1068,7 +1068,7 @@ CREATE TABLE workflow_function_param
     object_id                    integer,
     primary key (function_id, position),
     constraint ck_workflow_function_param_object CHECK (((((type) = 'OBJECT') AND (object_id IS NOT NULL)) OR (((type) != 'OBJECT') AND (object_id IS NULL)))),
-    constraint ck_workflow_function_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY'))),
+    constraint ck_workflow_function_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY', 'CONNECTION'))),
     constraint workflow_function_param_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id) ON DELETE CASCADE
 );
 

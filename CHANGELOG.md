@@ -180,7 +180,11 @@ have failed.
   Compaction happens before a turn is sent rather than after one fails, and a
   summariser that will not answer leaves the conversation alone — a chat that is
   still too long is a better outcome than one whose older half was thrown away
-  by a network error.
+  by a network error. The chat says so both ways round: a line while the summary
+  is being written, and a note in the transcript saying how many messages were
+  replaced by it - compaction that happened silently read as a turn that had
+  stalled, and left a summary in the conversation nobody had been told was
+  written.
 
 - 🔗 **A Slack trigger says which connection its event arrived on, and a function
   condition can be handed arguments.** Both are what the above needs to be
@@ -190,6 +194,25 @@ have failed.
   written value, or a reference to a field the run carries, such as the trigger's
   thread and the connection it came in on. A condition with none behaves exactly
   as it did, so nothing written before this changes.
+
+- 🧵 **A function can read a Slack thread, and be handed the connection to
+  read it through.** The plugin could; a function written in the workspace could
+  not, and a function is what most of this product is made of. `orknux.slack.thread`
+  is now declared in the function editor and answered by the server on the
+  function's behalf - the sandbox still has no network, so what crosses is a
+  request and a page of JSON, never a client. A parameter may now be typed
+  **connection**, which is what makes the call sayable: a function declaring
+  `string` worked and told nobody reading it what the string was for. Both
+  screens that ask for one - the Test Run window and an action's parameter
+  mapping - offer the workspace's connections by name rather than asking for an
+  id off another page. A thread on a connection belonging to another workspace is
+  refused as though it were not there.
+
+- ▶️ **A finished task can be told to carry on.** The only way back into one
+  that had ended was to start it again from nothing, which threw away everything
+  it had worked out and paid for the same reasoning twice. The box that was
+  already at the foot of a finished task now sends what you write into the same
+  task, with its history behind it, and the task picks up where it stopped.
 
 ### 🔧 Changed
 
@@ -236,6 +259,24 @@ have failed.
   Runs nobody triggered — a person pressing Run, an API asking for the workflow
   itself — still begin at every trigger, since nothing says which half to prefer.
   Repeating a run repeats the half the original ran.
+
+- 💾 **The workspace settings page has one Save, at the foot of it.** Some
+  cards had a Save of their own and some did not, so whether a change was kept
+  depended on which card it was in - and there was no way to tell by looking
+  which kind you were in front of. Every control on the page is now a draft until
+  the one button at the bottom is pressed. It writes only the fields that were
+  actually touched, which matters more than it sounds: saving everything on the
+  page would have quietly put back whatever somebody else had changed elsewhere
+  since it was opened.
+
+### 🐛 Fixed
+
+- ⌨️ **The function editor no longer loses what you typed.** A save landing
+  while somebody was mid-word put the stored version back over the top of it, so
+  a rewritten declaration reverted to what it had been a second earlier - about
+  one edit in two, with nothing on screen to say it had happened. The editor's
+  loader now stops caring about an answer it no longer needs, so a reply to a
+  request that has been overtaken is dropped rather than drawn.
 
 ## 0.9.5
 

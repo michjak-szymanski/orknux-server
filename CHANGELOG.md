@@ -278,6 +278,17 @@ have failed.
   loader now stops caring about an answer it no longer needs, so a reply to a
   request that has been overtaken is dropped rather than drawn.
 
+- 💬 **A chat opened by its own address is about its own workspace.** The chat
+  screen never asked which workspace the open conversation belonged to: it took
+  whichever workspace the browser had last looked at, and the first one in the
+  list when it had looked at none. So a chat reached from a link, a bookmark or
+  a reload was drawn under somebody else's workspace - the agents offered in the
+  picker, the models voice mode needs, where an attachment goes and every link
+  out of the page, including one naming a stranger's agent as the one answering.
+  Switching workspace from a chat still moves you, and now waits for the move to
+  land: the list of conversations no longer flickers back to the workspace you
+  just left.
+
 ## 0.9.5
 
 ### ✨ Added

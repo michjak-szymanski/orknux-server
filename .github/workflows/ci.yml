@@ -266,6 +266,19 @@ jobs:
         working-directory: orknux-ui
         run: node scripts/seed-demo.mjs
 
+      # And a second copy, because the suite runs two checks at a time and two
+      # checks cannot share a workspace: one makes a function the other is
+      # counting, one publishes a workflow the other is reading. A copy per
+      # worker is what makes the run parallel at all - see the `--jobs 2` below.
+      #
+      # Two and not four. The runner is building and running the all-in-one
+      # image beside this, and each worker is a chromium; the second one roughly
+      # halves the wall clock, and the third is where a 7GB runner starts
+      # swapping. Issue #308.
+      - name: Build a second copy of it, for the second worker
+        working-directory: orknux-ui
+        run: ORKNUX_SUITE_SHARD=2 node scripts/seed-demo.mjs
+
       # Which ids it got. A database built from nothing does not hand out the
       # same numbers as the developer's, so the checks are pointed at what the
       # seed actually made rather than at the numbers they were written with.
@@ -284,9 +297,15 @@ jobs:
           key: browser-suite-timings-${{ github.run_id }}
           restore-keys: browser-suite-timings-
 
+      # `--jobs 2` rather than one at a time. Each worker takes the next check
+      # off a shared queue and runs it against its own copy of the fixture, so
+      # the cheap ones still go first and no worker is left holding the long
+      # tail. The two checks that change something the whole installation shares
+      # - chat switched off, and alice reading Polish - are marked `alone` in
+      # suite.mjs and the runner drains the other worker before starting them.
       - name: Run the browser suite
         working-directory: orknux-ui
-        run: node scripts/suite/run.mjs --ci
+        run: node scripts/suite/run.mjs --ci --jobs 2
 
       # Reports matter most when the job failed, which is when the step above
       # stopped it - the same reason the server's suite uploads its own.

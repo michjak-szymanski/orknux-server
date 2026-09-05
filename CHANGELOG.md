@@ -289,6 +289,18 @@ have failed.
   land: the list of conversations no longer flickers back to the workspace you
   just left.
 
+- 📝 **Two more editors stopped losing what you typed.** The same fault #324
+  fixed in the function editor was in two more places, because a page that fills
+  its form from a load and never cancels that load puts the stored version back
+  over whatever is in the boxes - and nothing on screen says so, since it is the
+  state behind them that was reset and not the value they were told to draw. A
+  model's **Context Window** could be typed, saved, and stored as empty while the
+  box still showed the number; **renaming the parameter a tool arrives with**
+  reverted, and the save then stored the signature the panel had been put back
+  to. Both pages now drop an answer they no longer need, which also fixes the
+  quieter half: opening one model or tool and then another no longer draws the
+  first one's values under the second one's name.
+
 ## 0.9.5
 
 ### ✨ Added

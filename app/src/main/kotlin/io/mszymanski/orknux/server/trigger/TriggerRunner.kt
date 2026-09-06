@@ -86,7 +86,7 @@ class TriggerRunner(
             .mapNotNull { assignments.findByWorkspaceIdAndWorkflowId(trigger.workspaceId, it) }
 
         if (assigned.isEmpty()) {
-            log.info("Trigger {} fired, but no workflow instances it", trigger.name)
+            log.info("trigger={} event=fired outcome=no_instance assigned=0", triggerId)
             record(trigger, FiringOutcome.NO_INSTANCE, "No workflow has a trigger node pointing at this definition")
             return 0
         }
@@ -100,10 +100,21 @@ class TriggerRunner(
          * its answer to decide: whichever way it went, nothing would run.
          */
         val (runnable, switchedOff) = assigned.partition { it.enabled }
-        val offNames = switchedOff.map { "${it.workflow.name} is switched off in this workspace" }
+        val off = switchedOff.map {
+            Refused(
+                workflowId = requireNotNull(it.workflow.id),
+                reason = SWITCHED_OFF,
+                said = "${it.workflow.name} is switched off in this workspace",
+            )
+        }
         if (runnable.isEmpty()) {
-            log.info("Trigger {} fired at workflows that are all switched off", trigger.name)
-            record(trigger, FiringOutcome.WORKFLOW_DISABLED, offNames.joinToString("; "))
+            log.info(
+                "trigger={} event=fired outcome=all_switched_off assigned={} refused={}",
+                triggerId,
+                assigned.size,
+                machine(off),
+            )
+            record(trigger, FiringOutcome.WORKFLOW_DISABLED, off.joinToString("; ") { it.said })
             return 0
         }
 
@@ -114,61 +125,54 @@ class TriggerRunner(
             // own page; the log is where somebody watching a message not arrive
             // is looking, and a condition quietly refusing it is the commonest
             // reason for the silence they are reading.
-            log.info("Trigger {} did not fire: {}", trigger.name, verdict.detail)
+            log.info(
+                "trigger={} event=fired outcome={} detail=\"{}\"",
+                triggerId,
+                verdict.outcome.name.lowercase(),
+                verdict.detail,
+            )
             record(trigger, verdict.outcome, verdict.detail)
             return 0
         }
 
         // The ones that are off are refusals like any other, so a firing that
         // started two of three says which one it left alone and why.
-        val refusals = offNames.toMutableList()
-        /*
-         * The names, not only how many.
-         *
-         * "started 2 workflow(s)" is the line somebody reads when they are
-         * working out what a message set off, and it answered the one question
-         * they were not asking: the count was there and the names were not, so
-         * finding out meant going to Executions and matching on the clock. The
-         * refusals beside it have named their workflow all along.
-         */
+        val refusals = off.toMutableList()
         val begun = runnable.filter { start(trigger, requireNotNull(it.workflow.id), payload, refusals) }
-        val started = begun.size
-        val names = begun.joinToString(", ") { it.workflow.name }
-        if (started == assigned.size) {
-            log.info("Trigger {} started {} workflow(s): {}", trigger.name, started, names)
-            record(trigger, FiringOutcome.STARTED, "Started $started of ${assigned.size}: $names", started)
+        val started = begun.map { requireNotNull(it.workflow.id) }
+
+        /*
+         * Ids, and one key per fact.
+         *
+         * This line was prose with names in it, and names are not identities:
+         * two workflows may share one, a rename makes an old line describe
+         * something that no longer exists, and nothing downstream could parse
+         * it. So the log is `key=value`, the workflows are ids, and a refusal
+         * carries a token rather than a sentence - `switched_off`, not "dgd is
+         * switched off in this workspace". The sentence still exists, on the
+         * firing record, where a person reads it.
+         */
+        log.info(
+            "trigger={} event=fired outcome={} assigned={} started={} startedIds={} refused={}",
+            triggerId,
+            if (started.size == assigned.size) "started" else "partial",
+            assigned.size,
+            started.size,
+            started.joinToString(",", "[", "]"),
+            machine(refusals),
+        )
+
+        val said = buildList {
+            if (started.isNotEmpty()) add(begun.joinToString(", ") { "${it.workflow.name} (#${it.workflow.id})" })
+            addAll(refusals.map { it.said })
+        }.joinToString("; ")
+
+        if (started.size == assigned.size) {
+            record(trigger, FiringOutcome.STARTED, "Started ${started.size} of ${assigned.size}: $said", started.size)
         } else {
-            /*
-             * Partly started is not started, and the record says why rather
-             * than only how many. "Started 0 of 1" is what somebody reads when
-             * a trigger fires at a workflow nobody has published, and it tells
-             * them nothing they can act on - the reason exists, it was simply
-             * being swallowed here.
-             */
-            // The ones that did run are named here too, for the same reason:
-            // "started 1 of 3" is read by somebody working out which of the
-            // three it was.
-            val detail = "Started $started of ${assigned.size}: " +
-                (if (started > 0) "$names; " else "") +
-                refusals.joinToString("; ")
-
-            /*
-             * Said out loud, which it was not.
-             *
-             * Only the all-started branch logged, so a trigger that started one
-             * workflow of three said nothing about the one - the reader got a
-             * line per refusal and no line for the thing that actually ran, and
-             * a run that happened looked like a run that did not. The record
-             * carried it all along; the log is where somebody is looking.
-             */
-            if (started > 0) {
-                log.info("Trigger {} started {} of {}: {}", trigger.name, started, assigned.size, names)
-            }
-            log.info("Trigger {} did not start everything it fired at: {}", trigger.name, detail)
-
-            record(trigger, FiringOutcome.FAILED, detail, started)
+            record(trigger, FiringOutcome.FAILED, "Started ${started.size} of ${assigned.size}: $said", started.size)
         }
-        return started
+        return started.size
     }
 
     /**
@@ -258,7 +262,7 @@ class TriggerRunner(
         trigger: WorkflowTrigger,
         workflowId: Long,
         payload: String,
-        refusals: MutableList<String>,
+        refusals: MutableList<Refused>,
     ): Boolean {
         /*
          * Asked before starting, rather than found out by catching.
@@ -301,9 +305,11 @@ class TriggerRunner(
         } catch (notPublished: WorkflowNotPublishedException) {
             unpublished(trigger, workflowId, notPublished.message, refusals)
         } catch (failure: Exception) {
-            // One workflow failing is no reason for the others to miss the trigger.
-            log.error("Trigger {} could not start workflow {}", trigger.name, workflowId, failure)
-            refusals += failure.message ?: failure::class.simpleName.orEmpty()
+            // One workflow failing is no reason for the others to miss the
+            // trigger. The stack trace stays: this is the one refusal that is
+            // not an ordinary state of the graph.
+            log.error("trigger={} event=start_failed workflow={}", trigger.id, workflowId, failure)
+            refusals += Refused(workflowId, FAILED, failure.message ?: failure::class.simpleName.orEmpty())
             false
         }
     }
@@ -320,15 +326,34 @@ class TriggerRunner(
         trigger: WorkflowTrigger,
         workflowId: Long,
         detail: String?,
-        refusals: MutableList<String>,
+        refusals: MutableList<Refused>,
     ): Boolean {
-        log.info("Trigger {} found workflow {} unpublished; nothing started", trigger.name, workflowId)
-        refusals += detail ?: "a workflow that has never been published"
+        refusals += Refused(workflowId, UNPUBLISHED, detail ?: "a workflow that has never been published")
         return false
     }
 
+    /**
+     * One workflow this firing did not start, and why.
+     *
+     * Two audiences, so two fields. [reason] is a token a log line carries and
+     * something downstream can match on; [said] is the sentence on the firing
+     * record, where a person reads it. A name appears in neither - names are
+     * not identities, and an old line naming a workflow that has since been
+     * renamed describes something that no longer exists.
+     */
+    private data class Refused(val workflowId: Long, val reason: String, val said: String)
+
     private companion object {
         val log = LoggerFactory.getLogger(TriggerRunner::class.java)
+
+        /* The tokens a refusal is logged as. Machine-readable on purpose. */
+        const val SWITCHED_OFF = "switched_off"
+        const val UNPUBLISHED = "unpublished"
+        const val FAILED = "failed"
+
+        /** `[637=unpublished,1104=switched_off]`, or `[]`. */
+        fun machine(refused: List<Refused>): String =
+            refused.joinToString(",", "[", "]") { "${it.workflowId}=${it.reason}" }
 
         /** Where a webhook's own description of the call sits in the run's input. */
         const val WEBHOOK = "webhook"

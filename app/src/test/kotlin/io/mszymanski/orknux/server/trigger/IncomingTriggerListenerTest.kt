@@ -231,7 +231,7 @@ class IncomingTriggerListenerTest(
             .document("""query { triggerFirings(triggerId: $trigger) { content { outcome detail } } }""")
             .execute()
             .path("triggerFirings.content[0].detail").entity(String::class.java).get()
-        assertThat(detail).contains("Incident Response")
+        assertThat(detail).contains("Incident Response (#$workflowId)")
     }
 
     /**
@@ -270,9 +270,12 @@ class IncomingTriggerListenerTest(
             .execute()
             .path("triggerFirings.content[0].detail").entity(String::class.java).get()
 
-        // The one that ran is named, beside the reason the other did not.
-        assertThat(detail).contains("Incident Response")
+        // The one that ran carries its id, beside the reason the other did not.
+        // A name alone is not an identity: two workflows may share one, and a
+        // rename makes an old record describe something that no longer exists.
+        assertThat(detail).contains("Incident Response (#$workflowId)")
         assertThat(detail).contains("Started 1 of 2")
+        assertThat(detail).contains("switched off")
     }
 
     /**

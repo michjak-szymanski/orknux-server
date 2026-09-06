@@ -122,10 +122,21 @@ class TriggerRunner(
         // The ones that are off are refusals like any other, so a firing that
         // started two of three says which one it left alone and why.
         val refusals = offNames.toMutableList()
-        val started = runnable.count { start(trigger, requireNotNull(it.workflow.id), payload, refusals) }
+        /*
+         * The names, not only how many.
+         *
+         * "started 2 workflow(s)" is the line somebody reads when they are
+         * working out what a message set off, and it answered the one question
+         * they were not asking: the count was there and the names were not, so
+         * finding out meant going to Executions and matching on the clock. The
+         * refusals beside it have named their workflow all along.
+         */
+        val begun = runnable.filter { start(trigger, requireNotNull(it.workflow.id), payload, refusals) }
+        val started = begun.size
+        val names = begun.joinToString(", ") { it.workflow.name }
         if (started == assigned.size) {
-            log.info("Trigger {} started {} workflow(s)", trigger.name, started)
-            record(trigger, FiringOutcome.STARTED, "Started $started of ${assigned.size}", started)
+            log.info("Trigger {} started {} workflow(s): {}", trigger.name, started, names)
+            record(trigger, FiringOutcome.STARTED, "Started $started of ${assigned.size}: $names", started)
         } else {
             /*
              * Partly started is not started, and the record says why rather
@@ -137,7 +148,12 @@ class TriggerRunner(
             record(
                 trigger,
                 FiringOutcome.FAILED,
-                "Started $started of ${assigned.size}: ${refusals.joinToString("; ")}",
+                // The ones that did run are named here too, for the same
+                // reason: "started 1 of 3" is read by somebody working out
+                // which one of the three it was.
+                "Started $started of ${assigned.size}: " +
+                    (if (started > 0) "$names; " else "") +
+                    refusals.joinToString("; "),
                 started,
             )
         }

@@ -218,6 +218,20 @@ class IncomingTriggerListenerTest(
         ).execute()
             .path("workspaceTriggers.content[0].lastFiring.outcome").entity(String::class.java).isEqualTo("STARTED")
             .path("workspaceTriggers.content[0].lastFiring.runsStarted").entity(Int::class.java).isEqualTo(1)
+
+        /*
+         * And which one it started, by name.
+         *
+         * "started 2 workflow(s)" answers the question nobody was asking:
+         * somebody reading it wants to know what the message set off, and a
+         * count sent them to Executions to match on the clock. Asked for on
+         * 2026-09-06.
+         */
+        val detail = graphQlTester
+            .document("""query { triggerFirings(triggerId: $trigger) { content { outcome detail } } }""")
+            .execute()
+            .path("triggerFirings.content[0].detail").entity(String::class.java).get()
+        assertThat(detail).contains("Incident Response")
     }
 
     /**

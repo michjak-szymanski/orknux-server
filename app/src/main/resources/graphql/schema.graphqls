@@ -1962,6 +1962,7 @@ type WorkflowGraph {
     status: WorkflowStatus!
     "Whether the workspace has it switched on. Off means nothing starts it by itself; Run still does."
     enabled: Boolean!
+    assignmentId: ID
     nodes: [WorkflowNode!]!
     edges: [WorkflowEdge!]!
     "What the graph is missing, worst first; empty when it holds together."

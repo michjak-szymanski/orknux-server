@@ -108,6 +108,7 @@ class WorkflowGraphAPI(
             description = workflow.description,
             status = workflow.status,
             enabled = enabledIn(workspaceId, workflowId),
+            assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = proposed.map { node ->
                 val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
@@ -354,6 +355,7 @@ class WorkflowGraphAPI(
             description = workflow.description,
             status = workflow.status,
             enabled = enabledIn(workspaceId, workflowId),
+            assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = held.map { node ->
                 val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
@@ -865,6 +867,18 @@ data class WorkflowGraphView(
     val status: WorkflowStatus,
     /** Whether the workspace has it switched on; see `enabledIn`. */
     val enabled: Boolean = true,
+    /**
+     * The assignment that `enabled` is a property of, so the editor can change
+     * it.
+     *
+     * `setWorkflowEnabled` takes the assignment rather than the workflow - a
+     * definition may be assigned to several workspaces and each switches it on
+     * or off for itself - and the editor knew the workflow and not which
+     * assignment it was looking at. Null where this workspace has none, which
+     * is the state a graph read through an unassigned workflow is already in.
+     * Issue #330.
+     */
+    val assignmentId: Long? = null,
     val nodes: List<WorkflowNodeView>,
     val edges: List<WorkflowEdgeView>,
     /** Everything the graph is missing, worst first; empty when it holds together. */

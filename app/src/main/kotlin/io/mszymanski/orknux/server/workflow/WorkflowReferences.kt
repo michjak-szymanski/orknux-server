@@ -132,12 +132,26 @@ class WorkflowReferences(
      * only fetched once the answer is yes.
      *
      * Nothing is caught here. Everything that would have thrown ordinarily has
-     * been asked first - the workflow is one this workspace has assigned, so it
-     * is not missing either - and swallowing what is left would mean deleting
-     * against a transaction already doomed.
+     * been asked first, and swallowing what is left would mean deleting against
+     * a transaction already doomed.
+     *
+     * **The assignment is asked again, and that is the point.** The list this
+     * walks was read a moment ago, and `graph` checks the assignment for itself
+     * - so a workflow unassigned in between made the graph raise "Workflow 424
+     * is not assigned to workspace 9" out of a *condition* delete, naming a
+     * workflow the caller had never mentioned. Intermittent, and only under a
+     * concurrent `removeWorkflow`, which is exactly what a browser check
+     * tidying up does. Issue #194.
+     *
+     * A workflow that has stopped being this workspace's is not a workflow
+     * using this condition, so the answer is no nodes rather than an exception.
+     * Asked as a question rather than caught, for the reason above: catching
+     * what a transactional method threw does not unmark the transaction it
+     * doomed on the way out.
      */
     private fun published(workspaceId: Long, workflowId: Long): List<GraphNode> {
         if (!graphs.published(workflowId)) return emptyList()
+        if (!assignments.existsByWorkspaceIdAndWorkflowId(workspaceId, workflowId)) return emptyList()
         return graphs.graph(workspaceId, workflowId, GraphVersion.PUBLISHED).nodes
     }
 }

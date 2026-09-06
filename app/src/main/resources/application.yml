@@ -86,6 +86,12 @@ logging:
     # for the other afternoon, when the thing that is wrong is underneath.
     root: ${ORKNUX_LOG_LEVEL_ROOT:INFO}
     io.mszymanski.orknux: ${ORKNUX_LOG_LEVEL:INFO}
+    # What a workspace's own functions and plugins say, under loggers of their
+    # own so they can be turned up without the server getting louder with them.
+    # This decides where those lines *go*; script.log-level below decides
+    # whether they are written at all, inside the sandbox.
+    io.mszymanski.orknux.script: ${ORKNUX_SCRIPT_LOG:INFO}
+    io.mszymanski.orknux.plugin: ${ORKNUX_PLUGIN_LOG:INFO}
   logback:
     rollingpolicy:
       # Only consulted when a file is being written. A log that grows without
@@ -460,6 +466,11 @@ orknux:
     # files, no network and no threads. These bound what it can spend.
     timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:5000}
     statement-limit: ${ORKNUX_SCRIPT_STATEMENT_LIMIT:5000000}
+    # The lowest level a function's own `orknux.log` calls are kept at: debug,
+    # info, warn, error, or off. Decided inside the sandbox, so tracing left in
+    # a function costs one comparison while it is turned off - turn this down to
+    # find something without editing anybody's code.
+    log-level: ${ORKNUX_SCRIPT_LOG_LEVEL:info}
   library:
     registry:
       # Where an administrator's "install random@4.1.0" fetches from. The fetch
@@ -479,6 +490,10 @@ orknux:
     # bundle, and loading one is more work than calling one exported function.
     timeout-millis: ${ORKNUX_PLUGIN_TIMEOUT_MILLIS:10000}
     statement-limit: ${ORKNUX_PLUGIN_STATEMENT_LIMIT:10000000}
+    # The same, for plugins, and separate on purpose: a plugin is somebody
+    # else's code, and debugging one should not mean turning up every function
+    # this installation wrote itself.
+    log-level: ${ORKNUX_PLUGIN_LOG_LEVEL:info}
   execution:
     inline:
       # Only the inline engine. It waits out a parked step on the thread

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.workflow.script
 
+import java.util.Collections
 import org.graalvm.polyglot.Context
 import org.graalvm.polyglot.Engine
 import org.graalvm.polyglot.HostAccess
@@ -10,6 +11,7 @@ import org.graalvm.polyglot.Value
 import org.graalvm.polyglot.io.IOAccess
 import org.graalvm.polyglot.proxy.ProxyExecutable
 import org.graalvm.polyglot.proxy.ProxyObject
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.stereotype.Service
@@ -117,11 +119,19 @@ class ScriptRunner(
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
+        /*
+         * One list per call, and the guest writes into it through a binding of
+         * its own. Synchronised because the guard cancels from another thread:
+         * a script stopped mid-line must not leave this half-written for the
+         * thread that is building the failure.
+         */
+        val said = Collections.synchronizedList(mutableListOf<String>())
         return try {
             guard.bounded(stopped, ::newContext) {
                 ScriptResult.Returned(
-                    evaluate(it, source, functionName, arguments, context, modules, imports, on),
+                    evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName),
                     millisSince(started),
+                    said.toList(),
                 )
             }
         } catch (failure: PolyglotException) {
@@ -136,23 +146,23 @@ class ScriptRunner(
                 failure.isGuestException -> failure.message ?: "threw"
                 else -> failure.message ?: "could not be run"
             }
-            ScriptResult.Failed(reason, millisSince(started), settled = !budget && stopped.get() == null)
+            ScriptResult.Failed(reason, millisSince(started), settled = !budget && stopped.get() == null, logs = said.toList())
         } catch (failure: ScriptBusyException) {
             // Nothing to do with this script. Worth asking again once the ones
             // ahead of it have finished, which is what unsettled means.
-            ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started), settled = false)
+            ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started), settled = false, logs = said.toList())
         } catch (failure: ScriptContractException) {
             // The script ran and did not hold up its end: it threw, or there was
             // nothing to call. Both are answers about the script, not faults here.
-            ScriptResult.Failed(failure.message ?: "did not return", millisSince(started))
+            ScriptResult.Failed(failure.message ?: "did not return", millisSince(started), logs = said.toList())
         } catch (failure: IllegalStateException) {
             // Closing a cancelled context races with the call that was in it. If
             // it was the guard that closed it, say what for.
             val overrun = guard.overrunReason(stopped.get())
             if (overrun != null) {
-                ScriptResult.Failed("$overrun and was stopped", millisSince(started), settled = false)
+                ScriptResult.Failed("$overrun and was stopped", millisSince(started), settled = false, logs = said.toList())
             } else {
-                ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started))
+                ScriptResult.Failed(failure.message ?: "could not be run", millisSince(started), logs = said.toList())
             }
         }
     }
@@ -385,9 +395,11 @@ class ScriptRunner(
         modules: List<ScriptModule>,
         imports: Map<String, String>,
         on: Long?,
+        said: MutableList<String>,
+        called: String,
     ): String? {
         load(polyglot, modules)
-        serve(polyglot, on)
+        serve(polyglot, on, said, called)
 
         val module = polyglot.eval(module(prelude(imports) + source))
         val function = module.getMember("default")
@@ -491,9 +503,49 @@ class ScriptRunner(
      * A script calling it where the door is not wired should be told so in a
      * sentence rather than thrown whatever a call on undefined throws.
      */
-    private fun serve(polyglot: Context, on: Long?) {
+    /**
+     * The helpers, with this installation's log threshold compiled into them.
+     *
+     * Built once per runner rather than per call: it is the same text every
+     * time, and the level is a setting rather than something a script decides.
+     */
+    private val services: String by lazy {
+        val kept = HostHelpers.threshold(properties.logLevel)
+        SERVICES
+            .replace("%HTTP%", HostHelpers.http("this installation cannot make requests from a function").prependIndent("  "))
+            .replace("%LOG%", HostHelpers.log(kept).prependIndent("  "))
+    }
+
+    private fun serve(polyglot: Context, on: Long?, said: MutableList<String>, called: String) {
         val server = host
         val bindings = polyglot.getBindings("js")
+
+        /*
+         * The logging door, which is not a capability and never needed one:
+         * nothing is reached by it. It is bound whether or not there is a host,
+         * so a function can say something on an installation that wires none.
+         */
+        bindings.putMember(
+            LOG,
+            ProxyExecutable { given ->
+                val level = given.getOrNull(0)?.takeIf { it.isString }?.asString() ?: "info"
+                val line = given.getOrNull(1)?.takeIf { it.isString }?.asString() ?: return@ProxyExecutable null
+                val held = "$level $line"
+                if (said.size < MAX_LOG_LINES) said += held
+                // The script's own words, under a logger of their own so an
+                // installation can turn them up or down without touching the
+                // server's. The workspace and the function are how somebody
+                // finds the one they are looking for.
+                val about = "[workspace ${on ?: "?"}] $called: $line"
+                when (level) {
+                    "debug" -> scriptLog.debug(about)
+                    "warn" -> scriptLog.warn(about)
+                    "error" -> scriptLog.error(about)
+                    else -> scriptLog.info(about)
+                }
+                null
+            },
+        )
         if (server != null) {
             val granted = LinkedHashMap<String, Any>()
             /*
@@ -511,7 +563,7 @@ class ScriptRunner(
             }
             bindings.putMember(HOST, ProxyObject.fromMap(granted))
         }
-        polyglot.eval("js", SERVICES)
+        polyglot.eval("js", services)
     }
 
     private fun prelude(imports: Map<String, String>): String {
@@ -531,6 +583,27 @@ class ScriptRunner(
         val log = LoggerFactory.getLogger(ScriptRunner::class.java)
 
         const val HOST = "__orknuxHost"
+
+        /** Where `orknux.log` hands a line over. Not a capability; nothing is reached by it. */
+        const val LOG = "__orknuxLog"
+
+        /**
+         * A bound on what one call may keep.
+         *
+         * The lines are held to be handed back with the answer, so a script in a
+         * loop writing a line each time round would otherwise build a list the
+         * size of its own output. Everything is still written to the server's
+         * log; this bounds only what travels with the result.
+         */
+        const val MAX_LOG_LINES = 500
+
+        /**
+         * The scripts' own logger, separate from this class's.
+         *
+         * So an installation can turn what functions say up or down without
+         * touching what the runner itself says about them.
+         */
+        val scriptLog: Logger = LoggerFactory.getLogger("io.mszymanski.orknux.script")
 
         /** What a call gets when it was made with something that is not a string. */
         const val REFUSED = """{"error":"that call takes one JSON argument"}"""
@@ -561,94 +634,8 @@ class ScriptRunner(
                 },
               },
 
-              http: {
-                /**
-                 * One HTTP request, made by the server on this function's
-                 * behalf.
-                 *
-                 * The function never holds a socket: it hands over a URL and
-                 * gets an answer back as data, which is what keeps this a door
-                 * rather than a network. Where it may get to is the
-                 * installation's proxy rules - the same rules a Slack call and
-                 * an MCP call obey - which this cannot see and cannot argue
-                 * with.
-                 *
-                 * Answers `{ status, headers, body }`, or `{ error }` saying
-                 * why not. A refusal is data, like every other answer here: a
-                 * condition that cannot reach a service has to be able to
-                 * decide, rather than throw and become undecidable.
-                 *
-                 * Credentials are not a thing this takes. A function is handed
-                 * its workspace's variables as parameters, so the header is
-                 * built from one of those - which keeps the value out of the
-                 * source, where it would be revision-tracked and exportable.
-                 */
-                request(what) {
-                  const host = globalThis.__orknuxHost;
-                  if (host === undefined || host.network_request === undefined) {
-                    return { error: 'this installation cannot make requests from a function' };
-                  }
-                  const asked = what === null || typeof what !== 'object' ? { url: what } : what;
-
-                  const headers = Object.assign({}, asked.headers ?? {});
-                  let body = asked.body ?? null;
-                  /*
-                   * An object body is JSON, and says so.
-                   *
-                   * Stringifying it by hand is the easy half; the header is the
-                   * half people forget, and a service answering 415 to a body
-                   * that looks perfectly good is a bad afternoon. A string body
-                   * is passed through untouched - somebody sending form-encoded
-                   * text meant it.
-                   */
-                  if (body !== null && typeof body === 'object') {
-                    body = JSON.stringify(body);
-                    const named = Object.keys(headers).some(
-                      (name) => name.toLowerCase() === 'content-type',
-                    );
-                    if (!named) headers['content-type'] = 'application/json';
-                  }
-
-                  const answer = JSON.parse(
-                    host.network_request(
-                      JSON.stringify([
-                        asked.url ?? null,
-                        (asked.method ?? 'GET').toUpperCase(),
-                        headers,
-                        body,
-                      ]),
-                    ),
-                  );
-
-                  /*
-                   * `json` beside `body`, never instead of it.
-                   *
-                   * Nearly every service answers JSON and nearly every function
-                   * wants it parsed, so parsing it here saves the same three
-                   * lines being written every time - and a reply that is not
-                   * JSON, or is JSON the service got wrong, simply has no
-                   * `json` rather than throwing. `body` is always the text that
-                   * arrived, so nothing is hidden by this.
-                   */
-                  if (answer.error === undefined && typeof answer.body === 'string') {
-                    try {
-                      answer.json = JSON.parse(answer.body);
-                    } catch (ignored) {
-                      // Not JSON. `body` still is what it is.
-                    }
-                  }
-                  return answer;
-                },
-
-                /** The two nearly everybody wants, spelled out. */
-                get(url, headers) {
-                  return globalThis.orknux.http.request({ url, method: 'GET', headers });
-                },
-
-                post(url, body, headers) {
-                  return globalThis.orknux.http.request({ url, method: 'POST', body, headers });
-                },
-              },
+%HTTP%
+%LOG%
             };
         """.trimIndent()
 
@@ -924,8 +911,17 @@ sealed interface ScriptResult {
 
     val durationMillis: Long
 
-    /** JSON for what the function returned; null when it returned nothing. */
-    data class Returned(val json: String?, override val durationMillis: Long) : ScriptResult
+    /**
+     * @param json what the function returned; null when it returned nothing.
+     * @param logs what it said on the way, in order. Kept on the answer as well
+     *   as written to the server's log, so whatever called this can show them
+     *   next to the result they belong to.
+     */
+    data class Returned(
+        val json: String?,
+        override val durationMillis: Long,
+        val logs: List<String> = emptyList(),
+    ) : ScriptResult
 
     /** The script threw, ran too long, or never got as far as running. */
     /**
@@ -943,6 +939,14 @@ sealed interface ScriptResult {
         val reason: String,
         override val durationMillis: Long,
         val settled: Boolean = true,
+        /**
+         * What it said before it stopped.
+         *
+         * This is the case the logging is for: a script that returned an answer
+         * can be read from its answer, and one that threw halfway leaves nothing
+         * but a sentence about where.
+         */
+        val logs: List<String> = emptyList(),
     ) : ScriptResult
 }
 
@@ -991,6 +995,18 @@ data class ScriptProperties(
      * next is usually not the script's.
      */
     val heapPressurePercent: Int = 85,
+
+    /**
+     * The lowest level a script's own logging is kept at.
+     *
+     * Decided in the sandbox, before a line crosses: a `debug` call on an
+     * installation logging at `info` costs one comparison and is dropped where
+     * it was written. So a function may leave its tracing in and pay for it only
+     * when somebody turns this down to find something.
+     *
+     * `debug`, `info`, `warn`, `error`, or `off` for none of it.
+     */
+    val logLevel: String = "info",
 
     /**
      * How much a call must have allocated before the heap's trouble is put down

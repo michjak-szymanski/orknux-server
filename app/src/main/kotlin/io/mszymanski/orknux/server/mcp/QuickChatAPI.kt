@@ -425,7 +425,7 @@ class QuickChat(
 
                 type SlackThreadMessage = {
                   readonly ts: string;      // Slack's timestamp, and the message's id
-                  readonly user: string;
+                  readonly user: string | null;  // null where Slack named nobody
                   readonly text: string;
                   readonly parent: boolean; // the message the thread hangs off, not a reply
                 };
@@ -447,6 +447,12 @@ class QuickChat(
                       limit?: number,
                     ): SlackThread;
                   };
+                  readonly log: {
+                    debug(...said: unknown[]): void;
+                    info(...said: unknown[]): void;
+                    warn(...said: unknown[]): void;
+                    error(...said: unknown[]): void;
+                  };
                   readonly http: {
                     request(what: string | { url: string; method?: string; headers?: Record<string, string>; body?: unknown }): OrknuxResponse;
                     get(url: string, headers?: Record<string, string>): OrknuxResponse;
@@ -463,6 +469,8 @@ class QuickChat(
                 "content type; a JSON reply arrives parsed as `json`, beside the `body` it was parsed from. " +
                 "Read `error` first there too. A credential belongs in a workspace variable, which arrives as a " +
                 "parameter after the function's own - never written into the source. " +
+                "`orknux.log` is how a function says anything: there is no `console`, the level is the " +
+                "installation's, and anything that is not a string is logged as JSON. " +
                 "There is nothing else on `orknux`. "
 
         val log = LoggerFactory.getLogger(QuickChat::class.java)

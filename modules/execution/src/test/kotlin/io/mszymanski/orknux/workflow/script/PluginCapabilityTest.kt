@@ -106,6 +106,59 @@ class PluginCapabilityTest {
     }
 
     /**
+     * A plugin's `orknux.http` is a function's, member for member.
+     *
+     * They were written out twice - once in each runner - and the copies had
+     * drifted the moment functions were given HTTP: the plugin side kept an
+     * older shape with no `post` and no parsed `json`, so the same call written
+     * in the two places answered differently. Two copies of an API is two APIs,
+     * so there is one now, and this is what says so.
+     */
+    @Test
+    fun `a plugin gets the same http helper a function does`() {
+        val answering = PluginRunner(
+            PluginProperties(timeoutMillis = 5_000, statementLimit = 2_000_000),
+            PluginHost { capability, argument, _ ->
+                asked += capability to argument
+                """{"status":201,"headers":{},"body":"{\"id\":9}"}"""
+            },
+        )
+
+        val poster = """
+            export default class Poster extends OrknuxPlugin {
+              id() { return 'poster'; }
+              apiVersion() { return 1; }
+              capabilities() { return ['NETWORK_REQUEST']; }
+              functions() {
+                return [new OrknuxFunction({
+                  name: 'make',
+                  params: [{ name: 'url', type: 'string' }],
+                  returnType: 'map',
+                  run: (url) => {
+                    const r = orknux.http.post(url, { title: 'hello' });
+                    return { id: r.json.id, status: r.status };
+                  },
+                })];
+              }
+            }
+        """.trimIndent()
+
+        val answer = answering.call(
+            poster,
+            "make",
+            listOf("\"https://api.example.com/tickets\""),
+            capabilities = setOf(PluginCapability.NETWORK_REQUEST),
+        )
+
+        // `post` exists, an object body went out as JSON with the header, and
+        // the JSON reply came back parsed.
+        assertThat((answer as ScriptResult.Returned).json).contains("\"id\":9")
+        assertThat(answer.json).contains("\"status\":201")
+        assertThat(asked.single().second).contains("application/json")
+        assertThat(asked.single().second).contains("title")
+    }
+
+    /**
      * A refusal is data.
      *
      * A plugin has to be able to say something useful about "that connection is

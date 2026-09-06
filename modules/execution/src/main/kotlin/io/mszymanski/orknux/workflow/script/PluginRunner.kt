@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.workflow.script
 
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.graalvm.polyglot.Context
 import org.graalvm.polyglot.Engine
 import org.graalvm.polyglot.HostAccess
@@ -50,6 +52,20 @@ class PluginRunner(
      */
     private val host: PluginHost? = null,
 ) {
+
+    /**
+     * The contract, with this installation's helpers filled in.
+     *
+     * Built once per runner: the text is the same every time, and the log
+     * threshold is a setting rather than something a plugin decides. It lives
+     * here rather than beside `CONTRACT` because that is a companion constant
+     * and cannot see the properties.
+     */
+    private val contract: String by lazy {
+        CONTRACT
+            .replace("%HTTP%", HostHelpers.http("this plugin was not granted NETWORK_REQUEST").prependIndent("  "))
+            .replace("%LOG%", HostHelpers.log(HostHelpers.threshold(properties.logLevel)).prependIndent("  "))
+    }
 
     /**
      * Its own engine, so plugin sources — which are bundles, and large — do not
@@ -178,7 +194,7 @@ class PluginRunner(
         capabilities: Set<PluginCapability>,
         on: Long?,
     ): String? {
-        polyglot.eval("js", CONTRACT)
+        polyglot.eval("js", contract)
 
         val bindings = polyglot.getBindings("js")
         // Put in before the plugin is constructed: the contract's helper reads it
@@ -194,7 +210,7 @@ class PluginRunner(
         // As text, like everything else that crosses, so the harness stays one
         // cached source rather than being respliced per call.
         bindings.putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
-        bind(bindings, capabilities, on)
+        bind(bindings, capabilities, on, functionName)
         polyglot.eval("js", CALL)
 
         val error = bindings.getMember(ERROR)
@@ -209,7 +225,7 @@ class PluginRunner(
     private fun read(polyglot: Context, source: String): PluginInspection {
         // The contract first: the plugin is evaluated against a sandbox that already
         // has OrknuxPlugin in it, so `extends OrknuxPlugin` resolves.
-        polyglot.eval("js", CONTRACT)
+        polyglot.eval("js", contract)
 
         val exported = polyglot.eval(module(source)).getMember("default")
             ?: return PluginInspection.Unreadable("it has no default export")
@@ -439,7 +455,29 @@ class PluginRunner(
      * could walk from it to a class loader; a plugin handed a string can read
      * the string.
      */
-    private fun bind(bindings: Value, capabilities: Set<PluginCapability>, on: Long?) {
+    private fun bind(bindings: Value, capabilities: Set<PluginCapability>, on: Long?, named: String) {
+        /*
+         * The logging door first, and outside the guard below: it is not a
+         * capability and never needed granting - nothing is reached by it - so a
+         * plugin that declared nothing can still say what it is doing, which is
+         * the plugin somebody is most often trying to debug.
+         */
+        bindings.putMember(
+            LOG,
+            ProxyExecutable { given ->
+                val level = given.getOrNull(0)?.takeIf { it.isString }?.asString() ?: "info"
+                val line = given.getOrNull(1)?.takeIf { it.isString }?.asString() ?: return@ProxyExecutable null
+                val about = "[workspace ${on ?: "?"}] $named: $line"
+                when (level) {
+                    "debug" -> pluginLog.debug(about)
+                    "warn" -> pluginLog.warn(about)
+                    "error" -> pluginLog.error(about)
+                    else -> pluginLog.info(about)
+                }
+                null
+            },
+        )
+
         val server = host
         if (capabilities.isEmpty() || server == null) return
 
@@ -520,6 +558,16 @@ class PluginRunner(
 
         /** What the granted capabilities are bound as, and what the contract calls them. */
         const val HOST = "__orknuxHost"
+
+        /** Where `orknux.log` hands a line over. Not a capability; nothing is reached by it. */
+        const val LOG = "__orknuxLog"
+
+        /**
+         * The plugins' own logger, separate from this class's and from the
+         * functions'. An installation debugging a plugin it was handed should
+         * not have to turn up every function it wrote itself to do it.
+         */
+        val pluginLog: Logger = LoggerFactory.getLogger("io.mszymanski.orknux.plugin")
 
         /** Said when a capability is called with something other than JSON. */
         const val REFUSED = """{"error":"that call needs its arguments as JSON"}"""
@@ -686,46 +734,8 @@ class PluginRunner(
                 },
               },
 
-              http: {
-                /**
-                 * One HTTP request, made by the server on this plugin's behalf.
-                 *
-                 * Granted per plugin and accepted by an administrator, in the
-                 * words on NETWORK_REQUEST. Where it may get to is the
-                 * installation's proxy rules, which this cannot see and cannot
-                 * argue with.
-                 *
-                 * Answers `{ status, headers, body }`, or `{ error }` saying why
-                 * not. A refusal is data, like everywhere else here: a plugin has
-                 * to be able to say something useful about one.
-                 *
-                 * `body` is text. Anything that is not text is refused rather
-                 * than guessed at - a plugin that wanted bytes would have to say
-                 * what it meant to do with them in a sandbox that has no files.
-                 */
-                request(what) {
-                  const host = globalThis.__orknuxHost;
-                  if (host === undefined || host.network_request === undefined) {
-                    return { error: 'this plugin was not granted NETWORK_REQUEST' };
-                  }
-                  const asked = what === null || typeof what !== 'object' ? { url: what } : what;
-                  return JSON.parse(
-                    host.network_request(
-                      JSON.stringify([
-                        asked.url ?? null,
-                        (asked.method ?? 'GET').toUpperCase(),
-                        asked.headers ?? {},
-                        asked.body ?? null,
-                      ]),
-                    ),
-                  );
-                },
-
-                /** The same, for the request nearly everybody wants. */
-                get(url, headers) {
-                  return globalThis.orknux.http.request({ url, method: 'GET', headers });
-                },
-              },
+%HTTP%
+%LOG%
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {
@@ -910,6 +920,15 @@ data class PluginProperties(
 
     /** How much of a plugin may run while it is being loaded. */
     val statementLimit: Long = 10_000_000,
+
+    /**
+     * The lowest level a plugin's own logging is kept at.
+     *
+     * Its own setting rather than the functions' one, because a plugin is
+     * somebody else's code: an installation debugging a plugin it was handed
+     * should not have to turn up every function it wrote itself to do it.
+     */
+    val logLevel: String = "info",
 
     /**
      * How full the heap may be, after a collection, before loads and calls start

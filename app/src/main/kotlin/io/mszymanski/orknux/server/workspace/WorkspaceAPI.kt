@@ -483,6 +483,23 @@ class WorkspaceAPI(
     }
 
     /**
+     * Whether this workspace's chats show when each message was sent.
+     *
+     * A display choice rather than a capability, so it is not audited the way
+     * the write switch is - but it is per workspace rather than per person,
+     * because a chat read by two people should read the same. Issue #323.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceChatTimestamps(@Argument workspaceId: Long, @Argument shown: Boolean): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        workspace.chatShowTimestamps = shown
+        return workspace
+    }
+
+    /**
      * What agents in this workspace are given when they ask for nothing.
      *
      * The middle step of three - the agent's own share, then this, then the

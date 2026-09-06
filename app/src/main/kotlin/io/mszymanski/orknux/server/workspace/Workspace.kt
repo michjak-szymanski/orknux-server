@@ -169,6 +169,16 @@ class Workspace(
     var quickChatMayWrite: Boolean = false,
 
     /**
+     * Whether this workspace's chats show when each message was sent.
+     *
+     * The time has been stored all along; this decides whether it is drawn.
+     * Off by default because a visual change to every chat is not something an
+     * upgrade should decide. Issue #323.
+     */
+    @Column(name = "chat_show_timestamps", nullable = false)
+    var chatShowTimestamps: Boolean = false,
+
+    /**
      * What an agent that sets no share of its own is given, as a percentage of
      * its model's context window.
      *

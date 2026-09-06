@@ -25,6 +25,7 @@ import jakarta.persistence.EntityManager
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 /**
@@ -179,12 +180,23 @@ class ChatService(
          * so reloading the page lost the reasoning for every answer on it.
          */
         val thought = thoughts.findByChatSessionId(requireNotNull(session.id)).associateBy { it.messageIndex }
+        /*
+         * When each line was sent, read straight off the store's own table.
+         *
+         * Spring AI's repository answers content and role and keeps the
+         * timestamp to itself, so the column is read here and zipped by place
+         * in the thread - the same ordering the repository reads by. Two lines
+         * written in the same millisecond could in principle swap, and would
+         * then display the same time, which is the answer either way.
+         */
+        val sentAt = sentAt(session.conversationId)
         val thread = history.findByConversationId(session.conversationId)
             .mapIndexed { at, message ->
                 ChatMessage(message).copy(
                     takes = earlier[at]?.map { it.content }.orEmpty(),
                     thinking = thought[at]?.content,
                     thinkingMillis = thought[at]?.millis?.takeIf { it > 0 },
+                    at = sentAt.getOrNull(at)?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
                 )
             }
         val llmSessionId = session.llmSessionId ?: return thread
@@ -205,6 +217,36 @@ class ChatService(
         val upTo = if (ownSession(session)) OffsetDateTime.now() else session.createdAt
         return carried(thread, recorder.readBefore(llmSessionId, upTo, budget(session)))
     }
+
+    /**
+     * When each line of a conversation was written, in thread order.
+     *
+     * Straight off the store's table with a native query, because Spring AI's
+     * repository reads the same rows and does not pass the column on. Ordered
+     * the way the repository orders - time, then the sequence that breaks
+     * ties - so index N here is index N there.
+     *
+     * The column is a bare TIMESTAMP written by this JVM, so it is read back in
+     * this JVM's zone; a chat is not a flight log, and same-machine round
+     * tripping is the contract the store itself relies on.
+     */
+    private fun sentAt(conversationId: String): List<OffsetDateTime> =
+        entityManager
+            .createNativeQuery(
+                """select "timestamp" from SPRING_AI_CHAT_MEMORY where conversation_id = ?1 order by "timestamp", sequence_id""",
+            )
+            .setParameter(1, conversationId)
+            .resultList
+            .map { held ->
+                when (held) {
+                    is java.sql.Timestamp -> held.toLocalDateTime().atZone(java.time.ZoneId.systemDefault()).toOffsetDateTime()
+                    is OffsetDateTime -> held
+                    // SQLite hands back text; anything unreadable is a line with no time.
+                    else -> runCatching { java.time.LocalDateTime.parse(held.toString().replace(" ", "T")) }
+                        .getOrNull()?.atZone(java.time.ZoneId.systemDefault())?.toOffsetDateTime()
+                }
+            }
+            .mapNotNull { it }
 
     /**
      * Whether the session this chat is bound to is one it opened itself.
@@ -1107,6 +1149,15 @@ data class ChatMessage(
      * that shows a number less.
      */
     val thinkingMillis: Long? = null,
+    /**
+     * When it was sent, as ISO-8601, or null where nobody wrote it down.
+     *
+     * The store has carried a timestamp per line since the table was made; this
+     * is the first thing to read it back. Null covers lines carried in from the
+     * LLM session a chat continues - they were said before this chat existed,
+     * and inventing a time for them would be worse than none. Issue #323.
+     */
+    val at: String? = null,
 ) {
     constructor(message: Message) : this(message.messageType.name.lowercase(), message.text.orEmpty())
 }

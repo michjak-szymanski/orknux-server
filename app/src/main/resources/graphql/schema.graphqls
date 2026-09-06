@@ -1168,6 +1168,7 @@ type Mutation {
     setWorkspaceQuickChatModel(workspaceId: ID!, modelId: ID): Workspace!
     "Whether the quick chat may start things, or only look them up."
     setWorkspaceQuickChatWrites(workspaceId: ID!, allowed: Boolean!): Workspace!
+    setWorkspaceChatTimestamps(workspaceId: ID!, shown: Boolean!): Workspace!
     """
     What agents in this workspace are given when they set no share of their own.
 
@@ -1525,6 +1526,7 @@ type Workspace {
     default, including for a workspace that has already chosen a model.
     """
     quickChatMayWrite: Boolean!
+    chatShowTimestamps: Boolean!
     """
     What agents here are given when they set no share of their own, as a
     percentage of their model's context window.
@@ -2813,6 +2815,11 @@ was said, and only that.
 type ChatMessage {
     role: String!
     content: String!
+    """
+    When it was sent, ISO-8601, or null for a line carried in from the LLM
+    session this chat continues - said before the chat existed.
+    """
+    at: String
     """
     Who said it - the agent, the tool or the person - for a line carried into
     this chat from the LLM session it continues.

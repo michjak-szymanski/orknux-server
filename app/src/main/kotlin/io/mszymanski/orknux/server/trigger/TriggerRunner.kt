@@ -86,7 +86,7 @@ class TriggerRunner(
             .mapNotNull { assignments.findByWorkspaceIdAndWorkflowId(trigger.workspaceId, it) }
 
         if (assigned.isEmpty()) {
-            log.info("trigger={} event=fired outcome=no_instance assigned=0", triggerId)
+            log.info("Trigger {} (#{}) fired, but no workflow instances it", trigger.name, triggerId)
             record(trigger, FiringOutcome.NO_INSTANCE, "No workflow has a trigger node pointing at this definition")
             return 0
         }
@@ -109,10 +109,11 @@ class TriggerRunner(
         }
         if (runnable.isEmpty()) {
             log.info(
-                "trigger={} event=fired outcome=all_switched_off assigned={} refused={}",
+                "Trigger {} (#{}) fired at {} workflow(s), all switched off: {}",
+                trigger.name,
                 triggerId,
                 assigned.size,
-                machine(off),
+                off.joinToString(", ") { it.short },
             )
             record(trigger, FiringOutcome.WORKFLOW_DISABLED, off.joinToString("; ") { it.said })
             return 0
@@ -125,12 +126,7 @@ class TriggerRunner(
             // own page; the log is where somebody watching a message not arrive
             // is looking, and a condition quietly refusing it is the commonest
             // reason for the silence they are reading.
-            log.info(
-                "trigger={} event=fired outcome={} detail=\"{}\"",
-                triggerId,
-                verdict.outcome.name.lowercase(),
-                verdict.detail,
-            )
+            log.info("Trigger {} (#{}) did not fire: {}", trigger.name, triggerId, verdict.detail)
             record(trigger, verdict.outcome, verdict.detail)
             return 0
         }
@@ -142,24 +138,23 @@ class TriggerRunner(
         val started = begun.map { requireNotNull(it.workflow.id) }
 
         /*
-         * Ids, and one key per fact.
+         * Read by a person, and still greppable.
          *
-         * This line was prose with names in it, and names are not identities:
-         * two workflows may share one, a rename makes an old line describe
-         * something that no longer exists, and nothing downstream could parse
-         * it. So the log is `key=value`, the workflows are ids, and a refusal
-         * carries a token rather than a sentence - `switched_off`, not "dgd is
-         * switched off in this workspace". The sentence still exists, on the
-         * firing record, where a person reads it.
+         * The names came out because a name is not an identity - two workflows
+         * may share one, and a rename makes an old line describe something that
+         * no longer exists - and the key=value line that replaced them was
+         * worse in the other direction: nobody reads `outcome=partial
+         * assigned=3` at a glance. So: a sentence, with the ids in it. The
+         * counts are words, the workflows are numbers, and each refusal says
+         * what it was in three or four of them.
          */
         log.info(
-            "trigger={} event=fired outcome={} assigned={} started={} startedIds={} refused={}",
+            "Trigger {} (#{}) started {} of {} workflow(s): {}",
+            trigger.name,
             triggerId,
-            if (started.size == assigned.size) "started" else "partial",
-            assigned.size,
             started.size,
-            started.joinToString(",", "[", "]"),
-            machine(refusals),
+            assigned.size,
+            (started.map { "#$it started" } + refusals.map { it.short }).joinToString(", "),
         )
 
         val said = buildList {
@@ -308,7 +303,7 @@ class TriggerRunner(
             // One workflow failing is no reason for the others to miss the
             // trigger. The stack trace stays: this is the one refusal that is
             // not an ordinary state of the graph.
-            log.error("trigger={} event=start_failed workflow={}", trigger.id, workflowId, failure)
+            log.error("Trigger {} (#{}) could not start workflow #{}", trigger.name, trigger.id, workflowId, failure)
             refusals += Refused(workflowId, FAILED, failure.message ?: failure::class.simpleName.orEmpty())
             false
         }
@@ -335,25 +330,30 @@ class TriggerRunner(
     /**
      * One workflow this firing did not start, and why.
      *
-     * Two audiences, so two fields. [reason] is a token a log line carries and
-     * something downstream can match on; [said] is the sentence on the firing
-     * record, where a person reads it. A name appears in neither - names are
-     * not identities, and an old line naming a workflow that has since been
-     * renamed describes something that no longer exists.
+     * Two audiences, so two fields. [reason] is the short phrase the log line
+     * carries beside the id - "not published" - and [said] is the fuller
+     * sentence on the firing record, where a person reads it with the workflow
+     * in front of them. Neither is a name on its own: a name is not an
+     * identity, and an old line naming a workflow that has since been renamed
+     * describes something that no longer exists.
      */
-    private data class Refused(val workflowId: Long, val reason: String, val said: String)
+    private data class Refused(val workflowId: Long, val reason: String, val said: String) {
+
+        /** `#637 not published` — what the log line lists it as. */
+        val short: String get() = "#$workflowId $reason"
+    }
 
     private companion object {
         val log = LoggerFactory.getLogger(TriggerRunner::class.java)
 
-        /* The tokens a refusal is logged as. Machine-readable on purpose. */
-        const val SWITCHED_OFF = "switched_off"
-        const val UNPUBLISHED = "unpublished"
-        const val FAILED = "failed"
-
-        /** `[637=unpublished,1104=switched_off]`, or `[]`. */
-        fun machine(refused: List<Refused>): String =
-            refused.joinToString(",", "[", "]") { "${it.workflowId}=${it.reason}" }
+        /*
+         * What a refusal is called in the log: three or four words, the same
+         * three or four every time, so the line reads as a sentence and still
+         * greps as a token.
+         */
+        const val SWITCHED_OFF = "switched off"
+        const val UNPUBLISHED = "not published"
+        const val FAILED = "failed to start"
 
         /** Where a webhook's own description of the call sits in the run's input. */
         const val WEBHOOK = "webhook"

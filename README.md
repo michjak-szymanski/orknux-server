@@ -599,10 +599,12 @@ with the webhook's own mention and any markup taken off, and `teams_sender` give
 who said it and where, as the team, channel, conversation and message ids a reply
 has to be addressed with.
 
-**Sending is Graph, through a connection.** A plugin has no network — no files,
-no sockets, no host — so it could not call Graph even if it wanted to, and it
-should not: a call made from inside the sandbox would go round the proxy rules
-that every other outgoing request here obeys. So a message is sent by an **HTTP
+**Sending is Graph, through a connection.** A plugin holds no socket, and the
+one request it can make - `orknux.http`, behind the `NETWORK_REQUEST` grant - is
+made by the server under the proxy rules every other outgoing request here
+obeys. Sending a message is not what that is for: an action carries the
+connection, its credential and its retries, and a plugin reaching Graph directly
+would be reimplementing all three inside a sandbox. So a message is sent by an **HTTP
 request** action, with `teams_message` shaping the body and `teams_channelUrl` or
 `teams_replyUrl` naming the address, and the bearer token supplied as a header
 row pointing at a workspace variable rather than typed onto the action. That is
@@ -1164,7 +1166,9 @@ A **function** is JavaScript a workspace wrote, a module whose default export is
 called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 
 - no host classes, no class loading, no `Java`, `Packages` or `Polyglot`
-- no files, no network, no threads, no processes, no environment
+- no files, no sockets, no threads, no processes, no environment
+- no `fetch`, no `import`, no `require`: there is no module resolution and no
+  network of its own
 - no `load`, no `print`, and no timers, so nothing can be pending when a call
   returns
 - a statement limit and a wall-clock timeout, either of which stops a script
@@ -1178,6 +1182,42 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 
 Everything crossing the boundary is JSON text; nothing the script touches is a
 live Java object. `ScriptRunnerTest` is where those are held.
+
+**One global, `orknux`, is the whole of what the server will do on a function's
+behalf.** It is a door rather than a network: the script hands over a value and
+gets an answer back as data, so there is nothing to hold open, to listen on, or
+to reflect from.
+
+```js
+orknux.log.info('what is happening');            // and .debug .warn .error
+orknux.http.get(url, { authorization: token });  // .post, .request
+orknux.slack.thread(connection, channel, ts);    // the messages in one thread
+```
+
+- **`orknux.http`** is a request the *server* makes, so an installation's proxy
+  rules govern where it gets to — the same rules a Slack call and an MCP call
+  obey, and not something a script can see or argue with. An object body is sent
+  as JSON and given the content type; a JSON reply arrives parsed as `json`
+  beside the `body` it came from. Credentials belong in a workspace variable,
+  which arrives as a parameter — not written into source that is
+  revision-tracked and exportable.
+- **`orknux.log`** is how a function says anything; there is no `console`. The
+  level is the installation's — `ORKNUX_SCRIPT_LOG_LEVEL`, and
+  `ORKNUX_PLUGIN_LOG_LEVEL` for plugins — and it is applied *inside* the
+  sandbox, so tracing left in a function costs one comparison while it is turned
+  off. A line names the workspace, the function, and the workflow and execution
+  where there are any.
+- **`orknux.slack.thread`** reads one thread through a connection belonging to
+  the workspace the run is in, which is taken from the run and is not something a
+  script can set.
+
+Every one of them answers a value with `error` on it rather than throwing, so a
+condition that could not reach a service still decides. Check `error` before
+reading anything else. A plugin sees the same helpers from the same source —
+`HostHelpers` — with `orknux.http` behind the `NETWORK_REQUEST` grant an
+administrator accepts; a workspace's own functions have it without asking,
+because the proxy rules are the boundary and whoever can write a function can
+already run code in this sandbox.
 
 A function may **import** other functions, and so may a tool. The editor's
 *Imports* section names them, and the code reaches them through one frozen global:
@@ -1210,7 +1250,8 @@ would make what a workspace runs depend on what a registry served that afternoon
 **A package can still be the way the file arrives.** Type `random@4.1.0` beside
 the upload and the server fetches it once — here, into this database — and stores
 the module it found. Nothing changes about what runs: the row is the same row an
-upload makes, the sandbox has no network, and no registry is consulted again.
+upload makes, nothing in the sandbox fetches it, and no registry is consulted
+again.
 What the row gains is provenance, which is the price of fetching anything: the
 package, the exact version, the file inside it, and the hash the registry said it
 would be, checked against what arrived.

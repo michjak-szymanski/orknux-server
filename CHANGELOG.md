@@ -19,6 +19,36 @@ have failed.
 
 ### ✨ Added
 
+- 🌐 **A function can make an HTTP request.** A workspace's JavaScript could not
+  reach an outside service at all, so anything that needed one meant an action or
+  an MCP server - a heavier thing to build and keep for a single call.
+  `orknux.http.get`, `.post` and `.request` are made **by the server** on the
+  function's behalf: the script hands over a URL and gets an answer back as data,
+  so it never holds a socket. **Where it may get to is the installation's proxy
+  rules**, the same ones a Slack call and an MCP call obey. An object body is
+  sent as JSON and given the content type; a JSON reply arrives parsed as `json`
+  beside the `body` it came from; a failure is a value with `error` on it rather
+  than an exception, so a condition that could not reach a service still decides.
+  Put a credential in a workspace variable, which arrives as a parameter - not in
+  source that is revision-tracked and exportable.
+
+- 🪵 **A function or a plugin can say what it is doing.** There is no `console` in
+  the sandbox and `print` is turned off by name, so until now a script that
+  misbehaved left nothing behind but its answer. `orknux.log.debug`, `.info`,
+  `.warn` and `.error` write to the server's log under loggers of their own, so
+  what scripts say can be turned up without the server getting louder with them.
+  **The level is decided inside the sandbox** - `ORKNUX_SCRIPT_LOG_LEVEL` and
+  `ORKNUX_PLUGIN_LOG_LEVEL`, either of them `off` - so tracing left in a function
+  costs one comparison while it is turned off. A line names the workspace, the
+  function, and the workflow and execution where there are any; anything that is
+  not a string is logged as JSON.
+
+- 📝 **A new function's code says what it may call.** The stub opened with an
+  empty body and a sandbox whose whole surface is one global nobody has heard of,
+  so the first thing anybody wrote was `fetch` and the second was a refusal.
+  Four commented lines name what is there, and are deleted in one keystroke by
+  anybody who already knows.
+
 - 🧩 **An Object node with fields of its own now says so.** That mode has been
   there all along - a node with no saved shape holds whatever fields you name on
   it - but the Shape picker listed the workspace's saved objects and nothing
@@ -270,6 +300,55 @@ have failed.
   since it was opened.
 
 ### 🐛 Fixed
+
+- 🧩 **Looking at a saved shape no longer throws away an Object node's own
+  fields.** Naming fields under **Custom**, glancing at a saved shape and coming
+  back left the node holding the shape's fields and yours gone. They are set
+  aside while a shape has the panel and restored when Custom is chosen again.
+
+- ⚖️ **A condition's parameters are filled in on the node, with the ordinary
+  pickers.** They were on the condition's own settings page, which has no graph
+  behind it - so a reference had to be typed from memory into a plain box - and
+  they were one shared list, so two nodes asking the same question about
+  different threads had to be two conditions. They belong to the node now, drawn
+  with the same Value/Reference switch and field picker every other parameter
+  uses. **A condition that already carries arguments keeps them**, so no graph
+  changed meaning.
+
+- 🔎 **The field picker's search stopped keeping whole groups.** It matched the
+  group's heading as well as the field, so a graph with a *Slack reply received*
+  trigger and an *Azure* agent answered `re` with every field of both - a search
+  box that appeared to do nothing.
+
+- 📄 **A list goes back to the first page when the workspace changes.** Standing
+  on page 3 of Triggers and switching workspace asked for page 3 of the next one,
+  which answered truthfully with nothing: an empty list on a workspace that has
+  triggers. Every paged list on a workspace had it.
+
+- 🔌 **An agent's MCP servers are chosen from a list.** They were chips and a box
+  to type a name into, so granting one meant knowing its name by heart and
+  nothing on screen said which existed. They are the same list as Tools now, with
+  a search and a count; **a grant naming a server this workspace does not have is
+  still shown**, marked, and can be revoked.
+
+- ✏️ **Renaming a function in its code moves the panel beside it.** The Name
+  field rewrote the declaration and the declaration did not rewrite the Name
+  field, so a rename typed where a programmer types one left the panel - and what
+  is saved - on the old name.
+
+- 🔔 **A trigger firing says which workflows it started.** The line carried a
+  count, so working out what a message set off meant opening Executions and
+  matching on the clock, and a firing that started one of three said nothing
+  about the one. It names them, with their ids, and says why each of the others
+  did not run.
+
+- 💬 **The quick chat panel knows what the sandbox offers.** Its briefing listed
+  every prohibition and never mentioned `orknux`, so asked how to count the
+  messages in a Slack thread it answered `messages.length` - the length of the
+  page that was fetched, which also counts the parent - instead of `replies`.
+
+- ✅ **A validation line the interface could finish.** *Saved, and valid — the
+  code compiles and the sandbox's parser ac* now reads **Saved and valid**.
 
 - ⌨️ **The function editor no longer loses what you typed.** A save landing
   while somebody was mid-word put the stored version back over the top of it, so

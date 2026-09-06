@@ -265,6 +265,22 @@ is reported to the module rather than cascaded.
   nowhere else: host access, class loading, IO, threads, processes and
   environment are all denied, limits are set, and everything crossing the
   boundary is JSON text. Widening any of that needs a reason and a test.
+- **`orknux` is a door, not a network.** Everything the server does on a script's
+  behalf - `log`, `http`, `slack` - hands JSON over and gets JSON back; the guest
+  never holds a socket, a file or a host object, so there is nothing to reflect
+  from. A new member goes through `PluginCapability` and the same door, never
+  through a binding of its own. `http` reaches only where `ProxyRouter` allows,
+  which is where an administrator decides what this server may talk to.
+- **The two sandboxes share one source of helpers.** `HostHelpers` is the JavaScript
+  both `ScriptRunner` and `PluginRunner` hand their guests. They were written out
+  twice and drifted - the plugin side kept a `orknux.http` with no `post` and no
+  parsed `json`, so the same call answered differently in the two places. Two
+  copies of an API is two APIs; `PluginCapabilityTest` pins the parity.
+- **A capability a function gets without asking has to be bounded by something
+  other than judgement.** A plugin has an administrator to accept its grants and a
+  function has nobody, so `forScripts` is a decision about what holds it in:
+  reading a thread is bounded by the run's own workspace, and `NETWORK_REQUEST`
+  by the installation's proxy rules. Write the reason beside the entry.
 - **What an action needs is derived, not stored.** `ActionAPI.inputsOf` reads
   the placeholders off the settings; a second copy in the database would drift.
 - **A graph is checked by ports, not by kinds.** `GraphValidator` asks each node

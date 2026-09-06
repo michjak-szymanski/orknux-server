@@ -18,7 +18,16 @@ import org.springframework.stereotype.Service
  * onto the screen: how many turns were replaced, how many were kept word for
  * word, and roughly what the thread had grown to.
  */
-data class Compacted(val replaced: Int, val kept: Int, val tokens: Int)
+data class Compacted(
+    val replaced: Int,
+    val kept: Int,
+    val tokens: Int,
+    /**
+     * The summary that replaced the older turns, so a chat can show what was
+     * kept of them rather than only how many went. Issue #332.
+     */
+    val summary: String,
+)
 
 /**
  * Keeps a long chat inside the window the model will accept.
@@ -109,7 +118,7 @@ class ChatCompaction(
             carried,
             KEEP,
         )
-        return Compacted(replaced = older.size, kept = recent.size, tokens = carried)
+        return Compacted(replaced = older.size, kept = recent.size, tokens = carried, summary = summary)
     }
 
     /**

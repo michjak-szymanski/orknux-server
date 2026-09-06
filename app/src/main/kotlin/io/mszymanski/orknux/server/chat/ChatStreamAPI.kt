@@ -216,7 +216,12 @@ class ChatStreamAPI(
                 start.compacted?.let { held ->
                     send(
                         "compacted",
-                        mapOf("replaced" to held.replaced, "kept" to held.kept, "tokens" to held.tokens),
+                        mapOf(
+                            "replaced" to held.replaced,
+                            "kept" to held.kept,
+                            "tokens" to held.tokens,
+                            "summary" to held.summary,
+                        ),
                     )
                 }
 

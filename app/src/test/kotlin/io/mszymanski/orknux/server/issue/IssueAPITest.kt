@@ -44,13 +44,24 @@ class IssueAPITest(
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "support")).id)
         elsewhereId = requireNotNull(workspaces.save(Workspace(name = "billing")).id)
-        // Somebody to hand an issue to. Reused rather than recreated: the other
-        // tests here leave the user table alone, and one Bob is enough.
+        /*
+         * Somebody to hand an issue to, and this test decides what he is called.
+         *
+         * Reused rather than recreated - the user table is not emptied between
+         * classes - but the display name is written every time rather than
+         * inherited. It used to take whatever row was already there, and a row
+         * is left behind by any test that signs in as `bob` through
+         * `@WithMockUser`, which provisions the account with the username as its
+         * display name. So this passed or failed on which class Surefire happened
+         * to run first: `expected:<Bob> but was:<bob>`, in CI, on a tree where
+         * nothing about issues had changed. A fixture that reads another test's
+         * leavings is a fixture, not a test.
+         */
         bobId = requireNotNull(
-            (
-                users.findByUsername("bob")
-                    ?: users.save(AppUser(username = "bob", displayName = "Bob", type = UserType.INTERNAL))
-                ).id,
+            users.save(
+                (users.findByUsername("bob") ?: AppUser(username = "bob", displayName = "Bob", type = UserType.INTERNAL))
+                    .apply { displayName = "Bob" },
+            ).id,
         )
     }
 

@@ -131,6 +131,28 @@ class ScriptLogTest {
         assertThat((answer as ScriptResult.Failed).logs).containsExactly("info got this far")
     }
 
+    /**
+     * A line says which of this installation's things it came from.
+     *
+     * `isFirstSlackMessage: no thread` is the beginning of a question rather
+     * than an answer: on a server running many workflows at once the next thing
+     * anybody asks is which run said it, and matching on the clock is what this
+     * saves. What a caller does not have is left out rather than printed as a
+     * question mark - a function test-run from the editor belongs to no
+     * execution - so a line carries only what is true.
+     */
+    @Test
+    fun `the origin is what is known and no more`() {
+        assertThat(ScriptOrigin(functionId = 448, workflowId = 509, executionId = 2682).said(9))
+            .isEqualTo("[workspace 9 function 448 workflow 509 execution 2682]")
+
+        // The editor's Run: a workspace and a function, and nothing else is true.
+        assertThat(ScriptOrigin(functionId = 448).said(9)).isEqualTo("[workspace 9 function 448]")
+
+        // A library being inspected belongs to nothing at all.
+        assertThat(ScriptOrigin().said(null)).isEqualTo("[script]")
+    }
+
     /** There is no host here, and logging never needed one. */
     @Test
     fun `logging works on an installation that wires no host at all`() {

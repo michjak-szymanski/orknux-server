@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.workflow.script.ScriptOrigin
+import io.mszymanski.orknux.workflow.execution.WorkflowExecutionRepository
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
@@ -33,6 +35,8 @@ class ConditionNodeRunner(
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
     private val expressions: NodeExpressions,
+    /** Only to name the workflow in a line the condition's function writes. */
+    private val executions: WorkflowExecutionRepository,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.CONDITION
@@ -55,7 +59,16 @@ class ConditionNodeRunner(
         val passed = expressions.mappingsOf(step)
 
         val holds = try {
-            evaluator.holds(condition, input, passed, trigger)
+            evaluator.holds(
+                condition,
+                input,
+                passed,
+                trigger,
+                ScriptOrigin(
+                    workflowId = executions.findByIdOrNull(step.executionId)?.workflowId,
+                    executionId = step.executionId,
+                ),
+            )
         } catch (failure: ConditionNotDecidableException) {
             /*
              * A question that cannot be answered is not a run that failed; it

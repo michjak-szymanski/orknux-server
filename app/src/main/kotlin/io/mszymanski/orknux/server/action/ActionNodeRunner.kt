@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.workflow.execution.WorkflowExecutionRepository
+import io.mszymanski.orknux.workflow.script.ScriptOrigin
 import io.mszymanski.orknux.server.condition.ConditionEvaluator
 import io.mszymanski.orknux.connector.connection.Delivery
 import io.mszymanski.orknux.connector.connection.HttpAnswer
@@ -61,9 +63,23 @@ class ActionNodeRunner(
     private val messages: OutgoingMessages,
     private val http: OutgoingHttp,
     private val mail: OutgoingMail,
+    /**
+     * Only to name the workflow in a line a function writes.
+     *
+     * One indexed read by id, against a sandbox call that is milliseconds of
+     * JavaScript, and it turns "which run said this" into something a person
+     * can answer without matching on the clock.
+     */
+    private val executions: WorkflowExecutionRepository,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.ACTION
+
+    /** Which run a line belongs to: the execution, and the workflow it is of. */
+    private fun originOf(step: ExecutionStep) = ScriptOrigin(
+        workflowId = executions.findByIdOrNull(step.executionId)?.workflowId,
+        executionId = step.executionId,
+    )
 
     override fun run(step: ExecutionStep, input: String?, trigger: String?): StepResult {
         val actionId = step.actionId
@@ -346,7 +362,15 @@ class ActionNodeRunner(
 
         // The same call the editor's Run makes, through the same class, because a
         // test run that took another path would be testing another thing.
-        val result = caller.call(function, arguments, contextFor(action), action.workspaceId)
+        // Which run this belongs to, so a line a function writes can be found
+        // against the execution that produced it rather than by the clock.
+        val result = caller.call(
+            function,
+            arguments,
+            contextFor(action),
+            action.workspaceId,
+            origin = originOf(step),
+        )
 
         return when (result) {
             is ScriptResult.Returned -> StepResult(

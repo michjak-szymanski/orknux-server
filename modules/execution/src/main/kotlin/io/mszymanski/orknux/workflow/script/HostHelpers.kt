@@ -160,3 +160,32 @@ internal object HostHelpers {
         },
     """.trimIndent()
 }
+
+/**
+ * Which of this installation's things a script call belongs to, for the log.
+ *
+ * A line saying `isFirstSlackMessage: no thread` is the beginning of a question
+ * rather than an answer: on a server running many workflows at once the next
+ * thing anybody asks is *which run*, and matching on the clock is what this
+ * exists to save. Everything here is optional because not every caller has it —
+ * a function being test-run from the editor belongs to no execution, and a
+ * webhook's authenticator to no workflow — and what is absent is left out
+ * rather than printed as a question mark, so a line carries only what is true.
+ */
+data class ScriptOrigin(
+    val functionId: Long? = null,
+    val workflowId: Long? = null,
+    val executionId: Long? = null,
+) {
+
+    /** `[workspace 9 function 448 execution 2682]`, with the workspace the run's. */
+    fun said(workspace: Long?): String {
+        val parts = buildList {
+            workspace?.let { add("workspace $it") }
+            functionId?.let { add("function $it") }
+            workflowId?.let { add("workflow $it") }
+            executionId?.let { add("execution $it") }
+        }
+        return if (parts.isEmpty()) "[script]" else parts.joinToString(" ", "[", "]")
+    }
+}

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.workflow.script.ScriptOrigin
 import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.WorkflowFunction
@@ -79,7 +80,9 @@ class ConditionEvaluator(
         input: String?,
         passed: Map<String, NodeBinding>,
         trigger: String?,
-    ): Boolean = decide(condition, parse(input), raw = input, depth = 0, passed = passed, trigger = trigger)
+        /** Which run this belongs to, for anything the function logs. */
+        origin: ScriptOrigin = ScriptOrigin(),
+    ): Boolean = decide(condition, parse(input), raw = input, depth = 0, passed = passed, trigger = trigger, origin = origin)
 
     private fun decide(
         condition: WorkflowCondition,
@@ -88,6 +91,7 @@ class ConditionEvaluator(
         depth: Int,
         passed: Map<String, NodeBinding>,
         trigger: String?,
+        origin: ScriptOrigin = ScriptOrigin(),
     ): Boolean {
         if (depth > MAX_DEPTH) throw ConditionNotDecidableException("${condition.name} nests too deeply")
 
@@ -101,12 +105,12 @@ class ConditionEvaluator(
              * had before.
              */
             ConditionType.ANY_OF ->
-                members(condition).any { decide(it, input, raw, depth + 1, emptyMap(), trigger) }
+                members(condition).any { decide(it, input, raw, depth + 1, emptyMap(), trigger, origin) }
 
             ConditionType.ALL_OF ->
-                members(condition).all { decide(it, input, raw, depth + 1, emptyMap(), trigger) }
+                members(condition).all { decide(it, input, raw, depth + 1, emptyMap(), trigger, origin) }
 
-            ConditionType.FUNCTION -> ask(condition, raw, passed, trigger)
+            ConditionType.FUNCTION -> ask(condition, raw, passed, trigger, origin)
             else -> test(condition, input)
         }
         return answer != condition.negate
@@ -165,6 +169,7 @@ class ConditionEvaluator(
         input: String?,
         passed: Map<String, NodeBinding>,
         trigger: String?,
+        origin: ScriptOrigin,
     ): Boolean {
         val function = condition.functionId?.let { functions.findByIdOrNull(it) }
             ?: throw ConditionNotDecidableException("${condition.name} names a function that has been deleted")
@@ -228,8 +233,8 @@ class ConditionEvaluator(
                     contextFor(condition),
                     resolved.modules,
                     resolved.imports,
-                
                     on = condition.workspaceId,
+                    origin = origin.copy(functionId = function.id),
                 )
             }
         }

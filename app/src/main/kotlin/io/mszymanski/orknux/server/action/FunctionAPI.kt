@@ -656,8 +656,27 @@ class FunctionAPI(
             else -> params.joinToString(", ", "{ ", " }") { it.name }
         }
 
+        /*
+         * The stub says what there is, because nothing else does at that moment.
+         *
+         * A function starts with an empty body and a sandbox whose whole surface
+         * is one global nobody has heard of. Somebody writing their first one
+         * reaches for `fetch`, gets a refusal, and learns what is here one
+         * refusal at a time - and the completion in the editor only helps once
+         * they have typed `orknux.`, which they have no reason to. Four
+         * commented lines is the cheapest place to say it, and they are deleted
+         * in one keystroke by anybody who already knows. Asked for 2026-09-06.
+         */
         fun body(arguments: String) = """
             export default async function $name($arguments) {
+              // What this server will do for you, and there is nothing else:
+              //   orknux.log.info('what is happening')      what you say while this runs
+              //   orknux.http.get(url, headers)             a request, made by the server
+              //   orknux.http.post(url, { a: 1 })           an object body goes as JSON
+              //   orknux.slack.thread(connection, ch, ts)   the messages in one thread
+              // Each answers a value with `error` on it when it could not; check that
+              // first. There is no fetch, no import and no require: this is a sandbox.
+
               // What this returns is handed to the next node.
               return $returned;
             }

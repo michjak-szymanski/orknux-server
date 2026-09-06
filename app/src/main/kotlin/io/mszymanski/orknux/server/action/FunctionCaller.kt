@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.action
 
+import io.mszymanski.orknux.workflow.script.ScriptOrigin
 import io.mszymanski.orknux.server.plugin.PluginParameters
 import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
@@ -78,6 +79,12 @@ class FunctionCaller(
         context: String,
         workspaceId: Long,
         insteadOfVariables: Map<String, String> = emptyMap(),
+        /**
+         * Which run this belongs to, for the log. The function is filled in
+         * here - this is the one thing every caller of this has - and whatever
+         * else the caller knows comes in on it.
+         */
+        origin: ScriptOrigin = ScriptOrigin(),
     ): ScriptResult {
         val arguments = declared + externals.of(function, insteadOfVariables)
 
@@ -104,9 +111,9 @@ class FunctionCaller(
                 context,
                 resolved.modules,
                 resolved.imports,
-            
-                    on = workspaceId,
-                )
+                on = workspaceId,
+                origin = origin.copy(functionId = function.id),
+            )
         }
     }
 

@@ -116,6 +116,15 @@ class ScriptRunner(
          * rather than from the script, so nothing anybody writes changes it.
          */
         on: Long? = null,
+        /**
+         * Which of this installation's things this call belongs to.
+         *
+         * Only for the log. A line saying `isFirstSlackMessage: no thread` is
+         * the beginning of a question rather than an answer: on a server
+         * running many workflows at once, the next thing anybody asks is which
+         * run said it, and matching on the clock is what this exists to save.
+         */
+        origin: ScriptOrigin = ScriptOrigin(),
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
@@ -129,7 +138,7 @@ class ScriptRunner(
         return try {
             guard.bounded(stopped, ::newContext) {
                 ScriptResult.Returned(
-                    evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName),
+                    evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName, origin),
                     millisSince(started),
                     said.toList(),
                 )
@@ -397,9 +406,10 @@ class ScriptRunner(
         on: Long?,
         said: MutableList<String>,
         called: String,
+        origin: ScriptOrigin,
     ): String? {
         load(polyglot, modules)
-        serve(polyglot, on, said, called)
+        serve(polyglot, on, said, called, origin)
 
         val module = polyglot.eval(module(prelude(imports) + source))
         val function = module.getMember("default")
@@ -516,7 +526,13 @@ class ScriptRunner(
             .replace("%LOG%", HostHelpers.log(kept).prependIndent("  "))
     }
 
-    private fun serve(polyglot: Context, on: Long?, said: MutableList<String>, called: String) {
+    private fun serve(
+        polyglot: Context,
+        on: Long?,
+        said: MutableList<String>,
+        called: String,
+        origin: ScriptOrigin,
+    ) {
         val server = host
         val bindings = polyglot.getBindings("js")
 
@@ -536,7 +552,7 @@ class ScriptRunner(
                 // installation can turn them up or down without touching the
                 // server's. The workspace and the function are how somebody
                 // finds the one they are looking for.
-                val about = "[workspace ${on ?: "?"}] $called: $line"
+                val about = "${origin.said(on)} $called: $line"
                 when (level) {
                     "debug" -> scriptLog.debug(about)
                     "warn" -> scriptLog.warn(about)

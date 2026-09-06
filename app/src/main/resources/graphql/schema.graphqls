@@ -3340,9 +3340,16 @@ it says an administrator is protected when they are not. The design is a virtual
 machine or a container the administrator chose, an account with exactly the
 privileges they meant to give away, and an audit entry for every command run.
 """
+enum ShellKind { SSH, MCP }
+
 type Shell {
     id: ID!
     name: String!
+    "SSH or MCP - which list it appears in and what carries its commands."
+    kind: ShellKind!
+    "The MCP server an MCP shell speaks through, or null for an SSH shell."
+    mcpServerId: ID
+    "Blank for an MCP shell, whose reach is the server's, not a host of its own."
     host: String!
     port: Int!
     """
@@ -3419,7 +3426,12 @@ enum ShellStatus {
 
 input ShellInput {
     name: String!
-    host: String!
+    "SSH or MCP. Absent is SSH, unchangeable after creation."
+    kind: ShellKind
+    "Required for an MCP shell, ignored for SSH."
+    mcpServerId: ID
+    "Required for an SSH shell, ignored for MCP."
+    host: String
     port: Int! = 22
     """
     The account on the far side. Optional, and blank is the same as absent:

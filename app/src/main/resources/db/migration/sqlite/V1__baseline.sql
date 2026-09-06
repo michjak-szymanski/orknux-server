@@ -693,6 +693,8 @@ CREATE TABLE security_role_scope
 CREATE TABLE shell
 (
     id                           integer not null primary key autoincrement,
+    kind                         varchar(10) not null default 'SSH',
+    mcp_server_id                integer,
     name                         varchar(120) not null,
     host                         varchar(255) not null,
     port                         integer not null default 22,

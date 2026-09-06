@@ -25,6 +25,7 @@ class ShellSessionService(
     private val sessions: ShellSessionRepository,
     private val service: ShellService,
     private val client: ShellClient,
+    private val mcp: McpShellClient,
     private val properties: ShellProperties,
 ) {
 
@@ -46,20 +47,32 @@ class ShellSessionService(
         val id = UUID.randomUUID().toString().replace("-", "")
         val directory = "${properties.directoryRoot.trimEnd('/')}/$id"
 
-        val opened = client.connected(shell) { session, fingerprint ->
-            if (shell.hostKey.isNullOrBlank() && fingerprint != null) {
-                shell.hostKey = fingerprint
-                shells.save(shell)
-            }
+        val opened = when (shell.kind) {
+            ShellKind.SSH -> client.connected(shell) { session, fingerprint ->
+                if (shell.hostKey.isNullOrBlank() && fingerprint != null) {
+                    shell.hostKey = fingerprint
+                    shells.save(shell)
+                }
 
-            val made = client.run(session, makeDirectory(directory), null)
-            if (made.exitCode != 0 || !made.stdout.contains(READY)) {
-                throw ShellUnreachableException(
-                    "${shell.name} would not make a working directory at $directory: " +
-                        (made.stderr.trim().ifEmpty { made.stdout.trim() }.ifEmpty { "it said nothing" }),
-                )
+                val made = client.run(session, makeDirectory(directory), null)
+                if (made.exitCode != 0 || !made.stdout.contains(READY)) {
+                    throw ShellUnreachableException(
+                        "${shell.name} would not make a working directory at $directory: " +
+                            (made.stderr.trim().ifEmpty { made.stdout.trim() }.ifEmpty { "it said nothing" }),
+                    )
+                }
+                client.operatingSystem(session)
             }
-            client.operatingSystem(session)
+            ShellKind.MCP -> {
+                val made = mcp.run(shell, makeDirectory(directory), null)
+                if (!made.stdout.contains(READY)) {
+                    throw ShellUnreachableException(
+                        "${shell.name} would not make a working directory at $directory: " +
+                            made.stdout.trim().ifEmpty { "it said nothing" },
+                    )
+                }
+                mcp.operatingSystem(shell)
+            }
         }
 
         val stored = sessions.save(
@@ -99,7 +112,10 @@ class ShellSessionService(
         // The shell goes in because it carries the limits this command is run
         // under: the machine's own timeout and output allowance when it has
         // them, and the installation's when it has not.
-        val outcome = client.connected(shell) { open, _ -> client.run(open, command, session.directory, shell) }
+        val outcome = when (shell.kind) {
+            ShellKind.SSH -> client.connected(shell) { open, _ -> client.run(open, command, session.directory, shell) }
+            ShellKind.MCP -> mcp.run(shell, command, session.directory)
+        }
 
         session.lastUsedAt = OffsetDateTime.now()
         session.commandCount += 1
@@ -127,7 +143,10 @@ class ShellSessionService(
         val shell = shells.findByIdOrNull(session.shellId)
             ?: throw ShellUnreachableException("The shell this session was opened on has been removed")
 
-        client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
+        when (shell.kind) {
+            ShellKind.SSH -> client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
+            ShellKind.MCP -> mcp.run(shell, "rm -rf '${session.directory}'", null)
+        }
 
         session.state = ShellSessionState.CLOSED
         session.closedAt = OffsetDateTime.now()
@@ -156,7 +175,10 @@ class ShellSessionService(
         }
 
         return try {
-            client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
+            when (shell.kind) {
+            ShellKind.SSH -> client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
+            ShellKind.MCP -> mcp.run(shell, "rm -rf '${session.directory}'", null)
+        }
             session.state = ShellSessionState.EXPIRED
             session.closedAt = OffsetDateTime.now()
             sessions.save(session)

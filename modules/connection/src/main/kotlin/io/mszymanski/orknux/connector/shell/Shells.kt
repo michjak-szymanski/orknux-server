@@ -36,12 +36,38 @@ import java.time.OffsetDateTime
  * has exactly the privileges they meant to give away, and that everything run
  * through it is written down where they can read it.
  */
+/** What carries a shell's commands. The pool holds both kinds side by side. */
+enum class ShellKind { SSH, MCP }
+
 @Entity
 @Table(name = "shell")
 class Shell(
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null,
+
+    /**
+     * What carries this shell's commands: an SSH session, or an MCP server's
+     * tools on the machine itself.
+     *
+     * One pool either way. An agent is granted "may open a shell", never a
+     * machine by name, and [ShellService.choose] picks from every enabled
+     * configured shell without asking which kind it is - the kind decides the
+     * transport, not the grant. Issue #337.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 10)
+    var kind: ShellKind = ShellKind.SSH,
+
+    /**
+     * The registered MCP server an MCP shell speaks through, or null for SSH.
+     *
+     * A reference rather than an address of its own, so registration,
+     * credentials, proxy rules and the Check button are the MCP server's -
+     * built once, used here.
+     */
+    @Column(name = "mcp_server_id")
+    var mcpServerId: Long? = null,
 
     @Column(nullable = false, length = 120)
     var name: String = "",
@@ -184,7 +210,10 @@ class Shell(
 
     /** Whether there is anything to connect with. */
     val configured: Boolean
-        get() = host.isNotBlank() && !privateKey.isNullOrBlank()
+        get() = when (kind) {
+            ShellKind.SSH -> host.isNotBlank() && !privateKey.isNullOrBlank()
+            ShellKind.MCP -> mcpServerId != null
+        }
 }
 
 /**

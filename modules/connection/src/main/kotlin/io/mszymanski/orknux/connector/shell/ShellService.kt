@@ -32,6 +32,7 @@ class ShellService(
     private val shells: ShellRepository,
     private val sessions: ShellSessionRepository,
     private val client: ShellClient,
+    private val mcp: McpShellClient,
     private val probe: ConnectionProbe,
     private val properties: ShellProperties,
 ) {
@@ -59,17 +60,30 @@ class ShellService(
         if (shells.findByName(name) != null) throw ShellNameTakenException(name)
 
         val shell = shells.save(
-            Shell(
-                name = name,
-                host = validHost(input.host),
-                port = validPort(input.port),
-                username = validUsername(input.username),
-                privateKey = validKey(input.privateKey, input.keyPassphrase),
-                keyPassphrase = input.keyPassphrase?.trim()?.ifEmpty { null },
-                enabled = input.enabled ?: true,
-                commandTimeoutSeconds = validTimeout(input.commandTimeoutSeconds),
-                maxOutputBytes = validOutputBytes(input.maxOutputBytes),
-            ),
+            when (input.kind) {
+                ShellKind.SSH -> Shell(
+                    name = name,
+                    host = validHost(input.host),
+                    port = validPort(input.port),
+                    username = validUsername(input.username),
+                    privateKey = validKey(input.privateKey, input.keyPassphrase),
+                    keyPassphrase = input.keyPassphrase?.trim()?.ifEmpty { null },
+                    enabled = input.enabled ?: true,
+                    commandTimeoutSeconds = validTimeout(input.commandTimeoutSeconds),
+                    maxOutputBytes = validOutputBytes(input.maxOutputBytes),
+                )
+                // An MCP shell carries no host, key or port: its reach is the
+                // server's, which is registered and credentialed on its own page.
+                ShellKind.MCP -> Shell(
+                    name = name,
+                    kind = ShellKind.MCP,
+                    mcpServerId = input.mcpServerId
+                        ?: throw ShellAddressInvalidException("An MCP shell needs an MCP server to speak through"),
+                    enabled = input.enabled ?: true,
+                    commandTimeoutSeconds = validTimeout(input.commandTimeoutSeconds),
+                    maxOutputBytes = validOutputBytes(input.maxOutputBytes),
+                )
+            },
         )
         shell.status = if (shell.configured) ShellStatus.NOT_CHECKED else ShellStatus.NOT_CONFIGURED
         return view(shell)
@@ -88,20 +102,36 @@ class ShellService(
         val shell = shells.findByIdOrNull(id) ?: throw ShellNotFoundException(id)
         if (name != shell.name && shells.findByName(name) != null) throw ShellNameTakenException(name)
 
-        // Checked once and reused. Vetting a host resolves it, and doing that
-        // three times to answer one question is three name lookups for a form
-        // somebody pressed Save on.
-        val host = validHost(input.host)
-        val port = validPort(input.port)
-        val movedHost = shell.host != host || shell.port != port
-
         shell.name = name
-        shell.host = host
-        shell.port = port
-        shell.username = validUsername(input.username)
-        input.keyPassphrase?.let { shell.keyPassphrase = it.trim().ifEmpty { null } }
-        input.privateKey?.let { shell.privateKey = validKey(it, shell.keyPassphrase)?.ifEmpty { null } }
         input.enabled?.let { shell.enabled = it }
+
+        /*
+         * The kind is fixed at creation. An SSH shell and an MCP shell share no
+         * fields worth reinterpreting - a key is not a server id - so changing
+         * one into the other is deleting and remaking, not editing, and the form
+         * does not offer it. Everything below edits the fields of the kind it
+         * already is.
+         */
+        var movedHost = false
+        when (shell.kind) {
+            ShellKind.SSH -> {
+                // Checked once and reused. Vetting a host resolves it, and doing
+                // that three times to answer one question is three name lookups
+                // for a form somebody pressed Save on.
+                val host = validHost(input.host)
+                val port = validPort(input.port)
+                movedHost = shell.host != host || shell.port != port
+
+                shell.host = host
+                shell.port = port
+                shell.username = validUsername(input.username)
+                input.keyPassphrase?.let { shell.keyPassphrase = it.trim().ifEmpty { null } }
+                input.privateKey?.let { shell.privateKey = validKey(it, shell.keyPassphrase)?.ifEmpty { null } }
+            }
+            ShellKind.MCP -> {
+                input.mcpServerId?.let { shell.mcpServerId = it }
+            }
+        }
 
         /*
          * The limits follow the account's rule rather than the key's: absent
@@ -201,17 +231,29 @@ class ShellService(
 
         if (!shell.configured) {
             shell.status = ShellStatus.NOT_CONFIGURED
-            shell.lastCheckMessage = "No private key is stored, so there is nothing to connect with"
+            shell.lastCheckMessage = when (shell.kind) {
+                ShellKind.SSH -> "No private key is stored, so there is nothing to connect with"
+                ShellKind.MCP -> "No MCP server is chosen, so there is nothing to reach"
+            }
             return
         }
 
         try {
-            val greeting = client.connected(shell) { session, fingerprint ->
-                // Written down on the first connection that got this far, which
-                // is trust on first use: what answered then is what has to
-                // answer from now on.
-                if (shell.hostKey.isNullOrBlank() && fingerprint != null) shell.hostKey = fingerprint
-                client.operatingSystem(session)
+            val greeting = when (shell.kind) {
+                ShellKind.SSH -> client.connected(shell) { session, fingerprint ->
+                    // Written down on the first connection that got this far, which
+                    // is trust on first use: what answered then is what has to
+                    // answer from now on.
+                    if (shell.hostKey.isNullOrBlank() && fingerprint != null) shell.hostKey = fingerprint
+                    client.operatingSystem(session)
+                }
+                // The MCP server does its own reachability - address, credential,
+                // proxy rules - so a check here is a command it answers, not a
+                // handshake this owns.
+                ShellKind.MCP -> {
+                    if (!mcp.reachable(shell)) throw ShellUnreachableException("${shell.name} did not answer")
+                    mcp.operatingSystem(shell)
+                }
             }
             shell.status = ShellStatus.CONNECTED
             shell.lastCheckMessage = greeting?.let { "Connected to $it" } ?: "Connected"
@@ -373,7 +415,16 @@ class ShellService(
 
 data class ShellInput(
     val name: String,
-    val host: String,
+    /**
+     * SSH or MCP. Absent is SSH, which is what every shell was before there
+     * was a second kind, so an old client that does not send it still creates
+     * the shell it always did.
+     */
+    val kind: ShellKind = ShellKind.SSH,
+    /** The registered MCP server an MCP shell speaks through. Ignored for SSH. */
+    val mcpServerId: Long? = null,
+    /** The host an SSH shell reaches. Blank and ignored for an MCP shell. */
+    val host: String = "",
     val port: Int = 22,
     /**
      * The account on the far side, or null for the one this server runs as.
@@ -419,6 +470,10 @@ data class ShellInput(
 data class ShellView(
     val id: Long,
     val name: String,
+    /** SSH or MCP, so the screen draws it in the right list. */
+    val kind: ShellKind,
+    /** The MCP server behind an MCP shell, for the row to name; null for SSH. */
+    val mcpServerId: Long?,
     val host: String,
     val port: Int,
     /** What the administrator typed, or null when they left it out. */
@@ -464,6 +519,8 @@ data class ShellView(
     constructor(shell: Shell, properties: ShellProperties) : this(
         id = requireNotNull(shell.id),
         name = shell.name,
+        kind = shell.kind,
+        mcpServerId = shell.mcpServerId,
         host = shell.host,
         port = shell.port,
         username = shell.username,

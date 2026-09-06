@@ -50,8 +50,9 @@ class SlackPluginHost(
          * No workspace scoping, and the reason is not that it was forgotten: a
          * request names an address rather than one of the workspace's own
          * things, so there is nothing here for a workspace to be the boundary
-         * of. What bounds this is the grant and the proxy rules, which is said
-         * at length on the capability and on NetworkPluginHost.
+         * of. What bounds this is the proxy rules - and, for a plugin, the
+         * grant as well; a workspace's own function has it without asking,
+         * which is said at length on the capability and on NetworkPluginHost.
          */
         PluginCapability.NETWORK_REQUEST -> network.request(argument)
     }

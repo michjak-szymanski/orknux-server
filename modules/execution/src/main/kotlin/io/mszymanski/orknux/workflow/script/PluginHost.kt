@@ -41,8 +41,16 @@ enum class PluginCapability(
      * means bounded by something other than somebody's judgement.
      *
      * Reading a thread qualifies: it can only reach connections belonging to the
-     * workspace the run is in, which the runner takes from the run. Making a
-     * request does not: its bound is the grant, and there is nobody to give one.
+     * workspace the run is in, which the runner takes from the run.
+     *
+     * Making a request was withheld on the same reasoning - its bound is the
+     * grant, and a function has nobody to give one - and that was overruled on
+     * 2026-09-06: a function that cannot call an HTTP service cannot do most of
+     * what people write functions for, and every other way to make the call
+     * (an action, an MCP server) is a heavier thing to build and maintain for
+     * a single request. What holds it in is the installation's proxy rules,
+     * which is where an administrator decides where this server may get to, and
+     * whoever can write a function can already run code in this sandbox.
      */
     val forScripts: Boolean,
 ) {
@@ -70,7 +78,9 @@ enum class PluginCapability(
      * Three things hold it in, and none of them is the sandbox:
      *
      *   the grant   an administrator accepts it, in these words, per plugin. It
-     *               is off until somebody says otherwise
+     *               is off until somebody says otherwise - for a plugin. A
+     *               workspace's own functions have it without asking, which is
+     *               a deliberate decision and not an oversight: see `forScripts`
      *   the rules   every request goes out through `ProxyRouter`, so an
      *               installation's proxy rules govern where it gets to — the
      *               same rules an MCP call and a Slack call obey
@@ -82,7 +92,7 @@ enum class PluginCapability(
      * calling `require('net')` still cannot be installed and never will be: it
      * wants Node's socket API, and this is a function.
      */
-    NETWORK_REQUEST("Make requests to any address this server can reach", forScripts = false),
+    NETWORK_REQUEST("Make requests to any address this server can reach", forScripts = true),
 
     ;
 

@@ -98,6 +98,28 @@ class QuickChatBriefingTest(
         assertThat(briefing).contains("whole thread")
     }
 
+    /**
+     * And the way out to a network, once functions were given one.
+     *
+     * `orknux.http` is the only one there is - no `fetch`, no socket - and a
+     * model that does not know it exists answers "a function cannot call an
+     * HTTP service", which was true until 2026-09-06 and is the wrong answer
+     * now.
+     */
+    @Test
+    fun `the briefing carries the way out to a network`() {
+        ask()
+
+        val briefing = requireNotNull(received.firstOrNull())
+        assertThat(briefing).contains("orknux.http")
+        assertThat(briefing).contains("get(")
+        assertThat(briefing).contains("post(")
+        // The two that stop a model inventing `fetch` or pasting a token into a
+        // function's source.
+        assertThat(briefing).contains("no socket")
+        assertThat(briefing).contains("workspace variable")
+    }
+
     @Test
     fun `it says the shapes are all there is, so nothing else is invented`() {
         ask()

@@ -434,6 +434,10 @@ class QuickChat(
                   | { messages: SlackThreadMessage[]; replies: number; error?: undefined }
                   | { error: string; messages?: undefined; replies?: undefined };
 
+                type OrknuxResponse =
+                  | { status: number; headers: Record<string, string>; body: string; json?: unknown; error?: undefined }
+                  | { error: string };
+
                 declare const orknux: {
                   readonly slack: {
                     thread(
@@ -443,12 +447,23 @@ class QuickChat(
                       limit?: number,
                     ): SlackThread;
                   };
+                  readonly http: {
+                    request(what: string | { url: string; method?: string; headers?: Record<string, string>; body?: unknown }): OrknuxResponse;
+                    get(url: string, headers?: Record<string, string>): OrknuxResponse;
+                    post(url: string, body?: unknown, headers?: Record<string, string>): OrknuxResponse;
+                  };
                 };
                 """.trimIndent() +
                 "\nRead `error` before `messages`: a refusal is data, not a thrown error. " +
                 "`messages` is the page that was fetched and includes the parent; `replies` is Slack's own " +
                 "count of the whole thread, so it is the number to use for \"how many replies\" and " +
-                "`replies === 1` is the first one. There is nothing else on `orknux`. "
+                "`replies === 1` is the first one. " +
+                "`orknux.http` is the only way out to a network: the server makes the request and hands back " +
+                "data, so there is no `fetch` and no socket. An object body is sent as JSON and given a JSON " +
+                "content type; a JSON reply arrives parsed as `json`, beside the `body` it was parsed from. " +
+                "Read `error` first there too. A credential belongs in a workspace variable, which arrives as a " +
+                "parameter after the function's own - never written into the source. " +
+                "There is nothing else on `orknux`. "
 
         val log = LoggerFactory.getLogger(QuickChat::class.java)
     }

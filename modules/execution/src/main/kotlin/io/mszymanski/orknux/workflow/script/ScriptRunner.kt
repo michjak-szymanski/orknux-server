@@ -560,6 +560,95 @@ class ScriptRunner(
                   );
                 },
               },
+
+              http: {
+                /**
+                 * One HTTP request, made by the server on this function's
+                 * behalf.
+                 *
+                 * The function never holds a socket: it hands over a URL and
+                 * gets an answer back as data, which is what keeps this a door
+                 * rather than a network. Where it may get to is the
+                 * installation's proxy rules - the same rules a Slack call and
+                 * an MCP call obey - which this cannot see and cannot argue
+                 * with.
+                 *
+                 * Answers `{ status, headers, body }`, or `{ error }` saying
+                 * why not. A refusal is data, like every other answer here: a
+                 * condition that cannot reach a service has to be able to
+                 * decide, rather than throw and become undecidable.
+                 *
+                 * Credentials are not a thing this takes. A function is handed
+                 * its workspace's variables as parameters, so the header is
+                 * built from one of those - which keeps the value out of the
+                 * source, where it would be revision-tracked and exportable.
+                 */
+                request(what) {
+                  const host = globalThis.__orknuxHost;
+                  if (host === undefined || host.network_request === undefined) {
+                    return { error: 'this installation cannot make requests from a function' };
+                  }
+                  const asked = what === null || typeof what !== 'object' ? { url: what } : what;
+
+                  const headers = Object.assign({}, asked.headers ?? {});
+                  let body = asked.body ?? null;
+                  /*
+                   * An object body is JSON, and says so.
+                   *
+                   * Stringifying it by hand is the easy half; the header is the
+                   * half people forget, and a service answering 415 to a body
+                   * that looks perfectly good is a bad afternoon. A string body
+                   * is passed through untouched - somebody sending form-encoded
+                   * text meant it.
+                   */
+                  if (body !== null && typeof body === 'object') {
+                    body = JSON.stringify(body);
+                    const named = Object.keys(headers).some(
+                      (name) => name.toLowerCase() === 'content-type',
+                    );
+                    if (!named) headers['content-type'] = 'application/json';
+                  }
+
+                  const answer = JSON.parse(
+                    host.network_request(
+                      JSON.stringify([
+                        asked.url ?? null,
+                        (asked.method ?? 'GET').toUpperCase(),
+                        headers,
+                        body,
+                      ]),
+                    ),
+                  );
+
+                  /*
+                   * `json` beside `body`, never instead of it.
+                   *
+                   * Nearly every service answers JSON and nearly every function
+                   * wants it parsed, so parsing it here saves the same three
+                   * lines being written every time - and a reply that is not
+                   * JSON, or is JSON the service got wrong, simply has no
+                   * `json` rather than throwing. `body` is always the text that
+                   * arrived, so nothing is hidden by this.
+                   */
+                  if (answer.error === undefined && typeof answer.body === 'string') {
+                    try {
+                      answer.json = JSON.parse(answer.body);
+                    } catch (ignored) {
+                      // Not JSON. `body` still is what it is.
+                    }
+                  }
+                  return answer;
+                },
+
+                /** The two nearly everybody wants, spelled out. */
+                get(url, headers) {
+                  return globalThis.orknux.http.request({ url, method: 'GET', headers });
+                },
+
+                post(url, body, headers) {
+                  return globalThis.orknux.http.request({ url, method: 'POST', body, headers });
+                },
+              },
             };
         """.trimIndent()
 

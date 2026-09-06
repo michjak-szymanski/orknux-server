@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.action.ActionParameters
 import io.mszymanski.orknux.server.agent.AgentRepository
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
@@ -41,6 +42,9 @@ class WorkflowGraphAPI(
     private val parameters: ActionParameters,
     private val agents: AgentRepository,
     private val objects: WorkflowObjectRepository,
+    // Only for a condition node's parameters: the list is the function's, and
+    // this is where a node's mappings are resolved against a definition.
+    private val functions: WorkflowFunctionRepository,
     private val access: WorkspaceAccess,
     private val auditRecorder: WorkspaceAuditRecorder,
     private val publications: WorkflowPublicationRepository,
@@ -516,6 +520,27 @@ class WorkflowGraphAPI(
             return shape.properties
                 .map { property -> sent[property.name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = property.name) }
                 .toMutableList()
+        }
+
+        /*
+         * A condition node's parameters are the condition's function's.
+         *
+         * The declaration decides which there are, the same way an action's
+         * does: a parameter the function does not have is dropped, and one it
+         * has that the node did not fill arrives empty. A condition that asks
+         * no function - a comparison, an any-of - has none, and a node that
+         * fills nothing in keeps nothing, which is what makes the evaluator
+         * fall back to the condition's own arguments.
+         */
+        if (node.kind == NodeKind.CONDITION) {
+            val asks = node.conditionId?.let { conditions.findByIdOrNull(it) } ?: return mutableListOf()
+            val function = asks.functionId?.let { functions.findByIdOrNull(it) } ?: return mutableListOf()
+
+            val filled = function.params
+                .map { declared -> sent[declared.name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = declared.name) }
+            // Nothing filled in is nothing kept: an empty list is what the
+            // evaluator reads as "this node says nothing, use the condition's".
+            return if (filled.any { it.expression.isNotEmpty() }) filled.toMutableList() else mutableListOf()
         }
 
         if (node.kind != NodeKind.ACTION) return mutableListOf()

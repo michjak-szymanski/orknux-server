@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.workflow.execution.NodeBinding
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
@@ -55,15 +56,57 @@ class ConditionEvaluator(
      *   condition node as a reason to stop.
      */
     fun holds(condition: WorkflowCondition, input: String?): Boolean =
-        decide(condition, parse(input), raw = input, depth = 0)
+        decide(condition, parse(input), raw = input, depth = 0, passed = emptyMap(), trigger = null)
 
-    private fun decide(condition: WorkflowCondition, input: JsonNode?, raw: String?, depth: Int): Boolean {
+    /**
+     * The same question, asked by a node that says what to pass.
+     *
+     * A condition is a definition and a node is one use of it, and what to hand
+     * the function is the node's business: two nodes asking "is this the first
+     * reply" of different threads are the ordinary case, and arguments kept on
+     * the definition made them one shared answer. So the node's own bindings
+     * win where it has them.
+     *
+     * [passed] is empty for a node that fills nothing in, and then this behaves
+     * exactly as the call above: the condition's own arguments, or the whole of
+     * what the run carries. Nothing written before this changes meaning.
+     *
+     * @param passed what the node fills each declared parameter in with.
+     * @param trigger the event that started the run, so a reference may read it.
+     */
+    fun holds(
+        condition: WorkflowCondition,
+        input: String?,
+        passed: Map<String, NodeBinding>,
+        trigger: String?,
+    ): Boolean = decide(condition, parse(input), raw = input, depth = 0, passed = passed, trigger = trigger)
+
+    private fun decide(
+        condition: WorkflowCondition,
+        input: JsonNode?,
+        raw: String?,
+        depth: Int,
+        passed: Map<String, NodeBinding>,
+        trigger: String?,
+    ): Boolean {
         if (depth > MAX_DEPTH) throw ConditionNotDecidableException("${condition.name} nests too deeply")
 
         val answer = when (condition.type) {
-            ConditionType.ANY_OF -> members(condition).any { decide(it, input, raw, depth + 1) }
-            ConditionType.ALL_OF -> members(condition).all { decide(it, input, raw, depth + 1) }
-            ConditionType.FUNCTION -> ask(condition, raw)
+            /*
+             * The members decide for themselves. What a node passes is named
+             * for the parameters of *this* condition's function, and a member
+             * is a different condition with a different function - so handing
+             * them down would fill one function's parameters with another's
+             * names. They fall back to their own arguments, which is what they
+             * had before.
+             */
+            ConditionType.ANY_OF ->
+                members(condition).any { decide(it, input, raw, depth + 1, emptyMap(), trigger) }
+
+            ConditionType.ALL_OF ->
+                members(condition).all { decide(it, input, raw, depth + 1, emptyMap(), trigger) }
+
+            ConditionType.FUNCTION -> ask(condition, raw, passed, trigger)
             else -> test(condition, input)
         }
         return answer != condition.negate
@@ -86,13 +129,43 @@ class ConditionEvaluator(
     }
 
     /**
+     * One of the node's bindings, as the JSON to hand the function.
+     *
+     * A written value is that text, as a string. A reference reads the field it
+     * names out of what the run carries, or out of the event that started it
+     * where the name begins `trigger.` - and it keeps the type it finds, so a
+     * number arrives as a number. A field that is not there is `null`, the same
+     * answer `reference` gives, because a condition asking about a thread on a
+     * message that has none should decide rather than fail.
+     */
+    private fun jsonFor(binding: NodeBinding, input: String?, trigger: String?): String {
+        if (!binding.reference) return mapper.writeValueAsString(binding.expression)
+
+        val steps = binding.expression.trim().split('.').filter { it.isNotEmpty() }
+        val fromTrigger = steps.firstOrNull() == TRIGGER
+        val source = if (fromTrigger) trigger else input
+        val path = if (fromTrigger) steps.drop(1) else steps
+
+        val carried = runCatching { mapper.readTree(source ?: "null") }.getOrNull() ?: return "null"
+        val found = path.fold<String, JsonNode?>(carried) { held, step ->
+            if (held == null || !held.isObject) null else held.get(step)
+        }
+        return found?.toString() ?: "null"
+    }
+
+    /**
      * Runs the workspace's function in the sandbox and takes its answer.
      *
      * The function is handed what the run is carrying, and has to say true or
      * false: a condition that answered `"maybe"` is a condition nobody can act
      * on, so anything else is refused rather than guessed at.
      */
-    private fun ask(condition: WorkflowCondition, input: String?): Boolean {
+    private fun ask(
+        condition: WorkflowCondition,
+        input: String?,
+        passed: Map<String, NodeBinding>,
+        trigger: String?,
+    ): Boolean {
         val function = condition.functionId?.let { functions.findByIdOrNull(it) }
             ?: throw ConditionNotDecidableException("${condition.name} names a function that has been deleted")
 
@@ -110,10 +183,27 @@ class ConditionEvaluator(
          * The workspace's values come last either way, because that is where a
          * function declares them and where its declaration expects them.
          */
-        val written = condition.arguments.map { argument ->
-            when (argument.mode) {
-                MappingMode.VALUE -> mapper.writeValueAsString(argument.expression)
-                MappingMode.REFERENCE -> reference(argument.expression, input)
+        /*
+         * The node's, in the order the function declares - a map says which
+         * parameter, and only the declaration says which position. A parameter
+         * the node leaves out is passed as null rather than shifting the ones
+         * after it along.
+         */
+        val fromNode = if (passed.isEmpty()) {
+            emptyList()
+        } else {
+            function.params.map { declared ->
+                val binding = passed[declared.name] ?: return@map "null"
+                jsonFor(binding, input, trigger)
+            }
+        }
+
+        val written = fromNode.ifEmpty {
+            condition.arguments.map { argument ->
+                when (argument.mode) {
+                    MappingMode.VALUE -> mapper.writeValueAsString(argument.expression)
+                    MappingMode.REFERENCE -> reference(argument.expression, input)
+                }
             }
         }
         val arguments = written.ifEmpty { listOf(input ?: "null") } + externals.of(function)
@@ -332,6 +422,9 @@ class ConditionEvaluator(
 
         /** A composite of composites is fine; a hundred of them is a mistake. */
         const val MAX_DEPTH = 10
+
+        /** The name a reference starts with to read the event rather than the input. */
+        const val TRIGGER = "trigger"
 
         /**
          * The longest pattern MATCHES will run. `workflow_condition_value.value`

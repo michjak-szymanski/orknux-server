@@ -101,6 +101,98 @@ class WorkflowGraphAPITest(
             .path("workflowGraph.edges").entityList(String::class.java).hasSize(0)
     }
 
+    /**
+     * A condition node keeps what it fills its condition's parameters in with.
+     *
+     * The parameters used to live on the condition, which made them one shared
+     * list: two nodes asking the same question about different fields had to be
+     * two conditions. They are the node's now, and this is the half that made
+     * the panel look broken - the rows were drawn, the values were typed, and
+     * the save dropped them because every kind but ACTION, AGENT, SESSION and
+     * OBJECT kept nothing.
+     */
+    @Test
+    fun `a condition node keeps what it passes to its function`() {
+        val conditionId = functionCondition()
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{
+                  key: "asks", kind: CONDITION, name: "Is it over?", conditionId: $conditionId, x: 0, y: 0,
+                  mappings: [{ name: "count", expression: "replies", mode: REFERENCE }]
+                }],
+                edges: []
+              }) { nodes { key mappings { name expression mode } } }
+            }
+            """,
+        ).execute()
+            .path("saveWorkflowGraph.nodes[0].mappings[0].name").entity(String::class.java).isEqualTo("count")
+            .path("saveWorkflowGraph.nodes[0].mappings[0].expression").entity(String::class.java).isEqualTo("replies")
+            .path("saveWorkflowGraph.nodes[0].mappings[0].mode").entity(String::class.java).isEqualTo("REFERENCE")
+
+        // And it is still there when the graph is read back, which is where it
+        // went missing: the panel drew the rows and reopening emptied them.
+        graphQlTester.document(
+            """query { workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                 nodes { mappings { name expression } } } }""",
+        ).execute()
+            .path("workflowGraph.nodes[0].mappings[0].expression").entity(String::class.java).isEqualTo("replies")
+    }
+
+    /**
+     * A node that fills nothing in keeps nothing.
+     *
+     * That empty list is what the evaluator reads as "this node says nothing",
+     * and it is why a graph drawn before any of this goes on meaning what it
+     * meant: the condition's own arguments are still used.
+     */
+    @Test
+    fun `a condition node that fills nothing in stores no mappings`() {
+        val conditionId = functionCondition()
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{
+                  key: "asks", kind: CONDITION, name: "Is it over?", conditionId: $conditionId, x: 0, y: 0,
+                  mappings: [{ name: "count", expression: "", mode: VALUE }]
+                }],
+                edges: []
+              }) { nodes { mappings { name } } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].mappings").entityList(String::class.java).hasSize(0)
+    }
+
+    /** A condition that asks a function taking one declared parameter. */
+    private fun functionCondition(): Long {
+        val functionId = graphQlTester.document(
+            """
+            mutation {
+              createFunction(input: {
+                workspaceId: $workspaceId, name: "isOver", returnType: BOOLEAN,
+                params: [{ name: "count", type: NUMBER }],
+                source: "export default async function isOver(count) { return count > 1; }",
+                typescript: "export default async function isOver(count: number) { return count > 1; }"
+              }) { id }
+            }
+            """,
+        ).execute().path("createFunction.id").entity(Long::class.java).get()
+
+        return graphQlTester.document(
+            """
+            mutation {
+              createCondition(input: {
+                workspaceId: $workspaceId, name: "Is it over?", type: FUNCTION, functionId: $functionId
+              }) { id }
+            }
+            """,
+        ).execute().path("createCondition.id").entity(Long::class.java).get()
+    }
+
     /** One catalogue entry, of the scheduled kind, which needs no connection. */
     private fun trigger(workspace: Long, name: String): Long = graphQlTester.document(
         """

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.condition
 
+import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
 import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
@@ -31,6 +32,7 @@ import org.springframework.stereotype.Component
 class ConditionNodeRunner(
     private val conditions: WorkflowConditionRepository,
     private val evaluator: ConditionEvaluator,
+    private val expressions: NodeExpressions,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.CONDITION
@@ -41,8 +43,19 @@ class ConditionNodeRunner(
         val condition = conditions.findByIdOrNull(conditionId)
             ?: return StepResult(StepStatus.SKIPPED, "The condition ${step.name} asks has been deleted.")
 
+        /*
+         * What this node fills the condition's parameters in with.
+         *
+         * The condition is the question and the node is one asking of it, so
+         * the fields to look at are the node's: two nodes asking "is this the
+         * first reply" about different threads is the ordinary case. Empty for
+         * a node that fills nothing in, and the evaluator then falls back to
+         * the condition's own arguments exactly as before.
+         */
+        val passed = expressions.mappingsOf(step)
+
         val holds = try {
-            evaluator.holds(condition, input)
+            evaluator.holds(condition, input, passed, trigger)
         } catch (failure: ConditionNotDecidableException) {
             /*
              * A question that cannot be answered is not a run that failed; it

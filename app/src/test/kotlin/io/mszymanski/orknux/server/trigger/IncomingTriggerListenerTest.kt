@@ -235,6 +235,47 @@ class IncomingTriggerListenerTest(
     }
 
     /**
+     * A firing that started some of what it fired at still says which.
+     *
+     * Only the all-started branch was logged, so a trigger pointing at three
+     * workflows of which two are unpublished printed a line per refusal and
+     * nothing at all about the one that ran - a run that happened looked like a
+     * run that did not. Reported from a real log on 2026-09-06.
+     */
+    @Test
+    fun `a partly started firing names what it did start`() {
+        val trigger = createTrigger("Slack Partial Handler", "MENTION")
+        instance(workflowId, trigger)
+
+        // A second workflow it also fires at, switched off in this workspace, so
+        // the firing can only ever start one of the two - which is the shape a
+        // real log showed: three assigned, two of them not startable.
+        val off = graphQlTester.document(
+            """mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "Switched Off" }) { workflowId } }""",
+        ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
+        instance(off, trigger)
+
+        val assignment = graphQlTester.document(
+            """query { workspaceWorkflows(workspaceId: $workspaceId, page: 0, size: 50) { content { id workflowId } } }""",
+        ).execute().path("workspaceWorkflows.content").entityList(Map::class.java).get()
+            .first { (it["workflowId"] as String).toLong() == off }["id"] as String
+        graphQlTester.document(
+            """mutation { setWorkflowEnabled(id: $assignment, enabled: false) { id } }""",
+        ).execute().path("setWorkflowEnabled.id").hasValue()
+
+        publisher.publishEvent(mention())
+
+        val detail = graphQlTester
+            .document("""query { triggerFirings(triggerId: $trigger) { content { detail runsStarted } } }""")
+            .execute()
+            .path("triggerFirings.content[0].detail").entity(String::class.java).get()
+
+        // The one that ran is named, beside the reason the other did not.
+        assertThat(detail).contains("Incident Response")
+        assertThat(detail).contains("Started 1 of 2")
+    }
+
+    /**
      * A condition on the trigger decides before a run exists.
      *
      * The alternative is a condition node inside the workflow, which only

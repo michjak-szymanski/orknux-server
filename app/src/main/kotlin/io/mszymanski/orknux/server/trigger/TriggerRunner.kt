@@ -145,17 +145,28 @@ class TriggerRunner(
              * them nothing they can act on - the reason exists, it was simply
              * being swallowed here.
              */
-            record(
-                trigger,
-                FiringOutcome.FAILED,
-                // The ones that did run are named here too, for the same
-                // reason: "started 1 of 3" is read by somebody working out
-                // which one of the three it was.
-                "Started $started of ${assigned.size}: " +
-                    (if (started > 0) "$names; " else "") +
-                    refusals.joinToString("; "),
-                started,
-            )
+            // The ones that did run are named here too, for the same reason:
+            // "started 1 of 3" is read by somebody working out which of the
+            // three it was.
+            val detail = "Started $started of ${assigned.size}: " +
+                (if (started > 0) "$names; " else "") +
+                refusals.joinToString("; ")
+
+            /*
+             * Said out loud, which it was not.
+             *
+             * Only the all-started branch logged, so a trigger that started one
+             * workflow of three said nothing about the one - the reader got a
+             * line per refusal and no line for the thing that actually ran, and
+             * a run that happened looked like a run that did not. The record
+             * carried it all along; the log is where somebody is looking.
+             */
+            if (started > 0) {
+                log.info("Trigger {} started {} of {}: {}", trigger.name, started, assigned.size, names)
+            }
+            log.info("Trigger {} did not start everything it fired at: {}", trigger.name, detail)
+
+            record(trigger, FiringOutcome.FAILED, detail, started)
         }
         return started
     }

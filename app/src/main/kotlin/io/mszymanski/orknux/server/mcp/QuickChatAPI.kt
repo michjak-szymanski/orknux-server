@@ -346,6 +346,22 @@ class QuickChat(
             },
         )
         /*
+         * What the sandbox *does* give them, after the long list of what it does
+         * not.
+         *
+         * A model that knows only the prohibitions still has to guess at the one
+         * thing that is there, and it guessed wrong: asked how to count the
+         * messages in a Slack thread it said to take `messages.length`, which is
+         * the length of the page that was fetched and counts the parent, when
+         * the answer is `replies` — Slack's own count of the whole thread. The
+         * editor has known this shape all along; the panel beside it did not.
+         *
+         * The declarations rather than a description of them, because the shape
+         * is the answer: `messages` and `replies` are both there and picking
+         * between them is the whole question.
+         */
+        append(HOST_CALLS)
+        /*
          * Said as well as enforced. The scope already withholds the tool, so a
          * model told nothing would offer to start a workflow and then fail —
          * and where it may, being told saves it from refusing out of caution.
@@ -388,6 +404,51 @@ class QuickChat(
 
         /** The name every line this loop writes stands under. */
         const val QUICK_CHAT = "Quick chat"
+
+        /**
+         * The one thing the sandbox provides, as the editor declares it.
+         *
+         * A second copy of what `orknux-ui/src/components/monaco.ts` feeds the
+         * editor, and the shapes have to say the same thing: a panel that
+         * described a different `orknux` from the one autocompleting under it
+         * would be worse than the panel that described none. Kept to the shapes
+         * and the signature - the prose around them in that file is for somebody
+         * reading it, and this is for a model that has two sentences of answer
+         * to give.
+         *
+         * `QuickChatBriefingTest` pins what a change here must not lose.
+         */
+        val HOST_CALLS =
+            "\n\nThe sandbox provides exactly one thing beyond the language, and this is its whole surface:\n" +
+                """
+                type OrknuxConnectionRef = SlackConnection | number | string;
+
+                type SlackThreadMessage = {
+                  readonly ts: string;      // Slack's timestamp, and the message's id
+                  readonly user: string;
+                  readonly text: string;
+                  readonly parent: boolean; // the message the thread hangs off, not a reply
+                };
+
+                type SlackThread =
+                  | { messages: SlackThreadMessage[]; replies: number; error?: undefined }
+                  | { error: string; messages?: undefined; replies?: undefined };
+
+                declare const orknux: {
+                  readonly slack: {
+                    thread(
+                      connection: OrknuxConnectionRef,
+                      channel: string,
+                      threadTs: string,
+                      limit?: number,
+                    ): SlackThread;
+                  };
+                };
+                """.trimIndent() +
+                "\nRead `error` before `messages`: a refusal is data, not a thrown error. " +
+                "`messages` is the page that was fetched and includes the parent; `replies` is Slack's own " +
+                "count of the whole thread, so it is the number to use for \"how many replies\" and " +
+                "`replies === 1` is the first one. There is nothing else on `orknux`. "
 
         val log = LoggerFactory.getLogger(QuickChat::class.java)
     }

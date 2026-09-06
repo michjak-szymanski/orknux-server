@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.attachment
 
+import io.mszymanski.orknux.server.workflow.ExecutionRetentionProperties
 import io.mszymanski.orknux.server.chat.ChatProperties
 import io.mszymanski.orknux.server.graphql.Refusal
 import io.mszymanski.orknux.server.monitoring.MetricsProperties
@@ -55,6 +56,7 @@ object SettingNames {
     const val CHAT_ENABLED = "chat.enabled"
     const val METRICS_ANONYMOUS = "metrics.anonymous"
     const val REVISION_RETENTION_DAYS = "revision.retention.days"
+    const val EXECUTION_RETENTION_DAYS = "execution.retention.days"
     const val TASK_SWEEP_MINUTES = "task.sweep.minutes"
 }
 
@@ -74,6 +76,7 @@ class InstallationSettings(
     private val metrics: MetricsProperties,
     private val revisions: RevisionProperties,
     private val tasks: TaskSweepProperties,
+    private val runs: ExecutionRetentionProperties,
     /**
      * Which engine is carrying tasks, read as the container reads it.
      *
@@ -184,6 +187,36 @@ class InstallationSettings(
 
     /** What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS. */
     fun revisionRetentionDaysConfigured(): Int = revisions.retentionDays
+
+    /**
+     * How many days of finished runs are kept.
+     *
+     * The same bargain as the setting above - the file is where a fresh
+     * installation starts, the screen is the answer from then on - and the same
+     * bounds, so one retention screen governs both. What differs is the
+     * default: a revision is a copy of source nobody reads twice, a run is the
+     * record of something that happened, and the questions asked of it are
+     * asked weeks later. Issue #167.
+     */
+    fun executionRetentionDays(): Int {
+        val held = settings.findByIdOrNull(SettingNames.EXECUTION_RETENTION_DAYS) ?: return runs.retentionDays
+        return held.value.toIntOrNull()?.takeIf { it in MIN_RETENTION_DAYS..MAX_RETENTION_DAYS }
+            ?: runs.retentionDays
+    }
+
+    /** What a fresh installation would keep - ORKNUX_EXECUTION_RETENTION_DAYS. */
+    fun executionRetentionDaysConfigured(): Int = runs.retentionDays
+
+    @Transactional
+    fun setExecutionRetentionDays(days: Int, by: String) {
+        if (days !in MIN_RETENTION_DAYS..MAX_RETENTION_DAYS) throw RetentionOutOfRangeException(days)
+        val held = settings.findByIdOrNull(SettingNames.EXECUTION_RETENTION_DAYS)
+            ?: InstallationSetting(name = SettingNames.EXECUTION_RETENTION_DAYS)
+        held.value = days.toString()
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = by
+        settings.save(held)
+    }
 
     @Transactional
     fun setRevisionRetentionDays(days: Int, by: String) {

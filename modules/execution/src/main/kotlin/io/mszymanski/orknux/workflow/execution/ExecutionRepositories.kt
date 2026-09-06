@@ -4,6 +4,7 @@ import org.springframework.data.jpa.domain.Specification
 import java.time.OffsetDateTime
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor
+import org.springframework.data.jpa.repository.Modifying
 import org.springframework.data.jpa.repository.Query
 
 interface WorkflowExecutionRepository :
@@ -36,6 +37,35 @@ interface WorkflowExecutionRepository :
         """,
     )
     fun workflowsRun(workspaceId: Long): List<RanWorkflow>
+    /**
+     * The runs a retention sweep may take.
+     *
+     * Ids rather than entities: a sweep deletes by id in batches, and loading a
+     * run to throw it away would read its whole payload first.
+     *
+     * **A run still going is never a candidate.** `finishedAt` is null while it
+     * is running, so measuring from it excludes them by construction - and the
+     * status is asked for as well, because a run left with no finish by a crash
+     * would otherwise be immortal.
+     */
+    @Query(
+        """
+        select e.id from WorkflowExecution e
+        where e.finishedAt < :before
+          and e.status <> io.mszymanski.orknux.workflow.execution.ExecutionStatus.RUNNING
+        """,
+    )
+    fun idsFinishedBefore(before: OffsetDateTime): List<Long>
+
+    /**
+     * Every run of a workspace, for when the workspace itself is deleted.
+     *
+     * `workflow_execution` carries no foreign key on the workspace - the table
+     * belongs to another module - so nothing cascades, and without this the
+     * rows stay for ever, unreachable by any query the product can make.
+     */
+    @Query("select e.id from WorkflowExecution e where e.workspaceId = :workspaceId")
+    fun idsOfWorkspace(workspaceId: Long): List<Long>
 }
 
 /** One row of [WorkflowExecutionRepository.workflowsRun]. */
@@ -43,15 +73,32 @@ interface RanWorkflow {
     val workflowId: Long
     val workflowName: String
     val lastRunAt: OffsetDateTime
+
 }
 
 interface ExecutionStepRepository : JpaRepository<ExecutionStep, Long> {
     fun findByExecutionIdOrderByOrderAsc(executionId: Long): List<ExecutionStep>
     fun findByExecutionIdAndNodeKey(executionId: Long, nodeKey: String): ExecutionStep?
+
+    /**
+     * Goes with the runs it belongs to; nothing here cascades on its own.
+     *
+     * One statement rather than Spring Data's derived delete, which loads every
+     * row and deletes them one at a time - and then argues with the persistence
+     * context about rows it has already removed.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from ExecutionStep s where s.executionId in :executionIds")
+    fun deleteByExecutionIdIn(executionIds: Collection<Long>): Int
 }
 
 interface ExecutionLogRepository : JpaRepository<ExecutionLog, Long> {
     fun findByExecutionIdOrderBySequenceAsc(executionId: Long): List<ExecutionLog>
+
+    /** The same: a log line outlives its run only if somebody forgets it. */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("delete from ExecutionLog l where l.executionId in :executionIds")
+    fun deleteByExecutionIdIn(executionIds: Collection<Long>): Int
 
     /** The next line's sequence number; see [RunLogger] for why it is read, not counted. */
     fun countByExecutionId(executionId: Long): Int

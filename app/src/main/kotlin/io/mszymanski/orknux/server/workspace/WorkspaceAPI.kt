@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.workspace
 
+import org.slf4j.LoggerFactory
+import io.mszymanski.orknux.server.workflow.ExecutionSweeper
 import io.mszymanski.orknux.connector.connection.WorkspaceLifecycleService
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.issue.IssueType
@@ -33,6 +35,7 @@ class WorkspaceAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
     private val access: WorkspaceAccess,
     private val connections: WorkspaceLifecycleService,
+    private val executions: ExecutionSweeper,
     private val models: ModelService,
     private val budgets: SessionMemoryBudgets,
     private val issueTypes: IssueTypeRepository,
@@ -41,6 +44,8 @@ class WorkspaceAPI(
     /** Only to say how long a script may run where the workspace has not said. */
     private val scriptProperties: ScriptProperties,
 ) {
+
+    private val log = LoggerFactory.getLogger(javaClass)
 
     /**
      * Non-admins only see workspaces whose directory group they belong to. The filter
@@ -683,6 +688,11 @@ class WorkspaceAPI(
         // workspace_connection has no foreign key to workspace — the module owns its own
         // tables — so what was held for this workspace is dropped explicitly.
         connections.forgetWorkspace(id)
+        // And its run history, for the same reason and with the same shape:
+        // workflow_execution carries no foreign key on the workspace either, so
+        // without this the rows stay for ever, reachable by nothing. Issue #167.
+        val runs = executions.forgetWorkspace(id)
+        if (runs > 0) log.info("Forgot {} runs belonging to workspace {}", runs, id)
         auditRecorder.record(
             workspaceId = id,
             operationType = WorkspaceOperationType.REMOVE,

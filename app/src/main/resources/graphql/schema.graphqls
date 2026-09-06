@@ -788,6 +788,7 @@ type Mutation {
     this is the number that decides how much disk the history takes.
     """
     setRevisionRetentionDays(days: Int!): InstallationSettings!
+    setExecutionRetentionDays(days: Int!): InstallationSettings!
     """
     How long a task may sit queued before something hands it over again.
 
@@ -4485,6 +4486,8 @@ type InstallationSettings {
     revisionRetentionDays: Int!
     "What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS."
     revisionRetentionDaysConfigured: Int!
+    executionRetentionDays: Int!
+    executionRetentionDaysConfigured: Int!
     """
     How many minutes a task may sit queued before something hands it over again.
 

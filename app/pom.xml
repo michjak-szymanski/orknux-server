@@ -308,6 +308,10 @@
                              calls the sweep itself. The bean is still built, which is
                              what lets it. -->
                         <orknux.revision.sweep-enabled>false</orknux.revision.sweep-enabled>
+                        <!-- And run history, for the same reason: no clock may
+                             delete a row while a test is looking at it. The
+                             sweeper is still built, so a test can call it. -->
+                        <orknux.execution.retention.sweep-enabled>false</orknux.execution.retention.sweep-enabled>
                         <!-- And no clock hands a task to a worker mid-suite;
                              TaskSweepTest calls the sweep itself. Same bargain:
                              the bean is still built, which is what lets it. -->

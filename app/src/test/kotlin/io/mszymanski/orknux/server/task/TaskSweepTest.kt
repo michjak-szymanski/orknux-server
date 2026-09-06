@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.task
 
+import io.mszymanski.orknux.server.workflow.ExecutionRetentionProperties
 import io.mszymanski.orknux.connector.model.LlmModel
 import io.mszymanski.orknux.connector.model.LlmModelRepository
 import io.mszymanski.orknux.connector.model.ModelProvider
@@ -311,6 +312,9 @@ class TaskSweepTest(
         MetricsProperties(),
         RevisionProperties(),
         TaskSweepProperties(),
+        // Run retention, which this test says nothing about - the defaults are
+        // what a fresh installation has.
+        ExecutionRetentionProperties(),
         temporalEnabled = true,
     )
 

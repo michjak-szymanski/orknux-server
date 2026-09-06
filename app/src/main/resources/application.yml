@@ -495,6 +495,18 @@ orknux:
     # this installation wrote itself.
     log-level: ${ORKNUX_PLUGIN_LOG_LEVEL:info}
   execution:
+    retention:
+      # How long a finished run is kept. Ninety days rather than the fourteen a
+      # component's history gets: a revision is a copy of source nobody reads
+      # twice, a run is the record of something that happened, and the questions
+      # asked of it are asked weeks later. The file is where a fresh
+      # installation starts; Admin -> Settings is the answer from then on.
+      #
+      # A run still going is never swept, whatever the clock says.
+      retention-days: ${ORKNUX_EXECUTION_RETENTION_DAYS:90}
+      # False sweeps nothing on a timer, which is what the suite sets so that no
+      # clock deletes a row in the middle of a test.
+      sweep-enabled: ${ORKNUX_EXECUTION_SWEEP_ENABLED:true}
     inline:
       # Only the inline engine. It waits out a parked step on the thread
       # carrying the run, so a run may spend this long waiting in total before

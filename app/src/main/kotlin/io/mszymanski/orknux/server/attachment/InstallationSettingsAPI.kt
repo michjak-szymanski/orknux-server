@@ -40,6 +40,8 @@ class InstallationSettingsAPI(
         metricsAnonymousConfigured = settings.metricsAnonymousConfigured(),
         revisionRetentionDays = settings.revisionRetentionDays(),
         revisionRetentionDaysConfigured = settings.revisionRetentionDaysConfigured(),
+        executionRetentionDays = settings.executionRetentionDays(),
+        executionRetentionDaysConfigured = settings.executionRetentionDaysConfigured(),
         taskSweepMinutes = settings.taskSweepMinutes(),
         taskSweepMinutesConfigured = settings.taskSweepMinutesConfigured(),
         taskSweepConfigurable = settings.taskSweepConfigurable(),
@@ -121,6 +123,29 @@ class InstallationSettingsAPI(
     }
 
     /**
+     * How long a finished run is kept before a sweep takes it.
+     *
+     * An administrator's for the same reason the setting above is: it decides
+     * how large `workflow_execution` and its steps get, and nothing deleted a
+     * run before this existed at all. Issue #167.
+     *
+     * A run still going is never swept, whatever this says, so the number is
+     * about history rather than about anything in flight.
+     */
+    @MutationMapping
+    fun setExecutionRetentionDays(@Argument days: Int): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setExecutionRetentionDays(days, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Run history kept for $days days",
+        )
+        return installationSettings()
+    }
+
+    /**
      * How long a task may sit queued before something hands it over again.
      *
      * Gated like the chat and attachment switches — what the screen does not
@@ -188,6 +213,9 @@ data class InstallationSettingsView(
     val revisionRetentionDays: Int,
     /** What a fresh installation would keep - ORKNUX_REVISION_RETENTION_DAYS. */
     val revisionRetentionDaysConfigured: Int,
+    /** How long a finished run is kept, and what a fresh installation would keep. */
+    val executionRetentionDays: Int,
+    val executionRetentionDaysConfigured: Int,
     /**
      * How many minutes a task may sit queued before something hands it over
      * again.

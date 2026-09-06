@@ -241,14 +241,17 @@ The README's **Publishing** section is the rest.
 ## What a workspace's code may do
 
 A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
-files, no network and no threads. These bound what it can spend. Memory is
-bounded too, without a variable: a call still allocating while the heap stays
-nearly full after a collection is stopped, so no script can take the server down.
+files, no sockets and no threads. One global, `orknux`, is all it can reach
+outside: the server makes the call, so a function's HTTP request obeys this
+installation's proxy rules. Memory is bounded without a variable - a call still
+allocating while the heap stays nearly full after a collection is stopped.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
 | `ORKNUX_SCRIPT_TIMEOUT_MILLIS` | A function or tool that runs longer is stopped. | `5000` | No |
 | `ORKNUX_SCRIPT_STATEMENT_LIMIT` | How many statements one may execute - what catches a loop that never ends. | `5000000` | No |
+| `ORKNUX_SCRIPT_LOG_LEVEL` | The lowest level `orknux.log` keeps, decided inside the sandbox: `debug`, `info`, `warn`, `error`, `off`. | `info` | No |
+| `ORKNUX_PLUGIN_LOG_LEVEL` | The same, for plugins. Separate so debugging one does not turn up every function. | `info` | No |
 | `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same, for a plugin, which is a bundle and takes longer to load. | `10000` | No |
 | `ORKNUX_PLUGIN_STATEMENT_LIMIT` | The same, for a plugin. | `10000000` | No |
 | `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | How long a workflow's own HTTP request may take. | `30` | No |

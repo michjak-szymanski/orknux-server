@@ -63,6 +63,14 @@ class PluginRunner(
      */
     private val contract: String by lazy {
         CONTRACT
+            .replace(
+                "%SLACK%",
+                HostHelpers.slack(
+                    "this plugin was not granted SLACK_READ_THREAD",
+                    "this plugin was not granted SLACK_POST_MESSAGE",
+                    "this plugin was not granted SLACK_ADD_REACTION",
+                ).prependIndent("  "),
+            )
             .replace("%HTTP%", HostHelpers.http("this plugin was not granted NETWORK_REQUEST").prependIndent("  "))
             .replace("%LOG%", HostHelpers.log(HostHelpers.threshold(properties.logLevel)).prependIndent("  "))
     }
@@ -707,33 +715,7 @@ class PluginRunner(
              * from.
              */
             globalThis.orknux = {
-              slack: {
-                /**
-                 * The messages in one Slack thread, oldest first.
-                 *
-                 * Takes the connection the workspace pointed this plugin at - or
-                 * the one a trigger says its event arrived on - so a workspace
-                 * with two Slacks reads the right one.
-                 *
-                 * Answers `{ messages: [{ ts, user, text, parent }], replies }`,
-                 * or `{ error }` saying why not. A refusal is data rather than a
-                 * thrown error because a plugin has to be able to say something
-                 * useful about it.
-                 */
-                thread(connection, channel, threadTs, limit) {
-                  const host = globalThis.__orknuxHost;
-                  if (host === undefined || host.slack_read_thread === undefined) {
-                    return { error: 'this plugin was not granted SLACK_READ_THREAD' };
-                  }
-                  const id = connection === null || typeof connection !== 'object'
-                    ? connection
-                    : connection.id;
-                  return JSON.parse(
-                    host.slack_read_thread(JSON.stringify([id, channel, threadTs, limit ?? null])),
-                  );
-                },
-              },
-
+%SLACK%
 %HTTP%
 %LOG%
             };

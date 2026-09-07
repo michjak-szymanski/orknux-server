@@ -552,6 +552,16 @@ class PluginUploadAPI(
                   replies?: undefined;
                 };
 
+            /** A message that was posted - its channel and its own `ts` - or why not. */
+            type SlackPost =
+              | { channel: string; ts: string | null; error?: undefined }
+              | { error: string; channel?: undefined; ts?: undefined };
+
+            /** Whether a reaction went on. Already-reacted counts as ok. */
+            type SlackReaction =
+              | { ok: true; error?: undefined }
+              | { error: string; ok?: undefined };
+
             /**
              * What the server will do on a plugin's behalf.
              *
@@ -587,6 +597,41 @@ class PluginUploadAPI(
                   threadTs: string,
                   limit?: number,
                 ): SlackThread;
+
+                /**
+                 * Post a message through a connection the plugin was given.
+                 *
+                 * Needs the `SLACK_POST_MESSAGE` capability.
+                 *
+                 * @param connection which Slack to post through.
+                 * @param channel the channel id, or a `#name`/`@handle` it resolves.
+                 * @param text what to say.
+                 * @param threadTs when set, the message joins that thread. The
+                 *   answer's `ts` is the new message's own timestamp, which
+                 *   `react` hangs on and a reply threads onto.
+                 */
+                post(
+                  connection: SlackConnection,
+                  channel: string,
+                  text: string,
+                  threadTs?: string,
+                ): SlackPost;
+
+                /**
+                 * Add an emoji reaction to a message.
+                 *
+                 * Needs the `SLACK_ADD_REACTION` capability.
+                 *
+                 * @param ts the message's own `ts` - `post` returns one, and
+                 *   every thread message carries one.
+                 * @param emoji the short name, with or without the colons.
+                 */
+                react(
+                  connection: SlackConnection,
+                  channel: string,
+                  ts: string,
+                  emoji: string,
+                ): SlackReaction;
               };
 
               http: {

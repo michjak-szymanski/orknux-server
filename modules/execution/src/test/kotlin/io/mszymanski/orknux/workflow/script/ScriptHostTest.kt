@@ -67,6 +67,40 @@ class ScriptHostTest {
         })
     }
 
+    @Test
+    fun `a function can post a message through the server`() {
+        val poster = """
+            export default function post(channel) {
+              return orknux.slack.post({ id: 7, type: 'SLACK' }, channel, 'hi', '1.0');
+            }
+        """.trimIndent()
+
+        runner.call(poster, "post", listOf("\"#general\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_POST_MESSAGE)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"#general","hi","1.0"]""")
+        })
+    }
+
+    @Test
+    fun `a function can add a reaction through the server`() {
+        val reactor = """
+            export default function react(channel) {
+              return orknux.slack.react({ id: 7, type: 'SLACK' }, channel, '1.0', 'thumbsup');
+            }
+        """.trimIndent()
+
+        runner.call(reactor, "react", listOf("\"#general\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_ADD_REACTION)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"#general","1.0","thumbsup"]""")
+        })
+    }
+
     /** With no host wired, the helper is still there and says so in a sentence. */
     @Test
     fun `a script where the door is not wired is told, rather than thrown at`() {

@@ -65,6 +65,26 @@ enum class PluginCapability(
     SLACK_READ_THREAD("Read a Slack thread, through a connection it was given", forScripts = true),
 
     /**
+     * Post a message through one of the workspace's Slack connections.
+     *
+     * A write, and still `forScripts` - narrower than the HTTP a function
+     * already has, which can post to Slack's own API directly. This can only
+     * reach a connection the workspace was given, scoped by the run the way
+     * reading a thread is, so what bounds it is the same boundary and not a
+     * grant. The connection comes from a parameter somebody filled in.
+     */
+    SLACK_POST_MESSAGE("Post a Slack message, through a connection it was given", forScripts = true),
+
+    /**
+     * Add an emoji reaction to a Slack message.
+     *
+     * The same reasoning as posting: a write, scoped to a connection the
+     * workspace was given, narrower than the request capability a function
+     * already carries.
+     */
+    SLACK_ADD_REACTION("Add a Slack reaction, through a connection it was given", forScripts = true),
+
+    /**
      * Make an HTTP request, to an address of the plugin's choosing.
      *
      * **The widest thing on this list, and the summary says so** — because the

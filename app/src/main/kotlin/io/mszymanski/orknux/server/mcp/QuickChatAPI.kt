@@ -434,6 +434,14 @@ class QuickChat(
                   | { messages: SlackThreadMessage[]; replies: number; error?: undefined }
                   | { error: string; messages?: undefined; replies?: undefined };
 
+                type SlackPost =
+                  | { channel: string; ts: string | null; error?: undefined }
+                  | { error: string; channel?: undefined; ts?: undefined };
+
+                type SlackReaction =
+                  | { ok: true; error?: undefined }
+                  | { error: string; ok?: undefined };
+
                 type OrknuxResponse =
                   | { status: number; headers: Record<string, string>; body: string; json?: unknown; error?: undefined }
                   | { error: string };
@@ -446,6 +454,18 @@ class QuickChat(
                       threadTs: string,
                       limit?: number,
                     ): SlackThread;
+                    post(
+                      connection: OrknuxConnectionRef,
+                      channel: string,
+                      text: string,
+                      threadTs?: string,
+                    ): SlackPost;
+                    react(
+                      connection: OrknuxConnectionRef,
+                      channel: string,
+                      ts: string,
+                      emoji: string,
+                    ): SlackReaction;
                   };
                   readonly log: {
                     debug(...said: unknown[]): void;
@@ -464,6 +484,9 @@ class QuickChat(
                 "`messages` is the page that was fetched and includes the parent; `replies` is Slack's own " +
                 "count of the whole thread, so it is the number to use for \"how many replies\" and " +
                 "`replies === 1` is the first one. " +
+                "`slack.post` sends a message and `slack.react` adds an emoji, both through a connection the " +
+                "workspace was given, the same as `thread`; `post` answers with the new message's `ts`, which " +
+                "`react` then hangs on. Read `error` first on each. " +
                 "`orknux.http` is the only way out to a network: the server makes the request and hands back " +
                 "data, so there is no `fetch` and no socket. An object body is sent as JSON and given a JSON " +
                 "content type; a JSON reply arrives parsed as `json`, beside the `body` it was parsed from. " +

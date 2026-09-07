@@ -765,6 +765,8 @@ class FunctionAPI(
               //   orknux.http.get(url, headers)             a request, made by the server
               //   orknux.http.post(url, { a: 1 })           an object body goes as JSON
               //   orknux.slack.thread(connection, ch, ts)   the messages in one thread
+              //   orknux.slack.post(connection, ch, text)   send a message, or a reply
+              //   orknux.slack.react(connection, ch, ts, e) add an emoji to a message
               // Each answers a value with `error` on it when it could not; check that
               // first. There is no fetch, no import and no require: this is a sandbox.
 

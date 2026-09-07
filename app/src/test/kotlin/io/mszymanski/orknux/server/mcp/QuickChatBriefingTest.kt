@@ -82,6 +82,11 @@ class QuickChatBriefingTest(
         assertThat(briefing).contains("orknux")
         assertThat(briefing).contains("thread(")
 
+        // Posting and reacting are on the same surface, with their own results.
+        assertThat(briefing).contains("react(")
+        assertThat(briefing).contains("SlackPost")
+        assertThat(briefing).contains("SlackReaction")
+
         // Both halves of the union, which is what makes a refusal checkable.
         assertThat(briefing).contains("SlackThread")
         assertThat(briefing).contains("SlackThreadMessage")

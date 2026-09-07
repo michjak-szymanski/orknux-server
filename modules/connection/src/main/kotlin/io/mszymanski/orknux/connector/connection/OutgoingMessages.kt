@@ -56,10 +56,21 @@ class OutgoingMessages(
      *   to Slack's own id before it is posted — see below.
      * @param threadTs when set, the message joins that thread instead of the
      *   channel. This is what makes a workflow answer where it was asked.
+     * @param on the only workspace whose connections this may send through, or
+     *   null for a caller that answers to no one workspace. A boundary, not a
+     *   filter, exactly as [SlackThreads.read] takes one: a script hands over a
+     *   connection id it was given, and without this, posting through another
+     *   workspace's Slack was a matter of guessing a number. An action passes
+     *   null because it resolved the connection from the workspace's own config.
      */
-    fun send(connectionId: Long, target: String, text: String, threadTs: String? = null): Delivery {
+    fun send(connectionId: Long, target: String, text: String, threadTs: String? = null, on: Long? = null): Delivery {
         val connection = connections.findByIdOrNull(connectionId)
             ?: return Delivery.NotPossible("the connection it sends through has been deleted")
+
+        // Said as though it were not there, which is what it is to this caller.
+        if (on != null && connection.workspaceId != on) {
+            return Delivery.NotPossible("the connection it sends through has been deleted")
+        }
 
         if (connection.type != ConnectionType.SLACK) {
             return Delivery.NotPossible("${connection.type} connections cannot send messages yet")

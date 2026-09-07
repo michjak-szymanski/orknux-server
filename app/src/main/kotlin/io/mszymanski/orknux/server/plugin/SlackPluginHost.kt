@@ -1,5 +1,9 @@
 package io.mszymanski.orknux.server.plugin
 
+import io.mszymanski.orknux.connector.connection.Delivery
+import io.mszymanski.orknux.connector.connection.OutgoingMessages
+import io.mszymanski.orknux.connector.connection.Reaction
+import io.mszymanski.orknux.connector.connection.SlackReactions
 import io.mszymanski.orknux.connector.connection.SlackThreads
 import io.mszymanski.orknux.connector.connection.Thread
 import io.mszymanski.orknux.workflow.script.PluginCapability
@@ -30,6 +34,8 @@ import tools.jackson.databind.ObjectMapper
 @Component
 class SlackPluginHost(
     private val threads: SlackThreads,
+    private val messages: OutgoingMessages,
+    private val reactions: SlackReactions,
     private val mapper: ObjectMapper,
     /**
      * The other thing the server does on a caller's behalf; see
@@ -46,6 +52,8 @@ class SlackPluginHost(
 
     override fun ask(capability: PluginCapability, argument: String, on: Long?): String = when (capability) {
         PluginCapability.SLACK_READ_THREAD -> readThread(argument, on)
+        PluginCapability.SLACK_POST_MESSAGE -> postMessage(argument, on)
+        PluginCapability.SLACK_ADD_REACTION -> addReaction(argument, on)
         /*
          * No workspace scoping, and the reason is not that it was forgotten: a
          * request names an address rather than one of the workspace's own
@@ -116,6 +124,76 @@ class SlackPluginHost(
             is Thread.NotPossible -> refusal(read.reason)
             is Thread.Refused -> refusal(read.reason)
         }.also { log.debug("A plugin read thread {} in {} on connection {}", threadTs, channel, connectionId) }
+    }
+
+    /**
+     * `[connectionId, channel, text, threadTs?]`, and answers `{ ts }` where it
+     * sent or `{ error }` where it did not.
+     *
+     * `ts` is the message's own timestamp, which is what a reply threads onto and
+     * what a reaction hangs on - so a function that posts and then reacts has the
+     * one value it needs from the first call.
+     */
+    private fun postMessage(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 3) {
+            return refusal("that call takes a connection, a channel and some text")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val channel = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a channel")
+        val text = given.get(2)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the third argument has to be the message text")
+        val threadTs = given.get(3)?.takeIf { it.isTextual }?.asString()
+
+        return when (val sent = messages.send(connectionId, channel, text, threadTs, on)) {
+            is Delivery.Sent -> mapper.writeValueAsString(
+                mapper.createObjectNode().put("channel", sent.channel).put("ts", sent.ts),
+            )
+            is Delivery.NotPossible -> refusal(sent.reason)
+            is Delivery.Refused -> refusal(sent.reason)
+        }.also { log.debug("A script posted to {} on connection {}", channel, connectionId) }
+    }
+
+    /**
+     * `[connectionId, channel, ts, emoji]`, and answers `{ ok: true }` where it
+     * reacted or `{ error }` where it did not.
+     */
+    private fun addReaction(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 4) {
+            return refusal("that call takes a connection, a channel, a message and an emoji")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val channel = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a channel")
+        val ts = given.get(2)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the third argument has to be a message timestamp")
+        val emoji = given.get(3)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the fourth argument has to be an emoji name")
+
+        return when (val reacted = reactions.add(connectionId, channel, ts, emoji, on)) {
+            is Reaction.Added -> mapper.writeValueAsString(mapper.createObjectNode().put("ok", true))
+            is Reaction.NotPossible -> refusal(reacted.reason)
+            is Reaction.Refused -> refusal(reacted.reason)
+        }.also { log.debug("A script reacted on {} on connection {}", channel, connectionId) }
+    }
+
+    /**
+     * A number or a string of one, because both are what actually arrive: a
+     * trigger publishes its connection as `"7"`, since everything on a payload is
+     * text, and a plugin declares it as a number. See [readThread].
+     */
+    private fun connectionOf(node: tools.jackson.databind.JsonNode?): Long? = node?.let { held ->
+        when {
+            held.isNumber -> held.asLong()
+            held.isTextual -> held.asString().trim().toLongOrNull()
+            else -> null
+        }
     }
 
     private fun refusal(why: String): String =

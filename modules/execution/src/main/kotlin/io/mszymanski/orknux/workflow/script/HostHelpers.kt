@@ -79,6 +79,48 @@ internal object HostHelpers {
     """.trimIndent()
 
     /**
+     * `orknux.slack`, as both a plugin and a function see it.
+     *
+     * Read a thread, post a message, add a reaction - each hands the host a
+     * connection and gets an answer back as data, the connection read out of an
+     * object or taken as a bare id so `trigger.connection` and a number both
+     * work. Written here once for the reason http and log are: the two runners
+     * had their own copy of the thread reader and were one edit from disagreeing.
+     *
+     * Each door says its own thing when it is not wired, because the reason
+     * differs: a plugin was not granted the capability, a function is on an
+     * installation that answers none. Both are data, like every refusal here.
+     */
+    fun slack(readAbsent: String, postAbsent: String, reactAbsent: String): String = """
+        slack: {
+          thread(connection, channel, threadTs, limit) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_read_thread === undefined) {
+              return { error: '$readAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_read_thread(JSON.stringify([id, channel, threadTs, limit ?? null])));
+          },
+          post(connection, channel, text, threadTs) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_post_message === undefined) {
+              return { error: '$postAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_post_message(JSON.stringify([id, channel, text, threadTs ?? null])));
+          },
+          react(connection, channel, ts, emoji) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_add_reaction === undefined) {
+              return { error: '$reactAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_add_reaction(JSON.stringify([id, channel, ts, emoji])));
+          },
+        },
+    """.trimIndent()
+
+    /**
      * `orknux.http`, as both a plugin and a function see it.
      *
      * The guest never holds a socket: it hands over a URL and gets an answer

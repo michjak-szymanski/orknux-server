@@ -529,6 +529,14 @@ class ScriptRunner(
     private val services: String by lazy {
         val kept = HostHelpers.threshold(properties.logLevel)
         SERVICES
+            .replace(
+                "%SLACK%",
+                HostHelpers.slack(
+                    "this installation cannot read Slack threads from a function",
+                    "this installation cannot post to Slack from a function",
+                    "this installation cannot add Slack reactions from a function",
+                ).prependIndent("  "),
+            )
             .replace("%HTTP%", HostHelpers.http("this installation cannot make requests from a function").prependIndent("  "))
             .replace("%LOG%", HostHelpers.log(kept).prependIndent("  "))
     }
@@ -642,21 +650,7 @@ class ScriptRunner(
          */
         val SERVICES = """
             globalThis.orknux = {
-              slack: {
-                thread(connection, channel, threadTs, limit) {
-                  const host = globalThis.__orknuxHost;
-                  if (host === undefined || host.slack_read_thread === undefined) {
-                    return { error: 'this installation cannot read Slack threads from a script' };
-                  }
-                  const id = connection === null || typeof connection !== 'object'
-                    ? connection
-                    : connection.id;
-                  return JSON.parse(
-                    host.slack_read_thread(JSON.stringify([id, channel, threadTs, limit ?? null])),
-                  );
-                },
-              },
-
+%SLACK%
 %HTTP%
 %LOG%
             };

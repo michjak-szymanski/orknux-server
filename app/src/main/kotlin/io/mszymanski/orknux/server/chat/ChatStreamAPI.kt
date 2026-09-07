@@ -16,6 +16,7 @@ import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody
 import tools.jackson.databind.ObjectMapper
@@ -37,6 +38,17 @@ data class ChatStreamRequest @JsonCreator constructor(
      * picture the answer could not have seen.
      */
     @JsonProperty("attachmentIds") val attachmentIds: List<Long> = emptyList(),
+    /**
+     * Whether a lost reader should stop the answer.
+     *
+     * A voice turn is spoken and then gone, so a reader who walks away wants it
+     * stopped - which is what #299 gave voice mode. A text chat is a record: an
+     * answer left half-read is wanted when the person comes back, so leaving no
+     * longer stops it and it is written to the history whether anybody is still
+     * reading or not. That is #335, and this flag is which of the two this turn
+     * is. False - a text turn - unless the voice panel says otherwise.
+     */
+    @JsonProperty("voice") val voice: Boolean = false,
 )
 
 /**
@@ -64,6 +76,8 @@ class ChatStreamAPI(
     private val settings: InstallationSettings,
     /** How this endpoint finds out that the person who asked has walked away. */
     private val readers: ReaderWatch,
+    /** The in-flight answers, so the Stop button can reach one it is not inside. */
+    private val generations: ChatGenerations,
     private val mapper: ObjectMapper,
     private val chatTools: ChatTools,
 ) {
@@ -109,6 +123,7 @@ class ChatStreamAPI(
             request.text,
             response,
             session,
+            interruptOnLeave = request.voice,
         )
     }
 
@@ -126,14 +141,35 @@ class ChatStreamAPI(
      * in the sidebar would move it out from under them.
      */
     @PostMapping("/api/chats/{id}/regenerate", produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun regenerate(@PathVariable id: Long, response: HttpServletResponse): StreamingResponseBody {
+    fun regenerate(
+        @PathVariable id: Long,
+        @RequestParam(defaultValue = "false") voice: Boolean,
+        response: HttpServletResponse,
+    ): StreamingResponseBody {
         if (!settings.chatEnabled()) throw ChatDisabledException()
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
 
-        return answering(id, { chats.beginRegenerate(id) }, said = null, response = response, session = session) {
+        return answering(id, { chats.beginRegenerate(id) }, said = null, response = response, session = session, interruptOnLeave = voice) {
             chats.abandonRegenerate(id)
         }
+    }
+
+    /**
+     * Stops the answer being written on this chat, when somebody presses Stop.
+     *
+     * A text chat no longer stops on a lost reader - it is a record and the
+     * answer is wanted when the person returns (#335) - so stopping on purpose
+     * is a call of its own rather than the side effect of closing the stream
+     * that it used to be. It reaches the answering thread's [Hangup] through
+     * [ChatGenerations]; the stream the browser is reading closes on its own
+     * once the thread puts the interrupted turn back.
+     */
+    @PostMapping("/api/chats/{id}/interrupt")
+    fun interrupt(@PathVariable id: Long) {
+        val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
+        requireOwn(session)
+        generations.interrupt(id)
     }
 
     /**
@@ -163,6 +199,13 @@ class ChatStreamAPI(
         said: String?,
         response: HttpServletResponse,
         session: ChatSession,
+        /**
+         * Whether a lost reader stops the answer. A voice turn's does (#299); a
+         * text turn's does not, and is written to the history whether anybody is
+         * still reading or not (#335). Either way, pressing Stop stops it - that
+         * goes through [interrupt] and the [ChatGenerations] registry, not this.
+         */
+        interruptOnLeave: Boolean,
         giveUp: () -> Unit = {},
     ): StreamingResponseBody {
         // Nothing between here and the browser may hold a piece of the answer
@@ -185,7 +228,17 @@ class ChatStreamAPI(
              * short one arrived whole at the end and read as a slow model.
              */
             val stream = ServerSentEvents(response, mapper)
-            fun send(event: String, payload: Any) = stream.send(event, payload)
+            /*
+             * A write to a reader who has gone is fatal to a voice turn - it is
+             * how the turn ends - but only a detail to a text one, which goes on
+             * composing an answer for the history with nobody reading. So a text
+             * turn's frame is written best-effort: a failed write is the reader
+             * being gone, which #335 says to carry on through rather than throw.
+             */
+            fun send(event: String, payload: Any) {
+                if (interruptOnLeave) stream.send(event, payload)
+                else runCatching { stream.send(event, payload) }
+            }
 
             // Set the moment the answer is safely in the history, so the
             // rescue below cannot run on top of one that did arrive.
@@ -203,6 +256,9 @@ class ChatStreamAPI(
              * answer nobody wanted rather than an answer.
              */
             val hangup = Hangup()
+            // Registered so the Stop button, which is not on this thread, can
+            // reach this turn's hang-up. Released below however the turn ends.
+            generations.register(id, hangup)
 
             try {
                 /*
@@ -249,7 +305,7 @@ class ChatStreamAPI(
                  * else, so the model went on writing an answer nobody would
                  * ever read and it went on being charged for.
                  */
-                val answer = readers.whileReading(stream, gone = { hangup.hangUp() }) {
+                val answer = readers.whileReading(stream, gone = { if (interruptOnLeave) hangup.hangUp() }) {
                     if (start.agentId == null) {
                         client.stream(
                             start.modelId,
@@ -350,6 +406,8 @@ class ChatStreamAPI(
                 // to: the only thing left is not to lose it in silence.
                 log.warn("Chat {} stream ended early", id, closed)
                 if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
+            } finally {
+                generations.release(id, hangup)
             }
         }
     }

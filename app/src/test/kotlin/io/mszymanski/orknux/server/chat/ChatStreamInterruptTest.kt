@@ -35,7 +35,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * A chat whose reader has gone stops the model, rather than paying it to finish.
+ * When a chat whose reader has gone stops the model, and when it does not.
+ *
+ * Two issues meet here. A voice turn whose reader leaves is stopped rather than
+ * paid to finish (#299); a text turn whose reader leaves is finished and written
+ * to the history, because a chat is a record and the answer is wanted when the
+ * person comes back (#335). Stopping a text turn on purpose is [ChatStreamAPI]'s
+ * own interrupt door, not a lost reader.
  *
  * Issue #299, on the server's half. The browser learnt to abort the request when
  * somebody interrupts; this is the claim that aborting it means anything —
@@ -123,7 +129,7 @@ class ChatStreamInterruptTest(
      * fix there was therefore nothing for a hang-up to be discovered on.
      */
     @Test
-    fun `an agent's answer is stopped when the reader goes`() {
+    fun `a voice agent's answer is stopped when the reader goes`() {
         val chatId = chatWithAgent(model(serve()))
 
         run(chatId)
@@ -142,7 +148,7 @@ class ChatStreamInterruptTest(
      * moment the answer went quiet - and it is worth keeping honest either way.
      */
     @Test
-    fun `a bare model's answer is stopped when the reader goes`() {
+    fun `a voice bare model's answer is stopped when the reader goes`() {
         val chatId = chatOnBareModel(model(serve()))
 
         run(chatId)
@@ -160,7 +166,7 @@ class ChatStreamInterruptTest(
      * to the model is a worse record than one ending on the question.
      */
     @Test
-    fun `an abandoned answer is not kept`() {
+    fun `a voice turn's abandoned answer is not kept`() {
         val chatId = chatWithAgent(model(serve()))
 
         run(chatId)
@@ -171,10 +177,75 @@ class ChatStreamInterruptTest(
             .containsExactly("user")
     }
 
-    /** The streaming door, run with a reader that has walked away already. */
-    private fun run(chatId: Long) {
+    /**
+     * A text turn whose reader leaves is finished anyway, and written down.
+     *
+     * The other half of the same decision: a text chat is a record, so an answer
+     * whose reader walked away is the one they want when they come back rather
+     * than one to throw out. The reader is gone from the first frame - every
+     * write to it fails - and the provider still streams the whole answer
+     * because nothing hung it up, and the answer is in the history when it ends.
+     * Issue #335.
+     */
+    @Test
+    fun `a text turn whose reader leaves is finished and kept`() {
+        val chatId = chatWithAgent(model(serve()))
+
+        run(chatId, voice = false)
+
+        // Never hung up on: the provider ran to the end though nobody read it.
+        assertThat(torn.get()).isFalse()
+        assertThat(written.get()).isEqualTo(FRAMES)
+
+        graphQlTester.document("{ chatMessages(id: $chatId) { role } }")
+            .execute()
+            .path("chatMessages[*].role").entityList(String::class.java)
+            .containsExactly("user", "assistant")
+    }
+
+    /**
+     * And a text turn is stopped when Stop is pressed, not when the reader goes.
+     *
+     * Stopping is its own call now - [ChatStreamAPI.interrupt] through
+     * [ChatGenerations] - because a lost reader no longer means stop. The
+     * reader here stays (writes to a real buffer succeed); the turn is answered
+     * on a thread of its own, interrupted part way, and the provider is hung up
+     * on with the answer left off the history. Issue #335.
+     */
+    @Test
+    fun `a text turn is stopped when it is interrupted`() {
+        val chatId = chatWithAgent(model(serve()))
+        val response = MockHttpServletResponse()
+        val body = streaming.stream(chatId, ChatStreamRequest("Say something long", voice = false), response)
+
+        val worker = Executors.newSingleThreadExecutor()
+        worker.submit { runCatching { body.writeTo(response.outputStream) } }
+        // Long enough that the answer is under way; the stub is 5ms a frame.
+        Thread.sleep(INTERRUPT_AFTER_MILLIS)
+        streaming.interrupt(chatId)
+
+        assertThat(done.await(10, TimeUnit.SECONDS)).isTrue()
+        assertThat(torn.get()).isTrue()
+        assertThat(written.get()).isLessThan(FRAMES)
+        worker.shutdownNow()
+
+        graphQlTester.document("{ chatMessages(id: $chatId) { role } }")
+            .execute()
+            .path("chatMessages[*].role").entityList(String::class.java)
+            .containsExactly("user")
+    }
+
+    /**
+     * The streaming door, run with a reader that has walked away already.
+     *
+     * `voice` is what a lost reader means: a voice turn is stopped by it (#299),
+     * a text turn is not and is written to the history instead (#335). The
+     * cases that assert stopping drive a voice turn, because that is the turn a
+     * lost reader still stops.
+     */
+    private fun run(chatId: Long, voice: Boolean = true) {
         val response = Gone()
-        streaming.stream(chatId, ChatStreamRequest("Say something long"), response)
+        streaming.stream(chatId, ChatStreamRequest("Say something long", voice = voice), response)
             .writeTo(response.outputStream)
         // The stub answers on a thread of its own, so what it made of the
         // hang-up is only settled once it has stopped.
@@ -294,5 +365,8 @@ class ChatStreamInterruptTest(
 
         /** And slow enough that there is a stream to interrupt rather than a burst. */
         const val FRAME_MILLIS = 5L
+
+        /** Long enough that the answer is well under way before Stop is pressed. */
+        const val INTERRUPT_AFTER_MILLIS = 300L
     }
 }

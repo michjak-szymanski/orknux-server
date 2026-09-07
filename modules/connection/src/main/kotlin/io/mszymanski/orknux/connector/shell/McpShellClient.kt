@@ -2,10 +2,14 @@ package io.mszymanski.orknux.connector.shell
 
 import tools.jackson.databind.ObjectMapper
 import io.mszymanski.orknux.connector.connection.McpClient
+import io.mszymanski.orknux.connector.connection.McpHandshake
 import io.mszymanski.orknux.connector.connection.McpServer
 import io.mszymanski.orknux.connector.connection.McpServerRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
+
+/** An opened MCP shell session: the id to thread through runs, and whether it jails. */
+data class OpenedMcpShell(val session: String, val isolated: Boolean)
 
 /**
  * A shell whose far side is DesktopCommander, spoken to as an MCP server.
@@ -57,8 +61,52 @@ class McpShellClient(
             put("command", command)
             directory?.let { put("cwd", it) }
         }
-        val answer = mapper.readTree(mcp.call(server, RUN_TOOL, mapper.writeValueAsString(arguments)))
+        return outcome(shell, mcp.call(server, RUN_TOOL, mapper.writeValueAsString(arguments)))
+    }
 
+    /**
+     * Opens a session, learning whether the server jails it.
+     *
+     * When it does ([OpenedMcpShell.isolated]), the session is the sandbox and a
+     * shell keeps it open and runs on it - no directory of its own to make or
+     * remove. When it does not, the caller lets this session go and falls back
+     * to the directory a command carries, the way it always did. Issue #337.
+     */
+    fun open(shell: Shell): OpenedMcpShell {
+        val server = serverOf(shell)
+        return when (val handshake = mcp.openSession(server)) {
+            is McpHandshake.Open -> OpenedMcpShell(handshake.session, handshake.sessionIsolation)
+            is McpHandshake.Refused -> throw ShellUnreachableException("${shell.name}: ${handshake.reason}")
+        }
+    }
+
+    /** Runs one command on an open session, so it lands in that session's own root. */
+    fun runOn(shell: Shell, command: String, session: String): ShellRun {
+        val server = serverOf(shell)
+        val arguments = mapper.createObjectNode().put("command", command)
+        return outcome(shell, mcp.callOn(server, session, RUN_TOOL, mapper.writeValueAsString(arguments)))
+    }
+
+    /** What the far side is on an open session, for the note the session carries. */
+    fun operatingSystemOn(shell: Shell, session: String): String? =
+        runCatching { runOn(shell, "uname -sr", session).stdout.trim().ifEmpty { null } }.getOrNull()
+
+    /** Ends a session, so the server destroys the root it jailed for it. */
+    fun close(shell: Shell, session: String) {
+        runCatching { mcp.closeSession(serverOf(shell), session) }
+    }
+
+    /**
+     * A run's answer, in the shape the SSH side returns.
+     *
+     * DesktopCommander answers a run as a block of text rather than a structured
+     * exit; a tool that could not be called comes back as an MCP error, which
+     * [McpClient] has already turned into `{ "error": ... }`. So a call that
+     * carries an error is unreachable, and one that does not is an exit of zero
+     * with the text as stdout.
+     */
+    private fun outcome(shell: Shell, result: String): ShellRun {
+        val answer = mapper.readTree(result)
         answer.path("error").takeIf { !it.isMissingNode }?.let {
             throw ShellUnreachableException("${shell.name}: ${it.stringValue() ?: "the MCP shell refused the command"}")
         }

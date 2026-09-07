@@ -74,6 +74,19 @@ class ShellSession(
     @Column(nullable = false, length = 500)
     val directory: String = "",
 
+    /**
+     * The MCP session this shell session is, when the far side jails each one.
+     *
+     * Set only for an MCP shell whose server said it isolates sessions: then the
+     * session's own root is the sandbox, so there is no directory of ours to
+     * make or remove and [directory] is left empty - the session id is what a
+     * run threads through and what a close ends. Null for an SSH shell and for
+     * an MCP server that does not jail, both of which carry a directory instead.
+     * Issue #337.
+     */
+    @Column(name = "mcp_session", length = 200)
+    val mcpSession: String? = null,
+
     @Column(name = "operating_system", length = 200)
     var operatingSystem: String? = null,
 

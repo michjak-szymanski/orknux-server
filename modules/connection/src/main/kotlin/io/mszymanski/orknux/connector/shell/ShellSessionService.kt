@@ -47,6 +47,10 @@ class ShellSessionService(
         val id = UUID.randomUUID().toString().replace("-", "")
         val directory = "${properties.directoryRoot.trimEnd('/')}/$id"
 
+        // Set only where the far side jails the session for us; then there is no
+        // directory of ours and the session id is the whole of the sandbox. #337
+        var mcpSession: String? = null
+
         val opened = when (shell.kind) {
             ShellKind.SSH -> client.connected(shell) { session, fingerprint ->
                 if (shell.hostKey.isNullOrBlank() && fingerprint != null) {
@@ -64,14 +68,25 @@ class ShellSessionService(
                 client.operatingSystem(session)
             }
             ShellKind.MCP -> {
-                val made = mcp.run(shell, makeDirectory(directory), null)
-                if (!made.stdout.contains(READY)) {
-                    throw ShellUnreachableException(
-                        "${shell.name} would not make a working directory at $directory: " +
-                            made.stdout.trim().ifEmpty { "it said nothing" },
-                    )
+                val handshake = mcp.open(shell)
+                if (handshake.isolated) {
+                    // The session's own root is the sandbox: nothing to make, and
+                    // the id is what run and close will thread through.
+                    mcpSession = handshake.session
+                    mcp.operatingSystemOn(shell, handshake.session)
+                } else {
+                    // Not a jailing server: let this handshake's session go and
+                    // make a directory the old way, carried on every command.
+                    mcp.close(shell, handshake.session)
+                    val made = mcp.run(shell, makeDirectory(directory), null)
+                    if (!made.stdout.contains(READY)) {
+                        throw ShellUnreachableException(
+                            "${shell.name} would not make a working directory at $directory: " +
+                                made.stdout.trim().ifEmpty { "it said nothing" },
+                        )
+                    }
+                    mcp.operatingSystem(shell)
                 }
-                mcp.operatingSystem(shell)
             }
         }
 
@@ -82,7 +97,10 @@ class ShellSessionService(
                 agentId = agentId,
                 agentName = agentName.take(NAME_LENGTH),
                 workspaceId = workspaceId,
-                directory = directory,
+                // A jailed MCP session carries no directory of ours; everything
+                // else carries one and no session id.
+                directory = if (mcpSession != null) "" else directory,
+                mcpSession = mcpSession,
                 operatingSystem = opened,
             ),
         )
@@ -91,7 +109,7 @@ class ShellSessionService(
             sessionId = stored.id,
             shellName = shell.name,
             operatingSystem = opened,
-            directory = directory,
+            directory = if (mcpSession != null) "" else directory,
         )
     }
 
@@ -114,7 +132,11 @@ class ShellSessionService(
         // them, and the installation's when it has not.
         val outcome = when (shell.kind) {
             ShellKind.SSH -> client.connected(shell) { open, _ -> client.run(open, command, session.directory, shell) }
-            ShellKind.MCP -> mcp.run(shell, command, session.directory)
+            // A jailed session runs on the session; every other MCP shell carries
+            // the directory on the command, the way it always did.
+            ShellKind.MCP -> session.mcpSession
+                ?.let { mcp.runOn(shell, command, it) }
+                ?: mcp.run(shell, command, session.directory)
         }
 
         session.lastUsedAt = OffsetDateTime.now()
@@ -145,7 +167,11 @@ class ShellSessionService(
 
         when (shell.kind) {
             ShellKind.SSH -> client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
-            ShellKind.MCP -> mcp.run(shell, "rm -rf '${session.directory}'", null)
+            // Ending a jailed session tells the server to destroy the root it
+            // made; a directory-carrying one is removed by hand as before.
+            ShellKind.MCP -> session.mcpSession
+                ?.let { mcp.close(shell, it) }
+                ?: mcp.run(shell, "rm -rf '${session.directory}'", null)
         }
 
         session.state = ShellSessionState.CLOSED
@@ -177,7 +203,9 @@ class ShellSessionService(
         return try {
             when (shell.kind) {
             ShellKind.SSH -> client.connected(shell) { open, _ -> service.removeDirectory(open, session) }
-            ShellKind.MCP -> mcp.run(shell, "rm -rf '${session.directory}'", null)
+            ShellKind.MCP -> session.mcpSession
+                ?.let { mcp.close(shell, it) }
+                ?: mcp.run(shell, "rm -rf '${session.directory}'", null)
         }
             session.state = ShellSessionState.EXPIRED
             session.closedAt = OffsetDateTime.now()

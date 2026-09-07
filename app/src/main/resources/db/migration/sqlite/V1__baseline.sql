@@ -729,6 +729,7 @@ CREATE TABLE shell_session
     agent_name                   varchar(120) not null,
     workspace_id                 integer,
     directory                    varchar(500) not null,
+    mcp_session                  varchar(200),
     operating_system             varchar(200),
     state                        varchar(16) not null default 'OPEN',
     opened_at                    timestamp not null default CURRENT_TIMESTAMP,

@@ -56,7 +56,19 @@ sealed interface McpHandshake {
      * @param protocol the version it answered with, which need not be the one
      *   it was asked for.
      */
-    data class Open(val session: String, val server: String?, val protocol: String?) : McpHandshake
+    data class Open(
+        val session: String,
+        val server: String?,
+        val protocol: String?,
+        /**
+         * Whether the server advertised, in `capabilities.experimental` under
+         * the orknux-shell marker, that it jails each session to its own root.
+         * When it does, a shell may hold one session open and reuse it across
+         * runs rather than carrying a directory of its own. False for any server
+         * that does not say so, which reads as "no jail here". See issue #337.
+         */
+        val sessionIsolation: Boolean,
+    ) : McpHandshake
 
     /** Why it did not open, in a sentence somebody can act on. */
     data class Refused(val reason: String) : McpHandshake
@@ -171,28 +183,10 @@ class McpClient(
             is McpHandshake.Open -> handshake
         }
 
-        val params = mapper.createObjectNode()
-        params.put("name", tool)
-        params.set("arguments", argumentsOf(arguments))
-
-        val answer = send(server, opened.session, "tools/call", params, id = 3)
-            ?: return failure("${server.name} did not answer")
-
-        answer.path("error").takeIf { !it.isMissingNode }?.let { error ->
-            return failure(error.path("message").stringValue() ?: "${server.name} refused the call")
-        }
-
         // The protocol returns content blocks; the text ones are what a model
-        // can read. Anything else is described rather than dropped silently.
-        val blocks = answer.path("result").path("content") as? ArrayNode
-            ?: return mapper.writeValueAsString(mapOf("result" to answer.path("result")))
-        val text = blocks.joinToString("\n") { block ->
-            when (block.path("type").stringValue()) {
-                "text" -> block.path("text").stringValue().orEmpty()
-                else -> "[${block.path("type").stringValue() ?: "unknown"} content, which cannot be read as text]"
-            }
-        }
-        return mapper.writeValueAsString(mapOf("result" to text))
+        // can read. Anything else is described rather than dropped silently -
+        // all of which is callWith's, shared with the session-holding path.
+        return callWith(server, opened.session, tool, arguments)
     }
 
     /**
@@ -261,6 +255,12 @@ class McpClient(
         val named = result.path("serverInfo").path("name").stringValue()
         val spoke = result.path("protocolVersion").stringValue()
         val session = response.headers().firstValue(SESSION_HEADER).orElse("")
+        // The marker orknux-shell puts under capabilities.experimental. A name in
+        // serverInfo is a hint anyone could copy; a namespaced experimental key
+        // carrying sessionIsolation is the handshake proof this server jails each
+        // session, and is what lets a shell reuse one session across runs. #337
+        val isolated = result.path("capabilities").path("experimental")
+            .path(SHELL_MARKER).path("sessionIsolation").asBoolean(false)
 
         log.debug(
             "MCP server {} completed the handshake as {} speaking {}, session {}",
@@ -277,7 +277,80 @@ class McpClient(
             post(server, session, request("notifications/initialized", mapper.createObjectNode(), id = null))
         }.onFailure { log.debug("MCP server {} did not take notifications/initialized", server.name, it) }
 
-        return McpHandshake.Open(session, named, spoke)
+        return McpHandshake.Open(session, named, spoke, isolated)
+    }
+
+    /**
+     * Opens a session and hands it back, for a caller that will make several
+     * calls on it rather than one.
+     *
+     * The stateless [call] and [tools] each open their own session and let it
+     * go, which is right for a lookup. A shell is not a lookup: it opens once,
+     * runs many commands that have to land in the same place, and closes. When
+     * the server jails each session ([McpHandshake.Open.sessionIsolation]), that
+     * place is the session's own root, so the session id is what has to be kept
+     * and threaded through - see [callOn] and [closeSession]. Issue #337.
+     */
+    fun openSession(server: McpServer): McpHandshake {
+        refusal(server)?.let { return McpHandshake.Refused(it) }
+        return open(server)
+    }
+
+    /**
+     * Calls a tool on a session already open, rather than opening one.
+     *
+     * The half of [call] after the handshake, so a shell that has opened a
+     * session keeps landing in the same jailed root instead of a fresh one per
+     * command. A failure is a result, not an exception, exactly as [call]'s is.
+     */
+    fun callOn(server: McpServer, session: String, tool: String, arguments: String): String {
+        refusal(server)?.let { return failure(it) }
+        return callWith(server, session, tool, arguments)
+    }
+
+    /**
+     * Ends a session, so the server can destroy the root it jailed for it.
+     *
+     * An HTTP DELETE carrying the session id, which is how the protocol says a
+     * client is done with a session. Best-effort: a server that has already
+     * forgotten the session, or an idle-sweep that beat us to it, is not a
+     * failure worth raising - the session is gone either way, which is the
+     * outcome asked for.
+     */
+    fun closeSession(server: McpServer, session: String) {
+        if (session.isEmpty()) return
+        runCatching {
+            val target = credentials.target(server)
+            val builder = HttpRequest.newBuilder(URI(server.address))
+                .timeout(properties.timeout)
+                .header(SESSION_HEADER, session)
+            target.requestHeaders().forEach { (name, value) -> builder.header(name, value) }
+            client().send(builder.DELETE().build(), HttpResponse.BodyHandlers.ofString())
+        }.onFailure { log.debug("MCP server {} did not take a session close", server.name, it) }
+    }
+
+    /** The tool call itself, on whatever session it is handed. */
+    private fun callWith(server: McpServer, session: String, tool: String, arguments: String): String {
+        val params = mapper.createObjectNode()
+        params.put("name", tool)
+        params.set("arguments", argumentsOf(arguments))
+
+        val answer = send(server, session, "tools/call", params, id = 3)
+            ?: return failure("${server.name} did not answer")
+
+        answer.path("error").takeIf { !it.isMissingNode }?.let { error ->
+            return failure(error.path("message").stringValue() ?: "${server.name} refused the call")
+        }
+
+        val blocks = answer.path("result").path("content") as? ArrayNode
+            ?: return mapper.writeValueAsString(mapOf("result" to answer.path("result")))
+        val text = blocks.joinToString("\n") { block ->
+            when (block.path("type").stringValue()) {
+                "text" -> block.path("text").stringValue().orEmpty()
+                else -> "[${block.path("type").stringValue() ?: "unknown"} content, which cannot be read as text]"
+            }
+        }
+        return mapper.writeValueAsString(mapOf("result" to text))
     }
 
     /**
@@ -424,6 +497,13 @@ class McpClient(
         /** The revision of the protocol this speaks. */
         const val PROTOCOL_VERSION = "2025-06-18"
         const val SESSION_HEADER = "Mcp-Session-Id"
+
+        /**
+         * The reverse-DNS key orknux-shell advertises itself under, in the
+         * handshake's `capabilities.experimental`. Matched exactly, so no
+         * ordinary server produces it by accident. Issue #337.
+         */
+        const val SHELL_MARKER = "io.mszymanski.orknux-shell"
         const val CLIENT_NAME = "ordilumen"
         const val CLIENT_VERSION = "1.0"
         val CONNECT_TIMEOUT: Duration = Duration.ofSeconds(10)

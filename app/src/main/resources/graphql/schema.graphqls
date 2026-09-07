@@ -1703,6 +1703,8 @@ enum NodeKind {
     CONDITION
     "Makes an object out of what the run is carrying, and hands it on."
     OBJECT
+    "Draws a picture from a prompt, with one of the workspace's image models."
+    IMAGE
     """
     Names an LLM session the agent nodes wired to it talk into.
 
@@ -1730,6 +1732,8 @@ type WorkflowNode {
     conditionId: ID
     "The saved shape an OBJECT node makes; null is a shape of the node's own."
     objectId: ID
+    "The image model an IMAGE node draws with, if it names one."
+    imageModelId: ID
     """
     What this node calls what it produces, so a later node can point a
     reference at it. Null hands the output on unchanged.
@@ -1999,6 +2003,8 @@ input WorkflowNodeInput {
     conditionId: ID
     "The saved shape an OBJECT node makes; null is a shape of the node's own."
     objectId: ID
+    "The image model an IMAGE node draws with; ignored on any other kind."
+    imageModelId: ID
     "What this node calls what it produces; a later node points a reference at it."
     outputName: String
     "Which icon the canvas draws on this node; a name from the interface's own set."
@@ -4225,6 +4231,21 @@ type ExecutionDetail {
     linking to it.
     """
     workflowAssigned: Boolean!
+    "The pictures this run's image nodes drew, each keyed to the step that drew it."
+    pictures: [ExecutionPicture!]!
+}
+
+"One picture an image node drew, as the run graph shows it."
+type ExecutionPicture {
+    id: ID!
+    "Which step drew it, so the graph shows it under that node."
+    nodeKey: String!
+    "Where the bytes are served: an <img src> and the download."
+    url: String!
+    "What it was drawn from, its alt text."
+    prompt: String!
+    filename: String!
+    contentType: String!
 }
 
 "What a variable holds. Scalars only: a shape belongs in the object catalogue."

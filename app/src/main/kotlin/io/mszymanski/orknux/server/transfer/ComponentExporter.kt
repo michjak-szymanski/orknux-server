@@ -227,6 +227,11 @@ class ComponentExporter(
                 // A session node points at no catalogue entry: what it names is
                 // a key it carries, so it brings nothing with it.
                 NodeKind.SESSION -> emptyList()
+                // An image node points at a model, which is not a transferable
+                // component - no more than an agent node's model is - so it
+                // brings nothing with it and the workspace it lands in supplies
+                // its own.
+                NodeKind.IMAGE -> emptyList()
             }
         }.distinct()
     }

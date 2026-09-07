@@ -48,6 +48,9 @@ enum class NodeKind {
     /** Makes an object out of what the run is carrying, and hands it on. */
     OBJECT,
 
+    /** Draws a picture from a prompt, with one of the workspace's image models. */
+    IMAGE,
+
     /**
      * Names an LLM session, for the agent nodes wired to it to talk into.
      *
@@ -214,6 +217,14 @@ class WorkflowNode(
     var conditionId: Long? = null,
 
     /**
+     * The image model an [NodeKind.IMAGE] node draws with; only that kind has
+     * one. Picked on the node itself, like an agent node picks an agent, rather
+     * than taken from a workspace default. Issue #333.
+     */
+    @Column(name = "image_model_id")
+    var imageModelId: Long? = null,
+
+    /**
      * The shape an object node makes, when it uses one the workspace has saved.
      *
      * Null is a shape of the node's own: its fields are whatever it holds. A
@@ -344,6 +355,7 @@ class WorkflowNode(
         actionId = actionId,
         conditionId = conditionId,
         objectId = objectId,
+        imageModelId = imageModelId,
         positionX = positionX,
         positionY = positionY,
         yesLabel = yesLabel,

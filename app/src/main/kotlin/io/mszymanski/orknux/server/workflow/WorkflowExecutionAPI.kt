@@ -36,7 +36,12 @@ class WorkflowExecutionAPI(
     private val access: WorkspaceAccess,
     private val temporal: TemporalLinks,
     private val auditRecorder: WorkspaceAuditRecorder,
+    private val pictures: ExecutionPictureRepository,
 ) {
+
+    /** The pictures one run's image nodes drew, oldest first, as the graph shows them. */
+    private fun picturesOf(executionId: Long): List<ExecutionPictureView> =
+        pictures.findByExecutionIdOrderByDrawnAtAscIdAsc(executionId).map(::ExecutionPictureView)
 
     @QueryMapping
     fun workspaceExecutions(
@@ -98,6 +103,7 @@ class WorkflowExecutionAPI(
             edgesOf(run.workflowId),
             temporal.forExecution(run.id),
             assignments.existsByWorkspaceIdAndWorkflowId(run.workspaceId, run.workflowId),
+            picturesOf(run.id),
         )
     }
 
@@ -232,6 +238,7 @@ class WorkflowExecutionAPI(
             edgesOf(started.workflowId),
             temporal.forExecution(started.id),
             assignments.existsByWorkspaceIdAndWorkflowId(started.workspaceId, started.workflowId),
+            picturesOf(started.id),
         )
 
     /**
@@ -248,6 +255,32 @@ class WorkflowExecutionAPI(
     private fun requireWorkspaceAccess(workspaceId: Long) {
         access.requireVisible(workspaceId)
     }
+}
+
+/**
+ * One picture an image node drew, as the run graph shows it.
+ *
+ * The bytes are served by [ExecutionPictureAPI]; this carries the link and what
+ * is needed to draw and name it. [nodeKey] is which step drew it, so the graph
+ * shows each picture under the node that made it. Issue #333.
+ */
+data class ExecutionPictureView(
+    val id: Long,
+    val nodeKey: String,
+    val url: String,
+    /** What it was drawn from, its alt text. */
+    val prompt: String,
+    val filename: String,
+    val contentType: String,
+) {
+    constructor(picture: ExecutionPicture) : this(
+        id = requireNotNull(picture.id),
+        nodeKey = picture.nodeKey,
+        url = "/api/execution-pictures/${requireNotNull(picture.id)}",
+        prompt = picture.prompt,
+        filename = picture.filename,
+        contentType = picture.contentType,
+    )
 }
 
 /**
@@ -361,12 +394,20 @@ data class RunDetailView(
      * is no editor to send anybody to, and the page says that instead.
      */
     val workflowAssigned: Boolean = true,
+    /**
+     * The pictures the run's image nodes drew, keyed to their steps by
+     * [ExecutionPictureView.nodeKey] so the graph shows each under the node that
+     * drew it. Empty for a run with no image node, and for one still under way.
+     * Issue #333.
+     */
+    val pictures: List<ExecutionPictureView> = emptyList(),
 ) {
     constructor(
         run: ExecutionDetailView,
         edges: List<WorkflowEdgeView>,
         temporalUrl: String?,
         workflowAssigned: Boolean,
+        pictures: List<ExecutionPictureView>,
     ) : this(
         id = run.id,
         workspaceId = run.workspaceId,
@@ -386,6 +427,7 @@ data class RunDetailView(
         logs = run.logs,
         temporalUrl = temporalUrl,
         workflowAssigned = workflowAssigned,
+        pictures = pictures,
     )
 }
 

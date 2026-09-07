@@ -13,6 +13,9 @@ enum class NodeKind {
 
     /** Makes an object out of what the run is carrying, and hands it on. */
     OBJECT,
+
+    /** Draws a picture from a prompt, with one of the workspace's image models. */
+    IMAGE,
 }
 
 /**
@@ -44,6 +47,8 @@ data class GraphNode(
     val actionId: Long? = null,
     /** The condition a [NodeKind.CONDITION] node asks. */
     val conditionId: Long? = null,
+    /** The image model an [NodeKind.IMAGE] node draws with; null on every other kind. */
+    val imageModelId: Long? = null,
     /**
      * The trigger definition a [NodeKind.TRIGGER] node stands for.
      *

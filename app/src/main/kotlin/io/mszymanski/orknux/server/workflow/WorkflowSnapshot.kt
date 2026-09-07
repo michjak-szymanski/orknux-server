@@ -38,6 +38,7 @@ object WorkflowSnapshot {
                     "agentId" to node.agentId,
                     "actionId" to node.actionId,
                     "conditionId" to node.conditionId,
+                    "imageModelId" to node.imageModelId,
                     "triggerId" to node.triggerId,
                     "outputName" to node.outputName,
                     "mappings" to node.mappings.mapValues { (_, binding) ->
@@ -79,6 +80,7 @@ object WorkflowSnapshot {
                     agentId = number(node, "agentId"),
                     actionId = number(node, "actionId"),
                     conditionId = number(node, "conditionId"),
+                    imageModelId = number(node, "imageModelId"),
                     /*
                      * Absent from every snapshot published before a run could
                      * tell two triggers apart, and read as the graph declining

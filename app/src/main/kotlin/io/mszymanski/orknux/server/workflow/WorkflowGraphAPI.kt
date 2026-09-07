@@ -395,11 +395,13 @@ class WorkflowGraphAPI(
         actionId = node.actionId.takeIf { node.kind == NodeKind.ACTION },
         conditionId = node.conditionId.takeIf { node.kind == NodeKind.CONDITION },
         objectId = node.objectId.takeIf { node.kind == NodeKind.OBJECT },
+        imageModelId = node.imageModelId.takeIf { node.kind == NodeKind.IMAGE },
         outputName = node.outputName?.trim()?.ifEmpty { null }
             // Only a node that produces something can name it; a trigger names
             // its own fields and a condition passes through what it was given.
             ?.takeIf {
-                node.kind == NodeKind.AGENT || node.kind == NodeKind.ACTION || node.kind == NodeKind.OBJECT
+                node.kind == NodeKind.AGENT || node.kind == NodeKind.ACTION ||
+                    node.kind == NodeKind.OBJECT || node.kind == NodeKind.IMAGE
             }
             ?.also { if (refusing) requireReferenceable(it) },
         icon = node.icon?.trim()?.ifEmpty { null },
@@ -677,6 +679,8 @@ data class WorkflowNodeInput(
     val conditionId: Long? = null,
     /** The saved shape an object node makes; null is a shape of its own. */
     val objectId: Long? = null,
+    /** The image model an image node draws with; ignored on any other kind. */
+    val imageModelId: Long? = null,
     val outputName: String? = null,
     val icon: String? = null,
     val orientation: NodeOrientation? = null,
@@ -745,6 +749,8 @@ data class WorkflowNodeView(
     val conditionId: Long?,
     /** The saved shape an object node makes; null is a shape of its own. */
     val objectId: Long?,
+    /** The image model an image node draws with; ignored on any other kind. */
+    val imageModelId: Long?,
     val outputName: String?,
     val icon: String?,
     /** Which way round it faces on the canvas; null is left to right. */
@@ -788,6 +794,7 @@ data class WorkflowNodeView(
         actionId = node.actionId,
         conditionId = node.conditionId,
         objectId = node.objectId,
+        imageModelId = node.imageModelId,
         outputName = node.outputName,
         icon = node.icon,
         orientation = node.orientation,

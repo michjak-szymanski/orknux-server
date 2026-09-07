@@ -326,6 +326,7 @@ CREATE TABLE execution_step
     wait_until                   timestamp,
     mappings                     text,
     agent_id                     integer,
+    image_model_id               integer,
     output_name                  varchar(60),
     branch                       varchar(8),
     carried_over                 boolean not null default false,
@@ -339,7 +340,7 @@ CREATE TABLE execution_step
     attempts                     integer not null default 0,
     constraint uk_execution_step UNIQUE (execution_id, node_key),
     constraint ck_execution_step_branch CHECK (((branch IS NULL) OR ((branch) IN ('YES', 'NO', 'FAILURE')))),
-    constraint ck_execution_step_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT'))),
+    constraint ck_execution_step_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT', 'IMAGE'))),
     constraint ck_execution_step_status CHECK (((status) IN ('PENDING', 'RUNNING', 'WAITING', 'COMPLETED', 'FAILED', 'SKIPPED'))),
     constraint execution_step_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES workflow_execution(id) ON DELETE CASCADE
 );
@@ -848,6 +849,24 @@ CREATE TABLE task_picture
     constraint task_picture_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE execution_picture
+(
+    id                           integer not null primary key autoincrement,
+    execution_id                 integer not null,
+    node_key                     varchar(64) not null,
+    workspace_id                 integer not null,
+    prompt                       text not null,
+    filename                     varchar(255) not null,
+    content_type                 varchar(120) not null,
+    size_bytes                   integer not null,
+    location                     varchar(1000) not null,
+    drawn_at                     timestamp not null default CURRENT_TIMESTAMP,
+    constraint execution_picture_execution_id_fkey FOREIGN KEY (execution_id) REFERENCES workflow_execution(id) ON DELETE CASCADE,
+    constraint execution_picture_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE INDEX execution_picture_execution_idx ON execution_picture (execution_id, drawn_at, id);
+
 CREATE TABLE task_request
 (
     id                           integer not null primary key autoincrement,
@@ -1109,6 +1128,7 @@ CREATE TABLE workflow_node
     output_name                  varchar(60),
     icon                         varchar(40),
     object_id                    integer,
+    image_model_id               integer,
     yes_label                    varchar(40),
     no_label                     varchar(40),
     orientation                  varchar(16),
@@ -1124,7 +1144,7 @@ CREATE TABLE workflow_node
     constraint ck_workflow_node_retry_max_wait CHECK (((retry_max_wait_seconds IS NULL) OR ((retry_max_wait_seconds >= 1) AND (retry_max_wait_seconds <= 3600)))),
     constraint ck_workflow_node_retry_jitter CHECK (((retry_jitter IS NULL) OR ((retry_jitter >= 0) AND (retry_jitter <= 1)))),
     constraint ck_workflow_node_retry_budget CHECK (((retry_budget_seconds IS NULL) OR ((retry_budget_seconds >= 1) AND (retry_budget_seconds <= 86400)))),
-    constraint ck_workflow_node_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT', 'SESSION'))),
+    constraint ck_workflow_node_kind CHECK (((kind) IN ('TRIGGER', 'AGENT', 'ACTION', 'CONDITION', 'OBJECT', 'SESSION', 'IMAGE'))),
     constraint workflow_node_action_id_fkey FOREIGN KEY (action_id) REFERENCES workflow_action(id) ON DELETE SET NULL,
     constraint workflow_node_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE SET NULL,
     constraint workflow_node_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id) ON DELETE SET NULL,

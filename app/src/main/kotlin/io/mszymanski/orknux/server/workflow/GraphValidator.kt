@@ -161,6 +161,25 @@ class GraphValidator(
          * node reports having no action: a session with no key names nothing and
          * records nothing, which is worth saying before a run proves it.
          */
+        /*
+         * An image node reads a prompt and produces a picture.
+         *
+         * Named, that one field holds the picture reference - its url and what it
+         * is - which is what a later node points at. Unnamed, the reference is
+         * handed on as it stands and nothing downstream can say its shape. What it
+         * needs is whatever its prompt mapping reads, and what it reports unset is
+         * its model, the way an action node reports having no action.
+         */
+        NodeKind.IMAGE -> {
+            val named = node.outputName?.trim().orEmpty()
+            Ports(
+                inputs = reads(node.mappings),
+                outputs = if (named.isEmpty()) emptyList() else listOf(ActionParamView(named, ValueType.OBJECT)),
+                opaque = named.isEmpty(),
+                unresolved = "no image model".takeIf { node.imageModelId == null },
+            )
+        }
+
         NodeKind.SESSION -> Ports(unresolved = "no session key".takeIf { keyOf(node).isEmpty() })
     }
 

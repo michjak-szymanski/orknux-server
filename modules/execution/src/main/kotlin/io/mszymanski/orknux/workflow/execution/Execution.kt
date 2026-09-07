@@ -205,6 +205,10 @@ class ExecutionStep(
     @Column(name = "agent_id")
     val agentId: Long? = null,
 
+    /** The image model this step draws with, when the node is one; by id. */
+    @Column(name = "image_model_id")
+    val imageModelId: Long? = null,
+
     /**
      * What the node called what it produces, copied when the run started.
      *

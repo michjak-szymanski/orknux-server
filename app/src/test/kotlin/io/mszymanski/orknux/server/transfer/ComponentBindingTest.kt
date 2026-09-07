@@ -275,15 +275,15 @@ class ComponentBindingTest(
         val told = plan(into, json)
         assertThat(told.importable).isTrue()
         assertThat(told.entries.map { it.external }).containsOnlyNulls()
-        // A workflow's name belongs to the installation rather than to one
-        // workspace, so a copy landing beside the original is always renamed —
-        // and the plan says so before anything is written.
-        assertThat(told.entries.single { it.kind == "WORKFLOW" }.disposition).isEqualTo("RENAME")
-        assertThat(told.entries.single { it.kind == "WORKFLOW" }.targetName).isEqualTo("Triage (2)")
+        // A workflow's name is unique within a workspace, not the installation,
+        // so a copy landing in a workspace that has no workflow by that name
+        // keeps it and is created rather than renamed. See issues #338, #341.
+        assertThat(told.entries.single { it.kind == "WORKFLOW" }.disposition).isEqualTo("CREATE")
+        assertThat(told.entries.single { it.kind == "WORKFLOW" }.targetName).isEqualTo("Triage")
 
         import(into, json)
 
-        val here = workflows.findByName("Triage (2)")!!
+        val here = assignments.findByWorkspaceIdAndWorkflowName(into, "Triage")!!.workflow
         assertThat(assignments.findByWorkspaceIdAndWorkflowId(into, here.id!!)).isNotNull()
         // A draft, whatever it was where it came from: publishing takes a copy
         // of the graph to run, and nobody has made one here.

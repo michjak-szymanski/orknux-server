@@ -888,7 +888,8 @@ CREATE TABLE workflow
     name                         varchar(255) not null,
     description                  varchar(500),
     status                       varchar(16) not null default 'DRAFT',
-    constraint uk_workflow_name UNIQUE (name),
+    -- A name is unique within a workspace, checked in the application against
+    -- the assignments; there is no installation-wide unique here. Issue #341.
     constraint ck_workflow_status CHECK (((status) IN ('DRAFT', 'PUBLISHED')))
 );
 

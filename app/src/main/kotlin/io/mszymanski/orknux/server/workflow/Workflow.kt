@@ -22,7 +22,11 @@ class Workflow(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null,
 
-    @Column(nullable = false, unique = true)
+    // Not unique in the database: a name is unique within a workspace, and the
+    // workspace a definition belongs to is on its assignment, not here. The
+    // check is made against the assignments in WorkflowAPI, the way every other
+    // per-workspace name is. See issue #341.
+    @Column(nullable = false)
     var name: String,
 
     @Column(length = 500)

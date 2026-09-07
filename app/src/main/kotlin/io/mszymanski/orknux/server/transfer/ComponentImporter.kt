@@ -1198,12 +1198,11 @@ class ComponentImporter(
     /**
      * The id this workspace already has under that name, if any.
      *
-     * A workflow is the exception and is asked of the installation rather than
-     * of the workspace: the definition's name is unique across all of them, and
-     * one that is taken is taken whether or not this workspace can see it. So a
-     * workflow arriving beside one of the same name is renamed even when the
-     * name belongs to a workspace somebody has never heard of — which is also
-     * why removing a workflow from a workspace does not free its name.
+     * A workflow is asked of the workspace like everything else: a name is taken
+     * only where the workspace itself has assigned one, resolved across the
+     * assignment rather than by looking the definition up installation-wide. An
+     * import into one workspace no longer sees, renames around, or reports a
+     * same-named workflow in another. See issues #338 and #341.
      */
     private fun findByName(workspaceId: Long, kind: ComponentKind, name: String): Long? = when (kind) {
         ComponentKind.OBJECT -> objects.findByWorkspaceIdAndName(workspaceId, name)?.id
@@ -1214,7 +1213,7 @@ class ComponentImporter(
         ComponentKind.ACTION -> actions.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.TRIGGER -> triggers.findByWorkspaceIdAndName(workspaceId, name)?.id
         ComponentKind.AGENT -> agents.findByWorkspaceIdAndName(workspaceId, name)?.id
-        ComponentKind.WORKFLOW -> workflows.findByName(name)?.id
+        ComponentKind.WORKFLOW -> assignments.findByWorkspaceIdAndWorkflowName(workspaceId, name)?.workflow?.id
     }
 
     private fun categoryOf(kind: ComponentKind): WorkspaceAuditCategory = when (kind) {

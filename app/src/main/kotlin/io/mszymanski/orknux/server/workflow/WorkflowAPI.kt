@@ -81,7 +81,7 @@ class WorkflowAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw WorkflowNameInvalidException()
         requireWorkspaceAccess(input.workspaceId)
-        if (workflows.findByName(name) != null) throw WorkflowNameTakenException(name)
+        if (assignments.existsByWorkspaceIdAndWorkflowName(input.workspaceId, name)) throw WorkflowNameTakenException(name)
 
         val workflow = workflows.save(Workflow(name = name, description = input.description?.trim()?.ifEmpty { null }))
         val assignment = assignments.save(WorkspaceWorkflow(workspaceId = input.workspaceId, workflow = workflow, enabled = true))
@@ -106,9 +106,9 @@ class WorkflowAPI(
      * a second webhook path nobody asked for.
      *
      * The name is the caller's, or *(copy)* with a number after it when that is
-     * taken too. Workflow names are unique across the installation, so a
-     * duplicate that refused on the name would refuse on exactly the press
-     * somebody makes twice.
+     * taken too. Workflow names are unique within a workspace, so a duplicate
+     * that refused on the name would refuse on exactly the press somebody makes
+     * twice.
      *
      * Nothing else is carried: not the publications, which belong to the
      * workflow that was published, and not the runs, which are history and
@@ -124,10 +124,12 @@ class WorkflowAPI(
         val sourceId = requireNotNull(source.id)
         val wanted = name?.trim()?.ifEmpty { null }
         if (name != null && wanted == null) throw WorkflowNameInvalidException()
-        if (wanted != null && workflows.findByName(wanted) != null) throw WorkflowNameTakenException(wanted)
+        if (wanted != null && assignments.existsByWorkspaceIdAndWorkflowName(assignment.workspaceId, wanted)) {
+            throw WorkflowNameTakenException(wanted)
+        }
 
         val copy = workflows.save(
-            Workflow(name = wanted ?: freeName(source.name), description = source.description),
+            Workflow(name = wanted ?: freeName(assignment.workspaceId, source.name), description = source.description),
         )
         val copyId = requireNotNull(copy.id)
 
@@ -153,15 +155,15 @@ class WorkflowAPI(
      * *(copy 2)*, which says what it is; a name with a number of the machine's
      * choosing in it says only that the machine was here.
      */
-    private fun freeName(from: String): String {
+    private fun freeName(workspaceId: Long, from: String): String {
         val first = "$from (copy)"
-        if (workflows.findByName(first) == null) return first
+        if (!assignments.existsByWorkspaceIdAndWorkflowName(workspaceId, first)) return first
         var at = 2
-        while (workflows.findByName("$from (copy $at)") != null) at += 1
+        while (assignments.existsByWorkspaceIdAndWorkflowName(workspaceId, "$from (copy $at)")) at += 1
         return "$from (copy $at)"
     }
 
-    /** Backs the workflow settings form. The definition is shared, so a rename is org-wide. */
+    /** Backs the workflow settings form. A name is checked free within its own workspace. */
     @MutationMapping
     @Transactional
     fun updateWorkflow(@Argument id: Long, @Argument input: UpdateWorkflowInput): WorkspaceWorkflowView {
@@ -173,7 +175,9 @@ class WorkflowAPI(
 
         val workflow = assignment.workflow
         val previousName = workflow.name
-        if (name != previousName && workflows.findByName(name) != null) throw WorkflowNameTakenException(name)
+        if (name != previousName && assignments.existsByWorkspaceIdAndWorkflowName(assignment.workspaceId, name)) {
+            throw WorkflowNameTakenException(name)
+        }
 
         workflow.name = name
         workflow.description = input.description?.trim()?.ifEmpty { null }

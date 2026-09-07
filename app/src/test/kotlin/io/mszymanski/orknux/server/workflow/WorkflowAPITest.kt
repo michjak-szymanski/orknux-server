@@ -98,6 +98,20 @@ class WorkflowAPITest(
     }
 
     @Test
+    fun `allows the same workflow name in a different workspace`() {
+        create("Backend CI/CD Pipeline")
+
+        graphQlTester.document(
+            """mutation { createWorkflow(input: { workspaceId: $otherWorkspaceId, name: "Backend CI/CD Pipeline" }) { name } }""",
+        ).execute()
+            .path("createWorkflow.name").entity(String::class.java).isEqualTo("Backend CI/CD Pipeline")
+
+        assertThat(workflows.findAll()).hasSize(2)
+        assertThat(assignments.findAll().map { it.workspaceId })
+            .containsExactlyInAnyOrder(workspaceId, otherWorkspaceId)
+    }
+
+    @Test
     fun `rejects a blank workflow name`() {
         graphQlTester.document("""mutation { createWorkflow(input: { workspaceId: $workspaceId, name: "  " }) { id } }""")
             .execute()

@@ -23,6 +23,17 @@ interface WorkspaceWorkflowRepository : JpaRepository<WorkspaceWorkflow, Long> {
     fun existsByWorkspaceIdAndWorkflowId(workspaceId: Long, workflowId: Long): Boolean
 
     /**
+     * Whether this workspace already has a workflow by this name - the name
+     * check, scoped to the workspace rather than the installation, because a
+     * name is only taken where it is used. Resolves across the assignment's
+     * `workflow` to its `name`. See issue #341.
+     */
+    fun existsByWorkspaceIdAndWorkflowName(workspaceId: Long, workflowName: String): Boolean
+
+    /** The assignment a name belongs to in this workspace, for the importer's reuse decision. */
+    fun findByWorkspaceIdAndWorkflowName(workspaceId: Long, workflowName: String): WorkspaceWorkflow?
+
+    /**
      * The assignment itself, for a caller that needs more than whether it is
      * there - which in practice means whether the workspace has it switched on.
      */

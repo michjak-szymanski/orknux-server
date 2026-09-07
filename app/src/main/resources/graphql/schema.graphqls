@@ -3768,6 +3768,18 @@ type McpServer {
     secretVariableCatalog: String
     "A reference pointing at nothing, reported rather than assumed away."
     secretVariableMissing: Boolean!
+    """
+    Whether the last check reached the server. Null until the first one, which
+    the screen draws as neither reachable nor failed rather than as a failure.
+    Kept up to date on a timer, so the list says which servers answer now.
+    """
+    reachable: Boolean
+    "When that check was made, ISO-8601, or null before the first one."
+    lastCheckedAt: String
+    "The sentence that check came back with, the same the Check button shows."
+    checkDetail: String
+    "How many tools it offered on a check that got that far."
+    toolCount: Int
 }
 
 "What pressing Check on an MCP server found."

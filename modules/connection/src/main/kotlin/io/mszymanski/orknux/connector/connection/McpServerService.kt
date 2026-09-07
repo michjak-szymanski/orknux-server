@@ -57,26 +57,47 @@ class McpServerService(
      */
     fun checkMcpServer(id: Long): McpServerCheck {
         val server = servers.findByIdOrNull(id) ?: throw McpServerNotFoundException(id)
+        val check = runCheck(server)
+        record(server, check)
+        // One statement, after the network conversation rather than around it -
+        // the same reason ShellService.checkShell saves outside a transaction.
+        servers.save(server)
+        return check
+    }
 
-        return when (val listing = client.tools(server)) {
-            is McpListing.Tools -> {
-                log.info("MCP server {} answered a check with {} tool(s)", server.name, listing.tools.size)
-                McpServerCheck(
-                    reachable = true,
-                    detail = when (listing.tools.size) {
-                        0 -> "Connected. The server offers no tools."
-                        1 -> "Connected. The server offers one tool."
-                        else -> "Connected. The server offers ${listing.tools.size} tools."
-                    },
-                    tools = listing.tools.size,
-                )
-            }
-
-            is McpListing.Failed -> {
-                log.info("MCP server {} failed a check: {}", server.name, listing.reason)
-                McpServerCheck(reachable = false, detail = listing.reason, tools = null)
-            }
+    /**
+     * The check itself, without recording it. The handshake and `tools/list` an
+     * agent makes, deliberately the same: a check that proved something the real
+     * path does not do proves nothing. It counts the tools rather than listing
+     * them - what a check has to establish is that the address, credential and
+     * protocol work; the tools are on the screen already.
+     */
+    private fun runCheck(server: McpServer): McpServerCheck = when (val listing = client.tools(server)) {
+        is McpListing.Tools -> {
+            log.info("MCP server {} answered a check with {} tool(s)", server.name, listing.tools.size)
+            McpServerCheck(
+                reachable = true,
+                detail = when (listing.tools.size) {
+                    0 -> "Connected. The server offers no tools."
+                    1 -> "Connected. The server offers one tool."
+                    else -> "Connected. The server offers ${listing.tools.size} tools."
+                },
+                tools = listing.tools.size,
+            )
         }
+
+        is McpListing.Failed -> {
+            log.info("MCP server {} failed a check: {}", server.name, listing.reason)
+            McpServerCheck(reachable = false, detail = listing.reason, tools = null)
+        }
+    }
+
+    /** Writes a check onto the entity, so the list can show it. The caller saves. */
+    private fun record(server: McpServer, check: McpServerCheck) {
+        server.lastCheckedAt = java.time.OffsetDateTime.now()
+        server.reachable = check.reachable
+        server.checkDetail = check.detail.take(DETAIL_LENGTH)
+        server.toolCount = check.tools
     }
 
     @Transactional
@@ -169,6 +190,9 @@ class McpServerService(
 
     private companion object {
         val log = LoggerFactory.getLogger(McpServerService::class.java)
+
+        /** As much of a check's sentence as the column holds; the rest is a repeat. */
+        const val DETAIL_LENGTH = 1000
     }
 }
 
@@ -227,6 +251,18 @@ data class McpServerView(
     val secretVariableCatalog: String?,
     /** A reference pointing at nothing, reported rather than assumed away. */
     val secretVariableMissing: Boolean,
+    /**
+     * What the last check found, so the list shows reachability without anybody
+     * pressing Check. Null on [reachable] is "not checked yet", drawn as neither
+     * green nor red rather than as a failure. Issue #329.
+     */
+    val reachable: Boolean?,
+    /** ISO-8601, the same shape [ModelProviderView.lastCheckedAt] hands over. */
+    val lastCheckedAt: String?,
+    /** The sentence that check came back with, the same the button shows. */
+    val checkDetail: String?,
+    /** How many tools it offered on a check that got that far. */
+    val toolCount: Int?,
 ) {
     constructor(server: McpServer, held: HeldSecret? = null) : this(
         id = requireNotNull(server.id),
@@ -240,6 +276,10 @@ data class McpServerView(
         secretVariableName = held?.name,
         secretVariableCatalog = held?.catalog,
         secretVariableMissing = server.secretVariableId != null && held == null,
+        reachable = server.reachable,
+        lastCheckedAt = server.lastCheckedAt?.format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        checkDetail = server.checkDetail,
+        toolCount = server.toolCount,
     )
 }
 

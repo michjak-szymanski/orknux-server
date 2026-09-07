@@ -458,6 +458,11 @@ CREATE TABLE mcp_server
     auth_type                    varchar(16) not null default 'NONE',
     secret                       varchar(4000),
     secret_variable_id           integer,
+    -- The last check's result, so the list shows reachability without a press. #329
+    last_checked_at              timestamp,
+    reachable                    boolean,
+    check_detail                 varchar(1000),
+    tool_count                   integer,
     constraint uk_mcp_server_workspace_name UNIQUE (workspace_id, name),
     constraint ck_mcp_server_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
     constraint ck_mcp_server_secret CHECK (secret_variable_id IS NULL OR secret IS NULL)

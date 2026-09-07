@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.integration
 
 import com.sun.net.httpserver.HttpServer
+import io.mszymanski.orknux.connector.connection.McpServerMonitor
+import io.mszymanski.orknux.connector.connection.McpServerRepository
 import io.mszymanski.orknux.server.workspace.Workspace
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.assertj.core.api.Assertions.assertThat
@@ -36,6 +38,8 @@ import java.nio.charset.StandardCharsets
 class McpServerCheckTest(
     @Autowired val graphQlTester: ExecutionGraphQlServiceTester,
     @Autowired val workspaces: WorkspaceRepository,
+    @Autowired val servers: McpServerRepository,
+    @Autowired val monitor: McpServerMonitor,
 ) {
 
     private var workspaceId: Long = 0
@@ -43,6 +47,7 @@ class McpServerCheckTest(
 
     @BeforeEach
     fun reset() {
+        servers.deleteAll()
         workspaces.deleteAll()
         workspaceId = requireNotNull(workspaces.save(Workspace(name = "backend")).id)
     }
@@ -144,6 +149,35 @@ class McpServerCheckTest(
             held.stop(0)
             return port
         }
+
+    /**
+     * The check is written onto the row, so the list shows reachability without
+     * anybody pressing anything. Issue #329.
+     */
+    @Test
+    fun `a check is written onto the server`() {
+        val id = mcpServer("Brave Search", serve { _, _ -> null })
+
+        check(id)
+
+        val stored = servers.findById(id).orElseThrow()
+        assertThat(stored.reachable).isTrue()
+        assertThat(stored.toolCount).isEqualTo(1)
+        assertThat(stored.lastCheckedAt).isNotNull()
+        assertThat(stored.checkDetail).contains("one tool")
+    }
+
+    /** And the monitor's sweep records every server, with nobody pressing Check. */
+    @Test
+    fun `the monitor sweep records a server on its own`() {
+        val id = mcpServer("Brave Search", serve { _, _ -> null })
+
+        monitor.sweep()
+
+        val stored = servers.findById(id).orElseThrow()
+        assertThat(stored.reachable).isTrue()
+        assertThat(stored.lastCheckedAt).isNotNull()
+    }
 
     private fun detailOf(answer: org.springframework.graphql.test.tester.GraphQlTester.Response): String =
         answer.path("checkMcpServer.detail").entity(String::class.java).get()

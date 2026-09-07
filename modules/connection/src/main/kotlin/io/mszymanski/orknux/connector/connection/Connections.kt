@@ -375,4 +375,24 @@ class McpServer(
     @OrderColumn(name = "position")
     var headers: MutableList<HttpHeader> = mutableListOf(),
 
+    /**
+     * What the last check found, kept so the list can show reachability without
+     * anybody pressing Check. Null until the first check, which reads as "not
+     * checked yet" rather than as a failure. Issue #329.
+     */
+    @Column(name = "last_checked_at")
+    var lastCheckedAt: java.time.OffsetDateTime? = null,
+
+    /** Whether that check reached the server. Null before the first one. */
+    @Column(name = "reachable")
+    var reachable: Boolean? = null,
+
+    /** The one sentence that check came back with, the same the button shows. */
+    @Column(name = "check_detail", length = 1000)
+    var checkDetail: String? = null,
+
+    /** How many tools it offered, on a check that got that far. */
+    @Column(name = "tool_count")
+    var toolCount: Int? = null,
+
 )

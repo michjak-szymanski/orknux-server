@@ -226,7 +226,8 @@ class VariableAPI(
             }
             variable.kind = kind
         }
-        input.value?.takeIf { it.isNotEmpty() }?.let { variable.value = it }
+        // An empty string clears what is stored; only an absent value leaves it alone.
+        input.value?.let { variable.value = it.ifEmpty { null } }
         variable.lastModifiedAt = java.time.OffsetDateTime.now()
         variable.lastModifiedBy = currentUser()
 

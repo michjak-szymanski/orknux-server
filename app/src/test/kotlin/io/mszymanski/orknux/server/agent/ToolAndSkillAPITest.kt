@@ -496,6 +496,45 @@ class ToolAndSkillAPITest(
             }
     }
 
+    /**
+     * The mismatch behind "at least a is not a string": a tool whose code took
+     * three arguments while its details declared one saved fine, and then the
+     * model filled the one declared parameter — whose whole object landed in
+     * the code's first argument. Refused at save now, as a function's is.
+     */
+    @Test
+    fun `code that takes a different number of arguments than the tool declares is refused`() {
+        val id = tool("lookup")
+
+        graphQlTester.document(
+            """
+            mutation {
+              updateTool(id: $id, input: {
+                source: "export default function lookup(a, b) { return {}; }",
+                typescript: "export default function lookup(a: string, b: string) { return {}; }"
+              }) { id }
+            }
+            """,
+        ).execute().errors().expect { it.message?.contains("The code takes 2") == true }.verify()
+    }
+
+    @Test
+    fun `a tool's timeout is set on its own, cleared by null, and bounded`() {
+        val id = tool("slowCall")
+
+        graphQlTester.document(
+            """mutation { setToolTimeout(id: $id, seconds: 120) { timeoutSeconds } }""",
+        ).execute().path("setToolTimeout.timeoutSeconds").entity(Int::class.java).isEqualTo(120)
+
+        graphQlTester.document(
+            """mutation { setToolTimeout(id: $id, seconds: 601) { id } }""",
+        ).execute().errors().expect { it.message?.contains("between 1 and 600") == true }.verify()
+
+        graphQlTester.document(
+            """mutation { setToolTimeout(id: $id, seconds: null) { timeoutSeconds } }""",
+        ).execute().path("setToolTimeout.timeoutSeconds").valueIsNull()
+    }
+
     private fun tool(name: String): Long = graphQlTester.document(
         """mutation { createTool(input: { workspaceId: $workspaceId, name: "$name" }) { id } }""",
     ).execute().path("createTool.id").entity(Long::class.java).get()

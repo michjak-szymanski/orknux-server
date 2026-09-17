@@ -2,7 +2,9 @@ package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.server.action.ScriptImports
 import io.mszymanski.orknux.server.action.ScriptImportsResult
+import io.mszymanski.orknux.server.action.ScriptTimeouts
 import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.slf4j.LoggerFactory
@@ -26,6 +28,8 @@ class WorkspaceToolCaller(
     private val tools: AgentToolRepository,
     private val scripts: ScriptRunner,
     private val scriptImports: ScriptImports,
+    private val externals: VariableArguments,
+    private val timeouts: ScriptTimeouts,
     private val mapper: ObjectMapper,
 ) {
 
@@ -76,12 +80,15 @@ class WorkspaceToolCaller(
         val result = scripts.call(
             source = tool.source,
             functionName = tool.name,
-            arguments = argumentsFor(tool, arguments),
+            // The declared parameters as the model filled them, then the
+            // workspace's variables — after the declaration, where the code
+            // expects them, exactly as a function is handed its own.
+            arguments = argumentsFor(tool, arguments) + externals.of(tool.externals, "Tool ${tool.name}"),
             context = context(agent, tool),
             modules = resolved.modules,
             imports = resolved.imports,
-        
             on = agent.workspaceId,
+            timeoutMillis = timeouts.millisFor(tool.timeoutSeconds, agent.workspaceId),
         )
         return when (result) {
             is ScriptResult.Returned -> result.json ?: mapper.writeValueAsString(mapOf("result" to null))

@@ -143,6 +143,42 @@ class FunctionAPITest(
         assertThat(functions.findAll()).hasSize(1)
     }
 
+    /**
+     * A rename follows into the scripts that called it by its name: the alias
+     * on the import row and the `imports.name` in the importer's code move
+     * together, so nobody is left reading a call to a function that no longer
+     * exists. An alias the importer chose for itself would be left alone.
+     */
+    @Test
+    fun `renaming a function renames the alias its importers called it by`() {
+        val fooId = create("foo")
+
+        val barId = graphQlTester.document(
+            """
+            mutation {
+              createFunction(input: {
+                workspaceId: $workspaceId, name: "bar",
+                params: [{ name: "email", type: STRING }],
+                imports: [{ functionId: $fooId, name: "foo" }],
+                source: "export default async function bar(email) { return imports.foo(email); }",
+                typescript: "export default async function bar(email: string) { return imports.foo(email); }"
+              }) { id }
+            }
+            """,
+        ).execute().path("createFunction.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """mutation { updateFunction(id: $fooId, input: { name: "fooRenamed" }) { name } }""",
+        ).execute().path("updateFunction.name").entity(String::class.java).isEqualTo("fooRenamed")
+
+        val bar = requireNotNull(functions.findById(barId).orElse(null))
+        assertThat(bar.imports.single().importName).isEqualTo("fooRenamed")
+        assertThat(bar.source).contains("imports.fooRenamed(email)")
+        assertThat(bar.typescript).contains("imports.fooRenamed(email)")
+        assertThat(audit.findAll().map { it.message })
+            .contains("Function foo renamed to fooRenamed, followed in 1 importing script")
+    }
+
     private fun create(name: String): Long = graphQlTester.document(
         """
         mutation {

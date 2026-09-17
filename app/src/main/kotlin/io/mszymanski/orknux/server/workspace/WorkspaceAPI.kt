@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.issue.IssueType
 import io.mszymanski.orknux.server.issue.IssueTypeAPI
 import io.mszymanski.orknux.server.issue.IssueTypeRepository
 import io.mszymanski.orknux.server.task.TaskProperties
+import io.mszymanski.orknux.workflow.script.ScriptProperties
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.security.Role
 import io.mszymanski.orknux.server.security.RoleNotFoundException
@@ -37,6 +38,8 @@ class WorkspaceAPI(
     private val issueTypes: IssueTypeRepository,
     /** Only to say what a task gets where the workspace has not said. */
     private val taskProperties: TaskProperties,
+    /** Only to say how long a script may run where the workspace has not said. */
+    private val scriptProperties: ScriptProperties,
 ) {
 
     /**
@@ -248,6 +251,14 @@ class WorkspaceAPI(
      */
     @SchemaMapping(typeName = "Workspace")
     fun taskMaxTurnsDefault(workspace: Workspace): Int = taskProperties.maxTurns
+
+    /**
+     * The installation's script timeout, in seconds, for the same box: the
+     * default the workspace inherits while it has decided nothing.
+     */
+    @SchemaMapping(typeName = "Workspace")
+    fun scriptTimeoutSecondsDefault(workspace: Workspace): Int =
+        (scriptProperties.timeoutMillis / 1000).toInt().coerceAtLeast(1)
 
     /**
      * Chooses the model the workspace uses for its own small jobs.
@@ -544,6 +555,35 @@ class WorkspaceAPI(
     }
 
     /**
+     * How long this workspace's tools and functions may run, where they have no
+     * timeout of their own.
+     *
+     * Null clears it, which puts the workspace back on the installation's own
+     * bound - the same shape the task turns above have, and for the same
+     * reason. Read per call, so this decides the next run and leaves the ones
+     * already going alone.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceScriptTimeout(@Argument workspaceId: Long, @Argument seconds: Int?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        if (seconds != null && seconds !in MIN_SCRIPT_TIMEOUT_SECONDS..MAX_SCRIPT_TIMEOUT_SECONDS) {
+            throw ScriptTimeoutOutOfRangeException(seconds)
+        }
+
+        workspace.scriptTimeoutSeconds = seconds
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            seconds?.let { "A tool or function may run for $it seconds" }
+                ?: "The time a tool or function may run is the installation's again",
+        )
+        return workspace
+    }
+
+    /**
      * How voice mode decides somebody has finished talking, for this workspace.
      *
      * Three settings and one call, because they are one decision. The pause is
@@ -767,6 +807,23 @@ const val MAX_TASK_TURNS = 200
 class TaskTurnsOutOfRangeException(val turns: Int) : RuntimeException(
     "$turns is not a number of turns a task can be given. " +
         "Choose between $MIN_TASK_TURNS and $MAX_TASK_TURNS.",
+)
+
+/**
+ * The bounds a script timeout is held to, wherever one is set — the workspace's
+ * default and a tool's or function's own number are the same judgement at two
+ * scopes, so they answer to the same limits.
+ *
+ * The ceiling is high enough for a genuinely long call and low enough that a
+ * timeout typed in milliseconds by mistake is caught here rather than holding a
+ * sandbox thread for a fortnight.
+ */
+const val MIN_SCRIPT_TIMEOUT_SECONDS = 1
+const val MAX_SCRIPT_TIMEOUT_SECONDS = 600
+
+class ScriptTimeoutOutOfRangeException(val seconds: Int) : RuntimeException(
+    "$seconds is not a number of seconds a script can be given. " +
+        "Choose between $MIN_SCRIPT_TIMEOUT_SECONDS and $MAX_SCRIPT_TIMEOUT_SECONDS.",
 )
 
 /**

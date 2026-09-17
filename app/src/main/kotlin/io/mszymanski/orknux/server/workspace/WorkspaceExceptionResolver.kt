@@ -36,6 +36,7 @@ class WorkspaceExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is CompactionThresholdInvalidException,
             is CompactionSummaryInvalidException,
             is CompactionSummaryTooLongException,
+            is ScriptTimeoutOutOfRangeException,
             -> ErrorType.BAD_REQUEST
             is WorkspaceNotFoundException,
             is ModelNotFoundForWorkspaceException,

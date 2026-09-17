@@ -1,5 +1,7 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.FunctionExternal
+import io.mszymanski.orknux.server.action.FunctionExternalView
 import io.mszymanski.orknux.server.action.ImportNameInvalidException
 import io.mszymanski.orknux.server.action.ImportNameTakenException
 import io.mszymanski.orknux.server.action.ImportNotFoundException
@@ -20,10 +22,16 @@ import io.mszymanski.orknux.server.library.LibraryImports
 import io.mszymanski.orknux.server.obj.ObjectNotFoundException
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.variable.VariableNotFoundException
+import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
+import io.mszymanski.orknux.server.workspace.MAX_SCRIPT_TIMEOUT_SECONDS
+import io.mszymanski.orknux.server.workspace.MIN_SCRIPT_TIMEOUT_SECONDS
+import io.mszymanski.orknux.server.workspace.ScriptTimeoutOutOfRangeException
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.workflow.script.ScriptArity
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
@@ -59,6 +67,7 @@ class ToolAPI(
     private val functions: WorkflowFunctionRepository,
     private val scriptImports: ScriptImports,
     private val libraryImports: LibraryImports,
+    private val variables: WorkspaceVariableRepository,
 ) {
 
     @QueryMapping
@@ -88,17 +97,20 @@ class ToolAPI(
          * tools, a duplicate, a test - still creates a tool an agent can call.
          */
         val params = (input.params ?: listOf(DEFAULT_PARAM)).toParams(input.workspaceId)
+        val externals = input.externalVariableIds.orEmpty().toExternals(input.workspaceId)
         val code = codeFrom(input.source, input.typescript) ?: starter(name, params)
         requireParses(code.javascript)
+        requireSignature(code.javascript, params.size, externals.size)
 
         val tool = tools.save(
             AgentTool(
                 workspaceId = input.workspaceId,
                 name = name,
-                description = input.description?.trim()?.ifEmpty { null },
+                description = input.description?.trim()?.ifEmpty { null }?.also(::requireDescriptionFits),
                 source = code.javascript,
                 typescript = code.typescript,
                 params = params,
+                externals = externals,
                 imports = input.imports.orEmpty().toImports(input.workspaceId),
                 libraries = input.libraries.orEmpty().toLibraries(),
                 lastModifiedAt = OffsetDateTime.now(),
@@ -127,7 +139,7 @@ class ToolAPI(
             }
             tool.name = name
         }
-        input.description?.let { tool.description = it.trim().ifEmpty { null } }
+        input.description?.let { tool.description = it.trim().ifEmpty { null }?.also(::requireDescriptionFits) }
         /*
          * Both halves or neither. A write that moved one would leave the editor
          * showing code the sandbox is not running, which is the one failure this
@@ -144,8 +156,17 @@ class ToolAPI(
          * meant to rename a tool does not have to resend its signature to keep it.
          */
         input.params?.let { tool.params = it.toParams(tool.workspaceId) }
+        input.externalVariableIds?.let { tool.externals = it.toExternals(tool.workspaceId) }
         input.imports?.let { tool.imports = it.toImports(tool.workspaceId) }
         input.libraries?.let { tool.libraries = it.toLibraries() }
+
+        /*
+         * Checked against what this tool will be once saved, not against whichever
+         * field happened to arrive: adding a parameter without touching the code
+         * breaks the contract exactly as much as editing the code does.
+         */
+        requireSignature(tool.source, tool.params.size, tool.externals.size)
+
         tool.lastModifiedAt = OffsetDateTime.now()
         tool.lastModifiedBy = currentUser()
 
@@ -172,6 +193,38 @@ class ToolAPI(
         tool.lastModifiedBy = currentUser()
         val what = if (enabled) "enabled" else "disabled"
         auditRecorder.record(tool.workspaceId, WorkspaceAuditCategory.AGENT, "Tool ${tool.name} $what")
+        return describe(tool)
+    }
+
+    /**
+     * How long one call of this tool may run.
+     *
+     * Its own mutation rather than a field on the update, for the same reason
+     * the workspace's default has one: null is a real answer — "back on the
+     * workspace's number" — and the update input reads null as "leave it
+     * alone". Read per call, so this decides the next call and leaves one
+     * already running alone.
+     */
+    @MutationMapping
+    @Transactional
+    fun setToolTimeout(@Argument id: Long, @Argument seconds: Int?): ToolView {
+        val tool = tools.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: throw ToolNotFoundException(id)
+
+        if (seconds != null && seconds !in MIN_SCRIPT_TIMEOUT_SECONDS..MAX_SCRIPT_TIMEOUT_SECONDS) {
+            throw ScriptTimeoutOutOfRangeException(seconds)
+        }
+
+        // A save like any other: it changes what the next call is given.
+        revisions.saved(tool)
+        tool.timeoutSeconds = seconds
+        tool.lastModifiedAt = OffsetDateTime.now()
+        tool.lastModifiedBy = currentUser()
+        auditRecorder.record(
+            tool.workspaceId,
+            WorkspaceAuditCategory.AGENT,
+            seconds?.let { "Tool ${tool.name} may run for $it seconds" }
+                ?: "Tool ${tool.name} runs on the workspace's time again",
+        )
         return describe(tool)
     }
 
@@ -210,21 +263,34 @@ class ToolAPI(
         return true
     }
 
-    private fun describe(tool: AgentTool) = ToolView(
-        id = requireNotNull(tool.id),
-        workspaceId = tool.workspaceId,
-        name = tool.name,
-        description = tool.description,
-        source = tool.source,
-        typescript = tool.typescript,
-        params = tool.params.map { param ->
+    private fun describe(tool: AgentTool): ToolView {
+        val params = tool.params.map { param ->
             ToolParamView(
                 name = param.name,
                 type = param.type,
                 objectId = param.objectId,
                 objectName = param.objectId?.let { objects.findByIdOrNull(it)?.name },
             )
-        },
+        }
+        val externals = tool.externals.mapNotNull { held ->
+            variables.findByIdOrNull(held.variableId)?.let { variable ->
+                FunctionExternalView(
+                    variableId = requireNotNull(variable.id),
+                    name = variable.name,
+                    type = variable.type,
+                )
+            }
+        }
+        return ToolView(
+        id = requireNotNull(tool.id),
+        workspaceId = tool.workspaceId,
+        name = tool.name,
+        description = tool.description,
+        source = tool.source,
+        typescript = tool.typescript,
+        params = params,
+        externals = externals,
+        timeoutSeconds = tool.timeoutSeconds,
         imports = tool.imports.map { imported ->
             ScriptImportView(
                 functionId = imported.importedId,
@@ -247,15 +313,61 @@ class ToolAPI(
                 library = libraryImports.find(imported.importedId)?.let(libraryImports::viewOf),
             )
         },
-        signature = tool.signature,
+        signature = signatureOf(params, externals),
         enabled = tool.enabled,
         lastModifiedAt = tool.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = tool.lastModifiedBy,
-    )
+        )
+    }
+
+    /**
+     * The two halves marked apart, the way a function's signature says it: the
+     * caller fills the declared ones, the workspace supplies the rest, and
+     * somebody reading the list needs to know which is which.
+     */
+    private fun signatureOf(params: List<ToolParamView>, externals: List<FunctionExternalView>): String {
+        val declared = params.map { "${it.name}: ${it.objectName ?: it.type.name.lowercase()}" }
+        val handed = externals.map { "${it.name}: ${it.type.name.lowercase()} (external)" }
+        return (declared + handed).joinToString(", ", "(", ")")
+    }
+
+    /**
+     * The variables this tool is to be handed, checked against the workspace
+     * that owns it: a tool cannot be given another workspace's secret by id.
+     */
+    private fun List<Long>.toExternals(workspaceId: Long): MutableList<FunctionExternal> = distinct()
+        .map { variableId ->
+            val variable = variables.findByIdOrNull(variableId) ?: throw VariableNotFoundException(variableId)
+            if (variable.workspaceId != workspaceId) throw VariableNotFoundException(variableId)
+            FunctionExternal(variableId = variableId)
+        }
+        .toMutableList()
 
     private fun requireParses(source: String) {
         val checked = scripts.validate(source)
         if (!checked.valid) throw ToolSourceInvalidException(checked.message ?: "The script could not be parsed")
+    }
+
+    /**
+     * Refuses code that cannot be called the way it will be called.
+     *
+     * The sandbox passes the declared parameters positionally, so a tool whose
+     * code takes three arguments while its details declare one is not a tool
+     * that works — the model fills the one declared parameter and the code
+     * reads it as its first argument, whatever that argument was meant to be.
+     * The same check a function is saved under.
+     */
+    private fun requireSignature(source: String, params: Int, externals: Int) {
+        val expected = params + externals
+        when (val counted = scripts.arity(source)) {
+            is ScriptArity.Counted ->
+                if (counted.parameters != expected) {
+                    throw ToolSignatureMismatchException(counted.parameters, params, externals)
+                }
+
+            // No default export, or not a function: it could never have run.
+            is ScriptArity.Unreadable -> throw ToolSourceInvalidException(counted.reason)
+        }
     }
 
     /**
@@ -392,9 +504,18 @@ class ToolAPI(
         access.requireVisible(workspaceId)
     }
 
+    private fun requireDescriptionFits(description: String) {
+        if (description.length > DESCRIPTION_LIMIT) {
+            throw ToolDescriptionTooLongException(description.length, DESCRIPTION_LIMIT)
+        }
+    }
+
     private companion object {
         /** A name JavaScript can call: what the source is written against. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
+
+        /** As much description as the column holds. Checked here so going over is a refusal, not an internal error. */
+        const val DESCRIPTION_LIMIT = 4000
 
         /**
          * What a tool takes when nobody said: one object, called `input`.
@@ -424,6 +545,8 @@ data class CreateToolInput(
     val typescript: String? = null,
     /** Left out means the one every tool used to take: an object called `input`. */
     val params: List<ToolParamInput>? = null,
+    /** The workspace's variables it is handed, after the parameters it declares. */
+    val externalVariableIds: List<Long>? = null,
     /** The workspace's functions it calls, under the names it calls them. */
     val imports: List<ScriptImportInput>? = null,
     /** The installation's libraries it uses, under the names it uses them by. */
@@ -437,6 +560,8 @@ data class UpdateToolInput(
     val typescript: String? = null,
     /** Null leaves them alone; an empty list takes them all off. */
     val params: List<ToolParamInput>? = null,
+    /** Null leaves them alone; an empty list takes them all off. */
+    val externalVariableIds: List<Long>? = null,
     /** Null leaves them alone; an empty list takes them all off. */
     val imports: List<ScriptImportInput>? = null,
     /** Null leaves them alone; an empty list takes them all off. */
@@ -463,6 +588,10 @@ data class ToolView(
     val source: String,
     val typescript: String,
     val params: List<ToolParamView>,
+    /** The workspace's variables it is handed, after the parameters it declares. */
+    val externals: List<FunctionExternalView>,
+    /** How long one call may run, in seconds. Null means the workspace decides. */
+    val timeoutSeconds: Int?,
     /** What it imports, and what it calls each of them. */
     val imports: List<ScriptImportView>,
     /** The libraries it uses, and what it calls each of them. */

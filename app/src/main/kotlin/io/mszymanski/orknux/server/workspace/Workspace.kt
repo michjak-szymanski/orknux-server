@@ -223,6 +223,18 @@ class Workspace(
     var taskMaxTurns: Int? = null,
 
     /**
+     * How long one run of this workspace's tools and functions may hold its
+     * thread, in seconds, where the tool or function has no timeout of its own.
+     *
+     * Null is what every workspace starts as and means it has decided nothing,
+     * so the installation's bound is used — the same shape [taskMaxTurns] has,
+     * and for the same reason. Read per call, so changing it changes the next
+     * run rather than one in flight.
+     */
+    @Column(name = "script_timeout_seconds")
+    var scriptTimeoutSeconds: Int? = null,
+
+    /**
      * How long a pause has to run, after somebody has been talking, before
      * voice mode ends their turn and sends what they said.
      *

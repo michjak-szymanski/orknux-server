@@ -15,6 +15,9 @@ import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.variable.VariableNotFoundException
 import io.mszymanski.orknux.server.variable.VariableType
 import io.mszymanski.orknux.server.variable.WorkspaceVariableRepository
+import io.mszymanski.orknux.server.workspace.MAX_SCRIPT_TIMEOUT_SECONDS
+import io.mszymanski.orknux.server.workspace.MIN_SCRIPT_TIMEOUT_SECONDS
+import io.mszymanski.orknux.server.workspace.ScriptTimeoutOutOfRangeException
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
@@ -126,7 +129,7 @@ class FunctionAPI(
             WorkflowFunction(
                 workspaceId = input.workspaceId,
                 name = name,
-                description = input.description?.trim()?.ifEmpty { null },
+                description = input.description?.trim()?.ifEmpty { null }?.also(::requireDescriptionFits),
                 source = source,
                 typescript = code.typescript,
                 returnType = input.returnType ?: ValueType.MAP,
@@ -169,7 +172,7 @@ class FunctionAPI(
             }
             function.name = name
         }
-        input.description?.let { function.description = it.trim().ifEmpty { null } }
+        input.description?.let { function.description = it.trim().ifEmpty { null }?.also(::requireDescriptionFits) }
 
         /*
          * The code changes as a pair or not at all: what runs and what it was
@@ -215,9 +218,96 @@ class FunctionAPI(
         val message = if (previousName == function.name) {
             "Function ${function.name} updated"
         } else {
-            "Function $previousName renamed to ${function.name}"
+            val followed = renameInImporters(id, previousName, function.name)
+            "Function $previousName renamed to ${function.name}" +
+                (if (followed == 0) "" else ", followed in $followed importing ${if (followed == 1) "script" else "scripts"}")
         }
         auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, message)
+        return describe(function)
+    }
+
+    /**
+     * Carries a rename into the scripts that call this function by its old name.
+     *
+     * An import is held by id, so a rename never breaks a caller — but every
+     * importer whose alias *was* the function's name would go on calling it by a
+     * word that no longer appears anywhere, and the next person reading that
+     * code would go looking for a function that does not exist. So where the
+     * alias equals the old name, the alias and the code that spells it move
+     * together with the rename; an alias the importer chose for itself is left
+     * exactly as chosen.
+     *
+     * An importer that already uses the new name for something else is skipped
+     * whole rather than half-renamed — its old alias still resolves, because the
+     * id does the resolving.
+     *
+     * Each rewritten importer is versioned first, the same as any other save of
+     * it: the rewrite changes what runs.
+     */
+    private fun renameInImporters(functionId: Long, was: String, now: String): Int {
+        // Not a bare replace: `imports.fooBar` must survive `foo` being renamed,
+        // so both ends of the word are anchored the way JavaScript spells them.
+        val spelled = Regex("(?<![\\w$])imports\\.${Regex.escape(was)}(?![\\w$])")
+        val spoken = "imports.$now"
+        var followed = 0
+
+        functions.findByImportedFunctionId(functionId).forEach { importer ->
+            val alias = importer.imports.filter { it.importedId == functionId && it.importName == was }
+            if (alias.isEmpty()) return@forEach
+            if ((importer.imports + importer.libraries).any { it.importName == now }) return@forEach
+            revisions.saved(importer)
+            alias.forEach { it.importName = now }
+            importer.source = spelled.replace(importer.source, spoken)
+            importer.typescript = importer.typescript?.let { spelled.replace(it, spoken) }
+            importer.lastModifiedAt = OffsetDateTime.now()
+            importer.lastModifiedBy = currentUser()
+            followed++
+        }
+        tools.findByImportedFunctionId(functionId).forEach { importer ->
+            val alias = importer.imports.filter { it.importedId == functionId && it.importName == was }
+            if (alias.isEmpty()) return@forEach
+            if ((importer.imports + importer.libraries).any { it.importName == now }) return@forEach
+            revisions.saved(importer)
+            alias.forEach { it.importName = now }
+            importer.source = spelled.replace(importer.source, spoken)
+            importer.typescript = spelled.replace(importer.typescript, spoken)
+            importer.lastModifiedAt = OffsetDateTime.now()
+            importer.lastModifiedBy = currentUser()
+            followed++
+        }
+        return followed
+    }
+
+    /**
+     * How long one call of this function may run.
+     *
+     * Its own mutation rather than a field on the update, for the same reason
+     * the workspace's default has one: null is a real answer — "back on the
+     * workspace's number" — and the update input reads null as "leave it
+     * alone". Read per call, so this decides the next call and leaves one
+     * already running alone.
+     */
+    @MutationMapping
+    @Transactional
+    fun setFunctionTimeout(@Argument id: Long, @Argument seconds: Int?): FunctionView {
+        val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: throw FunctionNotFoundException(id)
+        val workspaceId = requireEditable(function)
+
+        if (seconds != null && seconds !in MIN_SCRIPT_TIMEOUT_SECONDS..MAX_SCRIPT_TIMEOUT_SECONDS) {
+            throw ScriptTimeoutOutOfRangeException(seconds)
+        }
+
+        // A save like any other: it changes what the next call is given.
+        revisions.saved(function)
+        function.timeoutSeconds = seconds
+        function.lastModifiedAt = OffsetDateTime.now()
+        function.lastModifiedBy = currentUser()
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.WORKFLOW,
+            seconds?.let { "Function ${function.name} may run for $it seconds" }
+                ?: "Function ${function.name} runs on the workspace's time again",
+        )
         return describe(function)
     }
 
@@ -581,6 +671,7 @@ class FunctionAPI(
         returnObjectName = function.returnObjectId?.let { objects.findByIdOrNull(it)?.name },
         params = params,
         externals = externals,
+        timeoutSeconds = function.timeoutSeconds,
         imports = function.imports.map(::describe),
         libraries = function.libraries.map(::describeLibrary),
         signature = signatureOf(params, externals),
@@ -808,6 +899,12 @@ class FunctionAPI(
         access.requireVisible(workspaceId)
     }
 
+    private fun requireDescriptionFits(description: String) {
+        if (description.length > DESCRIPTION_LIMIT) {
+            throw FunctionDescriptionTooLongException(description.length, DESCRIPTION_LIMIT)
+        }
+    }
+
     /** What an object is called, for an annotation that has to name it. */
     private fun objectNameOf(objectId: Long?): String? = objectId?.let { objects.findByIdOrNull(it)?.name }
 
@@ -821,6 +918,9 @@ class FunctionAPI(
     private companion object {
         /** A name JavaScript can call: what the source is written against. */
         val IDENTIFIER = Regex("[A-Za-z_$][A-Za-z0-9_$]{0,63}")
+
+        /** As much description as the column holds. Checked here so going over is a refusal, not an internal error. */
+        const val DESCRIPTION_LIMIT = 4000
     }
 }
 
@@ -932,6 +1032,8 @@ data class FunctionView(
     val params: List<FunctionParamView>,
     /** The workspace's variables it is handed, after the parameters it declares. */
     val externals: List<FunctionExternalView>,
+    /** How long one call may run, in seconds. Null means the workspace decides. */
+    val timeoutSeconds: Int?,
     /** What it imports, and what it calls each of them. */
     val imports: List<ScriptImportView>,
     /** The libraries it uses, and what it calls each of them. */

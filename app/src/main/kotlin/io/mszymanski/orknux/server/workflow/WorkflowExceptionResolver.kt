@@ -28,6 +28,7 @@ import io.mszymanski.orknux.server.action.FunctionNameTakenException
 import io.mszymanski.orknux.server.action.FunctionNotFoundException
 import io.mszymanski.orknux.server.action.FunctionParamInvalidException
 import io.mszymanski.orknux.server.action.FunctionCodeIncompleteException
+import io.mszymanski.orknux.server.action.FunctionDescriptionTooLongException
 import io.mszymanski.orknux.server.action.FunctionObjectRequiredException
 import io.mszymanski.orknux.server.revision.ComponentRevisionNotFoundException
 import io.mszymanski.orknux.server.revision.RevisionComponentGoneException
@@ -184,6 +185,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is FunctionNameInvalidException,
             is FunctionParamInvalidException,
             is FunctionSourceInvalidException,
+            is FunctionDescriptionTooLongException,
             is FunctionArgumentInvalidException,
             is FunctionCodeIncompleteException,
             is FunctionObjectRequiredException,

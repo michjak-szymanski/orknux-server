@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.ScriptImport
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.graphql.Refusal
@@ -79,10 +80,11 @@ class AgentTool(
     var name: String,
 
     /**
-     * What the tool is for, in a sentence. This is not decoration: it is what an
-     * agent reads to decide whether to call it.
+     * What the tool is for, in a sentence or a worked example. This is not
+     * decoration: it is what an agent reads to decide whether to call it, and a
+     * description good enough to quote a sample call needs room for one.
      */
-    @Column(length = 500)
+    @Column(length = 4000)
     var description: String? = null,
 
     /** What runs: the JavaScript the editor compiled from [typescript]. */
@@ -148,6 +150,30 @@ class AgentTool(
     @OrderColumn(name = "position")
     var libraries: MutableList<ScriptImport> = mutableListOf(),
 
+    /**
+     * The workspace's variables this tool is handed, after the parameters it
+     * declares — the same arrangement a function has, held in the same
+     * embeddable, because a tool is the same JavaScript in the same sandbox.
+     *
+     * The agent is never told they exist: the model fills the declared
+     * parameters and the sandbox appends these, which is how a tool reaches a
+     * credential without the credential passing through a conversation.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "agent_tool_external", joinColumns = [JoinColumn(name = "tool_id")])
+    @OrderColumn(name = "position")
+    var externals: MutableList<FunctionExternal> = mutableListOf(),
+
+    /**
+     * How long one call of this tool may run, in seconds.
+     *
+     * Null means the tool has decided nothing: the workspace's default is used,
+     * and the installation's bound where the workspace has none. Read per call,
+     * so changing it changes the next call rather than one in flight.
+     */
+    @Column(name = "timeout_seconds")
+    var timeoutSeconds: Int? = null,
+
     /** Off leaves it defined but out of reach, which a delete would not. */
     @Column(nullable = false)
     var enabled: Boolean = true,
@@ -201,10 +227,44 @@ class ToolSourceInvalidException(val reason: String) : RuntimeException(reason),
     override val arguments get() = mapOf("reason" to reason)
 }
 
+/**
+ * A description longer than the column it lives in.
+ *
+ * Said in characters, because the person pasted text and can count it — before
+ * this the database refused it and the editor showed an internal error, which
+ * told them nothing about what to shorten.
+ */
+class ToolDescriptionTooLongException(val length: Int, val limit: Int) : RuntimeException(
+    "The description is $length characters and at most $limit fit",
+), Refusal {
+
+    override val arguments get() = mapOf("length" to length, "limit" to limit)
+}
+
 class ToolParamInvalidException(val name: String) :
     RuntimeException("\"$name\" is not a name a parameter can have"), Refusal {
 
     override val arguments get() = mapOf("name" to name)
+}
+
+/**
+ * The code and the declared parameters disagree about how many arguments there are.
+ *
+ * The same rule a function is saved under, and it was missing here for no reason
+ * anybody chose: a tool whose code took three arguments while its details
+ * declared one saved fine — and then the model filled the one declared
+ * parameter, whose whole object landed in the code's first argument. The
+ * mismatch is only diagnosable at save time, so that is where it is refused.
+ */
+class ToolSignatureMismatchException(val found: Int, val params: Int, val externals: Int) : RuntimeException(
+    "The code takes $found ${if (found == 1) "argument" else "arguments"}, but this tool is handed " +
+        "${params + externals}: $params declared" +
+        (if (externals > 0) " and $externals from the workspace" else "") +
+        ". The agent fills the declared parameters and the sandbox passes them in that order, " +
+        "so the code has to take all of them.",
+), Refusal {
+
+    override val arguments get() = mapOf("found" to found, "params" to params, "externals" to externals)
 }
 
 /**

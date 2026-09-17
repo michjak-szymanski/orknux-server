@@ -47,6 +47,7 @@ object ComponentSnapshot {
             "version" to VERSION,
             "name" to function.name,
             "description" to function.description,
+            "timeoutSeconds" to function.timeoutSeconds,
             "source" to function.source,
             "typescript" to function.typescript,
             "returnType" to function.returnType.name,
@@ -85,6 +86,7 @@ object ComponentSnapshot {
             "version" to VERSION,
             "name" to tool.name,
             "description" to tool.description,
+            "timeoutSeconds" to tool.timeoutSeconds,
             "source" to tool.source,
             "typescript" to tool.typescript,
             "enabled" to tool.enabled,
@@ -93,6 +95,10 @@ object ComponentSnapshot {
             "params" to tool.params.map {
                 mapOf("name" to it.name, "type" to it.type.name, "objectId" to it.objectId)
             },
+            // Ids, not names: a variable renamed after this was written is the
+            // same variable, and a tool restored against its name would be
+            // handed a different one or none.
+            "externals" to tool.externals.map { mapOf("variableId" to it.variableId) },
             /*
              * What it imports: the id it points at, and the name it calls it.
              *
@@ -211,6 +217,7 @@ object ComponentSnapshot {
         val held = mapper.readTree(snapshot)
         function.name = text(held, "name") ?: function.name
         function.description = text(held, "description")
+        function.timeoutSeconds = number(held, "timeoutSeconds")?.toInt()
         function.source = text(held, "source") ?: function.source
         function.typescript = text(held, "typescript")
         function.returnType = enumOf(held, "returnType", function.returnType)
@@ -241,6 +248,7 @@ object ComponentSnapshot {
         val held = mapper.readTree(snapshot)
         tool.name = text(held, "name") ?: tool.name
         tool.description = text(held, "description")
+        tool.timeoutSeconds = number(held, "timeoutSeconds")?.toInt()
         tool.source = text(held, "source") ?: tool.source
         tool.typescript = text(held, "typescript") ?: tool.typescript
         tool.enabled = held.path("enabled").asBoolean(true)
@@ -250,6 +258,9 @@ object ComponentSnapshot {
                 type = enumOf(param, "type", ValueType.STRING),
                 objectId = number(param, "objectId"),
             )
+        }.toMutableList()
+        tool.externals = held.path("externals").values().mapNotNull { external ->
+            number(external, "variableId")?.let { FunctionExternal(variableId = it) }
         }.toMutableList()
         tool.imports = held.path("imports").values().mapNotNull { imported ->
             val id = number(imported, "importedId") ?: return@mapNotNull null

@@ -102,14 +102,25 @@ CREATE TABLE agent_tool
     id                           integer not null primary key autoincrement,
     workspace_id                 integer not null,
     name                         varchar(120) not null,
-    description                  varchar(500),
+    description                  varchar(4000),
     source                       text not null,
     enabled                      boolean not null default true,
     last_modified_at             timestamp not null,
     last_modified_by             varchar(120) not null,
     typescript                   text not null,
+    timeout_seconds              integer,
     constraint uk_agent_tool_name UNIQUE (workspace_id, name),
     constraint agent_tool_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_tool_external
+(
+    tool_id                      integer not null,
+    variable_id                  integer not null,
+    position                     integer not null,
+    primary key (tool_id, position),
+    constraint agent_tool_external_tool_id_fkey FOREIGN KEY (tool_id) REFERENCES agent_tool(id) ON DELETE CASCADE,
+    constraint agent_tool_external_variable_id_fkey FOREIGN KEY (variable_id) REFERENCES workspace_variable(id) ON DELETE RESTRICT
 );
 
 CREATE TABLE agent_tool_import
@@ -1009,7 +1020,8 @@ CREATE TABLE workflow_function
     id                           integer not null primary key autoincrement,
     workspace_id                 integer,
     name                         varchar(120) not null,
-    description                  varchar(500),
+    description                  varchar(4000),
+    timeout_seconds              integer,
     source                       text not null,
     return_type                  varchar(16) not null,
     last_modified_at             timestamp not null,
@@ -1208,6 +1220,7 @@ CREATE TABLE workspace
     voice_unattended_microphone_ms integer,
     voice_speech_chunking        varchar(16) not null default 'SENTENCE',
     task_max_turns               integer,
+    script_timeout_seconds       integer,
     constraint uk_workspace_name UNIQUE (name),
     constraint ck_workspace_default_memory_share CHECK (default_memory_share IS NULL OR (default_memory_share >= 1 AND default_memory_share <= 50)),
     constraint ck_workspace_voice_pause_ends_turn CHECK (voice_pause_ends_turn_ms IS NULL OR (voice_pause_ends_turn_ms BETWEEN 1500 AND 10000)),
@@ -1215,6 +1228,7 @@ CREATE TABLE workspace
     constraint ck_workspace_voice_unattended_microphone CHECK (voice_unattended_microphone_ms IS NULL OR (voice_unattended_microphone_ms BETWEEN 300000 AND 3600000)),
     constraint ck_workspace_voice_speech_chunking CHECK ((voice_speech_chunking) IN ('NONE', 'SENTENCE', 'PARAGRAPH')),
     constraint ck_workspace_task_max_turns CHECK (task_max_turns IS NULL OR (task_max_turns BETWEEN 1 AND 200)),
+    constraint ck_workspace_script_timeout CHECK (script_timeout_seconds IS NULL OR (script_timeout_seconds BETWEEN 1 AND 600)),
     constraint workspace_quick_chat_model_id_fkey FOREIGN KEY (quick_chat_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_image_model_id_fkey FOREIGN KEY (image_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
     constraint workspace_speech_model_id_fkey FOREIGN KEY (speech_model_id) REFERENCES llm_model(id) ON DELETE SET NULL,
@@ -1520,6 +1534,7 @@ CREATE INDEX idx_workflow_function_plugin ON workflow_function (plugin_id);
 CREATE INDEX idx_workflow_function_workspace ON workflow_function (workspace_id);
 CREATE UNIQUE INDEX uk_workflow_function_plugin_name ON workflow_function (name) WHERE ((scope) = 'PLUGIN');
 CREATE INDEX idx_workflow_function_external_variable ON workflow_function_external (variable_id);
+CREATE INDEX idx_agent_tool_external_variable ON agent_tool_external (variable_id);
 CREATE INDEX idx_workflow_node_action ON workflow_node (action_id) WHERE (action_id IS NOT NULL);
 CREATE INDEX idx_workflow_node_agent ON workflow_node (agent_id);
 CREATE INDEX idx_workflow_node_condition ON workflow_node (condition_id) WHERE (condition_id IS NOT NULL);

@@ -42,6 +42,7 @@ class FunctionCaller(
     private val pluginPermissions: PluginPermissions,
     private val pluginCapabilities: PluginCapabilities,
     private val externals: VariableArguments,
+    private val timeouts: ScriptTimeouts,
 ) {
 
     /**
@@ -113,6 +114,7 @@ class FunctionCaller(
                 resolved.imports,
                 on = workspaceId,
                 origin = origin.copy(functionId = function.id),
+                timeoutMillis = timeouts.millisFor(function.timeoutSeconds, workspaceId),
             )
         }
     }

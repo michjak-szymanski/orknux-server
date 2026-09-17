@@ -13,6 +13,7 @@ import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.action.ScriptImports
 import io.mszymanski.orknux.server.action.ScriptImportsResult
+import io.mszymanski.orknux.server.action.ScriptTimeouts
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -69,6 +70,7 @@ class WebhookAPI(
     private val pluginPermissions: PluginPermissions,
     private val pluginCapabilities: PluginCapabilities,
     private val externals: VariableArguments,
+    private val timeouts: ScriptTimeouts,
     private val mapper: ObjectMapper,
 ) {
 
@@ -215,8 +217,8 @@ class WebhookAPI(
                     arguments = arguments,
                     modules = resolved.modules,
                     imports = resolved.imports,
-                
                     on = trigger.workspaceId,
+                    timeoutMillis = timeouts.millisFor(function.timeoutSeconds, trigger.workspaceId),
                 )
             }
         }

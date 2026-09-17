@@ -12,6 +12,7 @@ import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.action.ScriptImports
 import io.mszymanski.orknux.server.action.ScriptImportsResult
+import io.mszymanski.orknux.server.action.ScriptTimeouts
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -46,6 +47,7 @@ class ConditionEvaluator(
     private val pluginPermissions: PluginPermissions,
     private val pluginCapabilities: PluginCapabilities,
     private val externals: VariableArguments,
+    private val timeouts: ScriptTimeouts,
     private val mapper: ObjectMapper,
     private val clock: Clock = Clock.systemDefaultZone(),
 ) {
@@ -211,7 +213,24 @@ class ConditionEvaluator(
                 }
             }
         }
-        val arguments = written.ifEmpty { listOf(input ?: "null") } + externals.of(function)
+        /*
+         * The workspace's values have a position: right after the parameters the
+         * function declares. The legacy whole-payload call and a hand-written
+         * argument list can both be shorter or longer than the declaration, and
+         * an external that slid into a declared parameter's place was read as
+         * that parameter — so where grants exist, the list is padded or trimmed
+         * to the declared count first, exactly as the sandbox does for an
+         * imported function. Where none exist, whatever was written is passed
+         * untouched, which is what every condition did before grants existed.
+         */
+        val said = written.ifEmpty { listOf(input ?: "null") }
+        val granted = externals.of(function)
+        val arguments = if (granted.isEmpty()) {
+            said
+        } else {
+            val squared = said + List((function.params.size - said.size).coerceAtLeast(0)) { "null" }
+            squared.take(function.params.size) + granted
+        }
         /*
          * A plugin's function is not this workspace's JavaScript — its source
          * column holds a note saying where the implementation lives — so it is
@@ -235,6 +254,7 @@ class ConditionEvaluator(
                     resolved.imports,
                     on = condition.workspaceId,
                     origin = origin.copy(functionId = function.id),
+                    timeoutMillis = timeouts.millisFor(function.timeoutSeconds, condition.workspaceId),
                 )
             }
         }

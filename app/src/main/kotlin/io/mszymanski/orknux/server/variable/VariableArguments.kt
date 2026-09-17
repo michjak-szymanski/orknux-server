@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.variable
 
+import io.mszymanski.orknux.server.action.FunctionExternal
 import io.mszymanski.orknux.server.action.WorkflowFunction
 import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
@@ -38,10 +39,18 @@ class VariableArguments(
      *   see [FunctionCaller.call].
      */
     fun of(function: WorkflowFunction, instead: Map<String, String> = emptyMap()): List<String> =
-        function.externals.map { external ->
+        of(function.externals, function.name, instead)
+
+    /**
+     * The same translation for anything else that carries externals — a tool's
+     * are the same embeddable and arrive the same way. [called] is only for the
+     * warning when a variable has gone missing.
+     */
+    fun of(externals: List<FunctionExternal>, called: String, instead: Map<String, String> = emptyMap()): List<String> =
+        externals.map { external ->
             val variable = variables.findByIdOrNull(external.variableId)
             if (variable == null) {
-                log.warn("Function {} is handed a variable that no longer exists", function.name)
+                log.warn("{} is handed a variable that no longer exists", called)
                 return@map "null"
             }
             instead[variable.name] ?: json(variable)

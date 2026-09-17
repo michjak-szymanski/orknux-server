@@ -229,8 +229,18 @@ class WorkflowFunction(
     @Column(nullable = false, length = 120)
     var name: String,
 
-    @Column(length = 500)
+    @Column(length = 4000)
     var description: String? = null,
+
+    /**
+     * How long one call of this function may run, in seconds.
+     *
+     * Null means the function has decided nothing: the workspace's default is
+     * used, and the installation's bound where the workspace has none. Read per
+     * call, so changing it changes the next call rather than one in flight.
+     */
+    @Column(name = "timeout_seconds")
+    var timeoutSeconds: Int? = null,
 
     /**
      * The JavaScript that runs.
@@ -422,6 +432,20 @@ class FunctionObjectRequiredException(val name: String) : RuntimeException(
 class FunctionSourceInvalidException(val reason: String) : RuntimeException(reason), Refusal {
 
     override val arguments get() = mapOf("reason" to reason)
+}
+
+/**
+ * A description longer than the column it lives in.
+ *
+ * Said in characters, because the person pasted text and can count it — before
+ * this the database refused it and the editor showed an internal error, which
+ * told them nothing about what to shorten.
+ */
+class FunctionDescriptionTooLongException(val length: Int, val limit: Int) : RuntimeException(
+    "The description is $length characters and at most $limit fit",
+), Refusal {
+
+    override val arguments get() = mapOf("length" to length, "limit" to limit)
 }
 
 /**

@@ -125,6 +125,13 @@ class ScriptRunner(
          * run said it, and matching on the clock is what this exists to save.
          */
         origin: ScriptOrigin = ScriptOrigin(),
+        /**
+         * How long this run may hold its thread, in milliseconds, where the tool
+         * or function being run carries a timeout of its own or its workspace
+         * set a default. Null means the installation's bound, which is what
+         * every run had before timeouts were configurable.
+         */
+        timeoutMillis: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
@@ -136,7 +143,7 @@ class ScriptRunner(
          */
         val said = Collections.synchronizedList(mutableListOf<String>())
         return try {
-            guard.bounded(stopped, ::newContext) {
+            guard.bounded(stopped, ::newContext, timeoutMillis) {
                 ScriptResult.Returned(
                     evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName, origin),
                     millisSince(started),
@@ -149,8 +156,8 @@ class ScriptRunner(
                 // What the guard says comes first. A cancelled context only says
                 // that somebody stopped it, and the guard is the only one who
                 // knows whether that was the clock or the heap.
-                stopped.get() != null -> "${guard.overrunReason(stopped.get())} and was stopped"
-                failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms and was stopped"
+                stopped.get() != null -> "${guard.overrunReason(stopped.get(), timeoutMillis)} and was stopped"
+                failure.isCancelled -> "took longer than ${timeoutMillis ?: properties.timeoutMillis} ms and was stopped"
                 failure.isResourceExhausted -> exhausted(failure)
                 failure.isGuestException -> failure.message ?: "threw"
                 else -> failure.message ?: "could not be run"
@@ -167,7 +174,7 @@ class ScriptRunner(
         } catch (failure: IllegalStateException) {
             // Closing a cancelled context races with the call that was in it. If
             // it was the guard that closed it, say what for.
-            val overrun = guard.overrunReason(stopped.get())
+            val overrun = guard.overrunReason(stopped.get(), timeoutMillis)
             if (overrun != null) {
                 ScriptResult.Failed("$overrun and was stopped", millisSince(started), settled = false, logs = said.toList())
             } else {

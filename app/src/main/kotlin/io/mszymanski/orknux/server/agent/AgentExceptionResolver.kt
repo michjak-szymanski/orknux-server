@@ -23,6 +23,8 @@ class AgentExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ToolNameTakenException,
             is ToolNameInvalidException,
             is ToolSourceInvalidException,
+            is ToolSignatureMismatchException,
+            is ToolDescriptionTooLongException,
             is ToolCodeIncompleteException,
             is ToolParamInvalidException,
             is ToolParamDuplicateException,

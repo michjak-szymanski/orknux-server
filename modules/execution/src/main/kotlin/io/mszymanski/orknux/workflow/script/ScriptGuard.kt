@@ -109,12 +109,21 @@ internal class ScriptGuard(name: String, private val bounds: Bounds) {
      *   `PolyglotException` that comes back says only that the run was
      *   cancelled, never why — and "took too long" and "was taking the heap" are
      *   different sentences to whoever has to fix the script.
+     * @param timeoutMillis how long this one run may hold its thread, where the
+     *   caller knows better than the installation's number — a tool or a
+     *   function with a timeout of its own, or a workspace with a default. Null
+     *   means the installation's bound, which is what every run had before.
      */
-    fun <T> bounded(stopped: AtomicReference<Overrun?>, newContext: () -> Context, body: (Context) -> T): T {
+    fun <T> bounded(
+        stopped: AtomicReference<Overrun?>,
+        newContext: () -> Context,
+        timeoutMillis: Long? = null,
+        body: (Context) -> T,
+    ): T {
         acquire()
         try {
             return newContext().use { polyglot ->
-                val watch = Watch(stopped)
+                val watch = Watch(stopped, timeoutMillis ?: bounds.timeoutMillis)
                 /*
                  * Polled rather than scheduled once, because there are now two
                  * ways to overrun and only one of them is a point in time. Both
@@ -139,9 +148,9 @@ internal class ScriptGuard(name: String, private val bounds: Bounds) {
     }
 
     /** How the overrun should be described to whoever has to act on it. */
-    fun overrunReason(stopped: Overrun?): String? = when (stopped) {
+    fun overrunReason(stopped: Overrun?, timeoutMillis: Long? = null): String? = when (stopped) {
         Overrun.MEMORY -> "was taking more of the heap than the server could spare"
-        Overrun.TIME -> "took longer than ${bounds.timeoutMillis} ms"
+        Overrun.TIME -> "took longer than ${timeoutMillis ?: bounds.timeoutMillis} ms"
         null -> null
     }
 
@@ -166,10 +175,10 @@ internal class ScriptGuard(name: String, private val bounds: Bounds) {
      * Constructed on the calling thread, so the thread id and the starting
      * allocation count are the script's own.
      */
-    private inner class Watch(private val stopped: AtomicReference<Overrun?>) {
+    private inner class Watch(private val stopped: AtomicReference<Overrun?>, timeoutMillis: Long) {
 
         private val thread = Thread.currentThread().threadId()
-        private val deadline = System.nanoTime() + bounds.timeoutMillis * 1_000_000
+        private val deadline = System.nanoTime() + timeoutMillis * 1_000_000
         private val allocatedAtStart = allocated(thread)
 
         fun overrun(): Boolean {

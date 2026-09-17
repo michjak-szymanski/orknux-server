@@ -1128,6 +1128,11 @@ type Mutation {
     "Backs the tool editor: the code on the left, the details on the right."
     updateTool(id: ID!, input: UpdateToolInput!): Tool!
     setToolEnabled(id: ID!, enabled: Boolean!): Tool!
+    """
+    How long one call of this tool may run. Null clears it, which puts the tool
+    back on the workspace's number; between 1 and 600 seconds otherwise.
+    """
+    setToolTimeout(id: ID!, seconds: Int): Tool!
     "Parses the source and says where it broke; the editor's Validate."
     validateToolSource(workspaceId: ID!, source: String!): SourceValidation!
     deleteTool(id: ID!): Boolean!
@@ -1181,6 +1186,12 @@ type Mutation {
     """
     setWorkspaceDefaultMemoryShare(workspaceId: ID!, share: Int): Workspace!
     setWorkspaceTaskMaxTurns(workspaceId: ID!, turns: Int): Workspace!
+    """
+    How long this workspace's tools and functions may run, where they have no
+    timeout of their own. Null clears it, which puts the workspace back on the
+    installation's own bound; between 1 and 600 seconds otherwise.
+    """
+    setWorkspaceScriptTimeout(workspaceId: ID!, seconds: Int): Workspace!
     """
     Sets how voice mode decides somebody has finished talking, for this
     workspace.
@@ -1412,6 +1423,11 @@ type Mutation {
     leaves no run behind it and it reads the workspace's variables.
     """
     runFunction(input: RunFunctionInput!): FunctionRun!
+    """
+    How long one call of this function may run. Null clears it, which puts the
+    function back on the workspace's number; between 1 and 600 seconds otherwise.
+    """
+    setFunctionTimeout(id: ID!, seconds: Int): Function!
     "Refused while an action still calls it."
     deleteFunction(id: ID!): Boolean!
     createCondition(input: CreateConditionInput!): Condition!
@@ -1535,6 +1551,20 @@ type Workspace {
     number. Sent so a field can show it rather than describe where it lives.
     """
     taskMaxTurnsDefault: Int!
+    """
+    How long one run of this workspace's tools and functions may hold its
+    thread, in seconds, where the tool or function has no timeout of its own.
+
+    Null means the workspace has decided nothing and the installation's own
+    bound is used, which is where every workspace starts. Read per call, so
+    changing this decides the next run and leaves one already going alone.
+    """
+    scriptTimeoutSeconds: Int
+    """
+    What a run gets when `scriptTimeoutSeconds` is null: the installation's own
+    bound. Sent so a field can show it rather than describe where it lives.
+    """
+    scriptTimeoutSecondsDefault: Int!
     """
     How long a pause has to run, after somebody has been talking, before their
     turn ends and what they said is sent.
@@ -2653,6 +2683,16 @@ type Tool {
     """
     params: [ToolParam!]!
     """
+    The workspace's variables it is handed, after the parameters it declares.
+
+    The same arrangement a function has, for the same reason: the agent is never
+    told they exist, so a tool reaches a credential without the credential
+    passing through a conversation.
+    """
+    externals: [FunctionExternal!]!
+    "How long one call may run, in seconds. Null means the workspace decides."
+    timeoutSeconds: Int
+    """
     The workspace's functions it calls, under the names it calls them.
 
     One direction only: a tool may import a function, and nothing imports a tool.
@@ -2901,6 +2941,8 @@ input CreateToolInput {
     typescript: String
     "Left out means the one every tool used to take: an object called `input`."
     params: [ToolParamInput!]
+    "The workspace's variables it is handed, after the parameters it declares."
+    externalVariableIds: [ID!]
     "The workspace's functions it calls, under the names it calls them."
     imports: [ScriptImportInput!]
     "The installation's libraries it uses, under the names it uses them by."
@@ -2916,6 +2958,8 @@ input UpdateToolInput {
     typescript: String
     "Null leaves them alone; an empty list takes them all off."
     params: [ToolParamInput!]
+    "Null leaves them alone; an empty list takes them all off."
+    externalVariableIds: [ID!]
     "Null leaves them alone; an empty list takes them all off."
     imports: [ScriptImportInput!]
     "Null leaves them alone; an empty list takes them all off."
@@ -4823,6 +4867,8 @@ type Function {
     returnObjectId: ID
     returnObjectName: String
     params: [FunctionParam!]!
+    "How long one call may run, in seconds. Null means the workspace decides."
+    timeoutSeconds: Int
     """
     The workspace's other functions it calls, under the names it calls them.
 

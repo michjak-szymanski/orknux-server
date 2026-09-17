@@ -62,7 +62,12 @@ class AgentTools(
 
     fun specsFor(agent: Agent): List<ToolSpec> = buildList {
         if (agent.skillCatalogs.isNotEmpty()) addAll(skills.descriptors().map(::spec))
-        if (agent.memoryCatalogs.isNotEmpty()) add(spec(memories.descriptor()))
+        if (agent.memoryCatalogs.isNotEmpty()) {
+            add(spec(memories.descriptor()))
+            // The writing half of the same grant: an agent given a catalog can
+            // add to what it holds, so a lesson outlives the conversation.
+            add(spec(memories.saveDescriptor()))
+        }
 
         // orknux itself, for an agent granted it. Scoped to the agent's own
         // workspace: the grant is the authorisation, and the workspace is the
@@ -185,6 +190,15 @@ class AgentTools(
                         query = argument(call, "query"),
                         catalog = argument(call, "catalog"),
                     ),
+                ),
+            )
+
+            "memory_save" -> mapper.writeValueAsString(
+                memories.save(
+                    agent = agent,
+                    catalog = argument(call, "catalog"),
+                    title = argument(call, "title"),
+                    content = argument(call, "content"),
                 ),
             )
 

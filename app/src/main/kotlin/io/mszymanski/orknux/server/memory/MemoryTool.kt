@@ -1,30 +1,38 @@
 package io.mszymanski.orknux.server.memory
 
 import io.mszymanski.orknux.server.agent.Agent
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
 
 /**
- * Looking things up in the workspace's memory, as an agent does it.
+ * The workspace's memory, as an agent reads and writes it.
  *
  * A built-in rather than one of the workspace's tools, because a workspace tool
  * is JavaScript in a sandbox with no IO — it cannot read a table, and widening
  * the sandbox so it could would be a hole opened for one feature. So the lookup
  * is implemented here and offered to agents as something they may call.
  *
- * What an agent may read is what it was granted: [Agent.memoryCatalogs] names
- * the catalogs, and an agent granted none reads nothing. That is the point of
+ * What an agent may touch is what it was granted: [Agent.memoryCatalogs] names
+ * the catalogs, and an agent granted none reaches nothing. That is the point of
  * the grant — everything the workspace knows is rarely what one agent should be
  * given, and an agent that can read every catalog by default makes the grant a
- * decoration.
+ * decoration. The same grant covers saving, because "remember this" is the
+ * other half of "what do we know".
  */
 @Service
 class MemoryTool(
     private val catalogs: MemoryCatalogRepository,
     private val memories: MemoryRepository,
+    private val auditRecorder: WorkspaceAuditRecorder,
 ) {
 
     /** What this looks like to an agent choosing whether to call it. */
     fun descriptor(): ToolDescriptor = DESCRIPTOR
+
+    /** The writing half, offered beside the reading one. */
+    fun saveDescriptor(): ToolDescriptor = SAVE_DESCRIPTOR
 
     /**
      * The catalogs this agent may read, as the screen would name them.
@@ -79,9 +87,85 @@ class MemoryTool(
             }
     }
 
+    /**
+     * Writes one memory into a catalog this agent holds.
+     *
+     * The same grant the search reads: an agent given a catalog can add to what
+     * it holds, because "remember this" is the other half of "what do we know" —
+     * and an agent that can only read is an agent whose lessons die with the
+     * conversation. The catalog may be left unsaid only while the agent holds
+     * exactly one, so nothing is ever filed somewhere by tie-break.
+     *
+     * A title already present in the catalog is updated rather than doubled:
+     * the title is how a memory is addressed, and two under one name are one an
+     * agent finds and one it never sees again. The author is the agent's name,
+     * so the card and the audit both say who wrote it.
+     *
+     * Refusals are thrown in words the model can act on; the caller turns them
+     * into an error result rather than a failed conversation.
+     */
+    @Transactional
+    fun save(agent: Agent, catalog: String?, title: String?, content: String?): MemorySaved {
+        val allowed = catalogsFor(agent)
+        if (allowed.isEmpty()) throw MemorySaveRefusedException("This agent has no memory catalog to write to")
+
+        val into = when {
+            catalog != null -> allowed.firstOrNull { it.name.equals(catalog, ignoreCase = true) }
+                ?: throw MemorySaveRefusedException(
+                    "This agent has no catalog called $catalog. It holds: " + allowed.joinToString { it.name },
+                )
+
+            allowed.size == 1 -> allowed.single()
+            else -> throw MemorySaveRefusedException(
+                "Say which catalog to save into. This agent holds: " + allowed.joinToString { it.name },
+            )
+        }
+
+        val said = title?.trim().orEmpty()
+        val kept = content?.trim().orEmpty()
+        if (said.isEmpty()) throw MemorySaveRefusedException("A memory needs a title")
+        if (said.length > MAX_TITLE) throw MemorySaveRefusedException("A title fits in $MAX_TITLE characters")
+        if (kept.isEmpty()) throw MemorySaveRefusedException("A memory needs content")
+
+        val now = java.time.OffsetDateTime.now()
+        val existing = memories.findByCatalogIdAndTitle(into.id, said)
+        if (existing != null) {
+            existing.content = kept
+            existing.lastModifiedAt = now
+            existing.lastModifiedBy = agent.name
+            auditRecorder.record(
+                into.workspaceId,
+                WorkspaceAuditCategory.MEMORY,
+                "Memory $said updated in ${into.name} by the agent ${agent.name}",
+            )
+            return MemorySaved(catalog = into.name, title = said, updated = true)
+        }
+
+        memories.save(
+            Memory(
+                catalogId = into.id,
+                title = said,
+                content = kept,
+                createdAt = now,
+                createdBy = agent.name,
+                lastModifiedAt = now,
+                lastModifiedBy = agent.name,
+            ),
+        )
+        auditRecorder.record(
+            into.workspaceId,
+            WorkspaceAuditCategory.MEMORY,
+            "Memory $said added to ${into.name} by the agent ${agent.name}",
+        )
+        return MemorySaved(catalog = into.name, title = said, updated = false)
+    }
+
     private companion object {
         const val DEFAULT_LIMIT = 10
         const val MAX_LIMIT = 50
+
+        /** What the column takes; over it is refused in words rather than by the database. */
+        const val MAX_TITLE = 200
 
         val DESCRIPTOR = ToolDescriptor(
             name = "memory_search",
@@ -93,8 +177,35 @@ class MemoryTool(
                 ToolParameter("catalog", "Restrict to one catalog by name. Optional.", required = false),
             ),
         )
+
+        val SAVE_DESCRIPTOR = ToolDescriptor(
+            name = "memory_save",
+            description = "Write something down for this workspace to keep. " +
+                "Saves into one of the memory catalogs this agent has been given; " +
+                "a memory with the same title in that catalog is updated rather than doubled.",
+            parameters = listOf(
+                ToolParameter("title", "What to file it under, in a short line.", required = true),
+                ToolParameter("content", "What to remember.", required = true),
+                ToolParameter(
+                    "catalog",
+                    "Which catalog to save into, by name. Optional while the agent holds exactly one.",
+                    required = false,
+                ),
+            ),
+        )
     }
 }
+
+/** What one save came to, in the shape an agent is handed back. */
+data class MemorySaved(
+    val catalog: String,
+    val title: String,
+    /** True when a memory with that title already existed and was rewritten. */
+    val updated: Boolean,
+)
+
+/** Said in words the model can act on; the tool loop turns it into an error result. */
+class MemorySaveRefusedException(message: String) : RuntimeException(message)
 
 /** One memory, in the shape an agent is handed it. */
 data class MemoryResult(

@@ -209,6 +209,10 @@ class ExecutionStep(
     @Column(name = "image_model_id")
     val imageModelId: Long? = null,
 
+    /** The shape an agent step's answer is held to, copied when the run started. */
+    @Column(name = "output_object_id")
+    val outputObjectId: Long? = null,
+
     /**
      * What the node called what it produces, copied when the run started.
      *

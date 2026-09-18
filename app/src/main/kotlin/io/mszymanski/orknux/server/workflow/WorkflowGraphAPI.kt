@@ -141,6 +141,7 @@ class WorkflowGraphAPI(
         input.nodes.forEach { requireConditionBelongsToWorkspace(workspaceId, it) }
         input.nodes.forEach { requireAgentBelongsToWorkspace(workspaceId, it) }
         input.nodes.forEach { requireObjectBelongsToWorkspace(workspaceId, it) }
+        input.nodes.forEach { requireOutputShapeBelongsToWorkspace(workspaceId, it) }
 
         // A graph is drawn before it is finished, so only the shapes that could
         // never run are refused; everything else comes back as advice.
@@ -395,6 +396,9 @@ class WorkflowGraphAPI(
         actionId = node.actionId.takeIf { node.kind == NodeKind.ACTION },
         conditionId = node.conditionId.takeIf { node.kind == NodeKind.CONDITION },
         objectId = node.objectId.takeIf { node.kind == NodeKind.OBJECT },
+        // Only an agent's answer has a shape to be held to; on any other kind
+        // the id is dropped the way an object node's would be on an action.
+        outputObjectId = node.outputObjectId.takeIf { node.kind == NodeKind.AGENT },
         imageModelId = node.imageModelId.takeIf { node.kind == NodeKind.IMAGE },
         outputName = node.outputName?.trim()?.ifEmpty { null }
             // Only a node that produces something can name it; a trigger names
@@ -628,6 +632,14 @@ class WorkflowGraphAPI(
         if (shape.workspaceId != workspaceId) throw ObjectNotInCatalogueException(objectId)
     }
 
+    /** An agent node's answer is held to one of the workspace's shapes, and only its own workspace's. */
+    private fun requireOutputShapeBelongsToWorkspace(workspaceId: Long, node: WorkflowNodeInput) {
+        val objectId = node.outputObjectId ?: return
+        if (node.kind != NodeKind.AGENT) return
+        val shape = objects.findByIdOrNull(objectId) ?: throw ObjectNotInCatalogueException(objectId)
+        if (shape.workspaceId != workspaceId) throw ObjectNotInCatalogueException(objectId)
+    }
+
     /** An agent node runs one of the workspace's agents, and only its own workspace's. */
     private fun requireAgentBelongsToWorkspace(workspaceId: Long, node: WorkflowNodeInput) {
         val agentId = node.agentId ?: return
@@ -679,6 +691,8 @@ data class WorkflowNodeInput(
     val conditionId: Long? = null,
     /** The saved shape an object node makes; null is a shape of its own. */
     val objectId: Long? = null,
+    /** The shape an agent node's answer is held to; null is prose. Ignored on any other kind. */
+    val outputObjectId: Long? = null,
     /** The image model an image node draws with; ignored on any other kind. */
     val imageModelId: Long? = null,
     val outputName: String? = null,
@@ -749,6 +763,8 @@ data class WorkflowNodeView(
     val conditionId: Long?,
     /** The saved shape an object node makes; null is a shape of its own. */
     val objectId: Long?,
+    /** The shape an agent node's answer is held to; null is prose. */
+    val outputObjectId: Long?,
     /** The image model an image node draws with; ignored on any other kind. */
     val imageModelId: Long?,
     val outputName: String?,
@@ -794,6 +810,7 @@ data class WorkflowNodeView(
         actionId = node.actionId,
         conditionId = node.conditionId,
         objectId = node.objectId,
+        outputObjectId = node.outputObjectId,
         imageModelId = node.imageModelId,
         outputName = node.outputName,
         icon = node.icon,

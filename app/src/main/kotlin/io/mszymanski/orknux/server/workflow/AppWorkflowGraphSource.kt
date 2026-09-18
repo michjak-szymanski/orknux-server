@@ -130,6 +130,7 @@ class AppWorkflowGraphSource(
                     actionId = node.actionId,
                     conditionId = node.conditionId,
                     imageModelId = node.imageModelId,
+                    outputObjectId = node.outputObjectId,
                     // Which trigger this node stands for, so a run started by
                     // one of two triggers can tell which half of the graph is
                     // its own. Nothing runs a trigger node; this is only how it

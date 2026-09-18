@@ -204,6 +204,69 @@ class AgentNodeRunnerTest(
     private fun serveAnswer(): String = serveAfter(refusals = 0, status = 200)
 
     /**
+     * Held to a shape, the answer comes through as the object - fields a later
+     * node can address - and the model was told the shape in its instructions.
+     */
+    @Test
+    fun `an agent held to a shape hands on the object its answer parsed into`() {
+        val shape = verdictShape()
+        val agentId = agent("Reviewer", model(serveAfter(0, 200, saying = """{ "cause": "the database", "urgent": true }""")))
+        shapedGraph(agentId, shape)
+
+        start()
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(step.output).isEqualTo("""{"verdict":{"cause":"the database","urgent":true}}""")
+        assertThat(received.single()).contains("single JSON object").contains("\\\"cause\\\"")
+    }
+
+    /**
+     * An answer that does not comply fails the step unsettled, so the node's
+     * own retry policy re-asks - the model is the flaky dependency here, and
+     * the second ask is the enforcement.
+     */
+    @Test
+    fun `an answer off the shape is re-asked under the node's policy, then fails`() {
+        val shape = verdictShape()
+        val agentId = agent("Reviewer", model(serveAnswer()))
+        shapedGraph(agentId, shape, attempts = 2)
+
+        start(expectFailure = true)
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.FAILED)
+        assertThat(step.error).contains("JSON object")
+        assertThat(received).describedAs("the node's two attempts each asked the model").hasSize(2)
+    }
+
+    private fun verdictShape(): Long = graphQlTester.document(
+        """
+        mutation {
+          createObject(input: {
+            workspaceId: $workspaceId, name: "Verdict",
+            properties: [{ name: "cause", kind: STRING }, { name: "urgent", kind: BOOLEAN }]
+          }) { id }
+        }
+        """,
+    ).execute().path("createObject.id").entity(Long::class.java).get()
+
+    private fun shapedGraph(agentId: Long, outputObjectId: Long, attempts: Int? = null) {
+        val retries = if (attempts == null) "" else ", retryAttempts: $attempts, retryBackoffSeconds: 0"
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{ key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId,
+                          outputObjectId: $outputObjectId, outputName: "verdict"$retries, x: 0, y: 0 }],
+                edges: []
+              }) { nodes { key outputObjectId } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].outputObjectId").entity(Long::class.java).isEqualTo(outputObjectId)
+    }
+
+    /**
      * A provider that refuses the first [refusals] calls with [status] and
      * answers after that.
      *
@@ -212,7 +275,11 @@ class AgentNodeRunnerTest(
      * step that retried and a step that did not look identical from the count
      * of attempts alone if nothing watches the wire.
      */
-    private fun serveAfter(refusals: Int, status: Int): String {
+    private fun serveAfter(
+        refusals: Int,
+        status: Int,
+        saying: String = "The database was the cause.",
+    ): String {
         val calls = AtomicInteger()
         server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/chat/completions") { exchange ->
@@ -221,8 +288,9 @@ class AgentNodeRunnerTest(
             val body = if (refusing) {
                 """{"error":{"message":"the provider would not take it"}}"""
             } else {
+                val content = saying.replace("\\", "\\\\").replace("\"", "\\\"")
                 """
-                {"choices":[{"message":{"role":"assistant","content":"The database was the cause."}}],
+                {"choices":[{"message":{"role":"assistant","content":"$content"}}],
                  "usage":{"prompt_tokens":11,"completion_tokens":6}}
                 """.trimIndent()
             }.toByteArray(StandardCharsets.UTF_8)

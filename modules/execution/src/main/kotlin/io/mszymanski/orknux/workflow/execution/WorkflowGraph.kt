@@ -49,6 +49,8 @@ data class GraphNode(
     val conditionId: Long? = null,
     /** The image model an [NodeKind.IMAGE] node draws with; null on every other kind. */
     val imageModelId: Long? = null,
+    /** The shape an [NodeKind.AGENT] node's answer is held to; null is prose. */
+    val outputObjectId: Long? = null,
     /**
      * The trigger definition a [NodeKind.TRIGGER] node stands for.
      *

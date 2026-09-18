@@ -234,6 +234,21 @@ class WorkflowNode(
     @Column(name = "object_id")
     var objectId: Long? = null,
 
+    /**
+     * The shape an agent node's answer is held to; only that kind has one.
+     *
+     * Null is prose, which is what every agent node answered until now. A
+     * chosen object makes the answer a JSON document matching that shape -
+     * asked of the model, checked by the runner, and retried under the node's
+     * own policy where the answer did not comply - so downstream nodes can
+     * address its fields the way they address any object's.
+     *
+     * Its own column rather than [objectId], which means "the shape an object
+     * node makes" and seeds that kind's mapping rows.
+     */
+    @Column(name = "output_object_id")
+    var outputObjectId: Long? = null,
+
     @Column(name = "position_x", nullable = false)
     var positionX: Double,
 
@@ -355,6 +370,7 @@ class WorkflowNode(
         actionId = actionId,
         conditionId = conditionId,
         objectId = objectId,
+        outputObjectId = outputObjectId,
         imageModelId = imageModelId,
         positionX = positionX,
         positionY = positionY,

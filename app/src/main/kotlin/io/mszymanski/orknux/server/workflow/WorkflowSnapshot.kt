@@ -39,6 +39,7 @@ object WorkflowSnapshot {
                     "actionId" to node.actionId,
                     "conditionId" to node.conditionId,
                     "imageModelId" to node.imageModelId,
+                    "outputObjectId" to node.outputObjectId,
                     "triggerId" to node.triggerId,
                     "outputName" to node.outputName,
                     "mappings" to node.mappings.mapValues { (_, binding) ->
@@ -81,6 +82,9 @@ object WorkflowSnapshot {
                     actionId = number(node, "actionId"),
                     conditionId = number(node, "conditionId"),
                     imageModelId = number(node, "imageModelId"),
+                    // Absent from every snapshot published before answers had
+                    // shapes, and read as prose - which is what it was.
+                    outputObjectId = number(node, "outputObjectId"),
                     /*
                      * Absent from every snapshot published before a run could
                      * tell two triggers apart, and read as the graph declining

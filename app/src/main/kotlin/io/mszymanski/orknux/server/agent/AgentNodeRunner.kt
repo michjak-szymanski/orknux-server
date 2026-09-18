@@ -18,10 +18,12 @@ import io.mszymanski.orknux.workflow.execution.RunLogger
 import io.mszymanski.orknux.workflow.execution.StepFailedException
 import io.mszymanski.orknux.workflow.execution.StepResult
 import io.mszymanski.orknux.workflow.execution.StepStatus
+import io.mszymanski.orknux.server.obj.ObjectShapes
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
 import tools.jackson.databind.JsonNode
+import tools.jackson.databind.ObjectMapper
 
 /**
  * Runs an agent node: asks the agent what it makes of what reached it.
@@ -57,6 +59,8 @@ class AgentNodeRunner(
     private val runLog: RunLogger,
     private val sessions: LlmSessionRecorder,
     private val budgets: SessionMemoryBudgets,
+    private val shapes: ObjectShapes,
+    private val mapper: ObjectMapper,
 ) : NodeRunner {
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.AGENT
@@ -110,6 +114,30 @@ class AgentNodeRunner(
             ?.takeIf { it.isNotBlank() }
             ?: briefing.of(agent)
 
+        /*
+         * The shape the answer is held to, said in the system prompt.
+         *
+         * Told rather than hoped for, and checked below rather than trusted:
+         * the shape travels on the step, so a published workflow keeps meaning
+         * what it meant, and a shape that has been deleted since is a failure
+         * the run reports rather than a node that quietly answers prose again.
+         */
+        val held = step.outputObjectId?.let { objectId ->
+            shapes.described(objectId)
+                ?: throw StepFailedException(
+                    step.nodeKey,
+                    "the shape ${step.name}'s answer is held to has been deleted",
+                    permanent = true,
+                )
+        }
+        val instructed = if (held == null) {
+            system
+        } else {
+            (system?.plus("\n\n") ?: "") +
+                "Answer with a single JSON object matching this shape, and nothing else - " +
+                "no prose around it and no code fence:\n$held"
+        }
+
         val question = prompt ?: input ?: "There is no input for this step. Say what you would do."
 
         /*
@@ -155,7 +183,7 @@ class AgentNodeRunner(
         val recalled = session?.let { sessions.recalled(it, budget) }.orEmpty()
 
         val turns = buildList {
-            system?.let { add(ChatTurn("system", it)) }
+            instructed?.let { add(ChatTurn("system", it)) }
             addAll(remembered)
             addAll(recalled)
             add(ChatTurn("user", question))
@@ -187,7 +215,12 @@ class AgentNodeRunner(
             // Named, the answer is handed on as an object holding it, so the next
             // node can refer to it by that name. Prose has no fields, and a
             // node cannot refer to something that has no name.
-            is ChatCompletion.Answered -> StepResult(StepStatus.COMPLETED, expressions.named(step.outputName, answer.content))
+            is ChatCompletion.Answered ->
+                if (step.outputObjectId == null) {
+                    StepResult(StepStatus.COMPLETED, expressions.named(step.outputName, answer.content))
+                } else {
+                    shaped(step, agent.name, answer.content)
+                }
 
             /*
              * Whether this is worth asking again is not the node's to guess.
@@ -214,6 +247,49 @@ class AgentNodeRunner(
                 permanent = true,
             )
         }
+    }
+
+    /**
+     * The answer, held to the node's shape.
+     *
+     * The model was told the shape in its system turn; this is where being told
+     * becomes being held. A code fence is stripped rather than counted against
+     * it - a model that fenced valid JSON did what was asked, in the one way
+     * models keep doing it - but an answer that does not parse, or parses into
+     * the wrong shape, fails the step *unsettled*: the node's own retry policy
+     * decides how many times the model is worth re-asking, exactly as it does
+     * for a provider that timed out. The problems are in the failure, so the
+     * transcript says what was wrong rather than only that something was.
+     */
+    private fun shaped(step: ExecutionStep, agent: String, content: String): StepResult {
+        val bare = unfenced(content)
+        val parsed = runCatching { mapper.readTree(bare) }.getOrNull()
+            ?: throw StepFailedException(
+                step.nodeKey,
+                "$agent was asked for a JSON object and answered prose",
+                permanent = false,
+            )
+
+        val problems = shapes.problems(requireNotNull(step.outputObjectId), parsed)
+        if (problems.isNotEmpty()) {
+            throw StepFailedException(
+                step.nodeKey,
+                "$agent's answer does not match the shape it is held to: " + problems.joinToString("; "),
+                permanent = false,
+            )
+        }
+
+        return StepResult(StepStatus.COMPLETED, expressions.namedJson(step.outputName, mapper.writeValueAsString(parsed)))
+    }
+
+    /** The JSON inside a ```fence```, where the model wrapped it in one. */
+    private fun unfenced(content: String): String {
+        val trimmed = content.trim()
+        if (!trimmed.startsWith("```")) return trimmed
+        return trimmed
+            .removePrefix("```json").removePrefix("```")
+            .removeSuffix("```")
+            .trim()
     }
 
     /**

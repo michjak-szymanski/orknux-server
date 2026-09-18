@@ -1732,6 +1732,15 @@ type WorkflowNode {
     conditionId: ID
     "The saved shape an OBJECT node makes; null is a shape of the node's own."
     objectId: ID
+    """
+    The shape an AGENT node's answer is held to; null is prose.
+
+    Chosen, the model is asked for a JSON object matching that shape, the
+    runner checks the answer against it, and an answer that does not comply is
+    retried under the node's own policy - so what a later node reads is the
+    object, fields and all.
+    """
+    outputObjectId: ID
     "The image model an IMAGE node draws with, if it names one."
     imageModelId: ID
     """
@@ -2003,6 +2012,8 @@ input WorkflowNodeInput {
     conditionId: ID
     "The saved shape an OBJECT node makes; null is a shape of the node's own."
     objectId: ID
+    "The shape an AGENT node's answer is held to; null is prose. Ignored on any other kind."
+    outputObjectId: ID
     "The image model an IMAGE node draws with; ignored on any other kind."
     imageModelId: ID
     "What this node calls what it produces; a later node points a reference at it."

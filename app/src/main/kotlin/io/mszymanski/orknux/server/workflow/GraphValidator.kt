@@ -115,13 +115,24 @@ class GraphValidator(
          * being opaque — which is what lets the editor show it and a later node
          * refer to it. Unnamed, it hands its answer on as before and nothing
          * downstream can say what it will contain.
+         *
+         * Held to a shape, the answer is that object: the name holds it and each
+         * of the shape's fields is offered as a dotted path under it, which is
+         * what makes `reply.priority` something a later node can pick rather
+         * than something somebody has to know to type. The run already resolves
+         * dotted paths; this is only the offering.
          */
         NodeKind.AGENT -> {
             val named = node.outputName?.trim().orEmpty()
-            if (named.isEmpty()) {
-                Ports(passThrough = true, opaque = true)
-            } else {
-                Ports(outputs = listOf(ActionParamView(named, ValueType.STRING)))
+            val shape = node.outputObjectId?.let { objects.findByIdOrNull(it) }
+            when {
+                named.isEmpty() && shape == null -> Ports(passThrough = true, opaque = true)
+                shape == null -> Ports(outputs = listOf(ActionParamView(named, ValueType.STRING)))
+                named.isEmpty() -> Ports(outputs = shape.properties.map { ActionParamView(it.name, typeOf(it.kind)) })
+                else -> Ports(
+                    outputs = listOf(ActionParamView(named, ValueType.OBJECT)) +
+                        shape.properties.map { ActionParamView("$named.${it.name}", typeOf(it.kind)) },
+                )
             }
         }
 

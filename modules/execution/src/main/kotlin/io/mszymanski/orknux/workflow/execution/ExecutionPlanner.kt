@@ -170,6 +170,7 @@ class ExecutionPlanner(
                     conditionId = node.conditionId,
                     agentId = node.agentId,
                     imageModelId = node.imageModelId,
+                    outputObjectId = node.outputObjectId,
                     outputName = node.outputName,
                     // The run's own copy of what to pass; see ExecutionStep.
                     mappings = node.mappings.takeIf { it.isNotEmpty() }?.let(mapper::writeValueAsString),

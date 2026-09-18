@@ -306,7 +306,9 @@ class ComponentTemplateAPITest(
     }
 
     private fun createTool(workspaceId: Long, name: String): Long {
-        val body = "export default function () { return {}; }"
+        // Takes the one default `input` the tool declares: code whose arity
+        // disagrees with the declared parameters is refused at save now.
+        val body = "export default function (input) { return {}; }"
         return graphQlTester.document(
             """
             mutation {

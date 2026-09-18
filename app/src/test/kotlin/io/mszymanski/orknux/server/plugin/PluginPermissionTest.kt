@@ -73,7 +73,7 @@ class PluginPermissionTest(
     fun `a plugin that needs something is refused until the list is accepted`() {
         val failure = runCatching { load("needy", declaring = "['INTL']") }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(PluginPermissionsNotAcceptedException::class.java)
+        assertThat(failure).isInstanceOf(PluginAgreementNeededException::class.java)
         assertThat(failure?.message).contains("INTL")
         assertThat(plugins.findAll()).isEmpty()
 
@@ -88,7 +88,7 @@ class PluginPermissionTest(
             load("needy", declaring = "['INTL', 'TEXT_ENCODING']", accepting = "INTL")
         }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(PluginPermissionsNotAcceptedException::class.java)
+        assertThat(failure).isInstanceOf(PluginAgreementNeededException::class.java)
         assertThat(plugins.findAll()).isEmpty()
     }
 
@@ -136,7 +136,7 @@ class PluginPermissionTest(
             load("dates", declaring = "['INTL', 'TEXT_ENCODING']")
         }.exceptionOrNull()
 
-        assertThat(failure).isInstanceOf(PluginPermissionsNotAcceptedException::class.java)
+        assertThat(failure).isInstanceOf(PluginAgreementNeededException::class.java)
         assertThat(failure?.message).contains("TEXT_ENCODING")
 
         val stored = requireNotNull(plugins.findByKey("dates"))
@@ -169,6 +169,65 @@ class PluginPermissionTest(
         assertThat(permissions.grantedTo(stored)).isEmpty()
         assertThat(stored.permissionsAcceptedBy).isNull()
         assertThat(asks("dates")).isFalse()
+    }
+
+    /**
+     * The same escalation, asked about a capability.
+     *
+     * This is the load that used to die as a 500: the capabilities refusal had
+     * no handler of its own, so a plugin updated to ask the server for one more
+     * thing could not be reloaded at all. The refusal must carry the list, and
+     * naming exactly that list must be the acceptance.
+     */
+    @Test
+    fun `a plugin edited to need one more capability is asked again with the list`() {
+        loadAsking("slacky", capabilities = "['SLACK_READ_THREAD']", accepting = "SLACK_READ_THREAD")
+
+        val failure = runCatching {
+            loadAsking("slacky", capabilities = "['SLACK_READ_THREAD', 'SLACK_READ_MESSAGE']")
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(PluginAgreementNeededException::class.java)
+        val asked = failure as PluginAgreementNeededException
+        assertThat(asked.capabilities.map { it.name })
+            .containsExactly("SLACK_READ_THREAD", "SLACK_READ_MESSAGE")
+        assertThat(asked.permissions).isEmpty()
+
+        loadAsking(
+            "slacky",
+            capabilities = "['SLACK_READ_THREAD', 'SLACK_READ_MESSAGE']",
+            accepting = "SLACK_READ_THREAD,SLACK_READ_MESSAGE",
+        )
+        assertThat(plugins.findByKey("slacky")).isNotNull()
+    }
+
+    /**
+     * A plugin asking for both kinds is asked one question carrying both lists.
+     *
+     * One question or it could never be answered: a refused load stores
+     * nothing, so accepting the second list on its own would be refused over
+     * the first again, forever.
+     */
+    @Test
+    fun `permissions and capabilities needed together are asked as one question`() {
+        val failure = runCatching {
+            loadAsking("both", permissions = "['INTL']", capabilities = "['SLACK_READ_THREAD']")
+        }.exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(PluginAgreementNeededException::class.java)
+        val asked = failure as PluginAgreementNeededException
+        assertThat(asked.permissions.map { it.name }).containsExactly("INTL")
+        assertThat(asked.capabilities.map { it.name }).containsExactly("SLACK_READ_THREAD")
+        assertThat(plugins.findAll()).isEmpty()
+
+        // One accept field naming both lists, each read by its own validator.
+        loadAsking(
+            "both",
+            permissions = "['INTL']",
+            capabilities = "['SLACK_READ_THREAD']",
+            accepting = "INTL,SLACK_READ_THREAD",
+        )
+        assertThat(plugins.findByKey("both")).isNotNull()
     }
 
     /**
@@ -255,6 +314,31 @@ class PluginPermissionTest(
               id() { return '$key'; }
               apiVersion() { return 1; }
               permissions() { return $declaring; }
+              functions() {
+                return [new OrknuxFunction({
+                  name: 'hasIntl',
+                  returnType: 'boolean',
+                  run: () => typeof Intl !== 'undefined',
+                })];
+              }
+            }
+        """.trimIndent()
+        upload.upload(MockMultipartFile("file", "$key.js", "text/plain", source.toByteArray()), null, accepting)
+    }
+
+    /** The same load, for a plugin that also answers the capabilities question. */
+    private fun loadAsking(
+        key: String,
+        permissions: String = "[]",
+        capabilities: String = "[]",
+        accepting: String? = null,
+    ) {
+        val source = """
+            export default class Plugin extends OrknuxPlugin {
+              id() { return '$key'; }
+              apiVersion() { return 1; }
+              permissions() { return $permissions; }
+              capabilities() { return $capabilities; }
               functions() {
                 return [new OrknuxFunction({
                   name: 'hasIntl',

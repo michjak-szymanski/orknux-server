@@ -275,21 +275,34 @@ class PluginUploadAPI(
         val wanted = permissions.validated(inspected.permissions)
         val already = plugins.findByKey(key)?.let { permissions.read(it.acceptedPermissions) } ?: emptySet()
         val agreeing = wanted.isNotEmpty() && !already.containsAll(wanted)
-        if (agreeing && permissions.accepted(accept) != wanted) {
-            throw PluginPermissionsNotAcceptedException(permissions.viewOf(wanted))
-        }
 
         /*
          * The same three steps for what the plugin asks the *server* to do, and
          * deliberately not folded into the ones above: a capability reaches
          * outside the sandbox where a permission does not, so accepting one must
-         * never be able to cover the other.
+         * never be able to cover the other. Each validator reads only its own
+         * names off the shared field, so the separation holds on the wire too.
          */
         val wantedCapabilities = capabilities.validated(inspected.capabilities)
         val heldCapabilities = plugins.findByKey(key)?.let { capabilities.read(it.acceptedCapabilities) } ?: emptySet()
         val agreeingCapabilities = wantedCapabilities.isNotEmpty() && !heldCapabilities.containsAll(wantedCapabilities)
-        if (agreeingCapabilities && capabilities.accepted(accept) != wantedCapabilities) {
-            throw PluginCapabilitiesNotAcceptedException(capabilities.viewOf(wantedCapabilities))
+
+        /*
+         * Refused as one question, with both lists. Asked one at a time this
+         * could never converge: each refused load stores nothing, so a second
+         * request accepting only the second list would be refused over the
+         * first again. The lists stay separately named all the way to the
+         * screen, so nothing is agreed to under cover of the other.
+         */
+        val refusedPermissions = agreeing && permissions.accepted(accept) != wanted
+        val refusedCapabilities = agreeingCapabilities && capabilities.accepted(accept) != wantedCapabilities
+        if (refusedPermissions || refusedCapabilities) {
+            throw PluginAgreementNeededException(
+                // Each list travels only while it is being agreed to: what was
+                // accepted long ago is not re-asked beside what is new.
+                permissions = if (agreeing) permissions.viewOf(wanted) else emptyList(),
+                capabilities = if (agreeingCapabilities) capabilities.viewOf(wantedCapabilities) else emptyList(),
+            )
         }
 
         val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
@@ -379,21 +392,24 @@ class PluginUploadAPI(
      * because these exceptions mean nothing anywhere else.
      */
     /**
-     * A plugin needing permissions nobody has agreed to, answered as the question
+     * A plugin needing something nobody has agreed to, answered as the question
      * it is.
      *
-     * Its own handler because the list has to travel: a message alone would leave
-     * the interface with nothing to show, and something to accept that nobody was
-     * shown is exactly what this is meant to prevent. The status is a 400 like
-     * every other refusal — nothing was stored, and the way forward is a second
-     * request.
+     * Its own handler because the lists have to travel: a message alone would
+     * leave the interface with nothing to show, and something to accept that
+     * nobody was shown is exactly what this is meant to prevent. Two lists under
+     * two names, never one: a permission relaxes the sandbox and a capability
+     * asks the server to act, and a screen must be able to say which is which.
+     * The status is a 400 like every other refusal — nothing was stored, and
+     * the way forward is a second request.
      */
-    @ExceptionHandler(PluginPermissionsNotAcceptedException::class)
-    fun needsAccepting(failure: PluginPermissionsNotAcceptedException): ResponseEntity<Map<String, Any>> =
+    @ExceptionHandler(PluginAgreementNeededException::class)
+    fun needsAccepting(failure: PluginAgreementNeededException): ResponseEntity<Map<String, Any>> =
         ResponseEntity.badRequest().body(
             mapOf(
-                "message" to (failure.message ?: "This plugin needs permissions"),
-                "permissions" to failure.needed.map { mapOf("name" to it.name, "summary" to it.summary) },
+                "message" to (failure.message ?: "This plugin needs to be accepted"),
+                "permissions" to failure.permissions.map { mapOf("name" to it.name, "summary" to it.summary) },
+                "capabilities" to failure.capabilities.map { mapOf("name" to it.name, "summary" to it.summary) },
             ),
         )
 
@@ -410,6 +426,7 @@ class PluginUploadAPI(
         PluginIdInvalidException::class,
         PluginFunctionInUseException::class,
         PluginPermissionUnknownException::class,
+        PluginCapabilityUnknownException::class,
     )
     fun refused(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.badRequest().body(mapOf("message" to (failure.message ?: "That file could not be loaded")))
@@ -1139,7 +1156,8 @@ class PluginExceptionResolver : DataFetcherExceptionResolverAdapter() {
             
             is PluginIdInvalidException,
             is PluginPermissionUnknownException,
-            is PluginPermissionsNotAcceptedException,
+            is PluginCapabilityUnknownException,
+            is PluginAgreementNeededException,
             is PluginInUseException,
             is PluginFunctionInUseException,
             is PluginParameterUnknownException,

@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.plugin
 
+import io.mszymanski.orknux.workflow.script.PluginCapability
 import io.mszymanski.orknux.workflow.script.PluginPermission
 import org.springframework.stereotype.Component
 import tools.jackson.databind.ObjectMapper
@@ -66,14 +67,19 @@ class PluginPermissions(private val mapper: ObjectMapper) {
      * What an upload said it accepts, as a set.
      *
      * A comma-separated list of names, because it arrives as a form field beside
-     * the file. An unknown name is refused here as it is anywhere else: accepting
-     * something that does not exist is not an acceptance of anything.
+     * the file. The field is shared with the capabilities, so a capability's name
+     * is simply not for this reader — but a name known to neither is refused here
+     * as it is anywhere else: accepting something that does not exist is not an
+     * acceptance of anything.
      */
     fun accepted(field: String?): Set<PluginPermission> = field.orEmpty()
         .split(',')
         .map { it.trim() }
         .filter { it.isNotEmpty() }
-        .map { PluginPermission.named(it) ?: throw PluginPermissionUnknownException(it) }
+        .mapNotNull { name ->
+            PluginPermission.named(name)
+                ?: if (PluginCapability.named(name) != null) null else throw PluginPermissionUnknownException(name)
+        }
         .toSet()
 }
 
@@ -90,14 +96,27 @@ class PluginPermissionUnknownException(asked: String) : RuntimeException(
 )
 
 /**
- * The plugin needs JavaScript nobody has agreed to yet.
+ * The plugin needs something nobody has agreed to yet — permissions, capabilities,
+ * or both, each under its own name so neither is agreed to under cover of the
+ * other.
  *
  * Not an error so much as the middle of a conversation: the upload is refused, the
- * list travels back with it, and loading it again while naming exactly that list is
- * the acceptance. Saying which permissions is what makes the second request an
- * agreement to *these* rather than a yes to whatever was asked.
+ * lists travel back with it, and loading it again while naming exactly those lists
+ * is the acceptance. One exception for both kinds because the refusal has to be
+ * one question — refused one kind at a time, a plugin asking for both could never
+ * be loaded: each refused load stores nothing, so accepting the second list would
+ * be refused over the first again.
  */
-class PluginPermissionsNotAcceptedException(val needed: List<PluginPermissionView>) : RuntimeException(
-    "This plugin needs ${needed.joinToString(", ") { "${it.name} (${it.summary.lowercase()})" }}. " +
-        "Load it again accepting them to allow it.",
+class PluginAgreementNeededException(
+    val permissions: List<PluginPermissionView>,
+    val capabilities: List<PluginCapabilityView>,
+) : RuntimeException(
+    buildString {
+        append("This plugin needs ")
+        append(
+            (permissions.map { "${it.name} (${it.summary.lowercase()})" } +
+                capabilities.map { "${it.name} (${it.summary.lowercase()})" }).joinToString(", "),
+        )
+        append(". Load it again accepting them to allow it.")
+    },
 )

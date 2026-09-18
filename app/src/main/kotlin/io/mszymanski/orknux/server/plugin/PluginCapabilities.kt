@@ -87,18 +87,3 @@ data class PluginCapabilityView(val name: String, val summary: String)
 class PluginCapabilityUnknownException(what: String) : RuntimeException(
     "This server has no capability called \"$what\". A plugin may only ask for the ones it has.",
 )
-
-/**
- * The plugin asks the server to do something nobody has agreed to yet.
- *
- * Its own refusal rather than the permissions one, so the sentence names what is
- * actually being asked for. "This plugin needs TEXT_ENCODING" and "this plugin
- * needs to read your Slack" are not decisions of the same size, and a screen
- * that showed them as one list would be asking for the second under cover of the
- * first.
- */
-class PluginCapabilitiesNotAcceptedException(val needed: List<PluginCapabilityView>) : RuntimeException(
-    "This plugin asks the server to do things on its behalf: " +
-        "${needed.joinToString(", ") { "${it.name} (${it.summary.lowercase()})" }}. " +
-        "Load it again accepting them to allow it.",
-)

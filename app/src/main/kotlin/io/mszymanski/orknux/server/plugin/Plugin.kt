@@ -83,6 +83,18 @@ class Plugin(
     var declaredFunctions: String = "[]",
 
     /**
+     * What the plugin answered when asked which tools it offers to agents, as
+     * JSON.
+     *
+     * A surface of its own, not a flag on the functions: workflows call
+     * functions and agents call tools, and a plugin says which of what it
+     * holds belongs to which reader. A tool proxying one of the functions
+     * carries the function's name under `proxyOf`.
+     */
+    @Column(name = "declared_tools", nullable = false, columnDefinition = "text")
+    var declaredTools: String = "[]",
+
+    /**
      * What the plugin answered when asked what it has to be told, as JSON.
      *
      * The plugin's half of the bargain: it says what it needs and a workspace says
@@ -203,6 +215,37 @@ data class PluginFunctionView(
 )
 
 data class PluginFunctionParamView(val name: String, val type: String)
+
+/**
+ * One tool a plugin says it offers to agents.
+ *
+ * [proxyOf] set means the tool stands in front of the plugin's function of that
+ * name: the params and return type here were copied from it when the plugin was
+ * inspected, and a call goes down the function path - edits and all. Null means
+ * the tool runs its own code out of the plugin's `tools()`.
+ */
+data class PluginToolView(
+    val name: String,
+    val description: String?,
+    val params: List<PluginFunctionParamView>,
+    val returnType: String,
+    val proxyOf: String?,
+)
+
+/**
+ * One tool a plugin offers to agents, as the grant list is told about it.
+ *
+ * [name] carries the plugin's key prefix - it is what goes on the grant list.
+ * [functionId] is set for a tool fronting one of the plugin's functions, so
+ * the list can offer the jump to the function's page; a tool with a run of
+ * its own has no page to go to.
+ */
+data class PluginAgentToolView(
+    val name: String,
+    val description: String?,
+    val plugin: String,
+    val functionId: String?,
+)
 
 /**
  * One thing a plugin says it has to be told, as the screen shows it.

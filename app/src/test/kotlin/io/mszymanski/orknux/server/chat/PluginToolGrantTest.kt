@@ -32,13 +32,15 @@ import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
- * A plugin's function, granted to an agent as a tool.
+ * A plugin's tools, granted to an agent.
  *
- * A plugin could answer a workflow and not the agent reading the message: the
- * grant list named workspace tools and only those. Now a granted name that
- * resolves to a plugin function is offered to the model under the plugin's own
- * description, and a call goes down the one path a function is called on - so
- * the plugin's settings and capabilities apply exactly as they do in a run.
+ * A plugin declares two surfaces: `functions()` for workflows and `tools()`
+ * for agents. What the grant list resolves against is the tools - most of them
+ * fronts for the plugin's own functions, declared as `OrknuxFunctionTool`, so
+ * a call goes down the one path a function is called on and the plugin's
+ * settings and capabilities apply exactly as they do in a run. A tool with a
+ * `run` of its own dispatches against `tools()` directly, and a function no
+ * tool fronts is not offered to a model at all.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester
@@ -87,6 +89,7 @@ class PluginToolGrantTest(
                 apiVersion = read.apiVersion,
                 sha256 = "0".repeat(64),
                 declaredFunctions = declarations.validated(read.functions),
+                declaredTools = declarations.validatedTools(read.tools),
                 declaredParameters = declarations.validatedParameters(read.parameters),
             ),
         )
@@ -94,10 +97,28 @@ class PluginToolGrantTest(
     }
 
     @AfterEach
-    fun stop() = server.stop(0)
+    fun stop() {
+        if (::server.isInitialized) server.stop(0)
+    }
+
+    /**
+     * The proxy is resolved when the plugin is read, not when a model calls.
+     *
+     * A tool fronting a function the plugin does not declare is a broken
+     * promise, and the first agent to call it is the worst place to find out.
+     */
+    @Test
+    fun `a tool proxying a function the plugin does not declare is refused at load`() {
+        val broken = SOURCE.replace("function: 'greet'", "function: 'nothingHere'")
+
+        val read = runner.inspect(broken)
+
+        assertThat(read).isInstanceOf(PluginInspection.Unreadable::class.java)
+        assertThat((read as PluginInspection.Unreadable).reason).contains("nothingHere")
+    }
 
     @Test
-    fun `a granted plugin function is offered, called, and its answer threads back`() {
+    fun `a granted proxy tool is offered, called down the function path, and threads back`() {
         val endpoint = serveToolThenAnswer()
         val agentId = agentGrantedTool("Concierge", model(endpoint), "greeter_greet")
 
@@ -115,12 +136,53 @@ class PluginToolGrantTest(
         // Offered under the plugin's own words, which were written for exactly
         // this reader.
         assertThat(received[0]).contains("greeter_greet").contains("Says hello, warmly")
+        // A function no tool fronts is not on an agent's menu, whatever the
+        // grant list says elsewhere.
+        assertThat(received[0]).doesNotContain("internalOnly")
         // The call ran down the function path and its answer threaded back.
         assertThat(received[1]).contains("tool_call_id")
         assertThat(received[1]).contains("hello, Dana")
     }
 
-    private fun serveToolThenAnswer(): String {
+    /** A tool with a `run` of its own dispatches against tools(), not functions(). */
+    @Test
+    fun `a granted standalone tool runs its own code`() {
+        val endpoint = serveToolThenAnswer(calling = "greeter_shout")
+        val agentId = agentGrantedTool("Herald", model(endpoint), "greeter_shout")
+
+        val agent = requireNotNull(agents.findByIdOrNull(agentId))
+        val answer = conversation.answer(
+            requireNotNull(agent.modelId),
+            agent,
+            listOf(ChatTurn("user", "Shout for Dana.")),
+        )
+
+        assertThat(answer).isInstanceOf(ChatCompletion.Answered::class.java)
+        assertThat(received[0]).contains("greeter_shout").contains("Says it loudly")
+        assertThat(received[1]).contains("HELLO, DANA!")
+    }
+
+    /**
+     * A function the plugin did not put a tool in front of is not an agent's:
+     * granting its name grants nothing, so the model is offered nothing - and
+     * with nothing offered there is no tool loop to enter at all.
+     */
+    @Test
+    fun `a plugin function no tool fronts is not offered`() {
+        val endpoint = serveToolThenAnswer(calling = "greeter_internalOnly")
+        val agentId = agentGrantedTool("Snoop", model(endpoint), "greeter_internalOnly")
+
+        val agent = requireNotNull(agents.findByIdOrNull(agentId))
+        conversation.answer(
+            requireNotNull(agent.modelId),
+            agent,
+            listOf(ChatTurn("user", "Call the hidden one.")),
+        )
+
+        assertThat(received.first()).doesNotContain("greeter_internalOnly")
+    }
+
+    private fun serveToolThenAnswer(calling: String = "greeter_greet"): String {
         server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         server.createContext("/chat/completions") { exchange ->
             val body = exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
@@ -132,7 +194,7 @@ class PluginToolGrantTest(
                 """
                 {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
                   {"id":"call_1","type":"function",
-                   "function":{"name":"greeter_greet","arguments":"{\"name\":\"Dana\"}"}}
+                   "function":{"name":"$calling","arguments":"{\"name\":\"Dana\"}"}}
                 ]}}],"usage":{"prompt_tokens":7,"completion_tokens":2}}
                 """.trimIndent()
             }
@@ -184,6 +246,25 @@ class PluginToolGrantTest(
                     params: [{ name: 'name', type: 'string' }],
                     returnType: 'string',
                     run: (name) => 'hello, ' + name,
+                  }),
+                  new OrknuxFunction({
+                    name: 'internalOnly',
+                    description: 'For workflows; no tool fronts this.',
+                    returnType: 'string',
+                    run: () => 'hidden',
+                  }),
+                ];
+              }
+
+              tools() {
+                return [
+                  new OrknuxFunctionTool({ function: 'greet' }),
+                  new OrknuxTool({
+                    name: 'shout',
+                    description: 'Says it loudly, to whoever is named.',
+                    params: [{ name: 'name', type: 'string' }],
+                    returnType: 'string',
+                    run: (name) => 'HELLO, ' + name.toUpperCase() + '!',
                   }),
                 ];
               }

@@ -60,6 +60,14 @@ class PluginTemplateTest(@Autowired val plugins: PluginUploadAPI) {
      * checks against still described the older shape - so a call that worked
      * was underlined and a plugin author could not trust either answer.
      */
+    /** The agents' surface, declared where a plugin author will see it. */
+    @Test
+    fun `the tools a plugin offers to agents are declared`() {
+        assertThat(template).contains("tools(): (OrknuxTool | OrknuxFunctionTool)[]")
+        assertThat(template).contains("declare class OrknuxTool")
+        assertThat(template).contains("declare class OrknuxFunctionTool")
+    }
+
     @Test
     fun `the template keeps up with the helpers the sandbox actually hands out`() {
         assertThat(template).contains("capabilities(): OrknuxCapability[]")

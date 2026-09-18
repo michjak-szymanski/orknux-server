@@ -1,6 +1,7 @@
 package io.mszymanski.orknux.server.action
 
 import io.mszymanski.orknux.workflow.script.ScriptOrigin
+import io.mszymanski.orknux.server.plugin.Plugin
 import io.mszymanski.orknux.server.plugin.PluginParameters
 import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
@@ -128,6 +129,40 @@ class FunctionCaller(
 
     /** The names the workspace's variables arrive under, for anything that has to say so. */
     fun grantsOf(function: WorkflowFunction): List<String> = externals.namesOf(function)
+
+    /**
+     * Runs one of a plugin's own tools - a declaration in `tools()` with a
+     * `run` of its own, which has no function row to go down [call] with.
+     *
+     * Here rather than in the agent code because this is the same assembly as
+     * a plugin function's: the workspace's settings, the accepted permissions
+     * and capabilities, all read per call from the plugin's row. A tool that
+     * proxies a function never comes this way - it resolves to the function's
+     * row and takes [call], edits and all.
+     *
+     * @param toolName the name the plugin gave it, without the key prefix.
+     */
+    fun callPluginTool(plugin: Plugin, toolName: String, arguments: List<String>, workspaceId: Long): ScriptResult {
+        val missing = pluginParameters.missingFor(plugin, workspaceId)
+        if (missing.isNotEmpty()) {
+            return ScriptResult.Failed(
+                "cannot run: the ${plugin.key} plugin has not been told " + missing.joinToString(", ") +
+                    ". Set it on this workspace's plugins page.",
+                0,
+            )
+        }
+
+        return pluginRunner.call(
+            plugin.source,
+            toolName,
+            arguments,
+            pluginParameters.settingsFor(plugin, workspaceId),
+            pluginPermissions.grantedTo(plugin),
+            pluginCapabilities.grantedTo(plugin),
+            on = workspaceId,
+            surface = "tools",
+        )
+    }
 
     /**
      * Runs a function one of the plugins declared.

@@ -1,10 +1,13 @@
 package io.mszymanski.orknux.server.agent
 
 import io.mszymanski.orknux.server.action.FunctionCaller
+import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.FunctionScope
 import io.mszymanski.orknux.server.action.ValueType
-import io.mszymanski.orknux.server.action.WorkflowFunction
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
+import io.mszymanski.orknux.server.plugin.Plugin
+import io.mszymanski.orknux.server.plugin.PluginDeclarations
+import io.mszymanski.orknux.server.plugin.PluginRepository
 import io.mszymanski.orknux.workflow.script.ScriptOrigin
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import org.slf4j.LoggerFactory
@@ -12,80 +15,128 @@ import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
 
 /**
- * Calling a plugin's function, as an agent does it.
+ * Calling a plugin's tool, as an agent does it.
  *
- * A plugin's functions were reachable from workflows - an action, a condition,
- * a webhook - and from nothing an agent holds: an agent's grants named
- * workspace tools and only those, so a Slack plugin could answer "who is this
- * mention" to a workflow and not to the agent reading the message. The grant
- * list now reaches these too, under the same rule as everything else on it: a
- * name on the list, resolved when the agent runs, dropped without ceremony
- * where nothing answers to it any more.
+ * A plugin declares two surfaces and says which reader each is for: `functions()`
+ * for workflows, `tools()` for agents. What a grant list resolves against is the
+ * tools - a function is not offered to a model unless the plugin put a tool in
+ * front of it, because the two are described for different readers and a
+ * description written for a workflow builder is the wrong words for a model.
+ *
+ * Most tools are that front: an `OrknuxFunctionTool` proxies one of the plugin's
+ * own functions, and its call resolves to the function's row and goes down
+ * [FunctionCaller] - so the plugin's settings, its capability grants and any
+ * edit somebody made to the function all apply exactly as they do in a run. A
+ * tool with a `run` of its own goes down the same assembly against the plugin's
+ * `tools()` surface instead.
  *
  * A workspace tool of the same name wins, the way a built-in wins over a
- * workspace tool: the resolution order is the shadow rule, and a plugin's
- * names are prefixed with its key precisely so this stays theoretical.
- *
- * The call goes down [FunctionCaller], which is the one path a function is
- * called on - so an edited plugin function behaves here exactly as it does in
- * a workflow, and the plugin's settings and capability grants apply unchanged.
+ * workspace tool: the resolution order is the shadow rule, and a plugin's names
+ * are prefixed with its key precisely so this stays theoretical.
  */
 @Service
 class PluginToolCaller(
+    private val plugins: PluginRepository,
+    private val declarations: PluginDeclarations,
     private val functions: WorkflowFunctionRepository,
     private val caller: FunctionCaller,
     private val mapper: ObjectMapper,
 ) {
 
     /**
-     * The plugin functions this agent may call: its granted names that resolve
-     * to one. The caller has already taken the workspace tools off the list,
-     * so what reaches this is only what nothing else answered to.
+     * One granted tool, ready to be offered and dispatched.
+     *
+     * [name] carries the plugin's key prefix - it is the name on the grant list
+     * and the name the model calls - while [declared] keeps the plugin's own
+     * spelling for the dispatch.
      */
-    fun granted(agent: Agent, except: Set<String>): List<WorkflowFunction> =
-        agent.tools
-            .filterNot { it in except }
-            .mapNotNull { functions.findByScopeAndName(FunctionScope.PLUGIN, it) }
+    data class PluginTool(
+        val name: String,
+        val description: String?,
+        val params: List<FunctionParam>,
+        val plugin: Plugin,
+        val declared: io.mszymanski.orknux.server.plugin.PluginToolView,
+    )
 
-    /** One granted plugin function by name, or null - for the dispatch. */
-    fun resolve(agent: Agent, name: String): WorkflowFunction? =
-        name.takeIf { it in agent.tools }
-            ?.let { functions.findByScopeAndName(FunctionScope.PLUGIN, it) }
+    /**
+     * The plugin tools this agent may call: its granted names that resolve to
+     * one. The caller has already taken the workspace tools off the list, so
+     * what reaches this is only what nothing else answered to.
+     */
+    fun granted(agent: Agent, except: Set<String>): List<PluginTool> {
+        if (agent.tools.isEmpty()) return emptyList()
+        return all().filter { it.name in agent.tools && it.name !in except }
+    }
+
+    /** One granted plugin tool by name, or null - for the dispatch. */
+    fun resolve(agent: Agent, name: String): PluginTool? =
+        name.takeIf { it in agent.tools }?.let { wanted -> all().firstOrNull { it.name == wanted } }
+
+    /** Every loaded plugin's tools, under their granted names. */
+    fun all(): List<PluginTool> = plugins.findAll().flatMap { plugin ->
+        declarations.readTools(plugin.declaredTools).map { declared ->
+            PluginTool(
+                name = "${plugin.key}_${declared.name}",
+                description = declared.description,
+                params = declared.params.map { FunctionParam(it.name, ValueType.valueOf(it.type)) },
+                plugin = plugin,
+                declared = declared,
+            )
+        }
+    }
 
     /**
      * Runs one, handing it the arguments the model composed - by name in the
-     * schema, positionally to the function, the same translation a workspace
+     * schema, positionally to the plugin, the same translation a workspace
      * tool's call makes and under the same two kindnesses.
      */
-    fun call(agent: Agent, function: WorkflowFunction, arguments: String): String {
-        val result = caller.call(
-            function,
-            argumentsFor(function, arguments),
-            context = mapper.writeValueAsString(
-                mapOf("workspaceId" to agent.workspaceId, "agent" to agent.name, "tool" to function.name),
-            ),
-            workspaceId = agent.workspaceId,
-            origin = ScriptOrigin(),
-        )
+    fun call(agent: Agent, tool: PluginTool, arguments: String): String {
+        val positional = argumentsFor(tool.params, arguments)
+
+        val result = if (tool.declared.proxyOf != null) {
+            /*
+             * The tool is a front for one of the plugin's functions, so the
+             * call is the function's call: resolved to the row the registry
+             * keeps, run down the one path a function runs on. An edit to the
+             * function is an edit to the tool, which is the point of the proxy.
+             */
+            val qualified = "${tool.plugin.key}_${tool.declared.proxyOf}"
+            val function = functions.findByScopeAndName(FunctionScope.PLUGIN, qualified)
+                ?: return mapper.writeValueAsString(
+                    mapOf("error" to "This tool fronts $qualified, which is no longer provided"),
+                )
+            caller.call(
+                function,
+                positional,
+                context = mapper.writeValueAsString(
+                    mapOf("workspaceId" to agent.workspaceId, "agent" to agent.name, "tool" to tool.name),
+                ),
+                workspaceId = agent.workspaceId,
+                origin = ScriptOrigin(),
+            )
+        } else {
+            caller.callPluginTool(tool.plugin, tool.declared.name, positional, agent.workspaceId)
+        }
+
         return when (result) {
             is ScriptResult.Returned -> result.json ?: mapper.writeValueAsString(mapOf("result" to null))
             is ScriptResult.Failed -> {
-                log.warn("Plugin function {} failed for agent {}: {}", function.name, agent.name, result.reason)
+                log.warn("Plugin tool {} failed for agent {}: {}", tool.name, agent.name, result.reason)
                 mapper.writeValueAsString(mapOf("error" to result.reason))
             }
         }
     }
 
     /** The same layout rule as a workspace tool's; see [WorkspaceToolCaller.argumentsFor]. */
-    private fun argumentsFor(function: WorkflowFunction, arguments: String): List<String> {
-        if (function.params.isEmpty()) return emptyList()
+    private fun argumentsFor(params: List<FunctionParam>, arguments: String): List<String> {
+        if (params.isEmpty()) return emptyList()
         val sent = runCatching { mapper.readTree(arguments) }.getOrNull()
 
-        return function.params.map { param ->
+        return params.map { param ->
             val given = sent?.path(param.name)
             when {
                 given == null || given.isMissingNode || given.isNull ->
-                    if (function.params.size == 1) arguments.ifBlank { "{}" } else "null"
+                    if (params.size == 1) arguments.ifBlank { "{}" } else "null"
 
                 given.isString && param.type != ValueType.STRING -> unwrapped(given.stringValue().orEmpty())
                     ?: mapper.writeValueAsString(given)

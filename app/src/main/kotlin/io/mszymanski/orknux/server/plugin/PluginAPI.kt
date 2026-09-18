@@ -2,6 +2,8 @@ package io.mszymanski.orknux.server.plugin
 
 import graphql.GraphQLError
 import graphql.schema.DataFetchingEnvironment
+import io.mszymanski.orknux.server.action.FunctionScope
+import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
@@ -269,6 +271,7 @@ class PluginUploadAPI(
 
         val apiVersion = inspected.apiVersion
         val declared = declarations.validated(inspected.functions)
+        val declaredTools = declarations.validatedTools(inspected.tools)
         val parameters = declarations.validatedParameters(inspected.parameters)
 
         /*
@@ -342,6 +345,7 @@ class PluginUploadAPI(
             this.sizeBytes = file.size
             this.apiVersion = apiVersion
             this.declaredFunctions = declared
+            this.declaredTools = declaredTools
             this.declaredParameters = parameters
             this.declaredPermissions = permissions.write(wanted)
             this.acceptedPermissions = permissions.write(wanted)
@@ -361,6 +365,7 @@ class PluginUploadAPI(
             sizeBytes = file.size,
             apiVersion = apiVersion,
             declaredFunctions = declared,
+            declaredTools = declaredTools,
             declaredParameters = parameters,
             declaredPermissions = permissions.write(wanted),
             /*
@@ -392,6 +397,9 @@ class PluginUploadAPI(
                 ),
                 "replaced" to (existing != null),
                 "provides" to provided,
+                // The agents' half of what it provides, under the same prefix
+                // rule: these are the names an agent is granted.
+                "tools" to declarations.readTools(saved.declaredTools).map { "${saved.key}_${it.name}" }.sorted(),
             ),
         )
     }
@@ -504,8 +512,21 @@ class PluginUploadAPI(
               abstract id(): string;
               /** Which plugin API this was written against. This server accepts @SUPPORTED@. */
               abstract apiVersion(): number;
-              /** What this plugin offers. Defaults to none. */
+              /** What this plugin offers to workflows. Defaults to none. */
               functions(): OrknuxFunction[];
+              /**
+               * What this plugin offers to agents, as tools a model calls.
+               * Defaults to none.
+               *
+               * A surface of its own because it has a reader of its own: a
+               * tool's description is read by a model deciding whether to call
+               * it, where a function's is read by a person building a workflow.
+               * A tool that is really one of the functions is declared as an
+               * OrknuxFunctionTool, which proxies it rather than describing it
+               * twice - params, return type and implementation stay the
+               * function's, and only the name and description may be its own.
+               */
+              tools(): (OrknuxTool | OrknuxFunctionTool)[];
               /** What this plugin has to be told before it can work. Defaults to none. */
               parameters(): OrknuxParameter[];
               /**
@@ -867,6 +888,40 @@ class PluginUploadAPI(
               });
             }
 
+            /** A tool of the plugin's own: a declaration with a run, offered to agents. */
+            declare class OrknuxTool {
+              constructor(declaration: {
+                /** An identifier: letters, digits and underscores. */
+                name: string;
+                /** Written for the model that reads it: when to call this, and with what. */
+                description?: string;
+                /** In the order `run` receives them. */
+                params?: { name: string; type: OrknuxValueType }[];
+                returnType: OrknuxValueType;
+                run: (...args: never[]) => unknown;
+              });
+            }
+
+            /**
+             * A tool that is one of this plugin's own functions, exposed to agents.
+             *
+             * The utility that says so rather than a copy: params, return type and
+             * implementation are the function's - including any edit somebody makes
+             * to it on the server later - and only the name and the model-facing
+             * description may be this tool's own. A `function` that functions()
+             * does not declare is refused at load.
+             */
+            declare class OrknuxFunctionTool {
+              constructor(declaration: {
+                /** The name of one of this plugin's functions, as functions() declares it. */
+                function: string;
+                /** What agents call it. Defaults to the function's own name. */
+                name?: string;
+                /** Written for the model. Defaults to the function's description. */
+                description?: string;
+              });
+            }
+
             /** What a parameter may be: exactly what a workspace variable can hold. */
             type OrknuxParameterType = @PARAMETER_TYPE_UNION@ | 'connection';
 
@@ -1030,7 +1085,34 @@ class PluginAPI(
     private val permissions: PluginPermissions,
     /** What it asks the server to do for it; see [PluginCapabilities]. */
     private val capabilities: PluginCapabilities,
+    private val functions: WorkflowFunctionRepository,
 ) {
+
+    /**
+     * Every tool the loaded plugins offer to agents.
+     *
+     * Not an administrator's query, the way listing the plugins is: granting a
+     * tool to an agent is workspace work, so whoever edits an agent can be
+     * shown what exists without being allowed to see what is loaded - the same
+     * reasoning that puts a plugin's name on a function for the pickers.
+     */
+    @QueryMapping
+    fun pluginTools(): List<PluginAgentToolView> =
+        plugins.findAllByOrderByNameAsc().flatMap { plugin ->
+            declarations.readTools(plugin.declaredTools).map { tool ->
+                PluginAgentToolView(
+                    name = "${plugin.key}_${tool.name}",
+                    description = tool.description,
+                    plugin = plugin.name,
+                    // A proxy fronts a function with a page; the grant list can
+                    // offer the jump. A tool with its own run has nowhere to go.
+                    functionId = tool.proxyOf?.let { proxied ->
+                        functions.findByScopeAndName(FunctionScope.PLUGIN, "${plugin.key}_$proxied")
+                            ?.id?.toString()
+                    },
+                )
+            }
+        }
 
     /** Everything loaded into this installation, by name. */
     @QueryMapping

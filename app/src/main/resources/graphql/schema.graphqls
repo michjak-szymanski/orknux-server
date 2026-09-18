@@ -94,6 +94,15 @@ type Query {
     installationSettings: InstallationSettings!
     "The plugins loaded into this installation, by name. Administrators only."
     plugins: [Plugin!]!
+
+    """
+    Every tool the loaded plugins offer to agents, under their granted names.
+
+    Not an administrator's query, unlike `plugins`: granting a tool to an agent
+    is workspace work, so whoever edits an agent can be shown what exists
+    without being allowed to see what is loaded.
+    """
+    pluginTools: [PluginAgentTool!]!
     """
     The libraries loaded into this installation, by name, with what imports them.
 
@@ -4430,6 +4439,23 @@ type PluginFunctionDeclaration {
 type PluginFunctionParam {
     name: String!
     type: String!
+}
+
+"""
+One tool a plugin offers to agents, for the grant list.
+
+Named with the plugin's key prefix - the name here is exactly what goes into an
+agent's grant list. Most tools front one of the plugin's own functions; those
+carry the function's id so the list can offer the jump to its page.
+"""
+type PluginAgentTool {
+    name: String!
+    "Written for the model that will read it."
+    description: String
+    "The plugin that offers it, by its display name."
+    plugin: String!
+    "The function this tool fronts, when it fronts one. Null for a tool with its own run."
+    functionId: ID
 }
 
 """

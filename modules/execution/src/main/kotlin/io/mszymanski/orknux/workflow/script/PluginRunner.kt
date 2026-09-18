@@ -166,13 +166,20 @@ class PluginRunner(
          * from the plugin, so nothing a plugin can write changes it.
          */
         on: Long? = null,
+        /**
+         * Which declaration list [functionName] lives in: `functions` for a
+         * workflow's call, `tools` for an agent's. Two lists on purpose - the
+         * two surfaces have different readers - so the lookup has to say which
+         * it means.
+         */
+        surface: String = "functions",
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, { newContext(permissions) }) {
                 ScriptResult.Returned(
-                    invoke(it, source, functionName, arguments, settings, capabilities, on),
+                    invoke(it, source, functionName, arguments, settings, capabilities, on, surface),
                     millis(started),
                 )
             }
@@ -204,6 +211,7 @@ class PluginRunner(
         settings: String,
         capabilities: Set<PluginCapability>,
         on: Long?,
+        surface: String,
     ): String? {
         polyglot.eval("js", contract)
 
@@ -217,6 +225,7 @@ class PluginRunner(
 
         bindings.putMember(PLUGIN, bindings.getMember(CONSTRUCT).execute(exported))
         bindings.putMember(WANTED, functionName)
+        bindings.putMember(SURFACE, surface)
         bindings.putMember(ARGUMENTS, "[${arguments.joinToString(",")}]")
         // As text, like everything else that crosses, so the harness stays one
         // cached source rather than being respliced per call.
@@ -279,6 +288,57 @@ class PluginRunner(
                 params = read,
                 returnType = text(one, "returnType") ?: return PluginInspection.Unreadable("a function has no returnType"),
             )
+        }
+
+        /*
+         * What it offers to agents. The same reading as the functions above,
+         * with one extra shape: a tool constructed as an OrknuxFunctionTool
+         * carries `proxyOf` instead of its own params, return type and run,
+         * and those are resolved here against what functions() just declared -
+         * so a proxy to a function the plugin does not have is refused at
+         * load, not discovered by the first agent to call it.
+         */
+        val declaredTools = plugin.invokeMember("tools")
+        if (!declaredTools.hasArrayElements()) {
+            return PluginInspection.Unreadable("tools() did not answer with an array")
+        }
+        if (declaredTools.arraySize > MAX_FUNCTIONS) {
+            return PluginInspection.Unreadable("tools() declared more than $MAX_FUNCTIONS tools")
+        }
+
+        val tools = (0 until declaredTools.arraySize).map { at ->
+            val one = declaredTools.getArrayElement(at)
+            val proxyOf = text(one, "proxyOf")
+            if (proxyOf != null) {
+                val target = functions.firstOrNull { it.name == proxyOf }
+                    ?: return PluginInspection.Unreadable(
+                        "tools() proxies \"$proxyOf\", which functions() does not declare",
+                    )
+                DeclaredTool(
+                    name = text(one, "name") ?: proxyOf,
+                    description = text(one, "description") ?: target.description,
+                    params = target.params,
+                    returnType = target.returnType,
+                    proxyOf = proxyOf,
+                )
+            } else {
+                val params = one.getMember("params")
+                val read = (0 until (params?.arraySize ?: 0)).map { index ->
+                    val param = params.getArrayElement(index)
+                    DeclaredParam(
+                        name = text(param, "name") ?: return PluginInspection.Unreadable("a tool parameter has no name"),
+                        type = text(param, "type") ?: return PluginInspection.Unreadable("a tool parameter has no type"),
+                    )
+                }
+                DeclaredTool(
+                    name = text(one, "name") ?: return PluginInspection.Unreadable("a tool has no name"),
+                    description = text(one, "description"),
+                    params = read,
+                    returnType = text(one, "returnType")
+                        ?: return PluginInspection.Unreadable("a tool has no returnType"),
+                    proxyOf = null,
+                )
+            }
         }
 
         /*
@@ -348,6 +408,7 @@ class PluginRunner(
             id = id.asString().trim(),
             apiVersion = version.asInt(),
             functions = functions,
+            tools = tools,
             parameters = parameters,
             permissions = permissions,
             capabilities = wantedCapabilities,
@@ -567,6 +628,9 @@ class PluginRunner(
         const val ERROR = "__orknuxPluginError"
         const val RESULT_LIMIT = "__orknuxPluginResultLimit"
 
+        /** Which declaration list the wanted name is looked up in: functions or tools. */
+        const val SURFACE = "__orknuxPluginSurface"
+
         /** What the granted capabilities are bound as, and what the contract calls them. */
         const val HOST = "__orknuxHost"
 
@@ -623,7 +687,7 @@ class PluginRunner(
               globalThis.$ERROR = null;
               try {
                 var plugin = globalThis.$PLUGIN;
-                var declared = plugin.functions();
+                var declared = globalThis.$SURFACE === 'tools' ? plugin.tools() : plugin.functions();
                 var wanted = null;
                 for (var at = 0; at < declared.length; at++) {
                   if (declared[at].name === globalThis.$WANTED) { wanted = declared[at]; break; }
@@ -684,6 +748,20 @@ class PluginRunner(
               }
 
               functions() {
+                return [];
+              }
+
+              /**
+               * What this plugin offers to agents, as tools a model calls.
+               *
+               * Separate from functions(), which workflows call: the two
+               * surfaces have different readers, and a tool's description is
+               * written for a model where a function's is written for a person
+               * building a workflow. A tool that is really one of the
+               * functions is declared as an OrknuxFunctionTool, which proxies
+               * it rather than describing it twice.
+               */
+              tools() {
                 return [];
               }
 
@@ -788,6 +866,60 @@ class PluginRunner(
               }
             };
 
+            globalThis.OrknuxTool = class OrknuxTool {
+              constructor(declared) {
+                if (declared === null || typeof declared !== 'object') {
+                  throw new Error('an OrknuxTool needs a declaration');
+                }
+
+                this.name = declared.name;
+                this.description = declared.description === undefined ? null : declared.description;
+                this.params = declared.params === undefined ? [] : declared.params;
+                this.returnType = declared.returnType;
+                this.run = declared.run;
+                this.proxyOf = null;
+
+                if (typeof this.name !== 'string' || this.name.length === 0) {
+                  throw new Error('an OrknuxTool needs a name');
+                }
+                if (typeof this.returnType !== 'string') {
+                  throw new Error(this.name + ' needs a returnType');
+                }
+                if (typeof this.run !== 'function') {
+                  throw new Error(this.name + ' needs a run function; it is what the tool does');
+                }
+                if (!Array.isArray(this.params)) {
+                  throw new Error(this.name + ' declares params that are not an array');
+                }
+              }
+            };
+
+            /*
+             * A tool that is one of the plugin's own functions, exposed to
+             * agents. The utility that says so rather than a copy: the params,
+             * return type and implementation are the function's - including any
+             * edit somebody makes to it later - and only the name and the
+             * model-facing description may be its own.
+             */
+            globalThis.OrknuxFunctionTool = class OrknuxFunctionTool {
+              constructor(declared) {
+                if (declared === null || typeof declared !== 'object') {
+                  throw new Error('an OrknuxFunctionTool needs a declaration');
+                }
+
+                this.proxyOf = declared.function;
+                this.name = declared.name === undefined ? declared.function : declared.name;
+                this.description = declared.description === undefined ? null : declared.description;
+
+                if (typeof this.proxyOf !== 'string' || this.proxyOf.length === 0) {
+                  throw new Error('an OrknuxFunctionTool needs a function to proxy, named by `function`');
+                }
+                if (typeof this.name !== 'string' || this.name.length === 0) {
+                  throw new Error('an OrknuxFunctionTool needs a name');
+                }
+              }
+            };
+
             globalThis.$CONSTRUCT = function (exported) {
               if (typeof exported !== 'function') {
                 throw new Error('the default export must be a class that extends OrknuxPlugin');
@@ -826,6 +958,11 @@ sealed interface PluginInspection {
         val id: String,
         val apiVersion: Int,
         val functions: List<DeclaredFunction>,
+        /**
+         * What it offers to agents. A proxy has already been resolved against
+         * [functions], so its params and return type are the function's own.
+         */
+        val tools: List<DeclaredTool> = emptyList(),
         val parameters: List<DeclaredParameter> = emptyList(),
         /**
          * What it says it needs, exactly as it wrote it.
@@ -861,6 +998,22 @@ data class DeclaredFunction(
 )
 
 data class DeclaredParam(val name: String, val type: String)
+
+/**
+ * One thing a plugin offers to agents.
+ *
+ * The same shape as a function's declaration plus [proxyOf]: set, it names the
+ * plugin's own function this tool stands in front of, and the params and return
+ * type here were copied from it at inspection. Null for a tool with a `run` of
+ * its own.
+ */
+data class DeclaredTool(
+    val name: String,
+    val description: String?,
+    val params: List<DeclaredParam>,
+    val returnType: String,
+    val proxyOf: String?,
+)
 
 /**
  * One thing a plugin says it has to be told before it can work.

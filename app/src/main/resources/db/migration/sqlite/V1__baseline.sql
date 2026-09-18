@@ -585,6 +585,7 @@ CREATE TABLE plugin
     uploaded_at                  timestamp not null default CURRENT_TIMESTAMP,
     uploaded_by                  varchar(120) not null default '',
     declared_functions           text not null default '[]',
+    declared_tools               text not null default '[]',
     plugin_key                   varchar(32) not null,
     typescript                   text,
     declared_parameters          text not null default '[]',

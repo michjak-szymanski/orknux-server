@@ -4,6 +4,7 @@ import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
 import io.mszymanski.orknux.workflow.script.DeclaredParameter
+import io.mszymanski.orknux.workflow.script.DeclaredTool
 import org.springframework.stereotype.Component
 import tools.jackson.databind.ObjectMapper
 
@@ -104,6 +105,92 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
         }
         return mapper.writeValueAsString(array)
     }
+
+    /**
+     * Checks what a plugin offers to agents and returns it as the JSON to keep.
+     *
+     * The same rules a function is held to - the names are identifiers, the
+     * types are this server's - plus one of its own: a proxy names one of the
+     * plugin's functions, which the inspection has already resolved, so what is
+     * checked here is the copied shape and the reference is kept as it was
+     * written. Tool names are unique among the tools; a tool sharing a name
+     * with a function is fine, and is exactly what a proxy defaults to - the
+     * two lists have different readers and never answer the same call.
+     */
+    fun validatedTools(declared: List<DeclaredTool>): String {
+        val names = mutableSetOf<String>()
+
+        val array = mapper.createArrayNode()
+        declared.forEach { tool ->
+            if (!IDENTIFIER.matches(tool.name)) {
+                throw PluginDeclarationInvalidException("\"${tool.name}\" is not a usable tool name")
+            }
+            if (!names.add(tool.name)) {
+                throw PluginDeclarationInvalidException("it declares the tool ${tool.name} more than once")
+            }
+
+            val returnType = valueType(tool.returnType)
+                ?: throw PluginDeclarationInvalidException(
+                    "the tool ${tool.name} returns \"${tool.returnType}\", which is not a type this server has",
+                )
+            if (returnType == ValueType.NONE || returnType == ValueType.OBJECT) {
+                throw PluginDeclarationInvalidException(
+                    "the tool ${tool.name} returns ${tool.returnType.lowercase()}; a tool answers a model, " +
+                        "so it has to return one of ${usableTypes().joinToString(", ")}",
+                )
+            }
+
+            val paramNames = mutableSetOf<String>()
+            val params = tool.params.map { param ->
+                if (!IDENTIFIER.matches(param.name)) {
+                    throw PluginDeclarationInvalidException(
+                        "the tool ${tool.name} has a parameter called \"${param.name}\", which is not a usable name",
+                    )
+                }
+                if (!paramNames.add(param.name)) {
+                    throw PluginDeclarationInvalidException("the tool ${tool.name} declares ${param.name} twice")
+                }
+                val type = valueType(param.type)
+                    ?: throw PluginDeclarationInvalidException(
+                        "the tool ${tool.name}'s ${param.name} is a \"${param.type}\", " +
+                            "which is not a type this server has",
+                    )
+                param.name to type
+            }
+
+            val node = array.addObject()
+            node.put("name", tool.name)
+            tool.description?.let { node.put("description", it) }
+            node.put("returnType", returnType.name)
+            tool.proxyOf?.let { node.put("proxyOf", it) }
+            val kept = node.putArray("params")
+            params.forEach { (name, type) -> kept.addObject().put("name", name).put("type", type.name) }
+        }
+        return mapper.writeValueAsString(array)
+    }
+
+    /** What was kept about the tools, as the grant list and the dispatch want it. */
+    fun readTools(json: String): List<PluginToolView> = runCatching {
+        val array = mapper.readTree(json)
+        (0 until array.size()).map { at ->
+            val node = array.get(at)
+            val params = node.get("params")
+            val read = (0 until (params?.size() ?: 0)).map { index ->
+                val param = params.get(index)
+                PluginFunctionParamView(
+                    name = param.get("name").asString(),
+                    type = param.get("type").asString(),
+                )
+            }
+            PluginToolView(
+                name = node.get("name").asString(),
+                description = node.get("description")?.asString(),
+                params = read,
+                returnType = node.get("returnType").asString(),
+                proxyOf = node.get("proxyOf")?.asString(),
+            )
+        }
+    }.getOrElse { emptyList() }
 
     /**
      * Checks what a plugin says it has to be told, and returns it as JSON to keep.

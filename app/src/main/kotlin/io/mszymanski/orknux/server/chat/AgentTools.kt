@@ -118,19 +118,19 @@ class AgentTools(
             }
 
         /*
-         * And the plugin functions the grant list names, after everything else
-         * has claimed its name: the resolution order is the shadow rule, and a
+         * And the plugin tools the grant list names, after everything else has
+         * claimed its name: the resolution order is the shadow rule, and a
          * plugin's names carry its key precisely so this stays theoretical.
-         * The declaration is the schema - a plugin wrote its description for
-         * exactly this reader.
+         * The declaration is the schema - a plugin wrote a tool's description
+         * for exactly this reader, which is what tools() exists for.
          */
         val taken = map { it.name }.toSet()
-        pluginTools.granted(agent, except = taken).forEach { function ->
+        pluginTools.granted(agent, except = taken).forEach { tool ->
             add(
                 ToolSpec(
-                    name = function.name,
-                    description = function.description ?: "One of this installation's plugin functions.",
-                    parameters = function.params.map { param ->
+                    name = tool.name,
+                    description = tool.description ?: "One of this installation's plugin tools.",
+                    parameters = tool.params.map { param ->
                         ToolParameterSpec(
                             name = param.name,
                             description = meaning(param.type),

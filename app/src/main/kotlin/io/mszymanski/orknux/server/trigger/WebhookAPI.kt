@@ -206,7 +206,7 @@ class WebhookAPI(
          * failure here is a no: the webhook would refuse every caller and the
          * history would blame the gatekeeper for a mistake nobody made.
          */
-        val call = if (function.scope == FunctionScope.PLUGIN) {
+        val call = if (function.scope == FunctionScope.PLUGIN && function.editedAt == null) {
             askPlugin(trigger, function, arguments)
         } else {
             when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {

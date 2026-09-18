@@ -29,6 +29,8 @@ import io.mszymanski.orknux.server.action.FunctionNotFoundException
 import io.mszymanski.orknux.server.action.FunctionParamInvalidException
 import io.mszymanski.orknux.server.action.FunctionCodeIncompleteException
 import io.mszymanski.orknux.server.action.FunctionDescriptionTooLongException
+import io.mszymanski.orknux.server.action.FunctionPluginNameHeldException
+import io.mszymanski.orknux.server.action.FunctionPluginNeedsNoWorkspaceException
 import io.mszymanski.orknux.server.action.FunctionObjectRequiredException
 import io.mszymanski.orknux.server.revision.ComponentRevisionNotFoundException
 import io.mszymanski.orknux.server.revision.RevisionComponentGoneException
@@ -186,6 +188,8 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is FunctionParamInvalidException,
             is FunctionSourceInvalidException,
             is FunctionDescriptionTooLongException,
+            is FunctionPluginNameHeldException,
+            is FunctionPluginNeedsNoWorkspaceException,
             is FunctionArgumentInvalidException,
             is FunctionCodeIncompleteException,
             is FunctionObjectRequiredException,

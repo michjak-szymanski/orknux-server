@@ -4950,6 +4950,14 @@ type Function {
     "ISO-8601 offset date-time."
     lastModifiedAt: String!
     lastModifiedBy: String!
+    """
+    When somebody edited a plugin's function, and who. Null on every workspace
+    function, and on a plugin function nobody has touched. Set, the row's code
+    is the implementation, a reload leaves it alone, and the plugin's export
+    carries it.
+    """
+    editedAt: String
+    editedBy: String
 }
 
 type FunctionParam {

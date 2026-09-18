@@ -49,7 +49,13 @@ class PluginFunctionRegistry(
          * something is calling it, in which case the plugin has taken away
          * something in use and that is worth refusing rather than breaking.
          */
-        val removed = existing.keys - wanted.keys
+        /*
+         * An edited row is somebody's work, not the declaration's echo, so a
+         * declaration that vanished does not take it away: the row runs from
+         * its own code now and goes on doing so. Only unedited rows follow the
+         * plugin out.
+         */
+        val removed = (existing.keys - wanted.keys).filter { existing.getValue(it).editedAt == null }
         removed.forEach { name ->
             val function = existing.getValue(name)
             val callers = callersOf(requireNotNull(function.id))
@@ -62,6 +68,10 @@ class PluginFunctionRegistry(
             val returnType = ValueType.valueOf(declaration.returnType)
 
             val function = existing[name]?.apply {
+                // The declaration no longer speaks for an edited row: a reload
+                // that overwrote the edit would be the thing edits exist to
+                // survive. The row keeps what somebody made of it.
+                if (editedAt != null) return@forEach
                 this.description = declaration.description
                 this.returnType = returnType
                 this.params = params.toMutableList()

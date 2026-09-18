@@ -238,7 +238,7 @@ class ConditionEvaluator(
          * action calls one. Running the note as a script would answer nothing
          * and read as a condition nobody can decide.
          */
-        val call = if (function.scope == FunctionScope.PLUGIN) {
+        val call = if (function.scope == FunctionScope.PLUGIN && function.editedAt == null) {
             askPlugin(condition, function, arguments)
         } else {
             when (val resolved = scriptImports.resolve(function.imports, function.libraries)) {

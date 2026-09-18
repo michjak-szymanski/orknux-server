@@ -94,8 +94,15 @@ class FunctionCaller(
          * column holds a note saying so rather than code. It runs in the plugin's
          * own sandbox, out of the plugin's own text, and it is handed what this
          * workspace answered the plugin's parameters with.
+         *
+         * Unless somebody edited it: then the row's code is the implementation,
+         * a module like any workspace function's, and it runs down the script
+         * path below. What an edited copy does not have is the plugin's
+         * `this.settings` — the editor says so where the edit is made.
          */
-        if (function.scope == FunctionScope.PLUGIN) return callPlugin(function, arguments, workspaceId)
+        if (function.scope == FunctionScope.PLUGIN && function.editedAt == null) {
+            return callPlugin(function, arguments, workspaceId)
+        }
 
         /*
          * What it imports is assembled before it runs, because the sandbox resolves

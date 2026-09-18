@@ -149,12 +149,24 @@ class FunctionAPI(
         return describe(function)
     }
 
-    /** Backs the editor: the code, the details panel and the parameter list. */
+    /**
+     * Backs the editor: the code, the details panel and the parameter list.
+     *
+     * A plugin's function saves here too, since 0.9.8: what a plugin declared
+     * is a starting point, not a cage, and the person who needs one function to
+     * behave slightly differently should not have to fork the whole bundle.
+     * What an edit may not touch is the plugin's contract - the name, and
+     * anything that needs a workspace to mean something: an external, an
+     * import, a library, an object-shaped parameter or return. The edit is
+     * stamped, which is what a reload reads to leave the row alone and what the
+     * export reads to carry this version.
+     */
     @MutationMapping
     @Transactional
     fun updateFunction(@Argument id: Long, @Argument input: UpdateFunctionInput): FunctionView {
         val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: throw FunctionNotFoundException(id)
-        val workspaceId = requireEditable(function)
+        val editedPlugin = function.scope == FunctionScope.PLUGIN
+        val workspaceId = if (editedPlugin) null else requireEditable(function)
 
         // What it is about to stop being, kept before anything overwrites it.
         // A function has no draft, so a save is a version - the rule is the
@@ -163,11 +175,18 @@ class FunctionAPI(
 
         val previousName = function.name
         input.name?.trim()?.let { name ->
+            // The name is how the plugin's registry matches its rows on reload,
+            // so a renamed row would read as one function gone and another
+            // arrived. Everything else about it may move; the name is the
+            // contract.
+            if (editedPlugin && name != function.name) throw FunctionPluginNameHeldException(function.name)
             requireIdentifier(name) { FunctionNameInvalidException(name) }
-            if (name != function.name && functions.findByWorkspaceIdAndName(workspaceId, name) != null) {
+            if (workspaceId != null && name != function.name &&
+                functions.findByWorkspaceIdAndName(workspaceId, name) != null
+            ) {
                 throw FunctionNameTakenException(name)
             }
-            if (functions.findByScopeAndName(FunctionScope.PLUGIN, name) != null) {
+            if (name != function.name && functions.findByScopeAndName(FunctionScope.PLUGIN, name) != null) {
                 throw FunctionNameTakenException(name)
             }
             function.name = name
@@ -194,16 +213,40 @@ class FunctionAPI(
         /*
          * The return type and the object it names are one decision. Set apart, a
          * function could end up saying OBJECT while pointing at nothing, or pointing
-         * at an object it no longer returns.
+         * at an object it no longer returns. A plugin's function belongs to no
+         * workspace, so nothing on it may name one workspace's object.
          */
         input.returnType?.let {
+            if (editedPlugin && it == ValueType.OBJECT) throw FunctionPluginNeedsNoWorkspaceException("return an object")
             function.returnType = it
-            function.returnObjectId = returnedObject(it, input.returnObjectId, workspaceId)
+            function.returnObjectId = workspaceId?.let { held -> returnedObject(it, input.returnObjectId, held) }
         }
-        input.params?.let { function.params = it.toParams(workspaceId) }
-        input.externalVariableIds?.let { function.externals = it.toExternals(workspaceId) }
-        input.imports?.let { function.imports = it.toImports(workspaceId, importer = id) }
-        input.libraries?.let { function.libraries = it.toLibraries() }
+        input.params?.let { params ->
+            function.params = if (workspaceId != null) {
+                params.toParams(workspaceId)
+            } else {
+                if (params.any { it.type == ValueType.OBJECT }) {
+                    throw FunctionPluginNeedsNoWorkspaceException("take an object-shaped parameter")
+                }
+                params.map { param ->
+                    val name = param.name.trim()
+                    requireIdentifier(name) { FunctionParamInvalidException(name) }
+                    FunctionParam(name, param.type)
+                }.toMutableList()
+            }
+        }
+        input.externalVariableIds?.let {
+            if (editedPlugin && it.isNotEmpty()) throw FunctionPluginNeedsNoWorkspaceException("be handed a variable")
+            if (workspaceId != null) function.externals = it.toExternals(workspaceId)
+        }
+        input.imports?.let {
+            if (editedPlugin && it.isNotEmpty()) throw FunctionPluginNeedsNoWorkspaceException("import a function")
+            if (workspaceId != null) function.imports = it.toImports(workspaceId, importer = id)
+        }
+        input.libraries?.let {
+            if (editedPlugin && it.isNotEmpty()) throw FunctionPluginNeedsNoWorkspaceException("import a library")
+            if (workspaceId != null) function.libraries = it.toLibraries()
+        }
 
         /*
          * Checked against what this function will be once saved, not against whichever
@@ -214,6 +257,13 @@ class FunctionAPI(
 
         function.lastModifiedAt = OffsetDateTime.now()
         function.lastModifiedBy = currentUser()
+        if (editedPlugin) {
+            // The stamp a reload reads to leave this row alone, and the export
+            // reads to carry this version. The editor, not the timestamp above,
+            // because lastModified moves on every reload too.
+            function.editedAt = OffsetDateTime.now()
+            function.editedBy = currentUser()
+        }
 
         val message = if (previousName == function.name) {
             "Function ${function.name} updated"
@@ -222,7 +272,7 @@ class FunctionAPI(
             "Function $previousName renamed to ${function.name}" +
                 (if (followed == 0) "" else ", followed in $followed importing ${if (followed == 1) "script" else "scripts"}")
         }
-        auditRecorder.record(workspaceId, WorkspaceAuditCategory.WORKFLOW, message)
+        workspaceId?.let { auditRecorder.record(it, WorkspaceAuditCategory.WORKFLOW, message) }
         return describe(function)
     }
 
@@ -291,7 +341,10 @@ class FunctionAPI(
     @Transactional
     fun setFunctionTimeout(@Argument id: Long, @Argument seconds: Int?): FunctionView {
         val function = functions.findByIdOrNull(id)?.takeIf(::readable) ?: throw FunctionNotFoundException(id)
-        val workspaceId = requireEditable(function)
+        // A plugin's function takes a timeout too - the setting is about the
+        // sandbox, not the workspace - so only the workspace half is asked for
+        // where there is one, which is what the audit needs.
+        val workspaceId = if (function.scope == FunctionScope.PLUGIN) null else requireEditable(function)
 
         if (seconds != null && seconds !in MIN_SCRIPT_TIMEOUT_SECONDS..MAX_SCRIPT_TIMEOUT_SECONDS) {
             throw ScriptTimeoutOutOfRangeException(seconds)
@@ -302,12 +355,14 @@ class FunctionAPI(
         function.timeoutSeconds = seconds
         function.lastModifiedAt = OffsetDateTime.now()
         function.lastModifiedBy = currentUser()
-        auditRecorder.record(
-            workspaceId,
-            WorkspaceAuditCategory.WORKFLOW,
-            seconds?.let { "Function ${function.name} may run for $it seconds" }
-                ?: "Function ${function.name} runs on the workspace's time again",
-        )
+        workspaceId?.let {
+            auditRecorder.record(
+                it,
+                WorkspaceAuditCategory.WORKFLOW,
+                seconds?.let { given -> "Function ${function.name} may run for $given seconds" }
+                    ?: "Function ${function.name} runs on the workspace's time again",
+            )
+        }
         return describe(function)
     }
 
@@ -677,6 +732,8 @@ class FunctionAPI(
         signature = signatureOf(params, externals),
         lastModifiedAt = function.lastModifiedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         lastModifiedBy = function.lastModifiedBy,
+        editedAt = function.editedAt?.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        editedBy = function.editedBy,
     )
 
     /**
@@ -1047,6 +1104,13 @@ data class FunctionView(
     val signature: String,
     val lastModifiedAt: String,
     val lastModifiedBy: String,
+    /**
+     * When somebody edited a plugin's function, and who. Null on every
+     * workspace function, and on a plugin function nobody has touched - the
+     * declaration still speaks for those.
+     */
+    val editedAt: String? = null,
+    val editedBy: String? = null,
 )
 
 /**

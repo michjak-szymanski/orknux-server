@@ -10,6 +10,7 @@ import io.mszymanski.orknux.workflow.script.PluginInspection
 import io.mszymanski.orknux.workflow.script.PluginPermission
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.springframework.http.HttpHeaders
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.data.repository.findByIdOrNull
@@ -60,6 +61,8 @@ class PluginUploadAPI(
     private val permissions: PluginPermissions,
     /** What it asks the server to do for it; see [PluginCapabilities]. */
     private val capabilities: PluginCapabilities,
+    /** Folds edited functions over the bundle when it is downloaded. */
+    private val overrides: PluginOverrides,
 ) {
 
     /**
@@ -165,6 +168,30 @@ class PluginUploadAPI(
     fun download(@PathVariable id: Long): ResponseEntity<String> {
         access.requireAdmin()
         val plugin = plugins.findByIdOrNull(id) ?: throw PluginNotFoundException(id)
+
+        /*
+         * Edited functions ride along, or the export would lie.
+         *
+         * The bundle is what the author uploaded; an edit lives on the function
+         * row and never rewrites it. A download that handed back the artifact
+         * alone would hand back a plugin that does something other than this
+         * installation does - so where edits exist, what downloads is the
+         * bundle with the edits folded over it, in JavaScript, since the edits
+         * are held both ways and only the JavaScript half is what runs.
+         */
+        val edited = overrides.editedOf(plugin)
+        if (edited.isNotEmpty()) {
+            val folded = overrides.folded(plugin, edited)
+                // A download, so the refusal is the download's own status and
+                // sentence rather than an exception dressed as a server fault.
+                ?: return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .contentType(MediaType.valueOf("text/plain"))
+                    .body(PluginExportUnfoldableException(plugin.name).message)
+            return ResponseEntity.ok()
+                .contentType(MediaType.valueOf("text/plain"))
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"${plugin.key}.js\"")
+                .body(folded)
+        }
 
         val typescript = plugin.typescript
         val extension = if (typescript == null) "js" else "ts"

@@ -1051,6 +1051,8 @@ CREATE TABLE workflow_function
     name                         varchar(120) not null,
     description                  varchar(4000),
     timeout_seconds              integer,
+    edited_at                    timestamp,
+    edited_by                    varchar(120),
     source                       text not null,
     return_type                  varchar(16) not null,
     last_modified_at             timestamp not null,

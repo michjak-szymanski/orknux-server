@@ -243,6 +243,22 @@ class WorkflowFunction(
     var timeoutSeconds: Int? = null,
 
     /**
+     * When somebody edited a plugin's function, and who.
+     *
+     * Null means the plugin's declaration still speaks for this row, which is
+     * what every plugin function has until somebody edits one - and what every
+     * workspace function has always, since editing those is simply saving.
+     * Set, three things change: the code runs from this row rather than out of
+     * the plugin's bundle, a plugin reload leaves the row alone, and the
+     * plugin's export carries this version rather than the declared one.
+     */
+    @Column(name = "edited_at")
+    var editedAt: java.time.OffsetDateTime? = null,
+
+    @Column(name = "edited_by", length = 120)
+    var editedBy: String? = null,
+
+    /**
      * The JavaScript that runs.
      *
      * Compiled from [typescript] for anything a workspace wrote — the sandbox runs
@@ -446,6 +462,33 @@ class FunctionDescriptionTooLongException(val length: Int, val limit: Int) : Run
 ), Refusal {
 
     override val arguments get() = mapOf("length" to length, "limit" to limit)
+}
+
+/**
+ * A plugin's function keeps the name the plugin declared.
+ *
+ * The name is how the registry matches rows on reload: renamed, the row would
+ * read as one function gone and another arrived, and the edit this feature
+ * exists to keep would be the thing that lost it.
+ */
+class FunctionPluginNameHeldException(val name: String) : RuntimeException(
+    "$name is a plugin's function and keeps the name the plugin declared; everything else about it may change",
+), Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
+
+/**
+ * A plugin's function belongs to no workspace, so nothing on it may name one
+ * workspace's things — an object, a variable, an import, a library. Which thing
+ * was asked for is in the sentence, because that is what has to come off the
+ * save.
+ */
+class FunctionPluginNeedsNoWorkspaceException(val wanted: String) : RuntimeException(
+    "A plugin's function belongs to every workspace at once, so it cannot $wanted - those are one workspace's own",
+), Refusal {
+
+    override val arguments get() = mapOf("wanted" to wanted)
 }
 
 /**

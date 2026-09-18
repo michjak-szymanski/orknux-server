@@ -11,6 +11,7 @@ import org.springframework.transaction.event.TransactionPhase
 import org.springframework.transaction.event.TransactionalEventListener
 import java.time.Duration
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
@@ -62,25 +63,34 @@ class ModelProviderMonitor(
     private val properties: ModelProviderCheckProperties,
 ) : SmartLifecycle {
 
-    private val sweeper = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "model-provider-check").apply { isDaemon = true }
-    }
+    /*
+     * Made in start() rather than held for the bean's life, because a stopped
+     * executor is terminated for good and this bean has to survive stop() then
+     * start() - which is exactly what the test framework does to a cached
+     * context it paused and picked up again.
+     */
+    private var sweeper: ScheduledExecutorService? = null
     private var running = false
 
     override fun start() {
-        sweeper.scheduleWithFixedDelay(
+        val pool = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "model-provider-check").apply { isDaemon = true }
+        }
+        pool.scheduleWithFixedDelay(
             { runCatching(::sweep).onFailure { log.warn("Could not check the model providers", it) } },
             properties.initialDelay.toSeconds(),
             properties.interval.toSeconds(),
             TimeUnit.SECONDS,
         )
+        sweeper = pool
         running = true
         log.info("Checking model providers every {}", properties.interval)
     }
 
     override fun stop() {
         if (!running) return
-        sweeper.shutdownNow()
+        sweeper?.shutdownNow()
+        sweeper = null
         running = false
     }
 
@@ -100,7 +110,7 @@ class ModelProviderMonitor(
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     fun onProviderSaved(event: ModelProviderSaved) {
         if (!running) return
-        sweeper.execute {
+        sweeper?.execute {
             runCatching { check(event.providerId) }
                 .onFailure { log.warn("Could not check model provider {}", event.providerId, it) }
         }

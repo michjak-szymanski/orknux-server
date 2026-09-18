@@ -8,6 +8,7 @@ import org.springframework.context.SmartLifecycle
 import org.springframework.stereotype.Component
 import java.time.Duration
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 @ConfigurationProperties(prefix = "orknux.mcp.check")
@@ -50,25 +51,34 @@ class McpServerMonitor(
     private val properties: McpServerCheckProperties,
 ) : SmartLifecycle {
 
-    private val sweeper = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, "mcp-server-check").apply { isDaemon = true }
-    }
+    /*
+     * Made in start() rather than held for the bean's life, because a stopped
+     * executor is terminated for good and this bean has to survive stop() then
+     * start() - which is exactly what the test framework does to a cached
+     * context it paused and picked up again.
+     */
+    private var sweeper: ScheduledExecutorService? = null
     private var running = false
 
     override fun start() {
-        sweeper.scheduleWithFixedDelay(
+        val pool = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "mcp-server-check").apply { isDaemon = true }
+        }
+        pool.scheduleWithFixedDelay(
             { runCatching(::sweep).onFailure { log.warn("Could not check the MCP servers", it) } },
             properties.initialDelay.toSeconds(),
             properties.interval.toSeconds(),
             TimeUnit.SECONDS,
         )
+        sweeper = pool
         running = true
         log.info("Checking MCP servers every {}", properties.interval)
     }
 
     override fun stop() {
         if (!running) return
-        sweeper.shutdownNow()
+        sweeper?.shutdownNow()
+        sweeper = null
         running = false
     }
 

@@ -15,6 +15,82 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.7
+
+### ✨ Added
+
+- ⏱️ **How long a tool or function may run is now a setting, at three scopes.**
+  Every script ran under the installation's one bound — five seconds unless the
+  server was started differently — and changing it meant an environment variable
+  and a restart. A tool or function can now carry a timeout of its own, in its
+  editor; a workspace can set a default on its settings page; and the
+  installation's bound is what remains where neither has said anything. The
+  nearest number wins, it is read per call so a change decides the next run and
+  never one in flight, and 1–600 seconds is the range everywhere — a timeout
+  typed in milliseconds by mistake is refused rather than holding a thread for a
+  fortnight.
+
+- 🔐 **A tool can be handed the workspace's variables, the way a function is.**
+  External parameters, the same arrangement functions have had: chosen by
+  variable in the editor, appended by the sandbox after the parameters the tool
+  declares, and never shown to the model — so a tool reaches a credential
+  without the credential passing through a conversation. The signature marks
+  them `(external)`, and the agent is never told they exist.
+
+- ✏️ **Renaming a function follows into the scripts that call it by its name.**
+  An import is held by id, so a rename never broke a caller — but every importer
+  whose alias *was* the function's name kept spelling the old one, and the next
+  person reading that code went looking for a function that does not exist. The
+  alias and the `imports.name` written in the importer's code now move with the
+  rename, in both languages, with a version recorded per rewritten importer. An
+  alias the importer chose for itself, or one the new name would collide with,
+  is left exactly as chosen.
+
+- 🧠 **An agent can write a memory, not only read them.** `memory_save`, beside
+  `memory_search` and under the same catalog grant — an agent that could only
+  read was an agent whose lessons died with the conversation. A repeated title
+  updates the memory rather than doubling it, the catalog may be left unsaid
+  only while the agent holds exactly one, and the author is the agent's name, on
+  the card and in the audit.
+
+### 🔧 Changed
+
+- ⚠️ **A tool's code is checked against its declared parameters when it is
+  saved** — the rule functions were always held to, and the gap behind the
+  strangest bug in this release: a tool whose code took three parameters while
+  its details held the one legacy `input` map saved fine, and then the model
+  filled `input`, whose whole object landed in the code's first argument. Code
+  whose arity disagrees with the declared parameters plus externals, or that has
+  no default export to call, is refused at save with both counts named. **A
+  tool already carrying such a mismatch keeps running as it did, but its next
+  save is refused until the code and the parameter list agree.**
+
+- 📏 **A description has room for a worked example.** Tool and function
+  descriptions were capped at 500 characters with nothing checking — a longer
+  paste failed as a raw database error surfaced as INTERNAL_ERROR. Both columns
+  now hold 4000, and going over is a refusal naming the count.
+
+- 🔑 **An empty value on a variable update now clears what is stored.** It used
+  to be read as "nothing was sent" and dropped, so a secret could never be set
+  back to empty. Null still means "leave the stored value alone", which is what
+  a form that cannot show a secret sends.
+
+### 🐛 Fixed
+
+- 🧵 **A condition's function gets its externals where the declaration puts
+  them.** The legacy whole-payload call appended the workspace's variables right
+  after one argument whatever the function declared, so a function declaring two
+  parameters and an external read the payload as its first parameter and the
+  external as its second. The argument list is squared to the declared count
+  before the variables are appended, so a secret can never slide into a declared
+  parameter's place.
+
+- 👁 **A secret saved empty can be edited again.** It never rendered its reveal
+  eye, and without the eye its box stayed read-only forever, with a tooltip
+  pointing at a control that was not there. A box holding nothing has nothing to
+  hide, so it stays open; the eye is drawn only where there is something to
+  reveal, and a revealed secret can now be cleared by saving it empty.
+
 ## 0.9.6
 
 ### ✨ Added

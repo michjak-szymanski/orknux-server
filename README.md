@@ -720,11 +720,14 @@ answer is how it worked, not what was said, and keeping it would mean every late
 round pays for it again. Eight rounds is the limit, after which the run is stopped
 and says so rather than being billed in a loop.
 
-Three tools are built in, offered only where the grant makes them useful:
+Four tools are built in, offered only where the grant makes them useful:
 
 - **`skill_list`** names the skills the agent was given and what each is for.
 - **`skill_load`** reads one in full, by name.
 - **`memory_search`** looks through the memory catalogs it was granted.
+- **`memory_save`** writes into them — the same grant, because "remember this"
+  is the other half of "what do we know". A repeated title updates the memory
+  rather than doubling it, and the author is the agent's name.
 
 They are built in rather than being workspace tools because a workspace tool is
 JavaScript in a sandbox with no IO — it cannot read a table, and widening the
@@ -741,11 +744,15 @@ nothing rather than failing the conversation.
 **The workspace's own tools are offered alongside them, under their own names.**
 That is the opposite case: a tool *is* the workspace's code, and the sandbox is
 where it belongs, so `ScriptRunner` runs it with the same limits as everything
-else. The model is asked to put what the tool needs in `input`; a tool declares
-no parameters, being a default export that takes what it is given, and its
-description is what tells the model what belongs there. A tool named like a
-built-in is not offered rather than shadowing it — two tools answering to one
-name is a call nobody can predict the destination of.
+else. A tool declares parameters the way a function does — the model fills them
+by name, the sandbox passes them in order, and a save is refused when the code's
+own parameter list disagrees with the declared one, because the mismatch would
+otherwise be discovered by an argument landing in the wrong place mid-run. A
+tool may also be handed the workspace's variables as **external parameters**,
+appended after the ones it declares and never shown to the model — how a tool
+reaches a credential without the credential passing through a conversation. A
+tool named like a built-in is not offered rather than shadowing it — two tools
+answering to one name is a call nobody can predict the destination of.
 
 Tools are granted per agent, like the catalogs, and this is the grant that
 matters most: a skill is a page an agent reads, a tool is code it runs. An agent
@@ -956,10 +963,12 @@ a runbook, whatever somebody wanted the agents to know. It is its own thing rath
 than a label because it exists whether or not anything is in it, and because it is
 the unit an agent is granted.
 
-An agent reads memories through the built-in `memory_search` tool, and only from
-the catalogs its editor granted it — a workspace can hold a catalog no agent can
-see. Granting is per catalog rather than per memory: what an agent may know is a
-decision worth making once, not once per note.
+An agent reads memories through the built-in `memory_search` tool, and writes
+them through `memory_save` — both only against the catalogs its editor granted
+it, so a workspace can hold a catalog no agent can see. Granting is per catalog
+rather than per memory: what an agent may know is a decision worth making once,
+not once per note. A save under a title the catalog already holds updates that
+memory rather than doubling it, and the author on the card is the agent's name.
 
 ### Models
 
@@ -1172,7 +1181,9 @@ called. It runs in GraalJS with the sandbox `ScriptRunner` builds:
 - no `load`, no `print`, and no timers, so nothing can be pending when a call
   returns
 - a statement limit and a wall-clock timeout, either of which stops a script
-  that will not finish
+  that will not finish. The timeout is decided closest to the code first: the
+  tool's or function's own number where one is set, else the workspace's
+  default, else the installation's bound
 - a guard on the heap, because neither of those stops a script that finishes by
   filling it: a call is stopped when the heap is still nearly full after a
   collection and that call is the one that has been allocating, so a script

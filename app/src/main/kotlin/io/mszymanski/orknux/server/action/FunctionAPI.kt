@@ -767,6 +767,9 @@ class FunctionAPI(
               //   orknux.slack.thread(connection, ch, ts)   the messages in one thread
               //   orknux.slack.post(connection, ch, text)   send a message, or a reply
               //   orknux.slack.react(connection, ch, ts, e) add an emoji to a message
+              //   orknux.slack.message(connection, link)    the message a permalink points at
+              //   orknux.slack.user(connection, '<@U…>')    who a mention is
+              //   orknux.slack.mention(connection, name)    the <@…> notation to post
               // Each answers a value with `error` on it when it could not; check that
               // first. There is no fetch, no import and no require: this is a sandbox.
 

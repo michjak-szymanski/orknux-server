@@ -85,6 +85,34 @@ enum class PluginCapability(
     SLACK_ADD_REACTION("Add a Slack reaction, through a connection it was given", forScripts = true),
 
     /**
+     * Follow a Slack permalink to the one message it points at.
+     *
+     * The same reasoning as reading a thread: read-only, through a connection
+     * the workspace was given, bounded by the run's workspace. A message pasted
+     * into another message travels as its permalink, and until this nothing
+     * could read what the link says.
+     */
+    SLACK_READ_MESSAGE("Read the Slack message a link points at, through a connection it was given", forScripts = true),
+
+    /**
+     * Say who a Slack user id belongs to.
+     *
+     * A mention arrives as `<@U…>`, which names nobody until it is looked up.
+     * Read-only, through a connection the workspace was given, bounded by the
+     * run's workspace like the thread read.
+     */
+    SLACK_READ_USER("Look up who a Slack user id is, through a connection it was given", forScripts = true),
+
+    /**
+     * Turn a name into the notation Slack renders as a mention.
+     *
+     * Read-only - what comes back is text to put in a message, and posting it
+     * still takes the posting capability. Bounded the same way the lookups
+     * above are.
+     */
+    SLACK_MENTION("Resolve a name to a Slack mention, through a connection it was given", forScripts = true),
+
+    /**
      * Make an HTTP request, to an address of the plugin's choosing.
      *
      * **The widest thing on this list, and the summary says so** — because the

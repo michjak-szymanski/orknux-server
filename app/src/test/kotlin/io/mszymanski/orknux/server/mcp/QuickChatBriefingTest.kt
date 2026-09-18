@@ -87,6 +87,14 @@ class QuickChatBriefingTest(
         assertThat(briefing).contains("SlackPost")
         assertThat(briefing).contains("SlackReaction")
 
+        // Following a link, naming a mention, and writing one.
+        assertThat(briefing).contains("message(")
+        assertThat(briefing).contains("SlackLinkedMessage")
+        assertThat(briefing).contains("user(")
+        assertThat(briefing).contains("SlackUserInfo")
+        assertThat(briefing).contains("mention(")
+        assertThat(briefing).contains("SlackMention")
+
         // Both halves of the union, which is what makes a refusal checkable.
         assertThat(briefing).contains("SlackThread")
         assertThat(briefing).contains("SlackThreadMessage")

@@ -91,7 +91,14 @@ internal object HostHelpers {
      * differs: a plugin was not granted the capability, a function is on an
      * installation that answers none. Both are data, like every refusal here.
      */
-    fun slack(readAbsent: String, postAbsent: String, reactAbsent: String): String = """
+    fun slack(
+        readAbsent: String,
+        postAbsent: String,
+        reactAbsent: String,
+        messageAbsent: String,
+        userAbsent: String,
+        mentionAbsent: String,
+    ): String = """
         slack: {
           thread(connection, channel, threadTs, limit) {
             const host = globalThis.__orknuxHost;
@@ -116,6 +123,30 @@ internal object HostHelpers {
             }
             const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
             return JSON.parse(host.slack_add_reaction(JSON.stringify([id, channel, ts, emoji])));
+          },
+          message(connection, link) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_read_message === undefined) {
+              return { error: '$messageAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_read_message(JSON.stringify([id, link])));
+          },
+          user(connection, userId) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_read_user === undefined) {
+              return { error: '$userAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_read_user(JSON.stringify([id, userId])));
+          },
+          mention(connection, name) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_mention === undefined) {
+              return { error: '$mentionAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_mention(JSON.stringify([id, name])));
           },
         },
     """.trimIndent()

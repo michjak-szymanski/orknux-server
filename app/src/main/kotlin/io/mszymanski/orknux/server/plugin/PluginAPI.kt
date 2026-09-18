@@ -562,6 +562,21 @@ class PluginUploadAPI(
               | { ok: true; error?: undefined }
               | { error: string; ok?: undefined };
 
+            /** The one message a permalink points at, or why it could not be read. */
+            type SlackLinkedMessage =
+              | { channel: string; ts: string; user: string | null; text: string; threadTs: string | null; error?: undefined }
+              | { error: string; text?: undefined };
+
+            /** Who a user id belongs to, or why that could not be said. */
+            type SlackUserInfo =
+              | { id: string; name: string; realName: string | null; displayName: string | null; bot: boolean; error?: undefined }
+              | { error: string; id?: undefined };
+
+            /** The notation Slack renders as a mention, ready to put in a message. */
+            type SlackMention =
+              | { mention: string; id: string; label: string; error?: undefined }
+              | { error: string; mention?: undefined };
+
             /**
              * What the server will do on a plugin's behalf.
              *
@@ -632,6 +647,46 @@ class PluginUploadAPI(
                   ts: string,
                   emoji: string,
                 ): SlackReaction;
+
+                /**
+                 * The one message a Slack permalink points at.
+                 *
+                 * Needs the `SLACK_READ_MESSAGE` capability.
+                 *
+                 * @param link the message's permalink - what a message pasted
+                 *   into another message travels as.
+                 */
+                message(
+                  connection: SlackConnection,
+                  link: string,
+                ): SlackLinkedMessage;
+
+                /**
+                 * Who a Slack user id is.
+                 *
+                 * Needs the `SLACK_READ_USER` capability.
+                 *
+                 * @param userId the id, bare or as the `<@U…>` notation a
+                 *   message carries it in.
+                 */
+                user(
+                  connection: SlackConnection,
+                  userId: string,
+                ): SlackUserInfo;
+
+                /**
+                 * The notation that pings somebody, from their name.
+                 *
+                 * Needs the `SLACK_MENTION` capability.
+                 *
+                 * @param name a display name, username, email, id, or a user
+                 *   group's handle - with or without the `@`. The answer's
+                 *   `mention` goes into `post`'s text as it is.
+                 */
+                mention(
+                  connection: SlackConnection,
+                  name: string,
+                ): SlackMention;
               };
 
               http: {

@@ -1,10 +1,16 @@
 package io.mszymanski.orknux.server.plugin
 
 import io.mszymanski.orknux.connector.connection.Delivery
+import io.mszymanski.orknux.connector.connection.LinkedMessage
+import io.mszymanski.orknux.connector.connection.Mention
 import io.mszymanski.orknux.connector.connection.OutgoingMessages
 import io.mszymanski.orknux.connector.connection.Reaction
+import io.mszymanski.orknux.connector.connection.SlackMentions
+import io.mszymanski.orknux.connector.connection.SlackMessages
 import io.mszymanski.orknux.connector.connection.SlackReactions
 import io.mszymanski.orknux.connector.connection.SlackThreads
+import io.mszymanski.orknux.connector.connection.SlackUser
+import io.mszymanski.orknux.connector.connection.SlackUsers
 import io.mszymanski.orknux.connector.connection.Thread
 import io.mszymanski.orknux.workflow.script.PluginCapability
 import io.mszymanski.orknux.workflow.script.PluginHost
@@ -36,6 +42,9 @@ class SlackPluginHost(
     private val threads: SlackThreads,
     private val messages: OutgoingMessages,
     private val reactions: SlackReactions,
+    private val linked: SlackMessages,
+    private val users: SlackUsers,
+    private val mentions: SlackMentions,
     private val mapper: ObjectMapper,
     /**
      * The other thing the server does on a caller's behalf; see
@@ -54,6 +63,9 @@ class SlackPluginHost(
         PluginCapability.SLACK_READ_THREAD -> readThread(argument, on)
         PluginCapability.SLACK_POST_MESSAGE -> postMessage(argument, on)
         PluginCapability.SLACK_ADD_REACTION -> addReaction(argument, on)
+        PluginCapability.SLACK_READ_MESSAGE -> readMessage(argument, on)
+        PluginCapability.SLACK_READ_USER -> readUser(argument, on)
+        PluginCapability.SLACK_MENTION -> mention(argument, on)
         /*
          * No workspace scoping, and the reason is not that it was forgotten: a
          * request names an address rather than one of the workspace's own
@@ -181,6 +193,94 @@ class SlackPluginHost(
             is Reaction.NotPossible -> refusal(reacted.reason)
             is Reaction.Refused -> refusal(reacted.reason)
         }.also { log.debug("A script reacted on {} on connection {}", channel, connectionId) }
+    }
+
+    /**
+     * `[connectionId, link]`, and answers the message the permalink points at,
+     * or `{ error }` where it could not be read.
+     */
+    private fun readMessage(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 2) {
+            return refusal("that call takes a connection and a message link")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val link = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a message link")
+
+        return when (val read = linked.read(connectionId, link, on)) {
+            is LinkedMessage.Found -> mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("channel", read.channel)
+                    .put("ts", read.ts)
+                    .put("user", read.user)
+                    .put("text", read.text)
+                    .put("threadTs", read.threadTs),
+            )
+            is LinkedMessage.NotPossible -> refusal(read.reason)
+            is LinkedMessage.Refused -> refusal(read.reason)
+        }.also { log.debug("A script followed a message link on connection {}", connectionId) }
+    }
+
+    /**
+     * `[connectionId, userId]`, and answers who that is, or `{ error }`. The id
+     * may arrive wrapped as the mention notation it came from.
+     */
+    private fun readUser(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 2) {
+            return refusal("that call takes a connection and a user id")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val userId = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a user id")
+
+        return when (val found = users.info(connectionId, userId, on)) {
+            is SlackUser.Found -> mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("id", found.id)
+                    .put("name", found.name)
+                    .put("realName", found.realName)
+                    .put("displayName", found.displayName)
+                    .put("bot", found.bot),
+            )
+            is SlackUser.NotPossible -> refusal(found.reason)
+            is SlackUser.Refused -> refusal(found.reason)
+        }.also { log.debug("A script looked up a user on connection {}", connectionId) }
+    }
+
+    /**
+     * `[connectionId, name]`, and answers `{ mention, id, label }` - the text to
+     * put in a message - or `{ error }`. A name nothing answers to is an error in
+     * words rather than a guess, because a mention that pings the wrong person is
+     * worse than one that asks again.
+     */
+    private fun mention(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 2) {
+            return refusal("that call takes a connection and a name")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val name = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a name")
+
+        return when (val resolved = mentions.of(connectionId, name, on)) {
+            is Mention.Resolved -> mapper.writeValueAsString(
+                mapper.createObjectNode()
+                    .put("mention", resolved.mention)
+                    .put("id", resolved.id)
+                    .put("label", resolved.label),
+            )
+            is Mention.NobodyCalled -> refusal("nobody in that Slack answers to \"${resolved.name}\"")
+            is Mention.NotPossible -> refusal(resolved.reason)
+            is Mention.Refused -> refusal(resolved.reason)
+        }.also { log.debug("A script resolved a mention on connection {}", connectionId) }
     }
 
     /**

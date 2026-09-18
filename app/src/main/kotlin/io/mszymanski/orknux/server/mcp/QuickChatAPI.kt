@@ -442,6 +442,18 @@ class QuickChat(
                   | { ok: true; error?: undefined }
                   | { error: string; ok?: undefined };
 
+                type SlackLinkedMessage =
+                  | { channel: string; ts: string; user: string | null; text: string; threadTs: string | null; error?: undefined }
+                  | { error: string; text?: undefined };
+
+                type SlackUserInfo =
+                  | { id: string; name: string; realName: string | null; displayName: string | null; bot: boolean; error?: undefined }
+                  | { error: string; id?: undefined };
+
+                type SlackMention =
+                  | { mention: string; id: string; label: string; error?: undefined }
+                  | { error: string; mention?: undefined };
+
                 type OrknuxResponse =
                   | { status: number; headers: Record<string, string>; body: string; json?: unknown; error?: undefined }
                   | { error: string };
@@ -466,6 +478,18 @@ class QuickChat(
                       ts: string,
                       emoji: string,
                     ): SlackReaction;
+                    message(
+                      connection: OrknuxConnectionRef,
+                      link: string,
+                    ): SlackLinkedMessage;
+                    user(
+                      connection: OrknuxConnectionRef,
+                      userId: string,
+                    ): SlackUserInfo;
+                    mention(
+                      connection: OrknuxConnectionRef,
+                      name: string,
+                    ): SlackMention;
                   };
                   readonly log: {
                     debug(...said: unknown[]): void;
@@ -487,6 +511,11 @@ class QuickChat(
                 "`slack.post` sends a message and `slack.react` adds an emoji, both through a connection the " +
                 "workspace was given, the same as `thread`; `post` answers with the new message's `ts`, which " +
                 "`react` then hangs on. Read `error` first on each. " +
+                "`slack.message` follows a permalink - the address a message pasted into another message travels " +
+                "as - to the one message it points at. `slack.user` says who a `<@U…>` mention is; hand it the id " +
+                "or the whole notation. `slack.mention` turns a name, a user group handle or an email into the " +
+                "notation to put in `slack.post`'s text - `<@U…>` for a person, `<!subteam^S…>` for a group; never " +
+                "write those by hand from a guessed id. " +
                 "`orknux.http` is the only way out to a network: the server makes the request and hands back " +
                 "data, so there is no `fetch` and no socket. An object body is sent as JSON and given a JSON " +
                 "content type; a JSON reply arrives parsed as `json`, beside the `body` it was parsed from. " +

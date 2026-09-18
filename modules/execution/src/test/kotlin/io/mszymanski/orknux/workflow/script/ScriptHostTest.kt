@@ -101,6 +101,57 @@ class ScriptHostTest {
         })
     }
 
+    @Test
+    fun `a function can follow a message link through the server`() {
+        val follower = """
+            export default function follow(link) {
+              return orknux.slack.message({ id: 7, type: 'SLACK' }, link);
+            }
+        """.trimIndent()
+
+        runner.call(follower, "follow", listOf("\"https://x.slack.com/archives/C1/p1\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_READ_MESSAGE)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"https://x.slack.com/archives/C1/p1"]""")
+        })
+    }
+
+    @Test
+    fun `a function can ask who a user id is through the server`() {
+        val who = """
+            export default function who(id) {
+              return orknux.slack.user({ id: 7, type: 'SLACK' }, id);
+            }
+        """.trimIndent()
+
+        runner.call(who, "who", listOf("\"<@U0123ABCD>\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_READ_USER)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"<@U0123ABCD>"]""")
+        })
+    }
+
+    @Test
+    fun `a function can resolve a mention through the server`() {
+        val resolver = """
+            export default function ping(name) {
+              return orknux.slack.mention({ id: 7, type: 'SLACK' }, name);
+            }
+        """.trimIndent()
+
+        runner.call(resolver, "ping", listOf("\"dana\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_MENTION)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"dana"]""")
+        })
+    }
+
     /** With no host wired, the helper is still there and says so in a sentence. */
     @Test
     fun `a script where the door is not wired is told, rather than thrown at`() {

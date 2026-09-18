@@ -23,7 +23,11 @@
  * Nothing here wraps `orknux.slack.thread` for the sake of it. That call is the
  * API and is available to any plugin granted the capability; a function that
  * only forwarded its arguments to it would be a name to look up in exchange for
- * nothing. What is here is what the call does not answer on its own.
+ * nothing. What is here is what the call does not answer on its own - plus the
+ * three lookups below, whose wrapping IS the point: an agent has no code and
+ * calls functions by name, so `readMessage`, `whoIs` and `mention` exist to be
+ * granted to agents as tools. Their descriptions are written for the model
+ * that reads them.
  *
  * ## Why the connection is an argument and not just a setting
  *
@@ -67,7 +71,7 @@ export default class Slack extends OrknuxPlugin {
   }
 
   capabilities() {
-    return ['SLACK_READ_THREAD'];
+    return ['SLACK_READ_THREAD', 'SLACK_READ_MESSAGE', 'SLACK_READ_USER', 'SLACK_MENTION'];
   }
 
   functions() {
@@ -112,6 +116,69 @@ export default class Slack extends OrknuxPlugin {
            * came back. One reply, and this is it.
            */
           return read.replies === 1;
+        },
+      }),
+
+      new OrknuxFunction({
+        name: 'readMessage',
+        description:
+          'Reads the Slack message a permalink points at. Use when a message links to another message ' +
+          '(https://…slack.com/archives/…) and you need what that message says. Pass the connection the ' +
+          'event came in on, or an empty string to use the configured one. Answers channel, ts, user and text.',
+        params: [
+          { name: 'connection', type: 'string' },
+          { name: 'link', type: 'string' },
+        ],
+        returnType: 'map',
+        run: (connection, link) => {
+          const read = orknux.slack.message(connection || this.settings.slack, link);
+          if (read.error !== undefined) {
+            throw new Error(`could not read the linked message: ${read.error}`);
+          }
+          return read;
+        },
+      }),
+
+      new OrknuxFunction({
+        name: 'whoIs',
+        description:
+          'Says who a Slack user id belongs to. Use when a message carries a mention like <@U0123ABCD> ' +
+          'and you need the person behind it; pass the id bare or as the whole <@…> notation. Pass the ' +
+          'connection the event came in on, or an empty string to use the configured one. Answers id, ' +
+          'name, realName, displayName and whether it is a bot.',
+        params: [
+          { name: 'connection', type: 'string' },
+          { name: 'userId', type: 'string' },
+        ],
+        returnType: 'map',
+        run: (connection, userId) => {
+          const found = orknux.slack.user(connection || this.settings.slack, userId);
+          if (found.error !== undefined) {
+            throw new Error(`could not look the user up: ${found.error}`);
+          }
+          return found;
+        },
+      }),
+
+      new OrknuxFunction({
+        name: 'mention',
+        description:
+          'Turns a name into the notation Slack renders as a mention: <@U…> for a person, <!subteam^S…> ' +
+          'for a user group. Use it to ping somebody in a message you are composing - put the answer in ' +
+          'the message text as it is, and never write <@…> from a guessed id. Takes a display name, ' +
+          'username, email, id or group handle. Pass the connection the event came in on, or an empty ' +
+          'string to use the configured one.',
+        params: [
+          { name: 'connection', type: 'string' },
+          { name: 'name', type: 'string' },
+        ],
+        returnType: 'string',
+        run: (connection, name) => {
+          const resolved = orknux.slack.mention(connection || this.settings.slack, name);
+          if (resolved.error !== undefined) {
+            throw new Error(`could not resolve the mention: ${resolved.error}`);
+          }
+          return resolved.mention;
         },
       }),
     ];

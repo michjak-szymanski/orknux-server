@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.McpToolCaller
 import io.mszymanski.orknux.server.agent.SkillTool
+import io.mszymanski.orknux.server.agent.PluginToolCaller
 import io.mszymanski.orknux.server.agent.WorkspaceToolCaller
 import io.mszymanski.orknux.server.mcp.OrknuxScope
 import io.mszymanski.orknux.server.mcp.OrknuxTools
@@ -34,6 +35,7 @@ class AgentTools(
     private val skills: SkillTool,
     private val memories: MemoryTool,
     private val workspaceTools: WorkspaceToolCaller,
+    private val pluginTools: PluginToolCaller,
     private val mcpTools: McpToolCaller,
     private val orknux: OrknuxTools,
     private val shells: ShellTools,
@@ -114,6 +116,30 @@ class AgentTools(
                     ),
                 )
             }
+
+        /*
+         * And the plugin functions the grant list names, after everything else
+         * has claimed its name: the resolution order is the shadow rule, and a
+         * plugin's names carry its key precisely so this stays theoretical.
+         * The declaration is the schema - a plugin wrote its description for
+         * exactly this reader.
+         */
+        val taken = map { it.name }.toSet()
+        pluginTools.granted(agent, except = taken).forEach { function ->
+            add(
+                ToolSpec(
+                    name = function.name,
+                    description = function.description ?: "One of this installation's plugin functions.",
+                    parameters = function.params.map { param ->
+                        ToolParameterSpec(
+                            name = param.name,
+                            description = meaning(param.type),
+                            required = true,
+                        )
+                    },
+                ),
+            )
+        }
     }
 
     /**
@@ -207,11 +233,13 @@ class AgentTools(
             else -> {
                 val tool = workspaceTools.granted(agent).firstOrNull { it.name == call.name }
                 val remote = mcpTools.resolve(agent, call.name)
+                val declared = pluginTools.resolve(agent, call.name)
                 when {
                     tool != null -> workspaceTools.call(agent, tool, call.arguments)
                     // An MCP tool takes its own named arguments, so the whole
                     // object goes through rather than being unwrapped.
                     remote != null -> mcpTools.call(remote.first, remote.second, call.arguments)
+                    declared != null -> pluginTools.call(agent, declared, call.arguments)
                     else -> mapper.writeValueAsString(mapOf("error" to "There is no tool called ${call.name}"))
                 }
             }

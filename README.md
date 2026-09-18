@@ -564,7 +564,8 @@ already there.
 
 ### Microsoft Teams
 
-**Teams is a plugin, not a connection type.** `plugins/teams/teams.js` in this
+**Teams is a plugin, not a connection type.** The `teams` plugin in the
+[orknux-extension](https://github.com/michjak-szymanski/orknux-extension)
 repository is loaded on the Plugins screen like any other, and everything it
 needs already exists: a webhook trigger to arrive at, an HTTP request action to
 leave by, a workspace variable to keep the credentials in and the proxy rules to

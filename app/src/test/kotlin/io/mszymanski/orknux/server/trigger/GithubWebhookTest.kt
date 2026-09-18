@@ -43,8 +43,6 @@ import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.setup.DefaultMockMvcBuilder
 import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import org.springframework.web.context.WebApplicationContext
-import java.nio.file.Files
-import java.nio.file.Path
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
@@ -52,15 +50,15 @@ import javax.crypto.spec.SecretKeySpec
  * GitHub reaching a workspace, the way issue #274 said it should: as a plugin.
  *
  * There is no GitHub connection and no GitHub trigger. What runs here is the
- * webhook trigger this server already had, guarded by a function the plugin in
- * `plugins/github/github.js` declares — so what is being tested is that the
- * plugin route carries a real integration end to end, signature and all.
+ * webhook trigger this server already had, guarded by a function the github
+ * plugin declares — so what is being tested is that the plugin route carries a
+ * real integration end to end, signature and all.
  *
- * **The plugin is read off disk rather than written out here.** A copy in this
- * file would go on passing on the day the shipped one stopped working, which is
- * the only day this test matters. The requests are made anonymously and with the
- * headers GitHub really sends, because that is the only way this endpoint is
- * ever called.
+ * **The plugin is a fixture copy now.** The canonical file lives in the
+ * orknux-extension repository, so this pins the server's half of the contract
+ * and the copy is kept in step with the canonical file by hand. The requests
+ * are made anonymously and with the headers GitHub really sends, because that
+ * is the only way this endpoint is ever called.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester
@@ -443,17 +441,17 @@ class GithubWebhookTest(
         /** Not a real one, and it never leaves the test database. */
         const val SECRET = "it-came-from-github"
 
-        val SOURCE: String = Files.readString(root().resolve("plugins/github/github.js"))
-
-        /** The repository, found by walking up rather than by counting `..`. */
-        fun root(): Path {
-            var here: Path? = Path.of("").toAbsolutePath()
-            while (here != null) {
-                if (Files.isDirectory(here.resolve("plugins")) && Files.isDirectory(here.resolve("app"))) return here
-                here = here.parent
-            }
-            error("Could not find the repository root from ${Path.of("").toAbsolutePath()}")
-        }
+        /*
+         * A copy of the plugin, not the plugin. The file an operator loads
+         * lives in the orknux-extension repository now, so what this pins is
+         * the server side of the contract: the webhook vocabulary the plugin
+         * relies on. When the canonical file changes, this copy is brought in
+         * step by hand - and a change that breaks this test is exactly the
+         * change the plugin's users need to hear about.
+         */
+        val SOURCE: String = requireNotNull(GithubWebhookTest::class.java.getResource("/plugins/github.js")) {
+            "the plugin fixture is not on the test classpath"
+        }.readText()
 
         /*
          * Cut down from real deliveries: what the trigger's shape asks for, plus

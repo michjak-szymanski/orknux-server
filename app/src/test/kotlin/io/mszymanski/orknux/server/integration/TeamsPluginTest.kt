@@ -57,15 +57,13 @@ import tools.jackson.databind.ObjectMapper
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.Path
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Microsoft Teams, both ways, through the plugin in `plugins/teams`.
+ * Microsoft Teams, both ways, through the teams plugin (in the orknux-extension repository).
  *
  * The point of this class is that nothing under `app` or `modules` knows the
  * word Teams. Receiving is a webhook trigger whose gatekeeper is one of the
@@ -74,9 +72,10 @@ import javax.crypto.spec.SecretKeySpec
  * name. If a change to any of those three general mechanisms would break a Teams
  * installation, it breaks here.
  *
- * The plugin is read off disk rather than pasted in, because a copy in a test
- * resource is a copy that passes while the file somebody actually loads is
- * broken.
+ * The plugin is a fixture copy: the canonical file lives in the
+ * orknux-extension repository now, and the copy here is kept in step with it
+ * by hand so this stays a test of the mechanisms a Teams installation stands
+ * on.
  */
 @SpringBootTest
 @AutoConfigureGraphQlTester
@@ -605,13 +604,16 @@ class TeamsPluginTest(
     private companion object {
 
         /**
-         * The plugin as it is shipped, read off disk.
+         * A copy of the plugin, not the plugin.
          *
-         * Relative to the module, which is where surefire runs. A copy pasted in
-         * here would go on passing after somebody broke the file an operator
-         * actually loads, and that file is the whole deliverable.
+         * The file an operator loads lives in the orknux-extension repository
+         * now, so this cannot read the deliverable itself any more. What the
+         * copy pins is the server side of the contract the plugin stands on;
+         * when the canonical file changes, it is brought in step by hand.
          */
-        val SOURCE: String = Files.readString(Path.of("..", "plugins", "teams", "teams.js"))
+        val SOURCE: String = requireNotNull(TeamsPluginTest::class.java.getResource("/plugins/teams.js")) {
+            "the plugin fixture is not on the test classpath"
+        }.readText()
 
         /** What Teams hands out when an outgoing webhook is created: base64. */
         val TOKEN: String = Base64.getEncoder()

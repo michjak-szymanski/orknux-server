@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.workflow.script.PluginCapability
 import io.mszymanski.orknux.workflow.script.PluginInspection
 import io.mszymanski.orknux.workflow.script.PluginPermission
 import io.mszymanski.orknux.workflow.script.PluginRunner
@@ -143,6 +144,18 @@ class PluginUploadAPI(
                     .replace(
                         "@PERMISSION_LIST@",
                         PluginPermission.entries.joinToString("\n") {
+                            "   *   - `${it.name}` - ${it.summary.lowercase()}"
+                        },
+                    )
+                    // The capabilities the same way, from the enumeration that
+                    // does the granting, for the same reason as everything above.
+                    .replace(
+                        "@CAPABILITY_UNION@",
+                        PluginCapability.entries.joinToString(" | ") { "'${it.name}'" },
+                    )
+                    .replace(
+                        "@CAPABILITY_LIST@",
+                        PluginCapability.entries.joinToString("\n") {
                             "   *   - `${it.name}` - ${it.summary.lowercase()}"
                         },
                     ),
@@ -519,6 +532,25 @@ class PluginUploadAPI(
                */
               permissions(): OrknuxPermission[];
               /**
+               * What this plugin asks the server to do on its behalf. Defaults to
+               * none.
+               *
+               * Deliberately not folded into `permissions()`: a permission turns
+               * a language feature back on inside the sandbox, where a capability
+               * has the server reach outside it - read a Slack thread, make an
+               * HTTP request - and those are not decisions of the same size, so
+               * whoever loads the plugin is shown them as two lists and accepts
+               * each under its own name.
+               *
+               * This is the whole of what can be asked for:
+               @CAPABILITY_LIST@
+               *
+               * Each `orknux.*` call below says which of these it needs. A call
+               * made without its capability answers `{ error }` saying so, rather
+               * than reaching anything.
+               */
+              capabilities(): OrknuxCapability[];
+              /**
                * What a workspace set those parameters to, keyed by name.
                *
                * Frozen, and put there by the server for the length of one call. A
@@ -530,7 +562,9 @@ class PluginUploadAPI(
                * point at, which is what makes the parameter list a readable answer
                * to "what can this thing get at?".
                */
-              readonly settings: Readonly<Record<string, string | number | boolean | OrknuxConnection<ConnectionType>>>;
+              readonly settings: Readonly<
+                Record<string, string | number | boolean | OrknuxConnection<ConnectionType> | undefined>
+              >;
             }
 
             /** The kinds of connection a workspace can hold. */
@@ -757,12 +791,34 @@ class PluginUploadAPI(
                         url: string;
                         method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD';
                         headers?: Record<string, string>;
-                        body?: string;
+                        /**
+                         * A string goes through untouched. An object is sent as
+                         * JSON, and `content-type: application/json` is set
+                         * unless a header already names one.
+                         */
+                        body?: string | object;
                       },
                 ): OrknuxResponse;
 
-                /** The same, for the request nearly everybody wants. */
+                /** The two nearly everybody wants, spelled out. */
                 get(url: string, headers?: Record<string, string>): OrknuxResponse;
+                post(url: string, body?: string | object, headers?: Record<string, string>): OrknuxResponse;
+              };
+
+              /**
+               * The way to say something, in a sandbox with no `console`.
+               *
+               * The line lands in the server's own log under this plugin's name.
+               * Anything that is not a string is written as JSON, and a level
+               * below the installation's threshold is dropped where it was
+               * written - so tracing may stay in and costs one comparison until
+               * somebody turns the level down. Needs no capability.
+               */
+              log: {
+                debug(...said: unknown[]): void;
+                info(...said: unknown[]): void;
+                warn(...said: unknown[]): void;
+                error(...said: unknown[]): void;
               };
             };
 
@@ -774,14 +830,27 @@ class PluginUploadAPI(
              * decided does not quietly decide.
              */
             type OrknuxResponse =
-              | { status: number; headers: Record<string, string>; body: string; error?: undefined }
-              | { error: string; status?: undefined; headers?: undefined; body?: undefined };
+              | {
+                  status: number;
+                  headers: Record<string, string>;
+                  body: string;
+                  /**
+                   * `body`, parsed, where it parsed as JSON - beside it, never
+                   * instead of it. A reply that is not JSON simply has no `json`.
+                   */
+                  json?: unknown;
+                  error?: undefined;
+                }
+              | { error: string; status?: undefined; headers?: undefined; body?: undefined; json?: undefined };
 
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;
 
             /** What a plugin may ask for. Exactly this list, and nothing else. */
             type OrknuxPermission = @PERMISSION_UNION@;
+
+            /** What a plugin may ask the server to do. Exactly this list, and nothing else. */
+            type OrknuxCapability = @CAPABILITY_UNION@;
 
             declare class OrknuxFunction {
               constructor(declaration: {

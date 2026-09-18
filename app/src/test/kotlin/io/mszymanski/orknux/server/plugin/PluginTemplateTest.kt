@@ -53,6 +53,24 @@ class PluginTemplateTest(@Autowired val plugins: PluginUploadAPI) {
     }
 
     /**
+     * The template describes what the runtime actually answers.
+     *
+     * It had fallen behind its own sandbox once: the helpers gained `post`,
+     * `log` and the parsed `json` beside `body`, and the file every editor
+     * checks against still described the older shape - so a call that worked
+     * was underlined and a plugin author could not trust either answer.
+     */
+    @Test
+    fun `the template keeps up with the helpers the sandbox actually hands out`() {
+        assertThat(template).contains("capabilities(): OrknuxCapability[]")
+        assertThat(template).contains("type OrknuxCapability =")
+        assertThat(template).contains("post(url: string")
+        assertThat(template).contains("json?: unknown")
+        assertThat(template).contains("log: {")
+        assertThat(template).contains("debug(...said: unknown[]): void")
+    }
+
+    /**
      * A Slack connection is not a Jira one.
      *
      * The type parameter has to reach a member for that to be true of the types

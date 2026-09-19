@@ -546,6 +546,29 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             node.put("type", type.name)
             node.put("required", parameter.required)
             node.put("secret", parameter.secret)
+            /*
+             * The values it may take, where the plugin knows them all.
+             *
+             * Checked here as well as in the sandbox because this is where a
+             * refusal reaches the person loading the plugin: a set of one is a
+             * field that cannot be filled in, and a duplicate is a picker with
+             * the same row twice.
+             */
+            parameter.options?.map { it.trim() }?.filter { it.isNotEmpty() }?.let { offered ->
+                if (offered.size != offered.distinct().size) {
+                    throw PluginDeclarationInvalidException(
+                        "the parameter ${parameter.name} offers the same option more than once",
+                    )
+                }
+                if (offered.size > MOST_OPTIONS) {
+                    throw PluginDeclarationInvalidException(
+                        "the parameter ${parameter.name} offers ${offered.size} options, and a picker holds " +
+                            "at most $MOST_OPTIONS",
+                    )
+                }
+                val held = node.putArray("options")
+                offered.forEach(held::add)
+            }
         }
         return mapper.writeValueAsString(array)
     }
@@ -574,6 +597,8 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                  */
                 required = node.get("required")?.asBoolean() ?: false,
                 secret = node.get("secret")?.asBoolean() ?: false,
+                options = node.get("options")?.takeIf { it.isArray }
+                    ?.values()?.map { it.asString() }?.toList() ?: emptyList(),
                 connectionType = node.get("connectionType")?.asString(),
             )
         }
@@ -706,6 +731,15 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
 
         /** What the `agent_skill` name column holds. */
         const val MOST_SKILL_NAME_CHARS = 120
+
+        /**
+         * How many values a picker may offer.
+         *
+         * A list past this is not a choice anybody scans, it is a search - and
+         * a parameter with two hundred answers wants a different control than
+         * the one this buys.
+         */
+        const val MOST_OPTIONS = 50
     }
 }
 

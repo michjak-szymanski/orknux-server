@@ -86,6 +86,15 @@ data class PluginParameterSettingView(
     val connectionType: String?,
     val required: Boolean,
     val secret: Boolean,
+    /**
+     * The values this may take, where the plugin knows them all.
+     *
+     * Empty where anything typed will do. Carried on the answered view as well
+     * as on the declaration because this is the one the settings form reads -
+     * a picker is drawn from what a parameter may be, and the form never sees
+     * the declaration.
+     */
+    val options: List<String> = emptyList(),
     val literal: String?,
     val variableId: String?,
     val variableName: String?,

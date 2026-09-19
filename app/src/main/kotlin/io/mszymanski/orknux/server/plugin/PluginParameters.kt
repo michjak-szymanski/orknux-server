@@ -84,6 +84,7 @@ class PluginParameters(
                 connectionType = parameter.connectionType,
                 required = parameter.required,
                 secret = parameter.secret,
+                options = parameter.options,
                 literal = setting?.literalValue,
                 variableId = variable?.id?.toString(),
                 // The name only. What it holds is read on the variables screen,

@@ -4803,6 +4803,16 @@ type PluginParameterDeclaration {
     into a form. One of these can only be answered by pointing at a variable.
     """
     secret: Boolean!
+    """
+    The values this may take, where the plugin knows them all. Empty where
+    anything typed will do.
+
+    A set makes the settings field a picker rather than a text box — which is
+    what saves a plugin checking the string by hand and writing the sentence
+    that lists the choices, and means a value that is not on the list cannot
+    be typed rather than being discovered at the first call.
+    """
+    options: [String!]!
 }
 
 """
@@ -4831,6 +4841,14 @@ type PluginParameterSetting {
     connectionType: String
     required: Boolean!
     secret: Boolean!
+    """
+    The values this may take, where the plugin knows them all; empty where
+    anything typed will do.
+
+    Here as well as on the declaration because this is the view the settings
+    form reads, and a picker is drawn from what a parameter may be.
+    """
+    options: [String!]!
     "What somebody typed. Null when this points at a variable, or is unanswered."
     literal: String
     "Which of the workspace's variables this reads. Null when it was typed in."

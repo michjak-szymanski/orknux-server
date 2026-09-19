@@ -442,6 +442,14 @@ data class PluginParameterView(
      * connection parameter to be missing it.
      */
     val connectionType: String? = null,
+    /**
+     * The values this may take, where the plugin knows them all.
+     *
+     * Empty where anything typed will do. A set makes the settings field a
+     * picker, which is what saves a plugin hand-checking the string and
+     * writing the sentence that lists the choices.
+     */
+    val options: List<String> = emptyList(),
 )
 
 /**

@@ -952,16 +952,24 @@ class PluginUploadAPI(
                         throw PluginZipInvalidException("\"$name\" is not a path a plugin zip may hold")
                     }
                     /*
-                     * JavaScript, the manifest, and the face it names. A zip
-                     * is how a plugin ships more than one file, and those
-                     * three are what a plugin is made of; anything else in
-                     * there is somebody's mistake, and a mistake that gets
-                     * stored is a mistake nobody finds.
+                     * JavaScript, the manifest, and the face it names: those
+                     * three are what a plugin is made of, and the rest of the
+                     * archive is passed over.
+                     *
+                     * Passed over rather than refused. A plugin folder is a
+                     * folder somebody works in - a README, a licence, a
+                     * lockfile - and the packer zips what is there, so
+                     * refusing the archive over a README meant a plugin that
+                     * builds cannot be loaded. What the refusal was actually
+                     * guarding is code nobody declared, and that is still
+                     * caught where it matters: a shipped .js the plugin does
+                     * not declare is refused by name, and a declared one that
+                     * did not arrive is too.
                      */
                     if (!path.endsWith(".js") && path != MANIFEST && !path.endsWith(".svg")) {
-                        throw PluginZipInvalidException(
-                            "a plugin zip holds JavaScript, its $MANIFEST and its icon - \"$path\" is none of those",
-                        )
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                        continue
                     }
                     val content = zip.readBytes()
                     total += content.size

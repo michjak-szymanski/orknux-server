@@ -208,6 +208,55 @@ class PluginLibrariesTest(
         assertThat(stored.name).isEqualTo("plugin")
     }
 
+    /**
+     * A plugin folder is a folder somebody works in.
+     *
+     * The packer zips what is there, so a README, a licence and a lockfile
+     * arrive beside the code - and refusing the archive over one of them meant
+     * a plugin that builds could not be loaded. They are passed over; what the
+     * refusal was guarding is code nobody declared, which is still caught.
+     */
+    @Test
+    fun `a zip may carry a README, and it is simply not part of the plugin`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "README.md" to "# Shipped. What this plugin does.",
+            "LICENSE" to "MIT",
+            "package-lock.json" to "{}",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        val stored = plugins.findByKey("shipped")!!
+        assertThat(libraries.findByPluginIdOrderByPositionAsc(requireNotNull(stored.id)).map { it.path })
+            .describedAs("the code, and only the code")
+            .containsExactly("lib/format.js", "lib/names.js")
+        assertThat(stored.source).doesNotContain("What this plugin does.")
+    }
+
+    /**
+     * And the thing the refusal was for is still refused: a .js nobody
+     * declared does not ride in on the same permission.
+     */
+    @Test
+    fun `an undeclared script is still refused, README or no README`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "README.md" to "# Shipped",
+            "lib/extra.js" to "export const x = 1;",
+        )
+
+        val failure = runCatching { load(archive, accepting = "lib/format.js,lib/names.js,lib/extra.js") }
+            .exceptionOrNull()
+
+        assertThat(failure).isInstanceOf(PluginContractException::class.java)
+        assertThat(failure!!.message).contains("lib/extra.js")
+    }
+
     @Test
     fun `a set already allowed is not asked about again`() {
         val archive = zipped("plugin.js" to pluginSource, "lib/format.js" to format, "lib/names.js" to names)

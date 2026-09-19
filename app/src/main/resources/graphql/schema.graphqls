@@ -103,7 +103,7 @@ type Query {
     rather than an empty list: "nothing is offered" is not something a network
     failure may claim. Administrators only.
     """
-    marketplacePlugins(refresh: Boolean): [MarketplaceListing!]!
+    marketplacePlugins: [MarketplaceListing!]!
 
     """
     Every tool the loaded plugins offer to agents, under their granted names.

@@ -38,13 +38,17 @@ class MarketplaceAPI(
      * One query rather than two and a join on the screen: whether a listing is
      * installed, and whether the version on offer is one this installation
      * does not have, are the two things the catalog is read for.
+     *
+     * Asked afresh every time, so refreshing is asking again rather than an
+     * argument. There used to be one, and it was forwarded to a marketplace
+     * that has no such argument and said so.
      */
     @QueryMapping
-    fun marketplacePlugins(@Argument refresh: Boolean?): List<MarketplaceListingView> {
+    fun marketplacePlugins(): List<MarketplaceListingView> {
         access.requireAdmin()
 
         val installed = plugins.findAll().associateBy { it.key }
-        return marketplace.offerings(refresh == true).map { offering ->
+        return marketplace.offerings().map { offering ->
             val here = installed[offering.key]
             MarketplaceListingView(
                 key = offering.key,

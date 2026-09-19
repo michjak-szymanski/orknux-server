@@ -51,7 +51,7 @@ class MarketplaceInstallTest(
 
     @Test
     fun `the catalog says what is on offer, and what is installed here`() {
-        val before = catalog.marketplacePlugins(refresh = null).single()
+        val before = catalog.marketplacePlugins().single()
 
         assertThat(before.key).isEqualTo("greeter")
         assertThat(before.author).isEqualTo("Orknux")
@@ -91,7 +91,7 @@ class MarketplaceInstallTest(
         assertThat(functions.findAll().map { it.name }).contains("greeter_greet")
 
         // And the catalog now says so, without an update to offer.
-        val listing = catalog.marketplacePlugins(refresh = null).single()
+        val listing = catalog.marketplacePlugins().single()
         assertThat(listing.installed).isTrue()
         assertThat(listing.installedVersion).isEqualTo("1.0.0")
         assertThat(listing.updatable).isFalse()
@@ -106,7 +106,7 @@ class MarketplaceInstallTest(
         catalog.installMarketplacePlugin("greeter", accept = "lib/words.js")
 
         offeredVersion = "1.1.0"
-        val listing = catalog.marketplacePlugins(refresh = null).single()
+        val listing = catalog.marketplacePlugins().single()
         assertThat(listing.updatable).describedAs("the catalog has moved on and this installation has not").isTrue()
 
         val updated = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)

@@ -61,15 +61,16 @@ class Marketplace(
     /** Whether this installation has a marketplace at all, for a screen to ask. */
     val configured: Boolean get() = endpoint.isNotBlank()
 
-    fun offerings(refresh: Boolean = false): List<MarketplaceOffering> {
-        val answer = asked(
-            """
-            query Catalog(${'$'}refresh: Boolean) {
-              marketplacePlugins(refresh: ${'$'}refresh) { $FIELDS }
-            }
-            """.trimIndent(),
-            mapOf("refresh" to refresh),
-        )
+    /**
+     * What the marketplace offers, asked afresh every time.
+     *
+     * Nothing is cached on either side of this call, so there is nothing for a
+     * refresh flag to bypass — and one was sent for a while, which the
+     * marketplace rightly refused as an argument it does not have. Asking
+     * again is the whole of refreshing.
+     */
+    fun offerings(): List<MarketplaceOffering> {
+        val answer = asked("query Catalog { marketplacePlugins { $FIELDS } }", emptyMap())
         return answer.path("data").path("marketplacePlugins").values().map(::read)
     }
 

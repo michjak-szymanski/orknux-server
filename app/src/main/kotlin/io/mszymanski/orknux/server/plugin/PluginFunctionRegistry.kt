@@ -136,31 +136,68 @@ class PluginFunctionRegistry(
     /**
      * What the source column holds for a function nobody has taken over yet.
      *
-     * The column cannot be empty and the editor shows it, so it says what this
-     * is and what saving would do - the note used to say the function could
-     * not be edited at all, which stopped being true and went on being read.
-     * The plugin's own implementation rides along for reference: a person
-     * deciding whether to take a function over wants to read what it does now.
+     * The plugin's own implementation, rewritten as the module an edit would
+     * run - so taking a function over starts from the real code, not from a
+     * blank page or a commented copy of it. The header says what a save does,
+     * and until one happens nothing here is executed: the plugin runs its
+     * bundled copy. Where the contract could not read the implementation, an
+     * empty body under the declared parameters stands in.
      */
     private fun explanation(plugin: Plugin, declaration: PluginFunctionView): String = buildString {
         appendLine("/*")
-        appendLine(" * Provided by the \"${plugin.name}\" plugin (${plugin.key}), which runs the")
-        appendLine(" * real implementation out of its own bundle.")
+        appendLine(" * Provided by the \"${plugin.name}\" plugin (${plugin.key}). This is the")
+        appendLine(" * plugin's own implementation, shown here to be edited: saving any change")
+        appendLine(" * takes the function over - from then on this module is what runs, and")
+        appendLine(" * plugin reloads leave it alone. Until a save, nothing here is executed;")
+        appendLine(" * the plugin runs its bundled copy.")
         appendLine(" *")
-        appendLine(" * Editing this file and saving takes the function over: from then on the")
-        appendLine(" * code here is what runs, as a module of its own - without the plugin's")
-        appendLine(" * `this.settings` - and plugin reloads leave it alone. Until then, what")
-        appendLine(" * is written here is never executed.")
-        // A run that contains the closing of a comment would close this one.
-        val reference = declaration.source?.replace("*/", "*\\/")
-        if (reference != null) {
-            appendLine(" *")
-            appendLine(" * As the plugin runs ${declaration.name}${declaration.signature}:")
-            appendLine(" *")
-            reference.lines().forEach { line -> appendLine(" * $line".trimEnd()) }
-        }
-        append(" */")
+        appendLine(" * `this.settings` is the plugin's and does not reach an edited module:")
+        appendLine(" * where the code reads it, put this workspace's own value instead.")
+        appendLine(" */")
+        append(moduleOf(declaration) ?: "export default function ${declaration.name}${parameterList(declaration)} {\n}")
     }
+
+    /**
+     * The plugin's `run`, rewritten as the module an edited row executes.
+     *
+     * An arrow or a function expression cannot stand as a module on its own,
+     * so the parameters and body are lifted into an `export default function`
+     * under the declared name. Null where the source is missing or written in
+     * a shape this does not read - a bound method, a reference to a helper -
+     * and the caller then falls back to an empty body.
+     */
+    private fun moduleOf(declaration: PluginFunctionView): String? {
+        val source = declaration.source?.trim() ?: return null
+
+        val block = Regex("""^(async\s+)?(?:function\s*[\w$]*\s*)?\(([^)]*)\)\s*(?:=>\s*)?\{([\s\S]*)}$""")
+            .find(source)
+        if (block != null) {
+            val (async, params, body) = block.destructured
+            return "export default ${async}function ${declaration.name}($params) {${dedented(body)}}"
+        }
+
+        // The concise arrow: one expression, its own return.
+        val concise = Regex("""^(async\s+)?(?:\(([^)]*)\)|([\w$]+))\s*=>\s*([\s\S]+)$""").find(source)
+        if (concise != null) {
+            val async = concise.groupValues[1]
+            val params = concise.groupValues[2].ifEmpty { concise.groupValues[3] }
+            val expression = concise.groupValues[4].trim().removeSuffix(";")
+            return "export default ${async}function ${declaration.name}($params) {\n  return $expression;\n}"
+        }
+
+        return null
+    }
+
+    /** The body re-indented to the module's own margin, whatever the bundle's was. */
+    private fun dedented(body: String): String {
+        val lines = body.lines().dropWhile { it.isBlank() }.dropLastWhile { it.isBlank() }
+        val margin = lines.filter { it.isNotBlank() }.minOfOrNull { line -> line.takeWhile { it == ' ' }.length } ?: 0
+        return "\n" + lines.joinToString("\n") { if (it.isBlank()) "" else "  ${it.drop(margin)}" } + "\n"
+    }
+
+    /** "(connection, link)" - the declared parameters, for the empty fallback. */
+    private fun parameterList(declaration: PluginFunctionView): String =
+        declaration.params.joinToString(", ", "(", ")") { it.name }
 }
 
 class PluginFunctionInUseException(name: String, callers: List<String>) : RuntimeException(

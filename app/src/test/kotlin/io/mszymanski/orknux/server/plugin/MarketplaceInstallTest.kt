@@ -55,7 +55,7 @@ class MarketplaceInstallTest(
 
         assertThat(before.key).isEqualTo("greeter")
         assertThat(before.author).isEqualTo("Orknux")
-        assertThat(before.icon).isEqualTo("✅")
+        assertThat(before.icon).endsWith("/icons/greeter.svg")
         assertThat(before.installed).isFalse()
         assertThat(before.updatable).isFalse()
     }
@@ -80,6 +80,12 @@ class MarketplaceInstallTest(
         assertThat(plugin.marketplaceKey).isEqualTo("greeter")
         assertThat(plugin.marketplaceVersion).isEqualTo("1.0.0")
         assertThat(plugin.enabled).isTrue()
+        /*
+         * The face came across rather than being pointed at: what is stored is
+         * the drawing, so this installation draws it whether or not it can
+         * reach the marketplace again.
+         */
+        assertThat(plugin.icon).startsWith("<svg").contains("greeter-face")
 
         // What it declares is callable, under the plugin's own prefix.
         assertThat(functions.findAll().map { it.name }).contains("greeter_greet")
@@ -175,7 +181,8 @@ class MarketplaceInstallTest(
                     val offering = """
                         {"key":"greeter","name":"Greeter","author":"Orknux","summary":"Says hello.",
                          "description":"# Greeter","version":"$offeredVersion",
-                         "url":"http://${where()}/plugins/greeter/greeter.js","icon":"✅",
+                         "url":"http://${where()}/plugins/greeter/greeter.js",
+                         "icon":"http://${where()}/icons/greeter.svg",
                          "downloads":7,"rating":null,"reviews":0,"published":"2026-09-19"}
                     """.trimIndent()
                     // The two queries the client makes, told apart by name.
@@ -188,6 +195,9 @@ class MarketplaceInstallTest(
                 }
                 createContext("/plugins/greeter/greeter.js") { answer(it, plugin) }
                 createContext("/plugins/greeter/lib/words.js") { answer(it, words) }
+                createContext("/icons/greeter.svg") {
+                    answer(it, """<svg xmlns="http://www.w3.org/2000/svg" id="greeter-face"><circle r="8"/></svg>""")
+                }
                 start()
             }
 

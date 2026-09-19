@@ -366,7 +366,45 @@ class PluginUploadAPI(
             typescript = null,
             accept = accept,
             marketplace = offering.key to offering.version,
+            icon = faceOf(offering),
         )
+    }
+
+    /**
+     * The plugin's face, brought across rather than linked to.
+     *
+     * The marketplace hosts the SVG; an installation that loaded a plugin
+     * last year should still draw it, and it may have no route to the
+     * marketplace at all. So the bytes are fetched once here and stored with
+     * the row. An emoji stands as itself and travels as the string it is.
+     *
+     * A face that cannot be fetched is not a failed install: the plugin is
+     * the point, and a screen without an icon draws its own placeholder.
+     */
+    private fun faceOf(offering: MarketplaceOffering): String? {
+        val named = offering.icon?.trim()?.ifEmpty { null } ?: return null
+        if (!named.startsWith("http://") && !named.startsWith("https://")) return named
+
+        return runCatching {
+            val address = java.net.URI.create(named)
+            val request = java.net.http.HttpRequest.newBuilder(address)
+                .timeout(java.time.Duration.ofSeconds(15))
+                .GET()
+                .build()
+            val answer = fetching.send(request, java.net.http.HttpResponse.BodyHandlers.ofString())
+            if (answer.statusCode() != 200) return null
+
+            val drawn = answer.body().orEmpty()
+            /*
+             * An SVG and nothing else, held to a size a row should carry. What
+             * is refused here is the interesting half: a marketplace pointing
+             * an icon at something that is not a picture is a marketplace
+             * putting somebody else's bytes on this installation's screens.
+             */
+            if (drawn.length > MOST_ICON_CHARS) return null
+            if (!drawn.trimStart().startsWith("<svg") && !drawn.trimStart().startsWith("<?xml")) return null
+            drawn
+        }.getOrNull()
     }
 
     /** One file from beside the plugin's URL, held to the upload's own bounds. */
@@ -411,6 +449,8 @@ class PluginUploadAPI(
          * from, which is true and is what an update would compare against.
          */
         marketplace: Pair<String, String>? = null,
+        /** The face to store with it, where the catalog offered one. */
+        icon: String? = null,
     ): ResponseEntity<Any> {
         /*
          * The plugin is loaded and questioned before anything is stored: what it
@@ -562,6 +602,9 @@ class PluginUploadAPI(
                 this.marketplaceKey = fromKey
                 this.marketplaceVersion = version
             }
+            // Only where one came with this load: a re-upload by hand does not
+            // strip the face the catalog gave it.
+            icon?.let { this.icon = it }
             // `enabled` is deliberately untouched: somebody who switched this
             // plugin off said something about the plugin, and a new version
             // arriving is not them changing their mind.
@@ -591,6 +634,7 @@ class PluginUploadAPI(
             uploadedBy = currentUser(),
             marketplaceKey = marketplace?.first,
             marketplaceVersion = marketplace?.second,
+            icon = icon,
         )
 
         val saved = plugins.save(plugin)
@@ -792,6 +836,12 @@ class PluginUploadAPI(
 
         /** The plugin and its libraries; the library bound plus one. */
         const val MAX_ZIP_FILES = 51
+
+        /**
+         * A face is a small drawing. Large enough for a real icon with a
+         * gradient in it, small enough that a row stays a row.
+         */
+        const val MOST_ICON_CHARS = 64 * 1024
 
         const val MAX_NAME = 200
 
@@ -1774,9 +1824,25 @@ class PluginExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is PluginParameterNotSecretException,
             is PluginParameterNotValueException,
             is PluginParameterVariableElsewhereException,
+            is PluginZipInvalidException,
+            is PluginUrlInvalidException,
             -> ErrorType.BAD_REQUEST
 
-            is PluginNotFoundException -> ErrorType.NOT_FOUND
+            /*
+             * A service that will not answer is not the caller's mistake, and
+             * reporting it as a bad request would have somebody checking what
+             * they typed instead of checking the marketplace. What matters
+             * either way is that the sentence travels: before these were
+             * named here, a marketplace that was down and a key that does not
+             * exist both arrived on screen as INTERNAL_ERROR and an id.
+             */
+            is MarketplaceUnreachableException,
+            is PluginUrlUnreachableException,
+            -> ErrorType.INTERNAL_ERROR
+
+            is PluginNotFoundException,
+            is MarketplaceOfferingUnknownException,
+            -> ErrorType.NOT_FOUND
 
             else -> return null
         }

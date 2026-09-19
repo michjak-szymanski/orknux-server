@@ -192,6 +192,19 @@ class Plugin(
 
     @Column(name = "marketplace_version", length = 32)
     var marketplaceVersion: String? = null,
+
+    /**
+     * The face this plugin wears: the SVG itself, or an emoji standing as
+     * itself.
+     *
+     * Copied in at install rather than pointed at. The marketplace hosts the
+     * file, but a plugin loaded here has to draw on a screen whose
+     * installation may never reach the marketplace again — so the bytes come
+     * across once and live with the row, the way the source does. Null for a
+     * plugin loaded from a file, which brought no face.
+     */
+    @Column(columnDefinition = "text")
+    var icon: String? = null,
 )
 
 interface PluginRepository : JpaRepository<Plugin, Long> {
@@ -235,6 +248,8 @@ data class PluginView(
     /** Where it came from, when that was the marketplace. */
     val marketplaceKey: String? = null,
     val marketplaceVersion: String? = null,
+    /** The SVG it wears, or an emoji; copied in at install. Null for a file. */
+    val icon: String? = null,
 )
 
 /**
@@ -377,4 +392,5 @@ fun Plugin.view(
     libraries = libraries,
     marketplaceKey = marketplaceKey,
     marketplaceVersion = marketplaceVersion,
+    icon = icon,
 )

@@ -615,7 +615,8 @@ CREATE TABLE plugin
     permissions_accepted_by      varchar(120),
     enabled                      boolean not null default true,
     marketplace_key              varchar(64),
-    marketplace_version          varchar(32)
+    marketplace_version          varchar(32),
+    icon                         text
 );
 
 CREATE TABLE plugin_library

@@ -4532,6 +4532,15 @@ type Plugin {
     """
     marketplaceKey: String
     marketplaceVersion: String
+    """
+    The face it wears: the SVG itself, or an emoji standing as itself.
+
+    Copied in when it was installed rather than pointed at — the marketplace
+    hosts the file, but a plugin loaded here has to draw on a screen whose
+    installation may never reach the marketplace again. Null for a plugin
+    loaded from a file, which brought no face.
+    """
+    icon: String
 }
 
 """

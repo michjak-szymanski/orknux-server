@@ -336,7 +336,7 @@ class PluginUploadAPI(
         val said = manifest(runCatching { fetched(base.resolve(MANIFEST)) }.getOrNull())
         val face = said?.icon?.let { icon ->
             runCatching { fetched(base.resolve(icon)) }.getOrNull()
-                ?.takeIf { it.length <= MOST_ICON_CHARS && it.trimStart().startsWith("<svg") }
+                ?.let(::drawing)
         }
 
         return loaded(
@@ -447,6 +447,39 @@ class PluginUploadAPI(
     }
 
     /**
+     * The text if it is a drawing, and null if it is not.
+     *
+     * Three places asked this and two of them asked it differently - one
+     * wanted `<svg` or `<?xml`, one wanted only `<svg`, and the zip path did
+     * not ask at all, which is how an icon whose file opens with a licence
+     * comment ended up stored and then printed as its own source on the
+     * screen.
+     *
+     * What is skipped is everything a real SVG file is allowed to open with
+     * before its root element: whitespace, an XML declaration, a doctype, and
+     * comments. Whatever is left has to be the `<svg` tag itself.
+     *
+     * This is a sanity check rather than a safety one. What makes somebody
+     * else's markup safe to draw is that it is put in an `<img>` as a data
+     * URI, where a browser renders it as a picture and runs nothing in it -
+     * the screen's job, not this one's.
+     */
+    private fun drawing(text: String?): String? {
+        val held = text?.takeIf { it.length <= MOST_ICON_CHARS } ?: return null
+        var at = 0
+        while (at < held.length) {
+            when {
+                held[at].isWhitespace() -> at++
+                held.startsWith("<?", at) -> at = held.indexOf("?>", at).takeIf { it >= 0 }?.plus(2) ?: return null
+                held.startsWith("<!--", at) -> at = held.indexOf("-->", at).takeIf { it >= 0 }?.plus(3) ?: return null
+                held.startsWith("<!", at) -> at = held.indexOf('>', at).takeIf { it >= 0 }?.plus(1) ?: return null
+                else -> return held.takeIf { held.startsWith("<svg", at) }
+            }
+        }
+        return null
+    }
+
+    /**
      * The plugin's face, brought across rather than linked to.
      *
      * The marketplace hosts the SVG; an installation that loaded a plugin
@@ -477,9 +510,7 @@ class PluginUploadAPI(
              * an icon at something that is not a picture is a marketplace
              * putting somebody else's bytes on this installation's screens.
              */
-            if (drawn.length > MOST_ICON_CHARS) return null
-            if (!drawn.trimStart().startsWith("<svg") && !drawn.trimStart().startsWith("<?xml")) return null
-            drawn
+            drawing(drawn) ?: return null
         }.getOrNull()
     }
 
@@ -994,6 +1025,10 @@ class PluginUploadAPI(
             ?.let { held[it] }
             ?.takeIf { it.size <= MOST_ICON_CHARS }
             ?.let(::text)
+            // Held to what the other two doors hold an icon to. This one
+            // stored whatever the manifest pointed at, so a manifest naming
+            // its own README got the README onto the screen.
+            ?.let(::drawing)
 
         // The plugin itself: the one root-level .js, or plugin.js where
         // several sit there. A rule somebody can hold in their head.

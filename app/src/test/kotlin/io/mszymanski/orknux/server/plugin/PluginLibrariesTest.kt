@@ -190,6 +190,51 @@ class PluginLibrariesTest(
     }
 
     /** A manifest that will not parse is a plugin without one, not a refusal. */
+    /**
+     * An icon file may open the way a file does.
+     *
+     * A real SVG carries a licence comment, or an XML declaration, before its
+     * root element - and the check was `startsWith("<svg")`, so one that did
+     * was not recognised as a drawing. On the screen that came out as a
+     * paragraph of markup where a glyph should have been, because what is not
+     * a drawing is drawn as text.
+     */
+    @Test
+    fun `an icon that opens with a comment is still a drawing`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to """{"key":"shipped","icon":"icon.svg"}""",
+            "icon.svg" to "<!-- The mark, used with permission. -->" +
+                """<svg xmlns="http://www.w3.org/2000/svg" id="commented-face"/>""",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        assertThat(plugins.findByKey("shipped")!!.icon).contains("commented-face")
+    }
+
+    /**
+     * And the zip path holds an icon to the same rule the others do. It held
+     * it to none at all, so a manifest naming something that is not a picture
+     * put that file's text on the screen.
+     */
+    @Test
+    fun `a manifest naming something that is not a drawing gets no icon`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to """{"key":"shipped","icon":"notes.svg"}""",
+            "notes.svg" to "# Notes. This is not a picture.",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        assertThat(plugins.findByKey("shipped")!!.icon).isNull()
+    }
+
     @Test
     fun `a manifest nobody can read leaves the plugin loadable`() {
         val archive = zipped(

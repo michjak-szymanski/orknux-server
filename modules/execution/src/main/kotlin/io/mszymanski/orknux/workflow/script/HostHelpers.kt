@@ -201,6 +201,21 @@ internal object HostHelpers {
               if (!named) headers['content-type'] = 'application/json';
             }
 
+            /*
+             * Binary crosses as base64, because text is all that crosses.
+             *
+             * `bodyBase64` says the body is base64 and the bytes it decodes to
+             * are what is sent; `binary` asks for the answer's bytes back the
+             * same way, as `base64` beside `contentType` and `size`. Neither
+             * set, everything is text, exactly as it always was.
+             */
+            const options = {};
+            if (asked.bodyBase64 !== undefined && asked.bodyBase64 !== null) {
+              body = asked.bodyBase64;
+              options.sendBase64 = true;
+            }
+            if (asked.binary === true) options.wantBytes = true;
+
             const answer = JSON.parse(
               host.network_request(
                 JSON.stringify([
@@ -208,6 +223,7 @@ internal object HostHelpers {
                   (asked.method ?? 'GET').toUpperCase(),
                   headers,
                   body,
+                  Object.keys(options).length === 0 ? null : options,
                 ]),
               ),
             );
@@ -238,6 +254,65 @@ internal object HostHelpers {
 
           post(url, body, headers) {
             return globalThis.orknux.http.request({ url, method: 'POST', body, headers });
+          },
+
+          /**
+           * Sends bytes - a file - given as base64, which is the one shape
+           * binary has on this side of the sandbox. The content type is a
+           * parameter because a server receiving a file cares what it is;
+           * left out, it is sent as an octet stream.
+           */
+          upload(url, base64, contentType, headers) {
+            const named = Object.assign({}, headers ?? {});
+            const has = Object.keys(named).some((name) => name.toLowerCase() === 'content-type');
+            if (!has) named['content-type'] = contentType ?? 'application/octet-stream';
+            return globalThis.orknux.http.request({ url, method: 'POST', bodyBase64: base64, headers: named });
+          },
+
+          /**
+           * Fetches binary content - an image, a PDF - and answers it as
+           * `base64` beside `contentType` and `size`, instead of a string
+           * the bytes were never going to survive being read as.
+           */
+          download(url, headers) {
+            return globalThis.orknux.http.request({ url, method: 'GET', headers, binary: true });
+          },
+        },
+    """.trimIndent()
+
+    /**
+     * `orknux.session.store`, the AI session's own scratchpad.
+     *
+     * What one tool call puts, a later one gets, for as long as the session
+     * lives - and no other session ever sees it; see [SessionScratch]. The
+     * doors are only bound where the call belongs to a session, so a function
+     * tried from its editor page or a webhook script says so in a sentence
+     * instead of quietly writing into nowhere.
+     */
+    fun sessionStore(): String = """
+        session: {
+          store: {
+            /**
+             * Stores one value under a key, replacing what was there. The value
+             * makes the trip as JSON, so what comes back out is a copy - and
+             * anything JSON cannot say (a function, undefined) does not survive.
+             */
+            put(key, value) {
+              const door = globalThis.__orknuxStorePut;
+              if (door === undefined) {
+                return { error: 'there is no session store here: only a call made inside an AI session carries one' };
+              }
+              const refused = door(String(key), JSON.stringify(value === undefined ? null : value));
+              return refused === null ? { ok: true } : { error: refused };
+            },
+
+            /** What the key holds, parsed, or null where nothing does. */
+            get(key) {
+              const door = globalThis.__orknuxStoreGet;
+              if (door === undefined) return null;
+              const held = door(String(key));
+              return held === null ? null : JSON.parse(held);
+            },
           },
         },
     """.trimIndent()

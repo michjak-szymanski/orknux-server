@@ -178,6 +178,56 @@ class ScriptHttpTest {
         assertThat((answer as ScriptResult.Returned).json).contains("the proxy refused that address")
     }
 
+    /**
+     * Binary goes over as base64 and is marked as such, so the server knows to
+     * decode it rather than send sixty thousand characters of alphabet soup.
+     */
+    @Test
+    fun `an upload marks its body as base64 and names the content type`() {
+        val runner = runnerAnswering("""{"status":201,"headers":{},"body":""}""")
+
+        runner.call(
+            """
+            export default function put(url) {
+              return orknux.http.upload(url, 'aGVsbG8=', 'image/png').status;
+            }
+            """.trimIndent(),
+            "put",
+            listOf("\"https://files.example.com/up\""),
+            on = 12,
+        )
+
+        val argument = asked.single().second
+        assertThat(argument).contains("aGVsbG8=")
+        assertThat(argument).contains("\"sendBase64\":true")
+        assertThat(argument).contains("image/png")
+        assertThat(argument).contains("POST")
+    }
+
+    /** And a download asks for the bytes back the same way. */
+    @Test
+    fun `a download asks for bytes and reads them as base64`() {
+        val runner =
+            runnerAnswering("""{"status":200,"headers":{},"base64":"aGVsbG8=","size":5,"contentType":"image/png"}""")
+
+        val answer = runner.call(
+            """
+            export default function fetchIt(url) {
+              const r = orknux.http.download(url);
+              return { size: r.size, kind: r.contentType, held: r.base64 };
+            }
+            """.trimIndent(),
+            "fetchIt",
+            listOf("\"https://files.example.com/logo.png\""),
+            on = 12,
+        )
+
+        assertThat(asked.single().second).contains("\"wantBytes\":true")
+        assertThat((answer as ScriptResult.Returned).json).contains("\"size\":5")
+        assertThat(answer.json).contains("image/png")
+        assertThat(answer.json).contains("aGVsbG8=")
+    }
+
     /** Without a host there is no door, and saying so beats throwing. */
     @Test
     fun `an installation with no host says so rather than failing oddly`() {

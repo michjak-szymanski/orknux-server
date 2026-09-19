@@ -65,11 +65,18 @@ class NetworkPluginHost(
         .build()
 
     /**
-     * `[url, method, headers, body]`, as the contract's helper sends it.
+     * `[url, method, headers, body, options]`, as the contract's helper sends it.
      *
      * Read defensively and refused in words. This is the boundary somebody
      * else's JavaScript writes to, so every shape of wrong has to come back as
      * something a plugin can say out loud.
+     *
+     * The fifth element is how binary crosses a boundary that only carries
+     * text: `{ sendBase64: true }` says the body is base64 and the bytes it
+     * decodes to are what is sent; `{ wantBytes: true }` says to bring the
+     * answer's body back as base64 under `base64`, beside its `contentType`
+     * and `size`, instead of as a string that a PDF or a PNG was never going
+     * to survive being read as. Absent, everything is text, exactly as before.
      */
     fun request(argument: String): String {
         val given = runCatching { mapper.readTree(argument) }.getOrNull()
@@ -93,26 +100,59 @@ class NetworkPluginHost(
         val method = given.get(1)?.takeIf { it.isTextual }?.asString()?.uppercase() ?: "GET"
         if (method !in METHODS) return refusal("$method is not a method this makes")
 
+        val options = given.get(4)?.takeIf { it.isObject }
+        val sendBase64 = options?.path("sendBase64")?.asBoolean(false) ?: false
+        val wantBytes = options?.path("wantBytes")?.asBoolean(false) ?: false
+
         val body = given.get(3)?.takeIf { it.isTextual }?.asString()
+        val publisher = when {
+            body == null -> HttpRequest.BodyPublishers.noBody()
+            sendBase64 -> {
+                val bytes = runCatching { java.util.Base64.getDecoder().decode(body) }.getOrNull()
+                    ?: return refusal("the body was said to be base64 and is not")
+                if (bytes.size > MAX_UPLOAD) {
+                    return refusal("the upload was larger than ${MAX_UPLOAD / (1024 * 1024)} MB")
+                }
+                HttpRequest.BodyPublishers.ofByteArray(bytes)
+            }
+            else -> HttpRequest.BodyPublishers.ofString(body)
+        }
         val request = HttpRequest.newBuilder(uri)
             .timeout(READ_TIMEOUT)
-            .method(method, body?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody())
+            .method(method, publisher)
 
         headers(given.get(2)).forEach { (name, value) -> request.header(name, value) }
 
         return try {
-            val answered = client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
-            val held = answered.body().orEmpty()
-            if (held.length > MAX_BODY) {
-                return refusal("the answer was larger than ${MAX_BODY / 1024} KB")
-            }
+            if (wantBytes) {
+                val answered = client.send(request.build(), HttpResponse.BodyHandlers.ofByteArray())
+                val held = answered.body() ?: ByteArray(0)
+                if (held.size > MAX_BYTES) {
+                    return refusal("the answer was larger than ${MAX_BYTES / (1024 * 1024)} MB")
+                }
 
-            val answer = mapper.createObjectNode()
-            answer.put("status", answered.statusCode())
-            val headers = answer.putObject("headers")
-            answered.headers().map().forEach { (name, values) -> headers.put(name, values.joinToString(", ")) }
-            answer.put("body", held)
-            mapper.writeValueAsString(answer)
+                val answer = mapper.createObjectNode()
+                answer.put("status", answered.statusCode())
+                val headers = answer.putObject("headers")
+                answered.headers().map().forEach { (name, values) -> headers.put(name, values.joinToString(", ")) }
+                answer.put("base64", java.util.Base64.getEncoder().encodeToString(held))
+                answer.put("size", held.size)
+                answer.put("contentType", answered.headers().firstValue("content-type").orElse(null))
+                mapper.writeValueAsString(answer)
+            } else {
+                val answered = client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
+                val held = answered.body().orEmpty()
+                if (held.length > MAX_BODY) {
+                    return refusal("the answer was larger than ${MAX_BODY / 1024} KB")
+                }
+
+                val answer = mapper.createObjectNode()
+                answer.put("status", answered.statusCode())
+                val headers = answer.putObject("headers")
+                answered.headers().map().forEach { (name, values) -> headers.put(name, values.joinToString(", ")) }
+                answer.put("body", held)
+                mapper.writeValueAsString(answer)
+            }
         } catch (failure: IOException) {
             refusal(failure.message ?: "it could not be reached")
         } catch (failure: InterruptedException) {
@@ -147,6 +187,16 @@ class NetworkPluginHost(
 
         /** Large enough for an API's answer, small enough that it stays a string. */
         const val MAX_BODY = 2 * 1024 * 1024
+
+        /**
+         * A binary answer's ceiling, on the bytes rather than the base64: what
+         * crosses the sandbox is a third again larger, and both ends of that
+         * trip live in memory while it is made.
+         */
+        const val MAX_BYTES = 5 * 1024 * 1024
+
+        /** An upload's ceiling, measured after decoding for the same reason. */
+        const val MAX_UPLOAD = 10 * 1024 * 1024
 
         val ALLOWED = setOf("http", "https")
 

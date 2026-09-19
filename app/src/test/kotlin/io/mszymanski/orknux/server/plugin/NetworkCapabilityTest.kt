@@ -108,10 +108,53 @@ class NetworkCapabilityTest(@Autowired val host: SlackPluginHost, @Autowired val
         assertThat(ask(null, "GET")["error"] as String).contains("has to be a url")
     }
 
+    /**
+     * Binary crosses as base64, in both directions.
+     *
+     * What is pinned is that the bytes on the wire are the *decoded* ones - a
+     * server receiving a file must receive the file, not sixty-six characters
+     * of alphabet - and that bytes coming back are not read as a string, which
+     * a PNG does not survive.
+     */
+    @Test
+    fun `an upload marked base64 sends the decoded bytes`() {
+        val answered = ask(
+            "http://${where()}/echo",
+            "POST",
+            mapOf("Content-Type" to "application/octet-stream"),
+            java.util.Base64.getEncoder().encodeToString(byteArrayOf(1, 2, 3, 0, -1)),
+            mapOf("sendBase64" to true),
+        )
+
+        assertThat(answered["status"]).isEqualTo(200)
+        assertThat(seenBody).containsExactly(1, 2, 3, 0, -1)
+    }
+
+    @Test
+    fun `a body that claims to be base64 and is not is refused in words`() {
+        assertThat(ask("http://${where()}/echo", "POST", null, "not base64!!!", mapOf("sendBase64" to true))["error"] as String)
+            .contains("base64")
+    }
+
+    @Test
+    fun `a download answers base64 beside what the bytes claim to be`() {
+        val answered = ask("http://${where()}/bytes", "GET", null, null, mapOf("wantBytes" to true))
+
+        assertThat(answered["status"]).isEqualTo(200)
+        assertThat(answered["contentType"]).isEqualTo("image/png")
+        assertThat(answered["size"]).isEqualTo(4)
+        val held = java.util.Base64.getDecoder().decode(answered["base64"] as String)
+        assertThat(held).containsExactly(-119, 80, 78, 71)
+        assertThat(answered["body"]).describedAs("bytes never come back pretending to be text").isNull()
+    }
+
     companion object {
 
         /** What the last request carried, so the headers can be looked at. */
         val seen = mutableMapOf<String, String>()
+
+        /** And its body as the bytes that actually arrived, for the upload test. */
+        var seenBody: ByteArray = ByteArray(0)
 
         private val server: HttpServer =
             HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
@@ -120,8 +163,17 @@ class NetworkCapabilityTest(@Autowired val host: SlackPluginHost, @Autowired val
                     exchange.requestHeaders.forEach { (name, values) ->
                         seen[name.lowercase()] = values.joinToString(", ")
                     }
+                    seenBody = exchange.requestBody.use { it.readBytes() }
                     val body = """{"said":"hello"}""".toByteArray(StandardCharsets.UTF_8)
                     exchange.responseHeaders.add("Content-Type", "application/json")
+                    exchange.sendResponseHeaders(200, body.size.toLong())
+                    exchange.responseBody.use { it.write(body) }
+                    exchange.close()
+                }
+                // Four bytes a string cannot hold: a PNG signature's first half.
+                createContext("/bytes") { exchange ->
+                    val body = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47)
+                    exchange.responseHeaders.add("Content-Type", "image/png")
                     exchange.sendResponseHeaders(200, body.size.toLong())
                     exchange.responseBody.use { it.write(body) }
                     exchange.close()

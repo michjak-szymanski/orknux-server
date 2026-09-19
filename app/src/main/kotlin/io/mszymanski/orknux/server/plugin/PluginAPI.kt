@@ -839,8 +839,9 @@ class PluginUploadAPI(
                  *
                  * Where a request may get to is the installation's proxy rules,
                  * which this cannot see and cannot argue with. The body comes
-                 * back as text; there are no bytes here, because there is
-                 * nowhere in the sandbox to put them.
+                 * back as text; binary crosses as base64, which `upload` and
+                 * `download` below spell out, because base64 is the one shape
+                 * bytes have in a sandbox with nowhere else to put them.
                  *
                  * @param what the url on its own, or the whole request.
                  */
@@ -857,12 +858,61 @@ class PluginUploadAPI(
                          * unless a header already names one.
                          */
                         body?: string | object;
+                        /** Base64 whose decoded bytes are the body; wins over `body`. */
+                        bodyBase64?: string;
+                        /** Bring the answer's bytes back as `base64` instead of `body`. */
+                        binary?: boolean;
                       },
                 ): OrknuxResponse;
 
                 /** The two nearly everybody wants, spelled out. */
                 get(url: string, headers?: Record<string, string>): OrknuxResponse;
                 post(url: string, body?: string | object, headers?: Record<string, string>): OrknuxResponse;
+
+                /**
+                 * Sends bytes - a file - given as base64. Sent as an octet
+                 * stream unless `contentType` or a header says what it is.
+                 * The upload is capped at 10 MB of decoded bytes.
+                 */
+                upload(
+                  url: string,
+                  base64: string,
+                  contentType?: string,
+                  headers?: Record<string, string>,
+                ): OrknuxResponse;
+
+                /**
+                 * Fetches binary content - an image, a PDF - and answers
+                 * `base64`, `contentType` and `size` instead of `body`.
+                 * Capped at 5 MB of bytes.
+                 */
+                download(url: string, headers?: Record<string, string>): OrknuxBinaryResponse;
+              };
+
+              /**
+               * The AI session's own store, for a plugin that has to keep its
+               * place between the calls of one conversation.
+               *
+               * What one tool call puts, a later one gets, for as long as the
+               * session lives - and no other session ever sees it. Not a
+               * capability: nothing outside the session is reached by it. The
+               * doors only exist where the call was made inside an AI session;
+               * anywhere else `put` answers `{ error }` saying so and `get`
+               * answers null.
+               */
+              session: {
+                store: {
+                  /**
+                   * Stores one value under a key, replacing what was there.
+                   * The value makes the trip as JSON, so what comes back out
+                   * is a copy - and anything JSON cannot say (a function,
+                   * undefined) does not survive.
+                   */
+                  put(key: string, value: unknown): { ok: true } | { error: string };
+
+                  /** What the key holds, parsed, or null where nothing does. */
+                  get(key: string): unknown;
+                };
               };
 
               /**
@@ -902,6 +952,21 @@ class PluginUploadAPI(
                   error?: undefined;
                 }
               | { error: string; status?: undefined; headers?: undefined; body?: undefined; json?: undefined };
+
+            /** A binary answer: the bytes as base64, and what they claim to be. */
+            type OrknuxBinaryResponse =
+              | {
+                  status: number;
+                  headers: Record<string, string>;
+                  /** The answer's bytes, base64-encoded. */
+                  base64: string;
+                  /** How many bytes that decodes to. */
+                  size: number;
+                  /** The answer's own content-type header, or null where it sent none. */
+                  contentType: string | null;
+                  error?: undefined;
+                }
+              | { error: string; status?: undefined; headers?: undefined; base64?: undefined; size?: undefined; contentType?: undefined };
 
             /** The shape of a value crossing between a workflow and a plugin. */
             type OrknuxValueType = @VALUE_TYPE_UNION@;

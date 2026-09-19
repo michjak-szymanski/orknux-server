@@ -159,6 +159,24 @@ orknux:
     # leaves the Catalog screen saying this installation has no marketplace,
     # which is the honest state for an air-gapped one.
     url: ${ORKNUX_MARKETPLACE_URL:https://orknux.io/graphql}
+    # What this installation says to be answered at all. The marketplace keys
+    # both its doors - the catalog query and the plugin files - and refuses
+    # anything without it; what travels is a HMAC of the day over this, never
+    # this.
+    #
+    # Written here on purpose, and it is not a leak. It is a deterrent against
+    # crawlers, not access control: orknux-server is self-hosted, so every
+    # installation able to install a plugin already holds this value, and a
+    # secret every reader has is not one a repository could keep. What it buys
+    # the marketplace is that a crawler has to be pointed at this file rather
+    # than at a URL, which is the whole of what it was ever for.
+    #
+    # So: nothing may be built on top of it that assumes the caller is
+    # trusted, and it must never be described to a user as access control. The
+    # marketplace vouches for nothing about a plugin either - what one asks to
+    # be allowed is still read from its code, in the sandbox, at the moment
+    # somebody accepts it. Override it per installation if you have your own.
+    install-key: ${ORKNUX_INSTALL_KEY:7444beb07c53a65ed81074f73cdeec6defeecced280e1ee6d866a95a6f69ac72}
   chat:
     # Whether this installation has a chat at all. False here is final: an
     # administrator can turn the chat off from the screen, but not back on

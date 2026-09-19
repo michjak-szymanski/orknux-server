@@ -48,6 +48,8 @@ data class MarketplaceOffering(
 @Component
 class Marketplace(
     private val mapper: ObjectMapper,
+    /** What this installation says to be answered at all; both doors want it. */
+    private val installKey: MarketplaceInstallKey,
     proxies: ProxyRouter,
     /** Where the marketplace's GraphQL lives; empty means this installation has none. */
     @Value("\${orknux.marketplace.url:https://orknux.io/graphql}") private val endpoint: String,
@@ -112,11 +114,18 @@ class Marketplace(
      */
     private fun asked(query: String, variables: Map<String, Any?>): tools.jackson.databind.JsonNode {
         if (!configured) throw MarketplaceUnreachableException("this installation has no marketplace configured")
+        /*
+         * The catalog is keyed too, and refused with a bare 401 before the
+         * query is looked at. Asked for here rather than at the far end so
+         * the answer is what is missing, not what the status code was.
+         */
+        val key = installKey.today() ?: throw MarketplaceUnreachableException(MarketplaceInstallKey.MISSING)
 
         val body = mapper.writeValueAsString(mapOf("query" to query, "variables" to variables))
         val request = HttpRequest.newBuilder(URI.create(endpoint))
             .timeout(Duration.ofSeconds(30))
             .header("Content-Type", "application/json")
+            .header(MarketplaceInstallKey.HEADER, key)
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()
 
@@ -127,6 +136,19 @@ class Marketplace(
         } catch (failure: InterruptedException) {
             Thread.currentThread().interrupt()
             throw MarketplaceUnreachableException("the request was interrupted")
+        }
+        // The two statuses worth naming. Everything else is the number, which
+        // is all anybody could act on anyway.
+        if (answer.statusCode() == 401) throw MarketplaceUnreachableException(MarketplaceInstallKey.REFUSED)
+        if (answer.statusCode() == 429) {
+            val after = answer.headers().firstValue("Retry-After").orElse(null)
+            throw MarketplaceUnreachableException(
+                if (after == null) {
+                    "it is rate-limiting this installation; try again shortly"
+                } else {
+                    "it is rate-limiting this installation; try again in ${after}s"
+                },
+            )
         }
         if (answer.statusCode() != 200) {
             throw MarketplaceUnreachableException("it answered ${answer.statusCode()}")

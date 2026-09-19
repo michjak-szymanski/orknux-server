@@ -177,6 +177,7 @@ class MarketplaceInstallTest(
                     exchange.close()
                 }
                 createContext("/graphql") { exchange ->
+                    if (!keyed(exchange)) return@createContext refuse(exchange)
                     val asked = exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
                     val offering = """
                         {"key":"greeter","name":"Greeter","author":"Orknux","summary":"Says hello.",
@@ -193,8 +194,19 @@ class MarketplaceInstallTest(
                     }
                     answer(exchange, """{"data":$data}""")
                 }
-                createContext("/plugins/greeter/greeter.js") { answer(it, plugin) }
-                createContext("/plugins/greeter/lib/words.js") { answer(it, words) }
+                createContext("/plugins/greeter/greeter.js") {
+                    if (keyed(it)) answer(it, plugin) else refuse(it)
+                }
+                createContext("/plugins/greeter/lib/words.js") {
+                    if (keyed(it)) answer(it, words) else refuse(it)
+                }
+                /*
+                 * The one door that answers anybody, and deliberately: a
+                 * listing's icon is a picture on a page a person is reading,
+                 * so the marketplace does not key it. Unguarded here so the
+                 * install that fetches it keeps working without a header -
+                 * and so a change that started demanding one is caught.
+                 */
                 createContext("/icons/greeter.svg") {
                     answer(it, """<svg xmlns="http://www.w3.org/2000/svg" id="greeter-face"><circle r="8"/></svg>""")
                 }
@@ -202,6 +214,34 @@ class MarketplaceInstallTest(
             }
 
         fun where() = "${stub.address.hostString}:${stub.address.port}"
+
+        /**
+         * The secret both ends share, for the length of this test.
+         *
+         * The stub checks every request for the day's HMAC of it, so a door
+         * that stopped sending the header fails here - which is the whole
+         * reason the stub bothers rather than answering anything that asks.
+         */
+        const val SECRET = "a-shared-secret"
+
+        /** Today's value, computed the way the contract writes it. */
+        private fun today(): String =
+            javax.crypto.Mac.getInstance("HmacSHA256").run {
+                init(javax.crypto.spec.SecretKeySpec(SECRET.toByteArray(), "HmacSHA256"))
+                doFinal(
+                    java.time.LocalDate.now(java.time.ZoneOffset.UTC).toString().toByteArray(),
+                ).joinToString("") { "%02x".format(it) }
+            }
+
+        private fun keyed(exchange: com.sun.net.httpserver.HttpExchange): Boolean =
+            exchange.requestHeaders.getFirst("X-Orknux-Install-Key") == today()
+
+        /** A bare 401, the way the marketplace refuses: no body, nothing read. */
+        private fun refuse(exchange: com.sun.net.httpserver.HttpExchange) {
+            exchange.responseHeaders.add("WWW-Authenticate", "Orknux-Install-Key")
+            exchange.sendResponseHeaders(401, -1)
+            exchange.close()
+        }
 
         @JvmStatic
         @AfterAll
@@ -211,6 +251,7 @@ class MarketplaceInstallTest(
         @DynamicPropertySource
         fun marketplace(registry: DynamicPropertyRegistry) {
             registry.add("orknux.marketplace.url") { "http://${where()}/graphql" }
+            registry.add("orknux.marketplace.install-key") { SECRET }
         }
     }
 }

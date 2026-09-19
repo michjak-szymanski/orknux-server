@@ -77,6 +77,12 @@ class PluginUploadAPI(
     private val installation: io.mszymanski.orknux.server.attachment.InstallationSettings,
     /** For reading a plugin's manifest, which is the one JSON this door parses. */
     private val mapper: tools.jackson.databind.ObjectMapper,
+    /**
+     * What the marketplace wants on a request for a file — and the question of
+     * whether an address is the marketplace's at all, since this door also
+     * fetches plugins from URLs somebody typed.
+     */
+    private val installKey: MarketplaceInstallKey,
 ) {
 
     /** How large one source file may be right now; asked per load, so the screen's answer is this one. */
@@ -442,10 +448,31 @@ class PluginUploadAPI(
 
     /** One file from beside the plugin's URL, held to the upload's own bounds. */
     private fun fetched(address: java.net.URI): String {
-        val request = java.net.http.HttpRequest.newBuilder(address)
+        /*
+         * The marketplace keys its files, and the key goes to the marketplace
+         * and nowhere else.
+         *
+         * One path serves two kinds of address - a plugin the catalog named,
+         * and a plugin at a URL somebody typed - and handing the day's value
+         * to the second would post it to whatever host was in the box. That is
+         * the leak the contract warns about, made by us rather than found, so
+         * the header is fitted by host rather than sent on every fetch.
+         *
+         * Computed here, per request, never held: the message is a date, and a
+         * value cached for the length of an install expires in the middle of
+         * one.
+         */
+        val marketplace = installKey.own(address)
+        if (marketplace && !installKey.configured) {
+            throw PluginUrlUnreachableException(address.toString(), MarketplaceInstallKey.MISSING)
+        }
+        val building = java.net.http.HttpRequest.newBuilder(address)
             .timeout(java.time.Duration.ofSeconds(20))
             .GET()
-            .build()
+        if (marketplace) {
+            installKey.today()?.let { building.header(MarketplaceInstallKey.HEADER, it) }
+        }
+        val request = building.build()
         val answer = try {
             fetching.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray())
         } catch (failure: java.io.IOException) {
@@ -453,6 +480,27 @@ class PluginUploadAPI(
         } catch (failure: InterruptedException) {
             Thread.currentThread().interrupt()
             throw PluginUrlUnreachableException(address.toString(), "the request was interrupted")
+        }
+        /*
+         * The statuses worth a sentence. A 401 from the marketplace is a
+         * setting somebody has not set, and reporting it as "it answered 401"
+         * sends them to their proxy rules looking for it; a 429 carries how
+         * long to wait, and saying so is the difference between waiting and
+         * retrying into the same wall.
+         */
+        if (marketplace && answer.statusCode() == 401) {
+            throw PluginUrlUnreachableException(address.toString(), MarketplaceInstallKey.REFUSED)
+        }
+        if (answer.statusCode() == 429) {
+            val after = answer.headers().firstValue("Retry-After").orElse(null)
+            throw PluginUrlUnreachableException(
+                address.toString(),
+                if (after == null) {
+                    "it is rate-limiting this installation; try again shortly"
+                } else {
+                    "it is rate-limiting this installation; try again in ${after}s"
+                },
+            )
         }
         if (answer.statusCode() != 200) {
             throw PluginUrlUnreachableException(address.toString(), "it answered ${answer.statusCode()}")

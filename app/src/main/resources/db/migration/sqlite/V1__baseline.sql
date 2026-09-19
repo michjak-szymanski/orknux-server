@@ -616,7 +616,10 @@ CREATE TABLE plugin
     enabled                      boolean not null default true,
     marketplace_key              varchar(64),
     marketplace_version          varchar(32),
-    icon                         text
+    icon                         text,
+    summary                      text,
+    author                       varchar(200),
+    version                      varchar(32)
 );
 
 CREATE TABLE plugin_library

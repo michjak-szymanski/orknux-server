@@ -154,6 +154,60 @@ class PluginLibrariesTest(
         assertThat(promised!!.message).contains("declared and not shipped").contains("lib/promised.js")
     }
 
+    /**
+     * A plugin says what it is, and the row says it back.
+     *
+     * The name used to come off the filename, which is a fact about how
+     * somebody saved a file — so a zip called `slack (2).zip` produced a
+     * plugin called `slack (2)`. A manifest is the plugin's own account of
+     * itself: what it is called, what it is for, who wrote it, what version
+     * it calls itself, and the face beside it.
+     */
+    @Test
+    fun `a manifest beside the plugin says what it is, and the row keeps it`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to """
+                {"key":"shipped","name":"Shipped Greeter","summary":"Greets, from a library.",
+                 "author":"Somebody","version":"2.1.0","icon":"icon.svg"}
+            """.trimIndent(),
+            "icon.svg" to """<svg xmlns="http://www.w3.org/2000/svg" id="shipped-face"/>""",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        val stored = plugins.findByKey("shipped")!!
+        assertThat(stored.name).describedAs("what it calls itself, not the file").isEqualTo("Shipped Greeter")
+        assertThat(stored.summary).isEqualTo("Greets, from a library.")
+        assertThat(stored.author).isEqualTo("Somebody")
+        assertThat(stored.version).isEqualTo("2.1.0")
+        assertThat(stored.icon).contains("shipped-face")
+        // And the manifest is not a library: it is not code and never runs.
+        assertThat(libraries.findByPluginIdOrderByPositionAsc(requireNotNull(stored.id)).map { it.path })
+            .containsExactly("lib/format.js", "lib/names.js")
+    }
+
+    /** A manifest that will not parse is a plugin without one, not a refusal. */
+    @Test
+    fun `a manifest nobody can read leaves the plugin loadable`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to "{ this is not json",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        val stored = plugins.findByKey("shipped")!!
+        assertThat(stored.summary).isNull()
+        // The filename, which is all there was — and exactly the poor name a
+        // manifest exists to replace: the archive's main file is plugin.js.
+        assertThat(stored.name).isEqualTo("plugin")
+    }
+
     @Test
     fun `a set already allowed is not asked about again`() {
         val archive = zipped("plugin.js" to pluginSource, "lib/format.js" to format, "lib/names.js" to names)

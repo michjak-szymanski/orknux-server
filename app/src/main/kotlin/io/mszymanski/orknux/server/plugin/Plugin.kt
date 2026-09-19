@@ -205,6 +205,27 @@ class Plugin(
      */
     @Column(columnDefinition = "text")
     var icon: String? = null,
+
+    /**
+     * What the plugin says it is for, in a line — from the `plugin.json`
+     * beside it. Null for one that ships no manifest.
+     */
+    @Column(columnDefinition = "text")
+    var summary: String? = null,
+
+    /** Who wrote it, as the manifest says. */
+    @Column(length = 200)
+    var author: String? = null,
+
+    /**
+     * What the plugin calls its own version.
+     *
+     * Not [marketplaceVersion], which is what the catalog offered it as: the
+     * two are usually equal and mean different things, and the update
+     * comparison goes on using the catalog's.
+     */
+    @Column(length = 32)
+    var version: String? = null,
 )
 
 interface PluginRepository : JpaRepository<Plugin, Long> {
@@ -250,6 +271,10 @@ data class PluginView(
     val marketplaceVersion: String? = null,
     /** The SVG it wears, or an emoji; copied in at install. Null for a file. */
     val icon: String? = null,
+    /** What it says about itself, where it ships a `plugin.json`. */
+    val summary: String? = null,
+    val author: String? = null,
+    val version: String? = null,
 )
 
 /**
@@ -393,4 +418,7 @@ fun Plugin.view(
     marketplaceKey = marketplaceKey,
     marketplaceVersion = marketplaceVersion,
     icon = icon,
+    summary = summary,
+    author = author,
+    version = version,
 )

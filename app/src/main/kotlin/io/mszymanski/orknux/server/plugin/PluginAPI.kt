@@ -74,6 +74,8 @@ class PluginUploadAPI(
     proxies: io.mszymanski.orknux.connector.proxy.ProxyRouter,
     /** Where the source-size cap lives now that an administrator can set it. */
     private val installation: io.mszymanski.orknux.server.attachment.InstallationSettings,
+    /** For reading a plugin's manifest, which is the one JSON this door parses. */
+    private val mapper: tools.jackson.databind.ObjectMapper,
 ) {
 
     /** How large one source file may be right now; asked per load, so the screen's answer is this one. */
@@ -278,13 +280,21 @@ class PluginUploadAPI(
         val zipped = sent.endsWith(".zip")
         if (!zipped && !sent.endsWith(".js") && !sent.endsWith(".mjs")) throw PluginNotJavaScriptException(sent)
 
-        val (filename, source, files) = if (zipped) {
+        val opened = if (zipped) {
             unzipped(file.bytes)
         } else {
-            Triple(sent, text(file.bytes), emptyList())
+            Unzipped(sent, text(file.bytes), emptyList(), manifest = null, icon = null)
         }
 
-        return loaded(filename, source, files, typescript, accept)
+        return loaded(
+            opened.filename,
+            opened.source,
+            opened.libraries,
+            typescript,
+            accept,
+            manifest = opened.manifest,
+            icon = opened.icon,
+        )
     }
 
     /**
@@ -307,8 +317,30 @@ class PluginUploadAPI(
     fun uploadFromUrl(@org.springframework.web.bind.annotation.RequestBody request: PluginUrlRequest): ResponseEntity<Any> {
         access.requireAdmin()
 
-        val (filename, source, files) = fetchedBundle(request.url.trim())
-        return loaded(filename, source, files, typescript = null, accept = request.accept)
+        val address = request.url.trim()
+        val (filename, source, files) = fetchedBundle(address)
+
+        /*
+         * What it says about itself, from beside where it lives. Optional in
+         * every sense: a plugin without a manifest is the ordinary case, and
+         * a fetch that fails takes nothing with it.
+         */
+        val base = java.net.URI.create(address)
+        val said = manifest(runCatching { fetched(base.resolve(MANIFEST)) }.getOrNull())
+        val face = said?.icon?.let { icon ->
+            runCatching { fetched(base.resolve(icon)) }.getOrNull()
+                ?.takeIf { it.length <= MOST_ICON_CHARS && it.trimStart().startsWith("<svg") }
+        }
+
+        return loaded(
+            filename,
+            source,
+            files,
+            typescript = null,
+            accept = request.accept,
+            icon = face,
+            manifest = said,
+        )
     }
 
     /**
@@ -449,8 +481,10 @@ class PluginUploadAPI(
          * from, which is true and is what an update would compare against.
          */
         marketplace: Pair<String, String>? = null,
-        /** The face to store with it, where the catalog offered one. */
+        /** The face to store with it, where one came with this load. */
         icon: String? = null,
+        /** What it says about itself, where it ships a manifest. */
+        manifest: PluginManifest? = null,
     ): ResponseEntity<Any> {
         /*
          * The plugin is loaded and questioned before anything is stored: what it
@@ -557,7 +591,14 @@ class PluginUploadAPI(
             )
         }
 
-        val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
+        /*
+         * What it calls itself, where it says — the filename otherwise.
+         *
+         * A filename is a fact about how somebody saved a file rather than
+         * about the plugin: "slack", "slack.min" and "slack (2)" are one
+         * plugin, and only the first of those reads like its name.
+         */
+        val name = manifest?.name ?: filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
 
         // The bundle as one measure and one fingerprint: what is stored is the
         // plugin and its files, so what is sized and hashed is too.
@@ -605,6 +646,11 @@ class PluginUploadAPI(
             // Only where one came with this load: a re-upload by hand does not
             // strip the face the catalog gave it.
             icon?.let { this.icon = it }
+            manifest?.let {
+                this.summary = it.summary
+                this.author = it.author
+                this.version = it.version
+            }
             // `enabled` is deliberately untouched: somebody who switched this
             // plugin off said something about the plugin, and a new version
             // arriving is not them changing their mind.
@@ -635,6 +681,9 @@ class PluginUploadAPI(
             marketplaceKey = marketplace?.first,
             marketplaceVersion = marketplace?.second,
             icon = icon,
+            summary = manifest?.summary,
+            author = manifest?.author,
+            version = manifest?.version,
         )
 
         val saved = plugins.save(plugin)
@@ -757,7 +806,7 @@ class PluginUploadAPI(
      * way for anything else to arrive - and the usual archive lint (folders,
      * `__MACOSX/`, dotfiles) is passed over without comment.
      */
-    private fun unzipped(bytes: ByteArray): Triple<String, String, List<PluginLibraryFile>> {
+    private fun unzipped(bytes: ByteArray): Unzipped {
         val held = linkedMapOf<String, ByteArray>()
         java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zip ->
             var total = 0L
@@ -774,8 +823,17 @@ class PluginUploadAPI(
                     if (path.startsWith("/") || path.split('/').any { it.isEmpty() || it == ".." }) {
                         throw PluginZipInvalidException("\"$name\" is not a path a plugin zip may hold")
                     }
-                    if (!path.endsWith(".js")) {
-                        throw PluginZipInvalidException("a plugin zip holds JavaScript and nothing else - \"$path\" is not a .js file")
+                    /*
+                     * JavaScript, the manifest, and the face it names. A zip
+                     * is how a plugin ships more than one file, and those
+                     * three are what a plugin is made of; anything else in
+                     * there is somebody's mistake, and a mistake that gets
+                     * stored is a mistake nobody finds.
+                     */
+                    if (!path.endsWith(".js") && path != MANIFEST && !path.endsWith(".svg")) {
+                        throw PluginZipInvalidException(
+                            "a plugin zip holds JavaScript, its $MANIFEST and its icon - \"$path\" is none of those",
+                        )
                     }
                     val content = zip.readBytes()
                     total += content.size
@@ -790,9 +848,22 @@ class PluginUploadAPI(
         }
         if (held.isEmpty()) throw PluginEmptyException()
 
-        // The plugin itself: the one root-level file, or plugin.js where
+        /*
+         * What it says about itself, and the face it names — read out of the
+         * archive before the code is, because neither is code and neither
+         * goes to the sandbox.
+         */
+        val said = manifest(held[MANIFEST]?.let(::text))
+        val face = said?.icon?.removePrefix("./")
+            ?.let { held[it] }
+            ?.takeIf { it.size <= MOST_ICON_CHARS }
+            ?.let(::text)
+
+        // The plugin itself: the one root-level .js, or plugin.js where
         // several sit there. A rule somebody can hold in their head.
-        val roots = held.keys.filter { '/' !in it }
+        val code = held.filterKeys { it.endsWith(".js") }
+        if (code.isEmpty()) throw PluginZipInvalidException("the zip holds no JavaScript, and the plugin is JavaScript")
+        val roots = code.keys.filter { '/' !in it }
         val main = when {
             roots.size == 1 -> roots.single()
             "plugin.js" in roots -> "plugin.js"
@@ -801,9 +872,40 @@ class PluginUploadAPI(
                 "the zip has several files at its root (${roots.sorted().joinToString(", ")}) - name the plugin plugin.js",
             )
         }
-        val libraries = held.filterKeys { it != main }
+        val libraries = code.filterKeys { it != main }
             .map { (path, content) -> PluginLibraryFile(path, text(content)) }
-        return Triple(main, text(held.getValue(main)), libraries)
+        return Unzipped(main, text(code.getValue(main)), libraries, said, face)
+    }
+
+
+    /**
+     * What a plugin says about itself, read from the `plugin.json` beside it.
+     *
+     * Everything here is prose for a screen — the name, the line under it,
+     * who wrote it, what it calls its version. None of it grants anything or
+     * changes what the plugin may do: what a plugin is *allowed* is read from
+     * the code, at the moment somebody accepts it, and a manifest that
+     * claimed otherwise would be a plugin describing itself into privileges.
+     *
+     * Every field is optional and every one is bounded. A manifest that will
+     * not parse is not a failed load: it is a plugin without a manifest,
+     * which is the ordinary case and the one every plugin was until now.
+     */
+    private fun manifest(json: String?): PluginManifest? {
+        val read = json?.let { runCatching { mapper.readTree(it) }.getOrNull() }?.takeIf { it.isObject }
+            ?: return null
+
+        fun said(name: String, most: Int) =
+            read.path(name).takeIf { it.isString }?.asString()?.trim()?.ifEmpty { null }?.take(most)
+
+        return PluginManifest(
+            name = said("name", MAX_NAME),
+            summary = said("summary", MOST_SUMMARY_CHARS),
+            author = said("author", MAX_NAME),
+            version = said("version", 32),
+            // A path beside the plugin, so it cannot name anything else.
+            icon = said("icon", 200)?.takeIf { PluginRunner.LIBRARY_PATH_ANY.matches(it) },
+        )
     }
 
     /**
@@ -842,6 +944,12 @@ class PluginUploadAPI(
          * gradient in it, small enough that a row stays a row.
          */
         const val MOST_ICON_CHARS = 64 * 1024
+
+        /** A line under a name, and the room a line needs. */
+        const val MOST_SUMMARY_CHARS = 500
+
+        /** What a plugin's manifest is called, beside the plugin itself. */
+        const val MANIFEST = "plugin.json"
 
         const val MAX_NAME = 200
 
@@ -1745,6 +1853,32 @@ class PluginNotTextException : RuntimeException("That file is not UTF-8 text")
 
 /** An archive that is not the shape a plugin zip has; the sentence says what is. */
 class PluginZipInvalidException(what: String) : RuntimeException(what)
+
+/**
+ * What a plugin says about itself, from the `plugin.json` beside it.
+ *
+ * Prose for a screen and nothing more. What a plugin is *allowed* comes from
+ * the code, read at the moment somebody accepts it — a manifest that could
+ * widen that would be a plugin describing itself into privileges. Every field
+ * is optional: a plugin without a manifest is the ordinary case.
+ */
+/** A plugin archive taken apart: the code, and what it says about itself. */
+data class Unzipped(
+    val filename: String,
+    val source: String,
+    val libraries: List<PluginLibraryFile>,
+    val manifest: PluginManifest?,
+    val icon: String?,
+)
+
+data class PluginManifest(
+    val name: String?,
+    val summary: String?,
+    val author: String?,
+    val version: String?,
+    /** A path beside the plugin, for the face it wears. */
+    val icon: String?,
+)
 
 /**
  * What the browser sends to load a plugin from where it lives.

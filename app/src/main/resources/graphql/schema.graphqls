@@ -4541,6 +4541,23 @@ type Plugin {
     loaded from a file, which brought no face.
     """
     icon: String
+    """
+    What the plugin says it is for, in a line — from the `plugin.json` it
+    ships beside itself. Null for one that ships no manifest.
+
+    Prose, and only prose: what a plugin is allowed to do is read from the
+    code at the moment somebody accepts it, never from what it says about
+    itself here.
+    """
+    summary: String
+    "Who wrote it, as its manifest says."
+    author: String
+    """
+    What the plugin calls its own version — not `marketplaceVersion`, which
+    is what the catalog offered it as. The two are usually equal and mean
+    different things, and the update comparison uses the catalog's.
+    """
+    version: String
 }
 
 """

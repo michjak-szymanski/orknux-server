@@ -821,6 +821,14 @@ class PluginRunner(
         const val MOST_LIBRARY_PATH_CHARS = 200
 
         /**
+         * The same shape without the `.js`, for the files beside a plugin that
+         * are not code — its manifest, its icon. Relative and contained, for
+         * the reason [LIBRARY_PATH] is: a path that could climb out is a path
+         * that could name something this plugin did not ship.
+         */
+        val LIBRARY_PATH_ANY = Regex("""(\./)?(?!\.)[A-Za-z0-9_\-.]+(/(?!\.)[A-Za-z0-9_\-.]+)*""")
+
+        /**
          * Runs one of the plugin's declared functions and leaves JSON behind.
          *
          * The plugin is asked for its declarations again rather than the function

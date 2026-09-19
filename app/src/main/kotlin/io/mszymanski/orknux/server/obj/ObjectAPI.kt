@@ -46,9 +46,25 @@ class ObjectAPI(
 
     @QueryMapping
     fun workflowObject(@Argument id: Long): ObjectView? {
-        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return null
+        val held = objects.findByIdOrNull(id)?.takeIf { visible(it) } ?: return null
         return describe(held)
     }
+
+    /**
+     * The shapes the loaded plugins export, for a picker that offers them.
+     *
+     * Beside `workspaceObjects` rather than folded into it: the workspace's
+     * page is what somebody draws and edits, and a plugin's shape is neither —
+     * it is replaced the next time the plugin is loaded. What they share is
+     * the thing that matters to a reference: an id to point at.
+     *
+     * Installation-wide, like the plugins themselves, and readable by anybody
+     * who may see a workspace — pointing at one is the decision, and a picker
+     * that cannot show what is on offer cannot be used to make it.
+     */
+    @QueryMapping
+    fun pluginObjects(): List<ObjectView> =
+        objects.findByPluginIdIsNotNull().sortedBy { it.name }.map(::describe)
 
     @MutationMapping
     @Transactional
@@ -77,19 +93,19 @@ class ObjectAPI(
     @MutationMapping
     @Transactional
     fun updateObject(@Argument id: Long, @Argument input: UpdateObjectInput): ObjectView {
-        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
-            ?: throw ObjectNotFoundException(id)
+        val held = objects.findByIdOrNull(id)?.takeIf { visible(it) } ?: throw ObjectNotFoundException(id)
+        val workspaceId = editable(held)
 
         val previousName = held.name
         input.name?.trim()?.let { name ->
             requireUsableName(name)
-            if (name != held.name && objects.findByWorkspaceIdAndName(held.workspaceId, name) != null) {
+            if (name != held.name && objects.findByWorkspaceIdAndName(workspaceId, name) != null) {
                 throw ObjectNameTakenException(name)
             }
             held.name = name
         }
         input.description?.let { held.description = it.trim().ifEmpty { null } }
-        input.properties?.let { held.properties = propertiesOf(held.workspaceId, it, self = id) }
+        input.properties?.let { held.properties = propertiesOf(workspaceId, it, self = id) }
         held.lastModifiedAt = OffsetDateTime.now()
         held.lastModifiedBy = currentUser()
 
@@ -138,7 +154,8 @@ class ObjectAPI(
     @MutationMapping
     @Transactional
     fun deleteObject(@Argument id: Long): Boolean {
-        val held = objects.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) } ?: return false
+        val held = objects.findByIdOrNull(id)?.takeIf { visible(it) } ?: return false
+        editable(held)
 
         val users = dependants.of(DependencyKind.OBJECT, id)
         if (users.isNotEmpty()) throw ObjectInUseException(held.name, users.phrases())
@@ -219,11 +236,40 @@ class ObjectAPI(
         }.toMutableList()
     }
 
+    /**
+     * Whether this row may be read here.
+     *
+     * A plugin's shape is visible to anybody who may see any workspace: it
+     * belongs to the installation, the way the plugin does, and a reference
+     * to one can be drawn in every workspace at once.
+     */
+    private fun visible(held: WorkflowObject): Boolean =
+        held.pluginId != null || access.canSee(requireNotNull(held.workspaceId))
+
+    /**
+     * The workspace whose shape this is, refusing one that is a plugin's.
+     *
+     * A plugin's object is replaced wholesale the next time the plugin is
+     * loaded, so an edit made here would be an edit somebody loses without
+     * being told. Refused with a sentence saying where it comes from rather
+     * than reported as missing, because it is plainly there on the screen.
+     */
+    private fun editable(held: WorkflowObject): Long =
+        held.workspaceId ?: throw PluginObjectNotEditableException(held.name)
+
     private fun describe(held: WorkflowObject): ObjectView {
-        val names = objects.findByWorkspaceId(held.workspaceId).associate { it.id to it.name }
+        /*
+         * The names a property could be pointing at: this owner's, and every
+         * plugin's. A plugin's shape may point within itself, and a
+         * workspace's may point at a plugin's - so a map of only one side
+         * would draw `unknown` beside a reference that resolves perfectly.
+         */
+        val names = (held.workspaceId?.let(objects::findByWorkspaceId).orEmpty() + objects.findByPluginIdIsNotNull())
+            .associate { it.id to it.name }
         return ObjectView(
             id = requireNotNull(held.id),
             workspaceId = held.workspaceId,
+            pluginId = held.pluginId,
             name = held.name,
             description = held.description,
             properties = held.properties.map { property ->
@@ -346,7 +392,10 @@ data class ObjectPropertyView(
 
 data class ObjectView(
     val id: Long,
-    val workspaceId: Long,
+    /** Null for a shape a plugin exports: it belongs to the installation. */
+    val workspaceId: Long?,
+    /** Set for a shape a plugin exports; there is nowhere to edit one. */
+    val pluginId: Long? = null,
     val name: String,
     val description: String?,
     val properties: List<ObjectPropertyView>,
@@ -357,6 +406,20 @@ data class ObjectView(
     val lastModifiedAt: String,
     val lastModifiedBy: String,
 )
+
+/**
+ * A plugin's shape is the plugin's, and there is nowhere to edit it.
+ *
+ * Said as a refusal rather than as absence: the object is on the screen, so
+ * "no such object" would read as a bug. What it says instead is who owns it.
+ */
+class PluginObjectNotEditableException(val name: String) : RuntimeException(
+    "$name comes from a plugin. A plugin's shapes are replaced every time it is loaded, so they are " +
+        "changed by changing the plugin.",
+), io.mszymanski.orknux.server.graphql.Refusal {
+
+    override val arguments get() = mapOf("name" to name)
+}
 
 /** What Validate answers; it is a report, not a failure. */
 data class ObjectValidationView(val valid: Boolean, val message: String)

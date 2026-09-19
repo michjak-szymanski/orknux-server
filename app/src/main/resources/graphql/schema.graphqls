@@ -370,7 +370,7 @@ type Query {
     "The workspace's skill catalogs, by name, each with what it holds."
     skillCatalogs(workspaceId: ID!): [SkillCatalog!]!
     """
-    The skill catalogs the loaded plugins bring, by the plugin's key.
+    The skill catalogs the loaded plugins bring, one each, named `<key>_plugin`.
 
     Beside `skillCatalogs` rather than folded into it: these are not rows, so
     there is nothing to rename, delete or add a skill to. What they share with
@@ -401,6 +401,20 @@ type Query {
     memoryAuthors(catalogId: ID!): [String!]!
     "The workspace's objects: the shapes its workflows pass around."
     workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20): ObjectPage!
+    """
+    The shapes the loaded plugins export, available in every workspace.
+
+    Beside `workspaceObjects` rather than among them: a workspace's object is
+    something somebody drew and can edit, and a plugin's is replaced the next
+    time the plugin is loaded. What they share is the part a reference needs —
+    an id to point at, which is why both are rows in the same table.
+
+    A plugin that is switched off still exports its shapes: a property
+    pointing at one describes something whether or not the code behind it can
+    run, and taking the shape away would break the workflows that named it.
+    Installation-wide, so the workspace is not an argument.
+    """
+    pluginObjects: [WorkflowObject!]!
     """
     One component as the JSON somebody downloads.
 
@@ -3103,11 +3117,44 @@ time it is loaded. What it shares with a workspace's catalog is the only thing
 that matters to an agent — it is granted by name, from the same field.
 """
 type PluginSkillCatalog {
-    "The plugin's key, which is what goes on an agent's grant list."
+    """
+    `jira_plugin` — the plugin's key, suffixed. What goes on an agent's grant
+    list.
+
+    Suffixed because the name is a grant string and has to be the plugin's
+    alone: a bare key could be a folder a workspace already has, and one grant
+    meaning two things is either a silent merge or a shadow rule.
+    """
     name: String!
+    "The plugin's key on its own, for a screen saying where this came from."
+    key: String!
     "What the plugin is called on screen, so a picker can show both."
     plugin: String!
     skills: [PluginSkill!]!
+}
+
+"""
+One shape a plugin exports, as it declared it.
+
+The plugin's own spelling throughout: `of` names another of *this plugin's*
+objects. What it becomes as a row — the prefix, the reference by id — is the
+server's, and `pluginObjects` is where that is read.
+"""
+type PluginObject {
+    name: String!
+    description: String
+    properties: [PluginObjectProperty!]!
+}
+
+"One field of a shape a plugin exports."
+type PluginObjectProperty {
+    name: String!
+    kind: PropertyKind!
+    "The object it points at, or what an array holds, by the plugin's own name."
+    of: String
+    "What an array holds when it holds scalars."
+    elementKind: PropertyKind
+    description: String
 }
 
 "One instruction set a plugin brings: markdown an agent reads, never code it runs."
@@ -4558,6 +4605,16 @@ type Plugin {
     """
     libraries: [String!]!
     """
+    The shapes this plugin exports, as it declared them.
+
+    The declaration, not the registration — the same split the functions have.
+    These become something a workspace can point at as `workflow_object` rows
+    under the plugin's key, so `Issue` declared by `jira` is `jira_Issue`;
+    `pluginObjects` is where those are read. The names here are the plugin's
+    own, unprefixed, because this is what the plugin said.
+    """
+    objects: [PluginObject!]!
+    """
     The instruction sets this plugin brings.
 
     A third surface beside its functions and its tools, and the one that does
@@ -4668,13 +4725,21 @@ type PluginFunctionDeclaration {
     description: String
     params: [PluginFunctionParam!]!
     returnType: String!
-    "\"(email: string): boolean\", ready for the list."
+    """
+    The plugin's own name for the shape it returns — `Issue`, not `jira_Issue`
+    — where it returns one of the shapes it exports. Null otherwise, and then
+    `returnType` is the whole answer.
+    """
+    returnObject: String
+    "\"(key: string): Issue\", ready for the list. A shape reads as its name."
     signature: String!
 }
 
 type PluginFunctionParam {
     name: String!
     type: String!
+    "The plugin's own name for the shape, where the type names one."
+    objectName: String
 }
 
 """
@@ -5975,7 +6040,22 @@ methods later without the concept having to be renamed.
 """
 type WorkflowObject {
     id: ID!
-    workspaceId: ID!
+    """
+    The workspace that drew this shape.
+
+    Null for one a plugin exports: a plugin belongs to the installation, so
+    what it exports belongs to every workspace at once. Exactly one of this
+    and `pluginId` is set.
+    """
+    workspaceId: ID
+    """
+    The plugin that exports this shape, or null for a workspace's own.
+
+    Set means the row is the plugin's: replaced wholesale the next time the
+    plugin is loaded, gone when it is unloaded, and there is nowhere to edit
+    it — `updateObject` and `deleteObject` refuse one, saying so.
+    """
+    pluginId: ID
     name: String!
     description: String
     properties: [ObjectProperty!]!

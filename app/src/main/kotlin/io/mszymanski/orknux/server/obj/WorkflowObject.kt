@@ -90,8 +90,27 @@ class WorkflowObject(
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     val id: Long? = null,
 
-    @Column(name = "workspace_id", nullable = false)
-    val workspaceId: Long,
+    /**
+     * The workspace that drew this shape, or null for one a plugin brought.
+     *
+     * Nullable for the reason a plugin's function row has no workspace: a
+     * plugin belongs to the installation, so what it exports belongs to every
+     * workspace at once. Exactly one of this and [pluginId] is set.
+     */
+    @Column(name = "workspace_id")
+    val workspaceId: Long? = null,
+
+    /**
+     * The plugin that exports this shape, or null for a workspace's own.
+     *
+     * Set means the row is the plugin's: it is replaced wholesale the next
+     * time the plugin is loaded, goes when the plugin is unloaded, and there
+     * is nowhere to edit it. A property pointing at it points by id like any
+     * other, so everything that already follows a reference follows this one
+     * without knowing it came from a plugin.
+     */
+    @Column(name = "plugin_id")
+    var pluginId: Long? = null,
 
     @Column(nullable = false, length = 64)
     var name: String,
@@ -124,4 +143,12 @@ interface WorkflowObjectRepository : JpaRepository<WorkflowObject, Long> {
     fun findByWorkspaceId(workspaceId: Long): List<WorkflowObject>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): WorkflowObject?
+
+    /** What one plugin exports, for the reconcile that replaces it. */
+    fun findByPluginId(pluginId: Long): List<WorkflowObject>
+
+    /** Every plugin's, for a list that shows what a workspace may point at. */
+    fun findByPluginIdIsNotNull(): List<WorkflowObject>
+
+    fun findByPluginIdAndName(pluginId: Long, name: String): WorkflowObject?
 }

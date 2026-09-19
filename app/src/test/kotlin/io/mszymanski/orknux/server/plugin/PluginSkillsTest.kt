@@ -124,7 +124,8 @@ class PluginSkillsTest(
         load()
 
         val offered = fromPlugins.catalogs().single()
-        assertThat(offered.name).describedAs("the plugin's key is the grant").isEqualTo("deploys")
+        assertThat(offered.name).describedAs("the key, suffixed, is the grant").isEqualTo("deploys_plugin")
+        assertThat(offered.key).isEqualTo("deploys")
         assertThat(offered.skills).hasSize(2)
 
         // Granted nothing: a catalog nobody gave it does not appear and cannot
@@ -148,12 +149,12 @@ class PluginSkillsTest(
             ),
         )
 
-        val granted = agent("house style", "deploys")
+        val granted = agent("house style", "deploys_plugin")
 
         assertThat(skillTool.list(granted).map { it.name })
             .containsExactlyInAnyOrder("Writing a changelog", "Rolling back a deploy", "Reading the deploy log")
         assertThat(skillTool.list(granted).single { it.name == "Rolling back a deploy" }.catalog)
-            .isEqualTo("deploys")
+            .isEqualTo("deploys_plugin")
 
         val loaded = skillTool.load(granted, "rolling back a deploy")
         assertThat(loaded).describedAs("found however it was spelled").isNotNull
@@ -168,7 +169,7 @@ class PluginSkillsTest(
     @Test
     fun `a plugin switched off teaches nobody, and the grant survives it`() {
         load()
-        val granted = agent("deploys")
+        val granted = agent("deploys_plugin")
         assertThat(skillTool.list(granted)).hasSize(2)
 
         val plugin = plugins.findByKey("deploys")!!
@@ -179,7 +180,7 @@ class PluginSkillsTest(
         assertThat(skillTool.list(granted)).isEmpty()
         assertThat(agents.findById(requireNotNull(granted.id)).get().skillCatalogs)
             .describedAs("the grant is about the plugin, not about this moment")
-            .containsExactly("deploys")
+            .containsExactly("deploys_plugin")
 
         plugin.enabled = true
         plugins.save(plugin)

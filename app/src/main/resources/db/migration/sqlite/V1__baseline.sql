@@ -577,7 +577,11 @@ CREATE TABLE object_property
     description                  varchar(500),
     primary key (object_id, position),
     constraint object_property_object_id_fkey FOREIGN KEY (object_id) REFERENCES workflow_object(id) ON DELETE CASCADE,
-    constraint object_property_ref_object_id_fkey FOREIGN KEY (ref_object_id) REFERENCES workflow_object(id)
+    -- SET NULL rather than nothing: a plugin's shapes go by cascade when it is
+    -- unloaded, and ones that point at each other would otherwise delete in an
+    -- order the constraint blocks. Null reads as "points at nothing", which is
+    -- what happened -- where taking the field away would edit somebody's shape.
+    constraint object_property_ref_object_id_fkey FOREIGN KEY (ref_object_id) REFERENCES workflow_object(id) ON DELETE SET NULL
 );
 
 CREATE TABLE password_reset
@@ -620,7 +624,8 @@ CREATE TABLE plugin
     summary                      text,
     author                       varchar(200),
     version                      varchar(32),
-    declared_skills              text not null default '[]'
+    declared_skills              text not null default '[]',
+    declared_objects             text not null default '[]'
 );
 
 CREATE TABLE plugin_library
@@ -1212,7 +1217,11 @@ CREATE TABLE workflow_node_mapping
 CREATE TABLE workflow_object
 (
     id                           integer not null primary key autoincrement,
-    workspace_id                 integer not null,
+    -- Exactly one owner: the workspace that drew the shape, or the plugin
+    -- that exports it. A plugin's row is replaced wholesale on every load and
+    -- goes when the plugin is unloaded.
+    workspace_id                 integer,
+    plugin_id                    integer,
     name                         varchar(64) not null,
     description                  text,
     created_at                   timestamp not null,
@@ -1220,8 +1229,13 @@ CREATE TABLE workflow_object
     last_modified_at             timestamp not null,
     last_modified_by             varchar(255) not null,
     constraint uk_workflow_object_name UNIQUE (workspace_id, name),
-    constraint workflow_object_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+    constraint uk_workflow_object_plugin_name UNIQUE (plugin_id, name),
+    constraint workflow_object_has_one_owner CHECK ((workspace_id IS NULL) <> (plugin_id IS NULL)),
+    constraint workflow_object_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+    constraint workflow_object_plugin_id_fkey FOREIGN KEY (plugin_id) REFERENCES plugin(id) ON DELETE CASCADE
 );
+
+CREATE INDEX idx_workflow_object_plugin ON workflow_object (plugin_id);
 
 CREATE TABLE workflow_publication
 (

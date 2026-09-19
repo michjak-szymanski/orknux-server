@@ -18,6 +18,10 @@ import java.time.OffsetDateTime
  * are scoped to the plugin rather than to a workspace, so every workspace can use
  * them, and nothing but the plugin can change them.
  *
+ * A function may return, or take, one of the shapes the plugin exports. The
+ * declaration names it and a row holds an id, so this is where the one becomes
+ * the other — which is why [PluginObjectRegistry] runs first.
+ *
  * Reconciled rather than appended: what the plugin declares now is what exists
  * afterwards. A function it no longer declares goes, one it has renamed arrives as
  * a new name, and loading the same plugin twice leaves the same set behind — which
@@ -27,6 +31,8 @@ import java.time.OffsetDateTime
 @Service
 class PluginFunctionRegistry(
     private val functions: WorkflowFunctionRepository,
+    /** The shapes this plugin exports, so a declared return type can become a reference. */
+    private val objects: io.mszymanski.orknux.server.obj.WorkflowObjectRepository,
     private val dependants: ComponentDependants,
     private val declarations: PluginDeclarations,
 ) {
@@ -63,9 +69,22 @@ class PluginFunctionRegistry(
         }
         functions.deleteAll(removed.map(existing::getValue))
 
+        /*
+         * The shapes this plugin exports, by the name it calls them.
+         *
+         * A declaration says `returnType: 'Issue'` and a row holds an id, so
+         * this is where the one becomes the other. The rows are made first -
+         * [PluginObjectRegistry] runs ahead of this - because a reference
+         * cannot be written before the thing it points at exists.
+         */
+        val shapes = shapes(plugin)
+
         wanted.forEach { (name, declaration) ->
-            val params = declaration.params.map { FunctionParam(it.name, ValueType.valueOf(it.type)) }
+            val params = declaration.params.map {
+                FunctionParam(it.name, ValueType.valueOf(it.type), objectId = it.objectName?.let(shapes::get))
+            }
             val returnType = ValueType.valueOf(declaration.returnType)
+            val returnObjectId = declaration.returnObject?.let(shapes::get)
 
             val function = existing[name]?.apply {
                 // The declaration no longer speaks for an edited row: a reload
@@ -74,6 +93,7 @@ class PluginFunctionRegistry(
                 if (editedAt != null) return@forEach
                 this.description = declaration.description
                 this.returnType = returnType
+                this.returnObjectId = returnObjectId
                 this.params = params.toMutableList()
                 this.source = explanation(plugin, declaration)
                 this.lastModifiedAt = OffsetDateTime.now()
@@ -86,6 +106,7 @@ class PluginFunctionRegistry(
                 description = declaration.description,
                 source = explanation(plugin, declaration),
                 returnType = returnType,
+                returnObjectId = returnObjectId,
                 params = params.toMutableList(),
                 lastModifiedAt = OffsetDateTime.now(),
                 lastModifiedBy = "plugin ${plugin.key}",
@@ -132,6 +153,24 @@ class PluginFunctionRegistry(
      * unique within it, so the pair cannot collide with anything.
      */
     private fun qualified(key: String, name: String): String = "${key}_$name"
+
+    /**
+     * The rows this plugin's shapes became, keyed by the plugin's own name.
+     *
+     * The declarations keep the plugin's spelling - `Issue` - and the rows
+     * carry the prefix, so the lookup strips one side back to the other. A
+     * name with no row is left as null rather than refused: the declaration
+     * has already been checked against the exported set, so the only way to
+     * get here is a row that went missing, and a dangling reference is
+     * reported by the screen that draws it.
+     */
+    private fun shapes(plugin: Plugin): Map<String, Long> =
+        objects.findByPluginId(requireNotNull(plugin.id))
+            .mapNotNull { row ->
+                val bare = row.name.removePrefix("${plugin.key}_")
+                row.id?.let { bare to it }
+            }
+            .toMap()
 
     /**
      * What the source column holds for a function nobody has taken over yet.

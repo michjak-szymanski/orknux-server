@@ -14,11 +14,17 @@ import org.springframework.stereotype.Service
  * work is meant to be done travels with the code that does it, instead of being
  * retyped into every workspace by hand.
  *
- * **A plugin's skills are a catalog named after the plugin**, which is the whole
+ * **A plugin's skills are a catalog named `<key>_plugin`**, which is the whole
  * of the grant model. Skills have always been granted by catalog, and a plugin's
  * are granted the same way, from the same picker, by the same field on the
  * agent. Nothing is automatic: a plugin loaded into this installation hands its
  * skills to nobody until somebody grants the catalog.
+ *
+ * The suffix is what makes the name the plugin's own. A bare key could be a
+ * folder somebody already has - and then one grant string meant two things,
+ * which is either a silent merge or a shadow rule, and both are worse than a
+ * name that cannot collide. It is spelled the way everything else a plugin
+ * contributes is: joined with an underscore, qualified by the key.
  *
  * A plugin switched off offers none, the way its tools stop resolving — the
  * grant naming it stays on the agent, so switching the plugin back on puts
@@ -43,14 +49,16 @@ class PluginSkills(
             if (held.isEmpty()) {
                 null
             } else {
+                val catalog = catalogOf(plugin.key)
                 PluginSkillCatalog(
-                    name = plugin.key,
+                    name = catalog,
+                    key = plugin.key,
                     plugin = plugin.name,
                     skills = held.map {
                         GrantedSkill(
                             name = it.name,
                             description = it.description,
-                            catalog = plugin.key,
+                            catalog = catalog,
                             content = it.content,
                         )
                     }.sortedBy { it.name },
@@ -66,10 +74,22 @@ class PluginSkills(
     }
 }
 
-/** One plugin's skills, offered under the plugin's key. */
+/**
+ * `jira_plugin` — a plugin's key, suffixed.
+ *
+ * Suffixed because the name is a grant string and has to be the plugin's
+ * alone: a bare key could be a folder a workspace already has, and one grant
+ * meaning two things is either a silent merge or a shadow rule. Neither is as
+ * good as a name that cannot collide.
+ */
+fun catalogOf(key: String): String = "${key}_plugin"
+
+/** One plugin's skills, offered as a catalog of its own. */
 data class PluginSkillCatalog(
-    /** The plugin's key, which is what goes on an agent's grant list. */
+    /** `jira_plugin`: what goes on an agent's grant list. */
     val name: String,
+    /** The plugin's key on its own, for a screen that wants to say where this came from. */
+    val key: String,
     /** What the plugin is called on screen, for a picker that shows both. */
     val plugin: String,
     val skills: List<GrantedSkill>,

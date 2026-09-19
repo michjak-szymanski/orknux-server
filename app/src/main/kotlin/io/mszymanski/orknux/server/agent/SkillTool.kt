@@ -58,11 +58,8 @@ class SkillTool(
      * rather than every call it makes. A skill switched off is out of reach here
      * as everywhere.
      *
-     * The workspace's own come first, and that ordering is the shadow rule:
-     * where a plugin brings a skill under a name the workspace already uses,
-     * [load] finds the workspace's. The same precedence a workspace tool has
-     * over a plugin's, for the same reason — what somebody wrote here wins over
-     * what arrived with a file.
+     * The two sets cannot collide: a plugin's catalog carries the `_plugin`
+     * suffix, so a grant string names one folder or the other and never both.
      */
     private fun granted(agent: Agent): List<GrantedSkill> {
         if (agent.skillCatalogs.isEmpty()) return emptyList()
@@ -77,10 +74,12 @@ class SkillTool(
             }
             .sortedBy { it.name }
 
-        val brought = fromPlugins.granted(held).filter { brought ->
-            own.none { it.name.equals(brought.name, ignoreCase = true) }
-        }
-        return own + brought
+        /*
+         * And the plugins', which cannot be confused with the above: a
+         * plugin's catalog is `<key>_plugin`, so one grant string never means
+         * two folders and there is nothing here to merge or shadow.
+         */
+        return own + fromPlugins.granted(held)
     }
 
     private companion object {

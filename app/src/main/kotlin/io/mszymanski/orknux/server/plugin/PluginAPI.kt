@@ -63,6 +63,7 @@ class PluginUploadAPI(
     private val runner: PluginRunner,
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
+    private val shapeRegistry: PluginObjectRegistry,
     private val permissions: PluginPermissions,
     /** What it asks the server to do for it; see [PluginCapabilities]. */
     private val capabilities: PluginCapabilities,
@@ -526,8 +527,15 @@ class PluginUploadAPI(
         if (!KEY.matches(key)) throw PluginIdInvalidException(key)
 
         val apiVersion = inspected.apiVersion
-        val declared = declarations.validated(inspected.functions)
-        val declaredTools = declarations.validatedTools(inspected.tools)
+        /*
+         * The shapes first, because the functions may name one. Checked
+         * before anything else is, so a function declaring `returnType:
+         * 'Issue'` is measured against a set that has already held together.
+         */
+        val declaredObjects = declarations.validatedObjects(inspected.objects)
+        val exported = inspected.objects.map { it.name.trim() }.toSet()
+        val declared = declarations.validated(inspected.functions, exported)
+        val declaredTools = declarations.validatedTools(inspected.tools, exported)
         val declaredSkills = declarations.validatedSkills(inspected.skills)
         val parameters = declarations.validatedParameters(inspected.parameters)
 
@@ -631,6 +639,7 @@ class PluginUploadAPI(
             this.declaredFunctions = declared
             this.declaredTools = declaredTools
             this.declaredSkills = declaredSkills
+            this.declaredObjects = declaredObjects
             this.declaredParameters = parameters
             this.declaredPermissions = permissions.write(wanted)
             this.acceptedPermissions = permissions.write(wanted)
@@ -667,6 +676,7 @@ class PluginUploadAPI(
             declaredFunctions = declared,
             declaredTools = declaredTools,
             declaredSkills = declaredSkills,
+            declaredObjects = declaredObjects,
             declaredParameters = parameters,
             declaredPermissions = permissions.write(wanted),
             /*
@@ -706,6 +716,14 @@ class PluginUploadAPI(
         // What it declares becomes what it provides, in the same transaction: a
         // plugin that is loaded but whose functions did not appear is a state
         // nobody could explain.
+        /*
+         * The shapes before the functions, because a function that returns one
+         * holds a reference to its row and the row has to exist to be pointed
+         * at. Both in the same transaction as the plugin: a plugin that is
+         * loaded but whose functions did not appear is a state nobody could
+         * explain.
+         */
+        val shapes = shapeRegistry.reconcile(saved)
         val provided = registry.reconcile(saved)
 
         return ResponseEntity.ok(
@@ -719,12 +737,15 @@ class PluginUploadAPI(
                     // the same list one flush later.
                     files.map { it.path },
                     declarations.readSkills(saved.declaredSkills),
+                    declarations.readObjects(saved.declaredObjects),
                 ),
                 "replaced" to (existing != null),
                 "provides" to provided,
                 // The agents' half of what it provides, under the same prefix
                 // rule: these are the names an agent is granted.
                 "tools" to declarations.readTools(saved.declaredTools).map { "${saved.key}_${it.name}" }.sorted(),
+                // And the shapes, under the same prefix rule.
+                "objects" to shapes,
             ),
         )
     }
@@ -1674,6 +1695,7 @@ class PluginAPI(
     private val access: WorkspaceAccess,
     private val declarations: PluginDeclarations,
     private val registry: PluginFunctionRegistry,
+    private val shapeRegistry: PluginObjectRegistry,
     private val permissions: PluginPermissions,
     /** What it asks the server to do for it; see [PluginCapabilities]. */
     private val capabilities: PluginCapabilities,
@@ -1722,6 +1744,7 @@ class PluginAPI(
                 permissions.viewOf(permissions.grantedTo(it)),
                 sources.librariesOf(it).map { library -> library.path },
                 declarations.readSkills(it.declaredSkills),
+                declarations.readObjects(it.declaredObjects),
             )
         }
     }
@@ -1748,6 +1771,12 @@ class PluginAPI(
          */
         val used = registry.inUse(plugin)
         if (used.isNotEmpty()) throw PluginInUseException(used)
+
+        // Its shapes go the same way, and anything pointing at one has the
+        // same problem: a property whose reference stopped existing describes
+        // nothing, and says so at the moment it matters.
+        val pointed = shapeRegistry.inUse(plugin)
+        if (pointed.isNotEmpty()) throw PluginObjectsInUseException(pointed)
 
         plugins.delete(plugin)
         return true

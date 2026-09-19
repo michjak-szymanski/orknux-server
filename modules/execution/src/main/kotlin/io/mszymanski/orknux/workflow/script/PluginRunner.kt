@@ -510,6 +510,46 @@ class PluginRunner(
             emptyList()
         }
 
+        /*
+         * The shapes it exports. Only what one field says about itself is
+         * judged here - the contract's own constructor has already refused a
+         * kind that is not a kind and an `of` where none belongs. Whether an
+         * `of` names an object this plugin actually declares needs the whole
+         * set, and that is the server's question, along with turning the
+         * names into references.
+         */
+        val shapes = if (plugin.hasMember("objects")) {
+            val declaredObjects = plugin.invokeMember("objects")
+            if (!declaredObjects.hasArrayElements()) {
+                return PluginInspection.Unreadable("objects() did not answer with an array")
+            }
+            if (declaredObjects.arraySize > MAX_OBJECTS) {
+                return PluginInspection.Unreadable("objects() declared more than $MAX_OBJECTS objects")
+            }
+            (0 until declaredObjects.arraySize).map { at ->
+                val one = declaredObjects.getArrayElement(at)
+                val name = text(one, "name") ?: return PluginInspection.Unreadable("an object has no name")
+                val properties = one.getMember("properties")
+                if (properties != null && properties.arraySize > MAX_PROPERTIES) {
+                    return PluginInspection.Unreadable("$name declares more than $MAX_PROPERTIES properties")
+                }
+                val fields = (0 until (properties?.arraySize ?: 0)).map { index ->
+                    val held = properties.getArrayElement(index)
+                    DeclaredProperty(
+                        name = text(held, "name")
+                            ?: return PluginInspection.Unreadable("$name has a property with no name"),
+                        kind = text(held, "kind")
+                            ?: return PluginInspection.Unreadable("$name has a property with no kind"),
+                        of = text(held, "of"),
+                        description = text(held, "description"),
+                    )
+                }
+                DeclaredObject(name = name.trim(), description = text(one, "description"), properties = fields)
+            }
+        } else {
+            emptyList()
+        }
+
         return PluginInspection.Read(
             id = id.asString().trim(),
             apiVersion = version.asInt(),
@@ -520,6 +560,7 @@ class PluginRunner(
             capabilities = wantedCapabilities,
             libraries = shipped,
             skills = taught,
+            objects = shapes,
         )
     }
 
@@ -870,6 +911,19 @@ class PluginRunner(
         const val MOST_SKILL_CHARS = 64 * 1024
 
         /**
+         * More shapes than a plugin has any business exporting.
+         *
+         * Lower than the function bound: every one of these is a name that
+         * lands in every workspace at once, and a plugin bringing a hundred
+         * types is bringing a schema nobody asked for. `MAX_OBJECTS` in
+         * @orknux/plugin mirrors it.
+         */
+        const val MAX_OBJECTS = 50
+
+        /** Fields on one exported object; the same bound a workspace's own has. */
+        const val MAX_PROPERTIES = 100
+
+        /**
          * The same shape without the `.js`, for the files beside a plugin that
          * are not code — its manifest, its icon. Relative and contained, for
          * the reason [LIBRARY_PATH] is: a path that could climb out is a path
@@ -1022,6 +1076,22 @@ class PluginRunner(
                * Nothing is automatic.
                */
               skills() {
+                return [];
+              }
+
+              /**
+               * The shapes this plugin exports, for its own functions and
+               * tools to pass around.
+               *
+               * A plugin's functions belong to every workspace at once, which
+               * is why they may not name a workspace's own objects - there is
+               * no single workspace whose definitions they could mean. An
+               * object declared here belongs to the plugin instead: it
+               * travels with it and is available wherever the plugin is,
+               * under the plugin's key. Name them here as you spelled them;
+               * the loader rewrites the references when it stores them.
+               */
+              objects() {
                 return [];
               }
             };
@@ -1198,6 +1268,63 @@ class PluginRunner(
               }
             };
 
+            /*
+             * A named shape this plugin exports.
+             *
+             * Each field is checked as it is written, so a shape with a typo
+             * in it fails on the line that declares it. Whether an `of` names
+             * an object this plugin actually declares needs the whole set, so
+             * that is the loader's question.
+             */
+            globalThis.OrknuxObject = class OrknuxObject {
+              constructor(declared) {
+                if (declared === null || typeof declared !== 'object') {
+                  throw new Error('an OrknuxObject needs a declaration');
+                }
+
+                this.name = declared.name;
+                this.description = declared.description === undefined ? null : declared.description;
+                this.properties = declared.properties === undefined ? [] : declared.properties;
+
+                if (typeof this.name !== 'string' || this.name.length === 0) {
+                  throw new Error('an OrknuxObject needs a name');
+                }
+                if (!Array.isArray(this.properties)) {
+                  throw new Error(this.name + ' needs properties, as an array');
+                }
+
+                var kinds = ['string', 'number', 'boolean', 'object', 'array'];
+                for (var at = 0; at < this.properties.length; at++) {
+                  var held = this.properties[at];
+                  if (held === null || typeof held !== 'object') {
+                    throw new Error(this.name + ' has a property that is not a declaration');
+                  }
+                  if (typeof held.name !== 'string' || held.name.length === 0) {
+                    throw new Error(this.name + ' has a property with no name');
+                  }
+                  var kind = typeof held.kind === 'string' ? held.kind.toLowerCase() : '';
+                  if (kinds.indexOf(kind) === -1) {
+                    throw new Error(
+                      this.name + "'s " + held.name + ' is a "' + held.kind + '", which is not one of ' +
+                        kinds.join(', '),
+                    );
+                  }
+                  var points = kind === 'object' || kind === 'array';
+                  var of = held.of === undefined ? null : held.of;
+                  if (points && (typeof of !== 'string' || of.length === 0)) {
+                    throw new Error(
+                      this.name + "'s " + held.name + ' is ' + (kind === 'object' ? 'an object' : 'an array') +
+                        ', so it needs an `of`: ' +
+                        (kind === 'object' ? 'the object it points at' : 'what it holds'),
+                    );
+                  }
+                  if (!points && of !== null) {
+                    throw new Error(this.name + "'s " + held.name + ' names an `of` but is a ' + kind);
+                  }
+                }
+              }
+            };
+
             globalThis.$CONSTRUCT = function (exported) {
               if (typeof exported !== 'function') {
                 throw new Error('the default export must be a class that extends OrknuxPlugin');
@@ -1274,6 +1401,13 @@ sealed interface PluginInspection {
          * which is what owns that format.
          */
         val skills: List<DeclaredSkill> = emptyList(),
+        /**
+         * The shapes it exports, each field shape-checked and no more.
+         * Whether an `of` names one of these, and what reference that becomes,
+         * is decided by the server - the sandbox judges one field at a time
+         * and never the set.
+         */
+        val objects: List<DeclaredObject> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */
@@ -1319,6 +1453,36 @@ data class DeclaredTool(
  * agent reads before doing something, and the plugin ships it so the knowledge
  * of how its work is meant to be done travels with the code that does it.
  */
+/**
+ * One field of a shape a plugin exports.
+ *
+ * [of] is the plugin's own spelling of what this points at: the name of
+ * another of its objects, or - for an array - a scalar kind. Names rather than
+ * references, because a plugin has no ids; turning them into ones is the
+ * server's job, and so is refusing a name that points at nothing.
+ */
+data class DeclaredProperty(
+    val name: String,
+    /** As the plugin wrote it. Whether it names a kind this server has is decided elsewhere. */
+    val kind: String,
+    val of: String?,
+    val description: String?,
+)
+
+/**
+ * One named shape a plugin exports.
+ *
+ * A plugin's functions belong to every workspace at once, so they may not name
+ * a workspace's own object definitions - there is no single workspace whose
+ * definitions they could mean. One of these belongs to the plugin instead, and
+ * travels with it.
+ */
+data class DeclaredObject(
+    val name: String,
+    val description: String?,
+    val properties: List<DeclaredProperty>,
+)
+
 data class DeclaredSkill(
     val name: String,
     val description: String?,

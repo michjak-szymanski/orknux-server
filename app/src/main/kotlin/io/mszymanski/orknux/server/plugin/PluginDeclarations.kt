@@ -3,7 +3,9 @@ package io.mszymanski.orknux.server.plugin
 import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.agent.SkillFormat
+import io.mszymanski.orknux.server.obj.PropertyKind
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
+import io.mszymanski.orknux.workflow.script.DeclaredObject
 import io.mszymanski.orknux.workflow.script.DeclaredParameter
 import io.mszymanski.orknux.workflow.script.DeclaredSkill
 import io.mszymanski.orknux.workflow.script.DeclaredTool
@@ -35,7 +37,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
      *
      * @throws PluginDeclarationInvalidException if anything about it is wrong.
      */
-    fun validated(declared: List<DeclaredFunction>): String {
+    fun validated(declared: List<DeclaredFunction>, exported: Set<String> = emptySet()): String {
         val names = mutableSetOf<String>()
 
         val checked = declared.map { function ->
@@ -46,9 +48,23 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 throw PluginDeclarationInvalidException("it declares ${function.name} more than once")
             }
 
-            val returnType = valueType(function.returnType)
+            /*
+             * A type is either one of this server's, or the name of a shape
+             * this plugin exports.
+             *
+             * The second is what objects() is for. A plugin's functions belong
+             * to every workspace at once, so they may not name a *workspace's*
+             * object - there is no single workspace whose definitions they
+             * could mean - and `map` was the only answer available. A shape
+             * the plugin exports is the answer that says something: it travels
+             * with the plugin, so it means the same thing wherever the plugin
+             * is.
+             */
+            val returns = shape(function.returnType, exported)
+            val returnType = returns?.let { ValueType.OBJECT } ?: valueType(function.returnType)
                 ?: throw PluginDeclarationInvalidException(
-                    "${function.name} returns \"${function.returnType}\", which is not a type this server has",
+                    "${function.name} returns \"${function.returnType}\", which is neither a type this " +
+                        "server has nor a shape this plugin exports",
                 )
             /*
              * A function's return type is constrained in the database to the types
@@ -58,12 +74,13 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             if (returnType == ValueType.NONE) {
                 throw PluginDeclarationInvalidException("${function.name} must return something, not none")
             }
-            // The same reason as a parameter's: there is no workspace here whose
-            // object it could be naming.
-            if (returnType == ValueType.OBJECT) {
+            // Bare `object` still names a workspace's definition, and there is
+            // still no workspace here. Naming the shape is what works.
+            if (returnType == ValueType.OBJECT && returns == null) {
                 throw PluginDeclarationInvalidException(
                     "${function.name} returns an object, which names one of a workspace's definitions. A " +
-                        "plugin's functions belong to every workspace at once, so use map instead.",
+                        "plugin's functions belong to every workspace at once, so name one of this plugin's " +
+                        "own shapes${offered(exported)}, or use map.",
                 )
             }
 
@@ -77,21 +94,24 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 if (!paramNames.add(param.name)) {
                     throw PluginDeclarationInvalidException("${function.name} declares ${param.name} twice")
                 }
-                val type = valueType(param.type)
+                val takes = shape(param.type, exported)
+                val type = takes?.let { ValueType.OBJECT } ?: valueType(param.type)
                     ?: throw PluginDeclarationInvalidException(
-                        "${function.name}'s ${param.name} is a \"${param.type}\", which is not a type this server has",
+                        "${function.name}'s ${param.name} is a \"${param.type}\", which is neither a type " +
+                            "this server has nor a shape this plugin exports",
                     )
-                if (type == ValueType.OBJECT) {
+                if (type == ValueType.OBJECT && takes == null) {
                     throw PluginDeclarationInvalidException(
                         "${function.name}'s ${param.name} is an object, which names one of a workspace's " +
                             "definitions. A plugin's functions belong to every workspace at once, so there is " +
-                            "no workspace whose objects they could name. Use map instead.",
+                            "no workspace whose objects they could name. Name one of this plugin's own " +
+                            "shapes${offered(exported)}, or use map.",
                     )
                 }
-                param.name to type
+                Taken(param.name, type, takes)
             }
 
-            Checked(function.name, function.description, params, returnType, function.source)
+            Checked(function.name, function.description, params, returnType, returns, function.source)
         }
 
         val array = mapper.createArrayNode()
@@ -100,12 +120,17 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             node.put("name", function.name)
             function.description?.let { node.put("description", it) }
             node.put("returnType", function.returnType.name)
+            // The plugin's own spelling of the shape, kept as a name. What it
+            // becomes - a reference by id - is the registry's, because that is
+            // the step where the rows exist.
+            function.returnObject?.let { node.put("returnObject", it) }
             // Kept as written, never validated: it is the plugin's own code,
             // shown in the editor for reference and executed from the bundle.
             function.source?.let { node.put("source", it) }
             val params = node.putArray("params")
-            function.params.forEach { (name, type) ->
-                params.addObject().put("name", name).put("type", type.name)
+            function.params.forEach { taken ->
+                val held = params.addObject().put("name", taken.name).put("type", taken.type.name)
+                taken.shape?.let { held.put("object", it) }
             }
         }
         return mapper.writeValueAsString(array)
@@ -122,7 +147,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
      * with a function is fine, and is exactly what a proxy defaults to - the
      * two lists have different readers and never answer the same call.
      */
-    fun validatedTools(declared: List<DeclaredTool>): String {
+    fun validatedTools(declared: List<DeclaredTool>, exported: Set<String> = emptySet()): String {
         val names = mutableSetOf<String>()
 
         val array = mapper.createArrayNode()
@@ -134,14 +159,24 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 throw PluginDeclarationInvalidException("it declares the tool ${tool.name} more than once")
             }
 
-            val returnType = valueType(tool.returnType)
+            /*
+             * The same rule the functions are held to, and for the same
+             * reason: a tool proxying one of them copies its return type, so
+             * refusing a shape here would refuse the proxy to a function that
+             * was accepted. A shape is better for a model than a map, too -
+             * what comes back has named fields it was told about.
+             */
+            val returns = shape(tool.returnType, exported)
+            val returnType = returns?.let { ValueType.OBJECT } ?: valueType(tool.returnType)
                 ?: throw PluginDeclarationInvalidException(
-                    "the tool ${tool.name} returns \"${tool.returnType}\", which is not a type this server has",
+                    "the tool ${tool.name} returns \"${tool.returnType}\", which is neither a type this " +
+                        "server has nor a shape this plugin exports",
                 )
-            if (returnType == ValueType.NONE || returnType == ValueType.OBJECT) {
+            if (returnType == ValueType.NONE || (returnType == ValueType.OBJECT && returns == null)) {
                 throw PluginDeclarationInvalidException(
                     "the tool ${tool.name} returns ${tool.returnType.lowercase()}; a tool answers a model, " +
-                        "so it has to return one of ${usableTypes().joinToString(", ")}",
+                        "so it has to return one of ${usableTypes().joinToString(", ")}, or one of this " +
+                        "plugin's own shapes${offered(exported)}",
                 )
             }
 
@@ -155,21 +190,26 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 if (!paramNames.add(param.name)) {
                     throw PluginDeclarationInvalidException("the tool ${tool.name} declares ${param.name} twice")
                 }
-                val type = valueType(param.type)
+                val takes = shape(param.type, exported)
+                val type = takes?.let { ValueType.OBJECT } ?: valueType(param.type)
                     ?: throw PluginDeclarationInvalidException(
                         "the tool ${tool.name}'s ${param.name} is a \"${param.type}\", " +
-                            "which is not a type this server has",
+                            "which is neither a type this server has nor a shape this plugin exports",
                     )
-                param.name to type
+                Taken(param.name, type, takes)
             }
 
             val node = array.addObject()
             node.put("name", tool.name)
             tool.description?.let { node.put("description", it) }
             node.put("returnType", returnType.name)
+            returns?.let { node.put("returnObject", it) }
             tool.proxyOf?.let { node.put("proxyOf", it) }
             val kept = node.putArray("params")
-            params.forEach { (name, type) -> kept.addObject().put("name", name).put("type", type.name) }
+            params.forEach { taken ->
+                val held = kept.addObject().put("name", taken.name).put("type", taken.type.name)
+                taken.shape?.let { held.put("object", it) }
+            }
         }
         return mapper.writeValueAsString(array)
     }
@@ -185,6 +225,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 PluginFunctionParamView(
                     name = param.get("name").asString(),
                     type = param.get("type").asString(),
+                    objectName = param.get("object")?.asString(),
                 )
             }
             PluginToolView(
@@ -192,6 +233,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 description = node.get("description")?.asString(),
                 params = read,
                 returnType = node.get("returnType").asString(),
+                returnObject = node.get("returnObject")?.asString(),
                 proxyOf = node.get("proxyOf")?.asString(),
             )
         }
@@ -278,6 +320,146 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             )
         }
     }.getOrElse { emptyList() }
+
+    /**
+     * Checks the shapes a plugin exports, and returns them as JSON.
+     *
+     * Where the field checks in the sandbox stop, this begins. The contract's
+     * own constructor has already refused a kind that is not a kind and an
+     * `of` where none belongs, because those are facts about one field. What
+     * needs the whole set is here: a name that is declared twice, and an `of`
+     * pointing at an object the plugin does not have.
+     *
+     * The names are kept as the plugin spelled them. Prefixing is the
+     * registry's, at the moment a row is made, for the reason the functions
+     * are prefixed there and not here: what is stored on the plugin is what
+     * the plugin said.
+     *
+     * @throws PluginDeclarationInvalidException if anything about it is wrong.
+     */
+    fun validatedObjects(declared: List<DeclaredObject>): String {
+        val names = mutableSetOf<String>()
+        declared.forEach { object_ ->
+            val name = object_.name.trim()
+            if (!IDENTIFIER.matches(name)) {
+                throw PluginDeclarationInvalidException("\"${object_.name}\" is not a usable object name")
+            }
+            if (!names.add(name)) {
+                throw PluginDeclarationInvalidException("it declares the object $name more than once")
+            }
+        }
+
+        val array = mapper.createArrayNode()
+        declared.forEach { object_ ->
+            val name = object_.name.trim()
+            val node = array.addObject()
+            node.put("name", name)
+            object_.description?.trim()?.takeIf { it.isNotEmpty() }?.let { node.put("description", it) }
+
+            val fields = mutableSetOf<String>()
+            val kept = node.putArray("properties")
+            object_.properties.forEach { property ->
+                if (!IDENTIFIER.matches(property.name)) {
+                    throw PluginDeclarationInvalidException(
+                        "$name has a property called \"${property.name}\", which is not a usable name",
+                    )
+                }
+                if (!fields.add(property.name)) {
+                    throw PluginDeclarationInvalidException("$name declares ${property.name} twice")
+                }
+
+                val kind = propertyKind(property.kind)
+                    ?: throw PluginDeclarationInvalidException(
+                        "$name's ${property.name} is a \"${property.kind}\", which is not a kind this server has",
+                    )
+                val held = kept.addObject()
+                held.put("name", property.name)
+                held.put("kind", kind.name)
+                property.description?.trim()?.takeIf { it.isNotEmpty() }?.let { held.put("description", it) }
+
+                val of = property.of?.trim()
+                when (kind) {
+                    PropertyKind.OBJECT -> {
+                        val points = of
+                            ?: throw PluginDeclarationInvalidException(
+                                "$name's ${property.name} is an object, so it has to say which with \"of\"",
+                            )
+                        if (points !in names) {
+                            throw PluginDeclarationInvalidException(
+                                "$name's ${property.name} points at \"$points\", which objects() does not declare",
+                            )
+                        }
+                        held.put("of", points)
+                    }
+
+                    PropertyKind.ARRAY -> {
+                        val holds = of
+                            ?: throw PluginDeclarationInvalidException(
+                                "$name's ${property.name} is an array, so it has to say what it holds with \"of\"",
+                            )
+                        /*
+                         * An array says what it holds one of two ways, and
+                         * which one is decided by whether the word is a kind.
+                         * A scalar kind is the element type; anything else is
+                         * one of this plugin's objects.
+                         */
+                        val element = propertyKind(holds)
+                        if (element != null && element != PropertyKind.OBJECT) {
+                            if (element == PropertyKind.ARRAY) {
+                                throw PluginDeclarationInvalidException(
+                                    "$name's ${property.name} is an array of arrays, " +
+                                        "which this server has no shape for",
+                                )
+                            }
+                            held.put("elementKind", element.name)
+                        } else {
+                            if (holds !in names) {
+                                throw PluginDeclarationInvalidException(
+                                    "$name's ${property.name} holds \"$holds\", " +
+                                        "which objects() does not declare",
+                                )
+                            }
+                            held.put("of", holds)
+                        }
+                    }
+
+                    else -> if (of != null) {
+                        throw PluginDeclarationInvalidException(
+                            "$name's ${property.name} names an \"of\" but is a ${kind.name.lowercase()}",
+                        )
+                    }
+                }
+            }
+        }
+        return mapper.writeValueAsString(array)
+    }
+
+    /** What was kept about the objects, as the registry and the screen want it. */
+    fun readObjects(json: String): List<PluginObjectView> = runCatching {
+        val array = mapper.readTree(json)
+        (0 until array.size()).map { at ->
+            val node = array.get(at)
+            val properties = node.get("properties")
+            val fields = (0 until (properties?.size() ?: 0)).map { index ->
+                val held = properties.get(index)
+                PluginObjectPropertyView(
+                    name = held.get("name").asString(),
+                    kind = held.get("kind").asString(),
+                    of = held.get("of")?.asString(),
+                    elementKind = held.get("elementKind")?.asString(),
+                    description = held.get("description")?.asString(),
+                )
+            }
+            PluginObjectView(
+                name = node.get("name").asString(),
+                description = node.get("description")?.asString(),
+                properties = fields,
+            )
+        }
+    }.getOrElse { emptyList() }
+
+    private fun propertyKind(name: String): PropertyKind? =
+        PropertyKind.entries.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
 
     /**
      * Checks what a plugin says it has to be told, and returns it as JSON to keep.
@@ -431,24 +613,36 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 PluginFunctionParamView(
                     name = param.get("name").asString(),
                     type = param.get("type").asString(),
+                    objectName = param.get("object")?.asString(),
                 )
             }
             val returnType = node.get("returnType").asString()
+            val returnObject = node.get("returnObject")?.asString()
             PluginFunctionView(
                 name = node.get("name").asString(),
                 description = node.get("description")?.asString(),
                 params = read,
                 returnType = returnType,
-                signature = signature(read, returnType),
+                returnObject = returnObject,
+                signature = signature(read, returnType, returnObject),
                 source = node.get("source")?.asString(),
             )
         }
     }.getOrElse { emptyList() }
 
-    /** "(email: string): boolean", the way a workspace's own functions read. */
-    private fun signature(params: List<PluginFunctionParamView>, returnType: String): String {
-        val taken = params.joinToString(", ") { "${it.name}: ${it.type.lowercase()}" }
-        return "($taken): ${returnType.lowercase()}"
+    /**
+     * "(email: string): boolean", the way a workspace's own functions read.
+     *
+     * A shape reads as its own name rather than as `object`, because `object`
+     * says nothing and the name is the whole point of having declared it.
+     */
+    private fun signature(
+        params: List<PluginFunctionParamView>,
+        returnType: String,
+        returnObject: String? = null,
+    ): String {
+        val taken = params.joinToString(", ") { "${it.name}: ${it.objectName ?: it.type.lowercase()}" }
+        return "($taken): ${returnObject ?: returnType.lowercase()}"
     }
 
     private fun valueType(name: String): ValueType? =
@@ -463,10 +657,33 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
     private data class Checked(
         val name: String,
         val description: String?,
-        val params: List<Pair<String, ValueType>>,
+        val params: List<Taken>,
         val returnType: ValueType,
+        /** The plugin's own name for the shape it returns, where it returns one. */
+        val returnObject: String? = null,
         val source: String? = null,
     )
+
+    /** One checked parameter, with the shape it names where it names one. */
+    private data class Taken(val name: String, val type: ValueType, val shape: String? = null)
+
+    /**
+     * The exported shape this type names, or null where it names none.
+     *
+     * A server type always wins: a plugin that exports a shape called `String`
+     * has not renamed the language. It cannot in practice - an object name is
+     * an identifier and so is a type name - but the order is written down so
+     * the answer does not depend on which check happened to run first.
+     */
+    private fun shape(type: String, exported: Set<String>): String? {
+        val held = type.trim()
+        if (valueType(held) != null) return null
+        return held.takeIf { it in exported }
+    }
+
+    /** ", one of Issue, User" - so a refusal says what was available. */
+    private fun offered(exported: Set<String>): String =
+        if (exported.isEmpty()) "" else ", one of ${exported.sorted().joinToString(", ")}"
 
     companion object {
         /** The same rule a workspace's own function names are held to. */

@@ -111,6 +111,17 @@ class Plugin(
     var declaredSkills: String = "[]",
 
     /**
+     * The shapes the plugin exports, as JSON.
+     *
+     * The declaration, not the registration — the same split the functions
+     * have. These become something a workspace can point at when
+     * [PluginObjectRegistry] makes `workflow_object` rows of them, and that is
+     * a separate step because a reference is an id and a plugin has no ids.
+     */
+    @Column(name = "declared_objects", nullable = false, columnDefinition = "text")
+    var declaredObjects: String = "[]",
+
+    /**
      * What the plugin answered when asked what it has to be told, as JSON.
      *
      * The plugin's half of the bargain: it says what it needs and a workspace says
@@ -284,6 +295,8 @@ data class PluginView(
     val libraries: List<String> = emptyList(),
     /** The instruction sets it brings, offered to agents as a catalog of its own. */
     val skills: List<PluginSkillView> = emptyList(),
+    /** The shapes it exports, available in every workspace under its key. */
+    val objects: List<PluginObjectView> = emptyList(),
     /** Where it came from, when that was the marketplace. */
     val marketplaceKey: String? = null,
     val marketplaceVersion: String? = null,
@@ -307,12 +320,21 @@ data class PluginFunctionView(
     val description: String?,
     val params: List<PluginFunctionParamView>,
     val returnType: String,
+    /**
+     * The plugin's own name for the shape it returns, where it returns one.
+     *
+     * A name rather than a reference: the plugin has no ids, and turning this
+     * into one is [PluginFunctionRegistry]'s step, at the moment the rows it
+     * would point at exist.
+     */
+    val returnObject: String? = null,
     val signature: String,
     /** The `run` as the plugin wrote it, for the editor. Reference only. */
     val source: String? = null,
 )
 
-data class PluginFunctionParamView(val name: String, val type: String)
+/** [objectName] is set where the type names one of the plugin's own shapes. */
+data class PluginFunctionParamView(val name: String, val type: String, val objectName: String? = null)
 
 /**
  * One instruction set a plugin brings.
@@ -321,6 +343,31 @@ data class PluginFunctionParamView(val name: String, val type: String)
  * will be handed over rather than assembled on the way out, so what a screen
  * shows and what an agent loads are the same text.
  */
+/**
+ * One shape a plugin exports, as it declared it.
+ *
+ * The plugin's own spelling throughout — `of` names another of *this plugin's*
+ * objects. What it becomes on the row is the registry's business; this is the
+ * declaration, and the declaration is what the plugin said.
+ */
+data class PluginObjectView(
+    val name: String,
+    val description: String?,
+    val properties: List<PluginObjectPropertyView>,
+)
+
+/** One field of an exported shape. */
+data class PluginObjectPropertyView(
+    val name: String,
+    /** STRING, NUMBER, BOOLEAN, OBJECT or ARRAY. */
+    val kind: String,
+    /** The object it points at, or what the array holds, by the plugin's own name. */
+    val of: String?,
+    /** What an array holds when it holds scalars. */
+    val elementKind: String?,
+    val description: String?,
+)
+
 data class PluginSkillView(
     val name: String,
     val description: String?,
@@ -340,6 +387,8 @@ data class PluginToolView(
     val description: String?,
     val params: List<PluginFunctionParamView>,
     val returnType: String,
+    /** The plugin's own name for the shape it answers with, where it answers one. */
+    val returnObject: String? = null,
     val proxyOf: String?,
 )
 
@@ -429,6 +478,8 @@ fun Plugin.view(
     libraries: List<String> = emptyList(),
     /** The instruction sets it brings; read beside the declarations. */
     skills: List<PluginSkillView> = emptyList(),
+    /** The shapes it exports; read beside the declarations. */
+    objects: List<PluginObjectView> = emptyList(),
 ): PluginView = PluginView(
     id = requireNotNull(id).toString(),
     key = key,
@@ -449,6 +500,7 @@ fun Plugin.view(
     enabled = enabled,
     libraries = libraries,
     skills = skills,
+    objects = objects,
     marketplaceKey = marketplaceKey,
     marketplaceVersion = marketplaceVersion,
     icon = icon,

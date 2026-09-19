@@ -233,7 +233,13 @@ class ComponentDependants(
 
     private fun ofObject(id: Long): List<Dependant> {
         val held = objects.findByIdOrNull(id) ?: return emptyList()
-        return objects.findByWorkspaceId(held.workspaceId)
+        /*
+         * This owner's shapes and every plugin's. A workspace's property may
+         * point at a shape a plugin exports, so the workspace's own list is
+         * not the whole of what would break - and a plugin's may point at
+         * another plugin's, which is the same question asked the other way.
+         */
+        return (held.workspaceId?.let(objects::findByWorkspaceId).orEmpty() + objects.findByPluginIdIsNotNull())
             .filter { it.id != id && it.properties.any { property -> property.refObjectId == id } }
             .map { plain(DependencyKind.OBJECT, it.id, it.name, it.workspaceId) } +
             triggers.findByObjectId(id)

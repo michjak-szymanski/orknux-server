@@ -64,7 +64,9 @@ class ChatAPI(
     fun chatMessages(@Argument id: Long): List<ChatMessageView> {
         val session = chats.session(id) ?: throw ChatSessionNotFoundException(id)
         requireOwn(session)
-        return chats.messages(session).map { ChatMessageView(it.role, it.content, it.actor, it.takes, it.thinking, it.thinkingMillis) }
+        return chats.messages(session).map {
+            ChatMessageView(it.role, it.content, it.actor, it.takes, it.thinking, it.thinkingMillis, it.at)
+        }
     }
 
     @MutationMapping
@@ -321,6 +323,13 @@ data class ChatMessageView(
     val thinking: String? = null,
     /** How long that thinking went on for, or null where nobody measured it. */
     val thinkingMillis: Long? = null,
+    /**
+     * When it was sent, ISO-8601, or null for a line said before the chat
+     * existed. The schema declared this before the view carried it, and a
+     * declared field a view lacks resolves to null rather than failing - which
+     * is how every message spent months claiming to have been sent at no time.
+     */
+    val at: String? = null,
 )
 
 data class ChatAnswerView(

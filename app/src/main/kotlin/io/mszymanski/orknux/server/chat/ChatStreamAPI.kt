@@ -13,6 +13,7 @@ import io.mszymanski.orknux.server.stream.ServerSentEvents
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.http.MediaType
+import org.springframework.security.core.context.SecurityContextHolder
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
@@ -213,6 +214,18 @@ class ChatStreamAPI(
         response.setHeader("Cache-Control", "no-cache, no-transform")
         response.setHeader("X-Accel-Buffering", "no")
 
+        /*
+         * Who asked, captured while this is still their request thread.
+         *
+         * The answer is composed on a thread of this endpoint's own (below),
+         * and Spring Security's context does not follow it there the way it
+         * follows Spring's async machinery. It has to: the turn writes audit
+         * lines - a drawn picture is recorded against the person whose chat
+         * drew it - and an audit line with nobody to attribute to is refused
+         * by the recorder, rightly.
+         */
+        val asker = SecurityContextHolder.getContext()
+
         return StreamingResponseBody { _ ->
             /*
              * The frames themselves are [ServerSentEvents]', which is also what
@@ -228,85 +241,88 @@ class ChatStreamAPI(
              * short one arrived whole at the end and read as a slow model.
              */
             val stream = ServerSentEvents(response, mapper)
+
             /*
-             * A write to a reader who has gone is fatal to a voice turn - it is
-             * how the turn ends - but only a detail to a text one, which goes on
-             * composing an answer for the history with nobody reading. So a text
-             * turn's frame is written best-effort: a failed write is the reader
-             * being gone, which #335 says to carry on through rather than throw.
+             * The answer is composed on a thread of its own, and this thread -
+             * the container's - only relays frames to the browser.
+             *
+             * That split is what actually delivers #335. The first build kept
+             * the model call on this thread and wrote frames best-effort, on
+             * the reasoning that a lost reader only shows up as failed writes -
+             * but a lost reader is not a quiet reader: Spring cancels the
+             * streaming task when the connection errors, and the cancellation
+             * *interrupts this thread*, which is at that moment inside the
+             * model call. The interrupt surfaced as an `InterruptedIOException`
+             * out of the provider's client, the turn died with it, and the
+             * answer the person left to come back to was exactly the thing
+             * that was lost. So the work now runs where the container cannot
+             * reach it, and what the interrupt kills is only the relay.
+             *
+             * Frames cross on a queue. The worker never touches the response -
+             * a thread writing into a response the container has completed and
+             * recycled could land bytes in somebody else's request, which is a
+             * worse bug than the one being fixed - and the queue is unbounded
+             * because what accumulates after the reader leaves is one answer's
+             * worth of frames, which is also what the memory was holding anyway.
              */
+            val frames = java.util.concurrent.LinkedBlockingQueue<Frame>()
             fun send(event: String, payload: Any) {
-                if (interruptOnLeave) stream.send(event, payload)
-                else runCatching { stream.send(event, payload) }
+                frames.offer(Frame(event, payload))
             }
 
-            // Set the moment the answer is safely in the history, so the
-            // rescue below cannot run on top of one that did arrive.
-            var kept = false
-
             /*
-             * The handle the model call is stopped by when nobody is left to
-             * read it.
-             *
-             * Pulled from [ReaderWatch]'s thread rather than this one, which is
-             * inside the call and will not come out of it on its own - that is
-             * the whole of why it is a handle rather than a flag. This thread
-             * comes back some moments later and asks the same object what
-             * happened, because what it is then holding is the wreckage of an
-             * answer nobody wanted rather than an answer.
+             * The handle the model call is stopped by on purpose: the Stop
+             * button (through [ChatGenerations]) and a voice turn's lost
+             * reader both reach for it. Held by the worker, hung up from
+             * wherever.
              */
             val hangup = Hangup()
-            // Registered so the Stop button, which is not on this thread, can
-            // reach this turn's hang-up. Released below however the turn ends.
             generations.register(id, hangup)
 
-            try {
-                /*
-                 * The turn, built here so that compacting can be announced while
-                 * it happens. `compacting` goes out before the summariser is
-                 * asked and `compacted` after it, with what it came to - and a
-                 * conversation nowhere near its threshold produces neither, which
-                 * is every conversation until somebody turns it on. Issue #286.
-                 */
-                val start = begin { event, payload -> send(event, payload) }
-                start.compacted?.let { held ->
-                    send(
-                        "compacted",
-                        mapOf(
-                            "replaced" to held.replaced,
-                            "kept" to held.kept,
-                            "tokens" to held.tokens,
-                            "summary" to held.summary,
-                        ),
-                    )
-                }
+            val worker = Thread.ofPlatform().name("chat-$id-answer").daemon().start {
+                // The person who asked, carried onto this thread so the turn's
+                // audit lines have somebody to be attributed to.
+                SecurityContextHolder.setContext(asker)
+                // Set the moment the answer is safely in the history, so the
+                // rescue below cannot run on top of one that did arrive.
+                var kept = false
+                try {
+                    /*
+                     * The turn, built here so that compacting can be announced
+                     * while it happens. `compacting` goes out before the
+                     * summariser is asked and `compacted` after it, with what it
+                     * came to - and a conversation nowhere near its threshold
+                     * produces neither, which is every conversation until
+                     * somebody turns it on. Issue #286.
+                     */
+                    val start = begin { event, payload -> send(event, payload) }
+                    start.compacted?.let { held ->
+                        send(
+                            "compacted",
+                            mapOf(
+                                "replaced" to held.replaced,
+                                "kept" to held.kept,
+                                "tokens" to held.tokens,
+                                "summary" to held.summary,
+                            ),
+                        )
+                    }
 
-                /*
-                 * An agent's answer still arrives as one chunk, and its working
-                 * does not.
-                 *
-                 * The tool loop cannot stream text: a round that asks for a
-                 * lookup produces no answer worth showing, and what to say is
-                 * only settled once the loop ends. What it *can* report is what
-                 * it is doing - which lookup it just made, what came back, and
-                 * what it thought on the way - and those are the things
-                 * somebody watching a minute of silence wanted. So the answer
-                 * lands whole and the working lands as it happens.
-                 *
-                 * A bare model calls no tools; what it can have is thinking,
-                 * and that streams beside the answer.
-                 */
-                /*
-                 * Watched while it runs, because the container says nothing
-                 * about a browser that has gone until something is written to
-                 * it - and between the question and the first piece of the
-                 * answer there is nothing to write. See [ReaderWatch] and issue
-                 * #299: interrupting used to stop the listening and nothing
-                 * else, so the model went on writing an answer nobody would
-                 * ever read and it went on being charged for.
-                 */
-                val answer = readers.whileReading(stream, gone = { if (interruptOnLeave) hangup.hangUp() }) {
-                    if (start.agentId == null) {
+                    /*
+                     * An agent's answer still arrives as one chunk, and its
+                     * working does not.
+                     *
+                     * The tool loop cannot stream text: a round that asks for a
+                     * lookup produces no answer worth showing, and what to say
+                     * is only settled once the loop ends. What it *can* report
+                     * is what it is doing - which lookup it just made, what came
+                     * back, and what it thought on the way - and those are the
+                     * things somebody watching a minute of silence wanted. So
+                     * the answer lands whole and the working lands as it
+                     * happens. A bare model calls no tools; what it can have is
+                     * thinking, and that streams beside the answer.
+                     */
+                    val answer = if (start.agentId == null) {
                         client.stream(
                             start.modelId,
                             start.turns,
@@ -326,91 +342,125 @@ class ChatStreamAPI(
                                 if (whole is ChatCompletion.Answered) send("chunk", mapOf("text" to whole.content))
                             }
                     }
-                }
 
-                /*
-                 * Given up on, so nothing is made of what came back.
-                 *
-                 * Not written to the history in particular. What the model had
-                 * produced when the reader went is part of an answer that was
-                 * stopped on purpose, and a chat reopened tomorrow ending in
-                 * half a sentence attributed to the model is a worse record
-                 * than one ending on the question. A regenerate is put back the
-                 * way it is for anything else that did not answer, or the chat
-                 * would be left ending on a question it had already answered
-                 * once.
-                 */
-                if (hangup.hungUp) {
-                    log.debug("Chat {} was given up on while it was being answered", id)
-                    if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
-                    return@StreamingResponseBody
-                }
+                    /*
+                     * Given up on, so nothing is made of what came back.
+                     *
+                     * Not written to the history in particular. What the model
+                     * had produced when it was hung up on is part of an answer
+                     * that was stopped on purpose - Stop, or a voice reader
+                     * walking away - and a chat reopened tomorrow ending in half
+                     * a sentence attributed to the model is a worse record than
+                     * one ending on the question.
+                     */
+                    if (hangup.hungUp) {
+                        log.debug("Chat {} was given up on while it was being answered", id)
+                        if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
+                        return@start
+                    }
 
-                when (answer) {
-                    is ChatCompletion.Failed -> {
-                        giveUp()
-                        send("error", mapOf("reason" to answer.reason))
-                    }
-                    // The loop runs tools to a conclusion, so nothing here is
-                    // still asking for one.
-                    is ChatCompletion.CalledTools -> {
-                        giveUp()
-                        send("error", mapOf("reason" to "The model asked for a tool that could not be run"))
-                    }
-                    is ChatCompletion.Answered -> {
-                        chats.finishSend(
-                            id,
-                            answer.content,
-                            answer.reasoning,
-                            answer.reasoningMillis,
-                            answer.inputTokens,
-                            answer.outputTokens,
-                        )
-                        kept = true
-                        // Naming it is not part of the answer, so a companion
-                        // model that will not answer costs the chat nothing.
-                        if (said != null) {
-                            runCatching { titles.nameFrom(id, said, answer.content) }
-                                .onFailure { log.warn("Could not name chat {}", id, it) }
+                    when (answer) {
+                        is ChatCompletion.Failed -> {
+                            giveUp()
+                            send("error", mapOf("reason" to answer.reason))
                         }
-                        /*
-                         * What the turn took and what it cost, in one frame.
-                         *
-                         * Costed here rather than on the screen because the
-                         * prices are the model's and the model is the server's
-                         * - a browser working it out would need them sent, and
-                         * then two places would round money. Null where the
-                         * model carries no prices, which the screen shows as
-                         * nothing rather than as nought.
-                         */
-                        /*
-                         * The chat's own running total is deliberately not on
-                         * this frame. It is on `ChatSession`, which the screen
-                         * re-reads at the end of every turn anyway, and one
-                         * number arriving by two roads is one number that can
-                         * disagree with itself.
-                         */
-                        send(
-                            "done",
-                            mapOf(
-                                "millis" to answer.millis,
-                                "inputTokens" to answer.inputTokens,
-                                "outputTokens" to answer.outputTokens,
-                                "cost" to models.costOf(start.modelId, answer.inputTokens, answer.outputTokens),
-                            ),
-                        )
+                        // The loop runs tools to a conclusion, so nothing here
+                        // is still asking for one.
+                        is ChatCompletion.CalledTools -> {
+                            giveUp()
+                            send("error", mapOf("reason" to "The model asked for a tool that could not be run"))
+                        }
+                        is ChatCompletion.Answered -> {
+                            chats.finishSend(
+                                id,
+                                answer.content,
+                                answer.reasoning,
+                                answer.reasoningMillis,
+                                answer.inputTokens,
+                                answer.outputTokens,
+                            )
+                            kept = true
+                            // Naming it is not part of the answer, so a
+                            // companion model that will not answer costs the
+                            // chat nothing.
+                            if (said != null) {
+                                runCatching { titles.nameFrom(id, said, answer.content) }
+                                    .onFailure { log.warn("Could not name chat {}", id, it) }
+                            }
+                            /*
+                             * What the turn took and what it cost, in one frame.
+                             *
+                             * Costed here rather than on the screen because the
+                             * prices are the model's and the model is the
+                             * server's - a browser working it out would need
+                             * them sent, and then two places would round money.
+                             * Null where the model carries no prices, which the
+                             * screen shows as nothing rather than as nought.
+                             * The chat's own running total is deliberately not
+                             * on this frame: it is on `ChatSession`, which the
+                             * screen re-reads at the end of every turn anyway.
+                             */
+                            send(
+                                "done",
+                                mapOf(
+                                    "millis" to answer.millis,
+                                    "inputTokens" to answer.inputTokens,
+                                    "outputTokens" to answer.outputTokens,
+                                    "cost" to models.costOf(start.modelId, answer.inputTokens, answer.outputTokens),
+                                ),
+                            )
+                        }
+                    }
+                } catch (failure: Exception) {
+                    // The provider, the store - something the turn needed. The
+                    // only thing left is not to lose the thread's state in
+                    // silence.
+                    log.warn("Chat {} could not finish its answer", id, failure)
+                    if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
+                } finally {
+                    generations.release(id, hangup)
+                    frames.offer(OVER)
+                    SecurityContextHolder.clearContext()
+                }
+            }
+
+            /*
+             * The relay: frames to the browser until the answer is over or the
+             * reader is gone.
+             *
+             * [ReaderWatch] pings between frames, because between the question
+             * and the first piece of the answer there is nothing else to write
+             * and the container reports nothing on its own - see issue #299.
+             * A failed write, a failed ping and the container's interrupt all
+             * mean the same person left; what that means depends on the turn.
+             * A voice turn is spoken and gone, so leaving hangs the model up.
+             * A text turn is a record: the worker goes on composing, unreached
+             * by any of this, and writes the history for whoever comes back.
+             */
+            readers.whileReading(stream, gone = { if (interruptOnLeave) hangup.hangUp() }) {
+                while (true) {
+                    val frame = try {
+                        frames.take()
+                    } catch (left: InterruptedException) {
+                        if (interruptOnLeave) hangup.hangUp()
+                        break
+                    }
+                    if (frame === OVER) break
+                    val wrote = runCatching { stream.send(frame.event, frame.payload) }
+                    if (wrote.isFailure) {
+                        if (interruptOnLeave) hangup.hangUp()
+                        break
                     }
                 }
-            } catch (closed: Exception) {
-                // The reader went away, or the write failed. Nothing to report
-                // to: the only thing left is not to lose it in silence.
-                log.warn("Chat {} stream ended early", id, closed)
-                if (!kept) runCatching(giveUp).onFailure { log.warn("Chat {} could not be put back", id, it) }
-            } finally {
-                generations.release(id, hangup)
             }
+            // Left holding nothing: the response is the container's again the
+            // moment this returns, and the worker was built to never touch it.
+            if (!worker.isAlive) log.debug("Chat {} answered before its reader left", id)
         }
     }
+
+    /** One server-sent frame, crossing from the answering thread to the relay. */
+    private class Frame(val event: String, val payload: Any)
 
     /**
      * The agent's round, turned into frames for whoever is reading.
@@ -444,5 +494,8 @@ class ChatStreamAPI(
 
     private companion object {
         val log = LoggerFactory.getLogger(ChatStreamAPI::class.java)
+
+        /** The frame after the last one; its identity is the whole signal. */
+        val OVER = Frame("", Unit)
     }
 }

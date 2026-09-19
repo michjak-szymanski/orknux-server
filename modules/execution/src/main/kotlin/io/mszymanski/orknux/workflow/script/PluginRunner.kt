@@ -85,6 +85,7 @@ class PluginRunner(
             .replace("%LOG%", HostHelpers.log(HostHelpers.threshold(properties.logLevel)).prependIndent("  "))
             .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
             .replace("%CRYPTO%", HostHelpers.crypto().prependIndent("  "))
+            .replace("%ENCODING%", HostHelpers.encoding().prependIndent("  "))
     }
 
     /**
@@ -1239,6 +1240,7 @@ class PluginRunner(
 %LOG%
 %STORE%
 %CRYPTO%
+%ENCODING%
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {

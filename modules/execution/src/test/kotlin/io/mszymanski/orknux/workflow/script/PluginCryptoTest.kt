@@ -85,8 +85,8 @@ class PluginCryptoTest {
     fun `text becomes base64 and comes back, which is what makes the rest reachable`() {
         val said = run(
             """
-            const encoded = orknux.crypto.encodeBase64('hello');
-            const back = orknux.crypto.decodeBase64(encoded.base64);
+            const encoded = orknux.encoding.encodeBase64('hello');
+            const back = orknux.encoding.decodeBase64(encoded.base64);
             return { encoded: encoded.base64, back: back.text };
             """.trimIndent(),
         )
@@ -97,7 +97,7 @@ class PluginCryptoTest {
     /** Bytes are not always text, and saying so beats returning replacement marks. */
     @Test
     fun `decoding bytes that spell nothing is refused in a sentence`() {
-        val said = run("return orknux.crypto.decodeBase64('/w==');")
+        val said = run("return orknux.encoding.decodeBase64('/w==');")
 
         assertThat(said).contains("not UTF-8 text")
     }
@@ -142,7 +142,7 @@ class PluginCryptoTest {
     fun `a SCRAM-SHA-256 chain runs end to end`() {
         val said = run(
             """
-            const salt = orknux.crypto.encodeBase64('salt');
+            const salt = orknux.encoding.encodeBase64('salt');
             const salted = orknux.crypto.pbkdf2('sha256', 'pencil', { base64: salt.base64 }, 4096, 32);
             const clientKey = orknux.crypto.hmac('sha256', { base64: salted.base64 }, 'Client Key');
             const storedKey = orknux.crypto.hash('sha256', { base64: clientKey.base64 });

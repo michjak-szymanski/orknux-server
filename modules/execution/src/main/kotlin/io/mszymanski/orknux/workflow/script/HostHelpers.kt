@@ -331,30 +331,6 @@ internal object HostHelpers {
             return { base64: rest };
           },
 
-          /**
-           * Text to base64, and back.
-           *
-           * Here because without them the rest is unreachable: the sandbox
-           * has no TextEncoder unless somebody granted TEXT_ENCODING, so a
-           * plugin holding a string has no way to make the bytes every call
-           * below takes - and no way to read the bytes they answer with.
-           */
-          encodeBase64(input) {
-            const door = globalThis.__orknuxCryptoEncode;
-            if (door === undefined) return { error: 'this server has no crypto helper' };
-            const held = this.__bytes(input);
-            if (held === null) return { error: 'input has to be { base64 }, { text } or a string' };
-            return this.__read(door(held[0], held[1]));
-          },
-
-          /** Base64 to the text it spells; a refusal where it spells none. */
-          decodeBase64(base64) {
-            const door = globalThis.__orknuxCryptoDecode;
-            if (door === undefined) return { error: 'this server has no crypto helper' };
-            if (typeof base64 !== 'string') return { error: 'base64 has to be a string' };
-            return this.__read(door(base64), 'text');
-          },
-
           hash(algorithm, input) {
             const door = globalThis.__orknuxCryptoHash;
             if (door === undefined) return { error: 'this server has no crypto helper' };
@@ -406,6 +382,57 @@ internal object HostHelpers {
               return { error: 'both sides have to be { base64 }, { text } or a string' };
             }
             return this.__read(door(left[0], left[1], right[0], right[1]), 'equal');
+          },
+        },
+    """.trimIndent()
+
+    /**
+     * Turning bytes into text and back, which is not cryptography.
+     *
+     * It lived under `crypto` while that was the only helper that needed it,
+     * which put base64 - a way of writing bytes down - beside digests and key
+     * derivation. A plugin encoding a payload is not doing cryptography, and a
+     * name is where somebody looks first.
+     *
+     * Here at all because without it the sandbox cannot do this: there is no
+     * `TextEncoder` unless somebody granted TEXT_ENCODING, so a plugin holding
+     * a string has no way to make bytes of it and no way to read bytes back.
+     */
+    fun encoding(): String = """
+        encoding: {
+          /** Whichever shape was handed over, as the pair a door takes. */
+          __bytes(given) {
+            if (given === null || given === undefined) return null;
+            if (typeof given === 'string') return ['text', given];
+            if (typeof given !== 'object') return null;
+            if (typeof given.base64 === 'string') return ['base64', given.base64];
+            if (typeof given.text === 'string') return ['text', given.text];
+            return null;
+          },
+
+          /** Text, or bytes, as the base64 that writes them down. */
+          encodeBase64(input) {
+            const door = globalThis.__orknuxCryptoEncode;
+            if (door === undefined) return { error: 'this server has no encoding helper' };
+            const held = this.__bytes(input);
+            if (held === null) return { error: 'input has to be { base64 }, { text } or a string' };
+            const answer = door(held[0], held[1]);
+            const at = answer.indexOf(':');
+            return answer.slice(0, at) === 'no'
+              ? { error: answer.slice(at + 1) }
+              : { base64: answer.slice(at + 1) };
+          },
+
+          /** Base64 as the text it spells; a refusal where it spells none. */
+          decodeBase64(base64) {
+            const door = globalThis.__orknuxCryptoDecode;
+            if (door === undefined) return { error: 'this server has no encoding helper' };
+            if (typeof base64 !== 'string') return { error: 'base64 has to be a string' };
+            const answer = door(base64);
+            const at = answer.indexOf(':');
+            return answer.slice(0, at) === 'no'
+              ? { error: answer.slice(at + 1) }
+              : { text: answer.slice(at + 1) };
           },
         },
     """.trimIndent()

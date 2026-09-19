@@ -86,13 +86,16 @@ class FunctionAPI(
         // a page, because a page filtered afterwards is a page of the wrong
         // size with a count that lies.
         @Argument scope: FunctionScope?,
+        // Narrower still: what one plugin brought. Wins over scope, since a
+        // plugin id already says which side of that line it is on.
+        @Argument pluginId: Long?,
     ): FunctionPage {
         requireWorkspaceAccess(workspaceId)
         val paged = pageRequest(page, size, Sort.by("name"))
-        val found = if (scope == null) {
-            functions.findByWorkspaceIdOrPlugin(workspaceId, paged)
-        } else {
-            functions.findByWorkspaceIdOrPluginScoped(workspaceId, scope, paged)
+        val found = when {
+            pluginId != null -> functions.findByPluginIdPaged(pluginId, paged)
+            scope == null -> functions.findByWorkspaceIdOrPlugin(workspaceId, paged)
+            else -> functions.findByWorkspaceIdOrPluginScoped(workspaceId, scope, paged)
         }
         return FunctionPage(found, ::describe)
     }

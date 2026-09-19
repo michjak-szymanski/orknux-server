@@ -389,6 +389,10 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
         pageable: Pageable,
     ): Page<WorkflowFunction>
 
+    /** Narrower still: what one plugin brought, which is a question with a name in it. */
+    @Query("select f from WorkflowFunction f where f.scope = 'PLUGIN' and f.pluginId = :pluginId")
+    fun findByPluginIdPaged(pluginId: Long, pageable: Pageable): Page<WorkflowFunction>
+
     fun findByScopeAndName(scope: FunctionScope, name: String): WorkflowFunction?
 
     /** Everything one plugin declared, which is what a reload reconciles against. */

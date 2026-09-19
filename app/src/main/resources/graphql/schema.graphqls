@@ -318,9 +318,10 @@ type Query {
 
     `scope` narrows the list to one origin - the workspace's own rows, or the
     ones the plugins brought - and absent means both, which is what the list
-    always showed.
+    always showed. `pluginId` narrows further to what one plugin brought, and
+    wins over scope.
     """
-    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope): FunctionPage!
+    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope, pluginId: ID): FunctionPage!
     function(id: ID!): Function
     "What starts a workspace's workflows, ordered by name."
     workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerPage!

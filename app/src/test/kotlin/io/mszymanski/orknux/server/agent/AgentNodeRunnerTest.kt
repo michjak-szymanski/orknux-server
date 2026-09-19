@@ -242,11 +242,14 @@ class AgentNodeRunnerTest(
 
     /**
      * The other way to shape an answer: the agent points at an object node on
-     * the graph, the answer is held to that node's shape - derived, not
-     * chosen - and the node's fields are filled from it when the run arrives.
+     * the graph and answers with that node's voice - the shape derived from
+     * the target, the answer emitted under the target's output name, before
+     * the run moves to any next node. The object node is a declaration and
+     * never runs; it needs no wiring, which is the point - the node stands
+     * wherever it reads best, and everything after the *agent* can read it.
      */
     @Test
-    fun `an agent saving into an object node fills it when the run arrives`() {
+    fun `an agent saving into an object node answers with the node's voice`() {
         val shape = verdictShape()
         val agentId = agent("Reviewer", model(serveAfter(0, 200, saying = """{ "cause": "the database", "urgent": true }""")))
 
@@ -256,10 +259,11 @@ class AgentNodeRunnerTest(
               saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
                 nodes: [
                   { key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId,
-                    outputNodeKey: "keep", outputName: "verdict", x: 0, y: 0 },
-                  { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape, x: 200, y: 0 }
+                    outputNodeKey: "keep", outputName: "llmResult", x: 0, y: 0 },
+                  { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape,
+                    outputName: "verdict", x: 200, y: 0 }
                 ],
-                edges: [{ source: "think", target: "keep" }]
+                edges: []
               }) { nodes { key outputObjectId outputNodeKey } }
             }
             """,
@@ -271,10 +275,12 @@ class AgentNodeRunnerTest(
 
         val recorded = steps.findAll().associateBy { it.nodeKey }
         assertThat(recorded.getValue("think").status).isEqualTo(StepStatus.COMPLETED)
-        assertThat(recorded.getValue("keep").status).isEqualTo(StepStatus.COMPLETED)
-        // The object node's output is the agent's answer, field for field.
-        assertThat(recorded.getValue("keep").output)
-            .isEqualTo("""{"cause":"the database","urgent":true}""")
+        // Under the object node's name, not the agent's own: the redirection
+        // is the naming, and the write is done as part of the agent's step.
+        assertThat(recorded.getValue("think").output)
+            .isEqualTo("""{"verdict":{"cause":"the database","urgent":true}}""")
+        // The object node is a declaration, not a step: nothing ran for it.
+        assertThat(recorded).doesNotContainKey("keep")
         assertThat(executions.findAll().single().status).isEqualTo(ExecutionStatus.COMPLETED)
     }
 

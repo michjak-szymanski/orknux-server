@@ -185,23 +185,34 @@ class GraphValidatorTest(
             .containsExactly("intentType: string", "userMessage: string")
     }
 
-    /** The answer travels the solid path, so a target no run reaches is said out loud. */
+    /**
+     * The saved answer is readable downstream of the *agent*, because the
+     * agent answers with the object node's voice - the node itself is a
+     * declaration, needs no wiring, and is never warned about standing alone.
+     */
     @Test
-    fun `a saving agent whose object node no run reaches is warned about`() {
+    fun `a saved answer is readable downstream of the agent, and the node needs no wiring`() {
         val shape = shape("Verdict", listOf("cause"))
+        val functionId = function("summarize")
+        val actionId = functionAction(functionId, "Summarize", emptyMap())
 
         val problems = save(
             nodes = """
                 { key: "think", kind: AGENT, name: "Responder", outputNodeKey: "keep",
                   outputName: "llmResult", x: 0, y: 0 },
-                { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape, x: 200, y: 0 }
+                { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape,
+                  outputName: "order", x: 200, y: 200 },
+                { key: "act", kind: ACTION, name: "Summarize", actionId: $actionId,
+                  mappings: [{ name: "order", expression: "order", mode: REFERENCE }], x: 400, y: 0 }
             """,
-            edges = "",
+            edges = """{ source: "think", target: "act" }""",
         )
 
-        assertThat(problems).anySatisfy {
-            assertThat(it).contains("WARNING").contains("no run carries it")
-        }
+        // The action's `order` arrives from the agent's step, though the wire
+        // is agent-to-action and the object node stands apart; and the node
+        // standing apart is its normal state, not a mistake.
+        assertThat(problems).noneSatisfy { assertThat(it).contains("needs order") }
+        assertThat(problems).noneSatisfy { assertThat(it).contains("Verdict has nothing before it") }
     }
 
     /**

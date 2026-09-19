@@ -62,8 +62,14 @@ class GraphValidator(
         val unresolved: String? = null,
     )
 
-    /** What a node needs and gives, worked out from what it points at. */
-    fun portsOf(node: WorkflowNode): Ports = when (node.kind) {
+    /**
+     * What a node needs and gives, worked out from what it points at.
+     *
+     * @param among the rest of the graph, for the one relationship that
+     *   crosses nodes: an object node an agent saves its answer into is a
+     *   declaration, not a step, and only the agent's node says so.
+     */
+    fun portsOf(node: WorkflowNode, among: List<WorkflowNode> = emptyList()): Ports = when (node.kind) {
         NodeKind.TRIGGER -> {
             val trigger = node.triggerId?.let { triggers.findByIdOrNull(it) }
             if (trigger == null) {
@@ -127,13 +133,13 @@ class GraphValidator(
             val shape = node.outputObjectId?.let { objects.findByIdOrNull(it) }
             when {
                 /*
-                 * Saved into an object node, the answer is spoken for: that
-                 * node is where it is read, and offering the fields here too
-                 * would be two places to read one answer - the fan of dotted
-                 * paths the redirection exists to retire. The node offers
-                 * nothing, a reference typed at it anyway is warned about as
-                 * reading what nothing produces, and whether the answer can
-                 * reach its node is its own question, asked in [problems].
+                 * Saved into an object node, the answer is spoken for: the
+                 * agent answers with that node's voice - its step emits the
+                 * shaped answer under the target's output name - so the
+                 * fields stand offered on the object node and nowhere else.
+                 * The agent's port is empty; what the run actually carries
+                 * after it is credited in [availability], which reads the
+                 * target's outputs off the reference.
                  */
                 node.outputNodeKey != null -> Ports()
                 named.isEmpty() && shape == null -> Ports(passThrough = true, opaque = true)
@@ -164,8 +170,15 @@ class GraphValidator(
         NodeKind.OBJECT -> {
             val named = node.outputName?.trim().orEmpty()
             val fields = shapeOf(node)
+            /*
+             * Saved into, the node is a declaration: the agent fills it as it
+             * answers, so it needs nothing - its own mappings included, which
+             * are simply not consulted - and what it offers arrives from the
+             * agent's step, wherever on the canvas this node stands.
+             */
+            val savedInto = among.any { it.kind == NodeKind.AGENT && it.outputNodeKey == node.nodeKey }
             Ports(
-                inputs = reads(node.mappings),
+                inputs = if (savedInto) emptyList() else reads(node.mappings),
                 outputs = if (named.isEmpty()) {
                     fields
                 } else {
@@ -371,7 +384,7 @@ class GraphValidator(
         if (hardOnly) return problems
 
         // --- What each node can see, followed along the edges ---
-        val ports = nodes.associate { it.nodeKey to portsOf(it) }
+        val ports = nodes.associate { it.nodeKey to portsOf(it, nodes) }
         val available = availability(nodes, known, ports)
 
         nodes.forEach { node ->
@@ -394,7 +407,11 @@ class GraphValidator(
             val incoming = known.count {
                 it.targetKey == node.nodeKey && byKey.getValue(it.sourceKey).kind != NodeKind.SESSION
             }
-            if (node.kind != NodeKind.TRIGGER && node.kind != NodeKind.SESSION && incoming == 0 && nodes.size > 1) {
+            // A redirect target is a declaration, like a session node: the
+            // agent fills it as it answers, so nothing needs to lead into it.
+            val declaration = node.kind == NodeKind.SESSION ||
+                nodes.any { it.kind == NodeKind.AGENT && it.outputNodeKey == node.nodeKey }
+            if (node.kind != NodeKind.TRIGGER && !declaration && incoming == 0 && nodes.size > 1) {
                 problems += GraphProblem(
                     severity = GraphProblemSeverity.WARNING,
                     nodeKey = node.nodeKey,
@@ -453,62 +470,24 @@ class GraphValidator(
         }
 
         /*
-         * An agent saving its answer into an object node needs a run to carry
-         * it there: the pointing is a dependency, and the answer travels the
-         * solid path like every other value. Asked as its own question rather
-         * than declared among the object node's inputs, because the agent's
-         * fields are deliberately no longer offered - the coverage rule would
-         * call the arrangement's own field unproducable.
+         * A save-into reference that no longer names an object node with a
+         * shape is a redirection to nowhere: the save refuses it, so this is
+         * only ever a preview describing a graph mid-edit - but it is the
+         * moment the person who broke the pointing is still looking.
          */
         nodes.filter { it.kind == NodeKind.AGENT && it.outputNodeKey != null }.forEach { agent ->
             val target = byKey[agent.outputNodeKey]
-            when {
-                target == null || target.kind != NodeKind.OBJECT || target.objectId == null ->
-                    problems += GraphProblem(
-                        severity = GraphProblemSeverity.WARNING,
-                        nodeKey = agent.nodeKey,
-                        message = "${agent.name} saves its answer into a node that cannot take it. " +
-                            "Pick where the answer goes again.",
-                    )
-
-                !runReaches(agent.nodeKey, target.nodeKey, known, byKey) ->
-                    problems += GraphProblem(
-                        severity = GraphProblemSeverity.WARNING,
-                        nodeKey = agent.nodeKey,
-                        message = "${agent.name} saves its answer into ${target.name}, but no run carries it " +
-                            "there: the answer travels the solid path, so wire ${target.name} somewhere " +
-                            "after ${agent.name}.",
-                    )
+            if (target == null || target.kind != NodeKind.OBJECT || target.objectId == null) {
+                problems += GraphProblem(
+                    severity = GraphProblemSeverity.WARNING,
+                    nodeKey = agent.nodeKey,
+                    message = "${agent.name} saves its answer into a node that cannot take it. " +
+                        "Pick where the answer goes again.",
+                )
             }
         }
 
         return problems.distinct().sortedBy { it.severity.ordinal }
-    }
-
-    /**
-     * Whether a run leaving [from] can arrive at [to], following the edges.
-     *
-     * A session's edge does not carry a run, and the failure edge out of the
-     * saving agent itself does not carry an answer - down it, there is none.
-     */
-    private fun runReaches(
-        from: String,
-        to: String,
-        edges: List<WorkflowEdge>,
-        byKey: Map<String, WorkflowNode>,
-    ): Boolean {
-        val queue = ArrayDeque(listOf(from))
-        val seen = mutableSetOf(from)
-        while (queue.isNotEmpty()) {
-            val here = queue.removeFirst()
-            if (here == to) return true
-            edges
-                .filter { it.sourceKey == here }
-                .filterNot { byKey[it.sourceKey]?.kind == NodeKind.SESSION }
-                .filterNot { it.sourceKey == from && it.branch == EdgeBranch.FAILURE }
-                .forEach { edge -> if (seen.add(edge.targetKey)) queue.addLast(edge.targetKey) }
-        }
-        return false
     }
 
     /** What has reached each node, following the edges from the ones that start. */
@@ -536,8 +515,20 @@ class GraphValidator(
             incoming[node.nodeKey] = reaching
 
             val port = ports.getValue(node.nodeKey)
+            /*
+             * An agent that saves into an object node answers with that node's
+             * voice: the fields stand offered on the object node, but what the
+             * run carries after the agent IS the object - so the walk credits
+             * the agent with the target's outputs, wherever the target stands
+             * on the canvas. The agent's own port stays empty; this is about
+             * what arrives, not what is offered.
+             */
+            val emitted = node.outputNodeKey
+                ?.takeIf { node.kind == NodeKind.AGENT }
+                ?.let { ports[it]?.outputs }
+                ?: port.outputs
             val own = Reachable(
-                fields = port.outputs.associate { it.name to it.type },
+                fields = emitted.associate { it.name to it.type },
                 opaque = port.opaque,
             )
             produced[node.nodeKey] = if (port.passThrough) reaching.merge(own) else own

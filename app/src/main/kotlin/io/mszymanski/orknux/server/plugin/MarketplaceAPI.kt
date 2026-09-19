@@ -58,6 +58,7 @@ class MarketplaceAPI(
                 description = offering.description,
                 version = offering.version,
                 icon = offering.icon,
+                iconDark = offering.iconDark,
                 downloads = offering.downloads,
                 rating = offering.rating,
                 reviews = offering.reviews,
@@ -159,6 +160,8 @@ data class MarketplaceListingView(
     val description: String,
     val version: String,
     val icon: String?,
+    /** The same glyph for a dark ground; null where there is only the one. */
+    val iconDark: String?,
     val downloads: Int,
     val rating: Double?,
     val reviews: Int,

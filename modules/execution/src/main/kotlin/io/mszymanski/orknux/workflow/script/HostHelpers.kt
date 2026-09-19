@@ -289,6 +289,127 @@ internal object HostHelpers {
      * tried from its editor page or a webhook script says so in a sentence
      * instead of quietly writing into nowhere.
      */
+    /**
+     * What a plugin can compute, since the engine cannot.
+     *
+     * Ungranted, beside the log and the store: a digest reaches nothing, sends
+     * nothing and learns nothing. Everything crosses as base64 because only
+     * text crosses, and every call takes `{ base64 }`, `{ text }` or a bare
+     * string - so a plugin holding a string need not ask for TEXT_ENCODING
+     * just to hash it.
+     *
+     * Every call answers an object: `{ base64 }`, `{ equal }` or `{ error }`,
+     * the way the other helpers do. A refusal is data a plugin can act on
+     * rather than a throw it has to catch.
+     *
+     * What crosses the doors is not JSON. Each answers `ok:<base64>` or
+     * `no:<sentence>` - two shapes, split on the first colon - because the
+     * alternative was a JSON parser on the far side of a boundary that exists
+     * to keep things simple.
+     */
+    fun crypto(): String = """
+        crypto: {
+          /** Whichever shape was handed over, as the pair a door takes. */
+          __bytes(given) {
+            if (given === null || given === undefined) return null;
+            if (typeof given === 'string') return ['text', given];
+            if (typeof given !== 'object') return null;
+            if (typeof given.base64 === 'string') return ['base64', given.base64];
+            if (typeof given.text === 'string') return ['text', given.text];
+            return null;
+          },
+
+          /** `ok:...` or `no:...`, as the object a plugin reads. */
+          __read(answer, key) {
+            if (typeof answer !== 'string') return { error: 'the crypto helper said nothing' };
+            const at = answer.indexOf(':');
+            const said = answer.slice(0, at);
+            const rest = answer.slice(at + 1);
+            if (said === 'no') return { error: rest };
+            if (key === 'equal') return { equal: rest === 'true' };
+            if (key === 'text') return { text: rest };
+            return { base64: rest };
+          },
+
+          /**
+           * Text to base64, and back.
+           *
+           * Here because without them the rest is unreachable: the sandbox
+           * has no TextEncoder unless somebody granted TEXT_ENCODING, so a
+           * plugin holding a string has no way to make the bytes every call
+           * below takes - and no way to read the bytes they answer with.
+           */
+          encodeBase64(input) {
+            const door = globalThis.__orknuxCryptoEncode;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            const held = this.__bytes(input);
+            if (held === null) return { error: 'input has to be { base64 }, { text } or a string' };
+            return this.__read(door(held[0], held[1]));
+          },
+
+          /** Base64 to the text it spells; a refusal where it spells none. */
+          decodeBase64(base64) {
+            const door = globalThis.__orknuxCryptoDecode;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            if (typeof base64 !== 'string') return { error: 'base64 has to be a string' };
+            return this.__read(door(base64), 'text');
+          },
+
+          hash(algorithm, input) {
+            const door = globalThis.__orknuxCryptoHash;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            const held = this.__bytes(input);
+            if (held === null) return { error: 'input has to be { base64 }, { text } or a string' };
+            return this.__read(door(String(algorithm), held[0], held[1]));
+          },
+
+          hmac(algorithm, key, input) {
+            const door = globalThis.__orknuxCryptoHmac;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            const theKey = this.__bytes(key);
+            const held = this.__bytes(input);
+            if (theKey === null) return { error: 'key has to be { base64 }, { text } or a string' };
+            if (held === null) return { error: 'input has to be { base64 }, { text } or a string' };
+            return this.__read(door(String(algorithm), theKey[0], theKey[1], held[0], held[1]));
+          },
+
+          pbkdf2(algorithm, password, salt, iterations, length) {
+            const door = globalThis.__orknuxCryptoPbkdf2;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            const pw = this.__bytes(password);
+            const theSalt = this.__bytes(salt);
+            if (pw === null) return { error: 'password has to be { base64 }, { text } or a string' };
+            if (theSalt === null) return { error: 'salt has to be { base64 }, { text } or a string' };
+            return this.__read(
+              door(String(algorithm), pw[0], pw[1], theSalt[0], theSalt[1], Number(iterations), Number(length)),
+            );
+          },
+
+          random(bytes) {
+            const door = globalThis.__orknuxCryptoRandom;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            return this.__read(door(Number(bytes)));
+          },
+
+          /**
+           * Whether two byte strings are equal, in time that does not depend
+           * on where they differ. Comparing a signature with === leaks its
+           * prefix through how long the comparison took, and a constant-time
+           * comparison written here stops being one once a JIT has seen it.
+           */
+          timingSafeEqual(a, b) {
+            const door = globalThis.__orknuxCryptoEqual;
+            if (door === undefined) return { error: 'this server has no crypto helper' };
+            const left = this.__bytes(a);
+            const right = this.__bytes(b);
+            if (left === null || right === null) {
+              return { error: 'both sides have to be { base64 }, { text } or a string' };
+            }
+            return this.__read(door(left[0], left[1], right[0], right[1]), 'equal');
+          },
+        },
+    """.trimIndent()
+
     fun sessionStore(): String = """
         session: {
           store: {

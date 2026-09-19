@@ -1,0 +1,13 @@
+-- The same glyph in white, for a dark ground.
+--
+-- Two files rather than one that adapts, and the reason belongs here because
+-- somebody will be tempted: an SVG loaded through an <img> is its own
+-- document. It inherits no colour from the page around it and resolves
+-- currentColor to black, which on a dark screen is a square of nothing. So
+-- each file carries real colours, and a row keeps both.
+--
+-- Null where a plugin ships one icon for both grounds, and then the one it has
+-- is drawn on either. Copied in at install beside the first, for the reason
+-- that one is: an installation that cannot reach the marketplace again still
+-- has to draw its plugins.
+ALTER TABLE plugin ADD COLUMN icon_dark text;

@@ -84,6 +84,7 @@ class PluginRunner(
             .replace("%HTTP%", HostHelpers.http("this plugin was not granted NETWORK_REQUEST").prependIndent("  "))
             .replace("%LOG%", HostHelpers.log(HostHelpers.threshold(properties.logLevel)).prependIndent("  "))
             .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
+            .replace("%CRYPTO%", HostHelpers.crypto().prependIndent("  "))
     }
 
     /**
@@ -261,6 +262,37 @@ class PluginRunner(
 
         val result = bindings.getMember(RESULT)
         return if (result == null || result.isNull) null else result.asString()
+    }
+
+    /** One string argument, or null where it was not one. */
+    private fun text(given: Array<Value>, at: Int): String? =
+        given.getOrNull(at)?.takeIf { it.isString }?.asString()
+
+    /** One whole number, or null where it was neither whole nor a number. */
+    private fun number(given: Array<Value>, at: Int): Int? =
+        given.getOrNull(at)?.takeIf { it.isNumber && it.fitsInInt() }?.asInt()
+
+    /**
+     * The bytes a `(shape, value)` pair at [at] names.
+     *
+     * The helper says which shape it is sending because only it knows: `text`
+     * is encoded here as UTF-8, and `base64` is decoded. Null where the pair
+     * is not a pair, or where what claimed to be base64 is not.
+     */
+    private fun bytes(given: Array<Value>, at: Int): ByteArray? {
+        val shape = text(given, at) ?: return null
+        val held = text(given, at + 1) ?: return null
+        return when (shape) {
+            "text" -> held.toByteArray()
+            "base64" -> PluginCrypto.decoded(held)
+            else -> null
+        }
+    }
+
+    /** An answer or a refusal, in the two shapes the helper splits on. */
+    private fun said(result: PluginCrypto.Result): String = when (result) {
+        is PluginCrypto.Result.Answer -> "ok:${PluginCrypto.encoded(result.bytes)}"
+        is PluginCrypto.Result.Refused -> "no:${result.why}"
     }
 
     private fun millis(started: Long): Long = (System.nanoTime() - started) / 1_000_000
@@ -700,6 +732,88 @@ class PluginRunner(
         )
 
         /*
+         * The crypto doors, beside the log's and granted the same way, which
+         * is to say not at all: they reach nothing and only compute.
+         *
+         * Without them a plugin cannot hash anything whatsoever - the engine
+         * has no crypto of its own and no option to turn one on - so a
+         * database handshake is out of reach before it begins, and a plugin
+         * verifying a signature is reduced to `===`.
+         *
+         * Each answers `ok:<base64>` or `no:<sentence>`; a refusal is data
+         * the plugin can act on rather than a throw it has to catch.
+         */
+        bindings.putMember(
+            CRYPTO_HASH,
+            ProxyExecutable { given ->
+                val algorithm = text(given, 0) ?: return@ProxyExecutable "no:an algorithm has to be named"
+                val input = bytes(given, 1) ?: return@ProxyExecutable "no:input has to be given"
+                said(PluginCrypto.hash(algorithm, input))
+            },
+        )
+        bindings.putMember(
+            CRYPTO_HMAC,
+            ProxyExecutable { given ->
+                val algorithm = text(given, 0) ?: return@ProxyExecutable "no:an algorithm has to be named"
+                val key = bytes(given, 1) ?: return@ProxyExecutable "no:a key has to be given"
+                val input = bytes(given, 3) ?: return@ProxyExecutable "no:input has to be given"
+                said(PluginCrypto.hmac(algorithm, key, input))
+            },
+        )
+        bindings.putMember(
+            CRYPTO_PBKDF2,
+            ProxyExecutable { given ->
+                val algorithm = text(given, 0) ?: return@ProxyExecutable "no:an algorithm has to be named"
+                val password = bytes(given, 1) ?: return@ProxyExecutable "no:a password has to be given"
+                val salt = bytes(given, 3) ?: return@ProxyExecutable "no:a salt has to be given"
+                val iterations = number(given, 5) ?: return@ProxyExecutable "no:iterations has to be a number"
+                val length = number(given, 6) ?: return@ProxyExecutable "no:a length has to be a number"
+                said(PluginCrypto.pbkdf2(algorithm, password, salt, iterations, length))
+            },
+        )
+        bindings.putMember(
+            CRYPTO_RANDOM,
+            ProxyExecutable { given ->
+                val wanted = number(given, 0) ?: return@ProxyExecutable "no:a count has to be a number"
+                said(PluginCrypto.random(wanted))
+            },
+        )
+        bindings.putMember(
+            CRYPTO_EQUAL,
+            ProxyExecutable { given ->
+                val left = bytes(given, 0) ?: return@ProxyExecutable "no:both sides have to be given"
+                val right = bytes(given, 2) ?: return@ProxyExecutable "no:both sides have to be given"
+                "ok:${PluginCrypto.equal(left, right)}"
+            },
+        )
+
+        /*
+         * And the two that are only a change of clothes. They are here rather
+         * than left to the plugin because without them the rest is out of
+         * reach: the sandbox has no TextEncoder unless TEXT_ENCODING was
+         * granted, so a plugin holding a string cannot make the bytes the
+         * doors above take, nor read the bytes they answer with.
+         */
+        bindings.putMember(
+            CRYPTO_ENCODE,
+            ProxyExecutable { given ->
+                val input = bytes(given, 0) ?: return@ProxyExecutable "no:input has to be given"
+                "ok:${PluginCrypto.encoded(input)}"
+            },
+        )
+        bindings.putMember(
+            CRYPTO_DECODE,
+            ProxyExecutable { given ->
+                val held = text(given, 0) ?: return@ProxyExecutable "no:base64 has to be a string"
+                val raw = PluginCrypto.decoded(held) ?: return@ProxyExecutable "no:that is not base64"
+                when (val said = PluginCrypto.text(raw)) {
+                    is PluginCrypto.Result.Answer -> "ok:${String(said.bytes)}"
+                    is PluginCrypto.Result.Refused -> "no:${said.why}"
+                }
+            },
+        )
+
+        /*
          * The store's doors, beside the log's and like it not a capability:
          * nothing outside the session is reached by them. Bound only where
          * the call was made inside an AI session, so a tool tried from its
@@ -843,6 +957,19 @@ class PluginRunner(
         const val LOG = "__orknuxLog"
 
         /** The execution store's two doors; bound only inside a workflow execution. */
+        /**
+         * The crypto doors. Five rather than one taking a shape, because the
+         * alternative is a JSON parser on the far side of a boundary that
+         * exists to keep things simple.
+         */
+        const val CRYPTO_HASH = "__orknuxCryptoHash"
+        const val CRYPTO_HMAC = "__orknuxCryptoHmac"
+        const val CRYPTO_PBKDF2 = "__orknuxCryptoPbkdf2"
+        const val CRYPTO_RANDOM = "__orknuxCryptoRandom"
+        const val CRYPTO_EQUAL = "__orknuxCryptoEqual"
+        const val CRYPTO_ENCODE = "__orknuxCryptoEncode"
+        const val CRYPTO_DECODE = "__orknuxCryptoDecode"
+
         const val STORE_PUT = "__orknuxStorePut"
         const val STORE_GET = "__orknuxStoreGet"
 
@@ -1111,6 +1238,7 @@ class PluginRunner(
 %HTTP%
 %LOG%
 %STORE%
+%CRYPTO%
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {

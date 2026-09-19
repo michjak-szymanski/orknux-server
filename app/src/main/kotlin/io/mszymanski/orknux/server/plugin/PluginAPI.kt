@@ -398,6 +398,22 @@ class PluginUploadAPI(
      */
     fun installed(offering: MarketplaceOffering, accept: String?): ResponseEntity<Any> {
         val (filename, source, files) = fetchedBundle(offering.url)
+
+        /*
+         * What it is called, what it is for and who wrote it.
+         *
+         * The plugin's own `plugin.json` first, where it ships one: a plugin's
+         * account of itself is the plugin's. The catalog answers for whatever
+         * the manifest leaves out - and for a plugin that ships no manifest
+         * that is all of it, which is why the author column was empty for
+         * every marketplace install. The listing knew; nothing asked it.
+         *
+         * Prose either way, and only prose. What a plugin is *allowed* to do
+         * is still read from its code in the sandbox at the moment somebody
+         * accepts it, so a generous listing buys nothing.
+         */
+        val base = java.net.URI.create(offering.url)
+        val said = manifest(runCatching { fetched(base.resolve(MANIFEST)) }.getOrNull())
         return loaded(
             filename,
             source,
@@ -405,7 +421,23 @@ class PluginUploadAPI(
             typescript = null,
             accept = accept,
             marketplace = offering.key to offering.version,
-            icon = faceOf(offering),
+            icon = faceOf(offering.icon),
+            /*
+             * The white one too, where the catalog has it. Both come across
+             * for the same reason either does: whichever ground somebody is
+             * looking at, the installation has to be able to draw this plugin
+             * without asking the marketplace again.
+             */
+            iconDark = faceOf(offering.iconDark),
+            manifest = PluginManifest(
+                name = said?.name ?: offering.name.ifBlank { null },
+                summary = said?.summary ?: offering.summary.ifBlank { null },
+                author = said?.author ?: offering.author.ifBlank { null },
+                version = said?.version ?: offering.version.ifBlank { null },
+                // The face came across already, by the route that checks it is
+                // a drawing; a path from here would be fetched a second time.
+                icon = null,
+            ),
         )
     }
 
@@ -420,8 +452,8 @@ class PluginUploadAPI(
      * A face that cannot be fetched is not a failed install: the plugin is
      * the point, and a screen without an icon draws its own placeholder.
      */
-    private fun faceOf(offering: MarketplaceOffering): String? {
-        val named = offering.icon?.trim()?.ifEmpty { null } ?: return null
+    private fun faceOf(icon: String?): String? {
+        val named = icon?.trim()?.ifEmpty { null } ?: return null
         if (!named.startsWith("http://") && !named.startsWith("https://")) return named
 
         return runCatching {
@@ -546,6 +578,8 @@ class PluginUploadAPI(
         marketplace: Pair<String, String>? = null,
         /** The face to store with it, where one came with this load. */
         icon: String? = null,
+        /** And the one for a dark ground, where the catalog had a second. */
+        iconDark: String? = null,
         /** What it says about itself, where it ships a manifest. */
         manifest: PluginManifest? = null,
     ): ResponseEntity<Any> {
@@ -719,6 +753,7 @@ class PluginUploadAPI(
             // Only where one came with this load: a re-upload by hand does not
             // strip the face the catalog gave it.
             icon?.let { this.icon = it }
+            iconDark?.let { this.iconDark = it }
             manifest?.let {
                 this.summary = it.summary
                 this.author = it.author
@@ -756,6 +791,7 @@ class PluginUploadAPI(
             marketplaceKey = marketplace?.first,
             marketplaceVersion = marketplace?.second,
             icon = icon,
+            iconDark = iconDark,
             summary = manifest?.summary,
             author = manifest?.author,
             version = manifest?.version,

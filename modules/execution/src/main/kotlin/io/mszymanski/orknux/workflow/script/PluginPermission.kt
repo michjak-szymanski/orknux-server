@@ -55,6 +55,20 @@ enum class PluginPermission(
 
     ;
 
+    /*
+     * There is deliberately no CRYPTO here, and it is not a judgement: this
+     * engine has nothing to switch on. GraalJS 25.0.4 offers 108 `js.*`
+     * options and not one of them is crypto - no WebCrypto, no `js.crypto`.
+     * Node's `crypto` module exists under the Node launcher, which is a
+     * different runtime from an embedded polyglot context.
+     *
+     * So a plugin that needs a digest, an HMAC or random bytes - which is any
+     * plugin speaking a database's authentication handshake - cannot be
+     * served by a permission at all. That is a host helper's job, beside the
+     * HTTP and store helpers in [HostHelpers], where the work happens on this
+     * side of the sandbox and only the answer crosses.
+     */
+
     companion object {
 
         /**

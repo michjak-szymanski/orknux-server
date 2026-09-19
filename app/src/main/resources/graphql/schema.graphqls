@@ -4644,6 +4644,15 @@ type Plugin {
     """
     icon: String
     """
+    The same glyph in white, for a dark ground. Null where the plugin has only
+    the one, and then `icon` is drawn on either.
+
+    Two files rather than one that adapts: an SVG loaded through an `<img>` is
+    its own document, inherits no colour from the page around it, and resolves
+    `currentColor` to black — which on a dark screen is a square of nothing.
+    """
+    iconDark: String
+    """
     What the plugin says it is for, in a line — from the `plugin.json` it
     ships beside itself. Null for one that ships no manifest.
 
@@ -4679,6 +4688,8 @@ type MarketplaceListing {
     version: String!
     "An emoji, or the URL of a small image. Null where the catalog offers none."
     icon: String
+    "The same glyph for a dark ground; null where the catalog offers only one."
+    iconDark: String
     downloads: Int!
     rating: Float
     reviews: Int!

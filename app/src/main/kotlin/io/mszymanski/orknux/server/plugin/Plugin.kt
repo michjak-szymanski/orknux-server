@@ -234,6 +234,17 @@ class Plugin(
     var icon: String? = null,
 
     /**
+     * The same glyph in white, for a dark ground. Null where the plugin has
+     * only the one, and then [icon] is drawn on both.
+     *
+     * Copied in at install beside [icon], and for the same reason: an
+     * installation that can no longer reach the marketplace still has to draw
+     * its plugins, on whichever ground the person looking has chosen.
+     */
+    @Column(name = "icon_dark", columnDefinition = "text")
+    var iconDark: String? = null,
+
+    /**
      * What the plugin says it is for, in a line — from the `plugin.json`
      * beside it. Null for one that ships no manifest.
      */
@@ -302,6 +313,8 @@ data class PluginView(
     val marketplaceVersion: String? = null,
     /** The SVG it wears, or an emoji; copied in at install. Null for a file. */
     val icon: String? = null,
+    /** The same, in white, for a dark ground. Null where there is only the one. */
+    val iconDark: String? = null,
     /** What it says about itself, where it ships a `plugin.json`. */
     val summary: String? = null,
     val author: String? = null,
@@ -504,6 +517,7 @@ fun Plugin.view(
     marketplaceKey = marketplaceKey,
     marketplaceVersion = marketplaceVersion,
     icon = icon,
+    iconDark = iconDark,
     summary = summary,
     author = author,
     version = version,

@@ -24,7 +24,18 @@ data class MarketplaceOffering(
     val description: String,
     val version: String,
     val url: String,
+    /** The glyph for a light ground, as an address. */
     val icon: String?,
+    /**
+     * The same glyph in white, for a dark ground, or null where the plugin
+     * ships one icon for both.
+     *
+     * Two files rather than one that adapts, and the reason is worth keeping:
+     * an SVG loaded through `<img>` is its own document, inherits no colour
+     * from the page around it, and resolves `currentColor` to black - which on
+     * a dark screen is a square of nothing. So each file carries real colours.
+     */
+    val iconDark: String?,
     val downloads: Int,
     val rating: Double?,
     val reviews: Int,
@@ -99,6 +110,7 @@ class Marketplace(
         version = node.path("version").asString(""),
         url = node.path("url").asString(""),
         icon = node.path("icon").asString("").ifEmpty { null },
+        iconDark = node.path("iconDark").asString("").ifEmpty { null },
         downloads = node.path("downloads").asInt(0),
         rating = node.path("rating").takeIf { it.isNumber }?.asDouble(),
         reviews = node.path("reviews").asInt(0),
@@ -164,7 +176,8 @@ class Marketplace(
     }
 
     private companion object {
-        val FIELDS = "key name author summary description version url icon downloads rating reviews published"
+        val FIELDS =
+            "key name author summary description version url icon iconDark downloads rating reviews published"
     }
 }
 

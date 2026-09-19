@@ -81,7 +81,13 @@ class PluginFunctionRegistry(
 
         wanted.forEach { (name, declaration) ->
             val params = declaration.params.map {
-                FunctionParam(it.name, ValueType.valueOf(it.type), objectId = it.objectName?.let(shapes::get))
+                FunctionParam(
+                    it.name,
+                    ValueType.valueOf(it.type),
+                    objectId = it.objectName?.let(shapes::get),
+                    required = it.required,
+                    defaultJson = it.default,
+                )
             }
             val returnType = ValueType.valueOf(declaration.returnType)
             val returnObjectId = declaration.returnObject?.let(shapes::get)

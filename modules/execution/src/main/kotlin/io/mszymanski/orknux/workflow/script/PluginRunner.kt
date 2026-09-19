@@ -296,6 +296,16 @@ class PluginRunner(
         is PluginCrypto.Result.Refused -> "no:${result.why}"
     }
 
+    /** A member that is an array of strings, or null where there is none. */
+    private fun strings(one: Value, named: String): List<String>? {
+        val held = one.getMember(named)?.takeIf { it.hasArrayElements() } ?: return null
+        return (0 until held.arraySize)
+            .map { held.getArrayElement(it) }
+            .filter { it.isString }
+            .map { it.asString() }
+            .takeIf { it.isNotEmpty() }
+    }
+
     private fun millis(started: Long): Long = (System.nanoTime() - started) / 1_000_000
 
     private fun read(polyglot: Context, source: String, libraries: List<PluginLibraryFile> = emptyList()): PluginInspection {
@@ -339,6 +349,10 @@ class PluginRunner(
                 DeclaredParam(
                     name = text(param, "name") ?: return PluginInspection.Unreadable("a parameter has no name"),
                     type = text(param, "type") ?: return PluginInspection.Unreadable("a parameter has no type"),
+                    required = flag(param, "required", default = true),
+                    // Already JSON: the contract stringifies it where it was
+                    // written, so what is stored is what will be passed.
+                    default = text(param, "defaultJson"),
                 )
             }
             DeclaredFunction(
@@ -388,6 +402,8 @@ class PluginRunner(
                     DeclaredParam(
                         name = text(param, "name") ?: return PluginInspection.Unreadable("a tool parameter has no name"),
                         type = text(param, "type") ?: return PluginInspection.Unreadable("a tool parameter has no type"),
+                        required = flag(param, "required", default = true),
+                        default = text(param, "defaultJson"),
                     )
                 }
                 DeclaredTool(
@@ -426,6 +442,7 @@ class PluginRunner(
                 required = flag(one, "required", default = true),
                 secret = flag(one, "secret", default = false),
                 connectionType = text(one, "connectionType"),
+                options = strings(one, "options"),
             )
         }
 
@@ -1256,6 +1273,17 @@ class PluginRunner(
                 this.secret = declared.secret === undefined ? false : declared.secret;
                 this.connectionType =
                   declared.connectionType === undefined ? null : declared.connectionType;
+                /*
+                 * The values this may take, where there is a fixed set.
+                 *
+                 * A plugin choosing between two backends was checking the
+                 * string by hand and throwing a sentence listing the choices -
+                 * written twice, in the same shape, in two plugins. Declared
+                 * instead, the settings page draws a picker: the validation
+                 * and its refusal go, and a value that is not on the list
+                 * cannot be typed rather than being found at the first call.
+                 */
+                this.options = declared.options === undefined ? null : declared.options;
 
                 if (typeof this.name !== 'string' || this.name.length === 0) {
                   throw new Error('an OrknuxParameter needs a name');
@@ -1278,7 +1306,69 @@ class PluginRunner(
                 if (this.connectionType !== null && this.type !== 'connection') {
                   throw new Error(this.name + ' names a connectionType but is not a connection');
                 }
+                if (this.options !== null) {
+                  if (!Array.isArray(this.options) || this.options.length === 0) {
+                    throw new Error(this.name + ' has options, which have to be a non-empty array');
+                  }
+                  if (this.options.some(function (one) { return typeof one !== 'string' || one.length === 0; })) {
+                    throw new Error(this.name + ' has an option that is not a name');
+                  }
+                  /*
+                   * Neither a connection nor a secret is chosen from a list of
+                   * values: a connection names a row the workspace has, and a
+                   * secret cannot be one of a set somebody can read.
+                   */
+                  if (this.type === 'connection' || this.secret) {
+                    throw new Error(
+                      this.name + ' cannot have options: it is a ' + (this.secret ? 'secret' : 'connection'),
+                    );
+                  }
+                }
               }
+            };
+
+            /*
+             * Every parameter, with what it says about being left out.
+             *
+             * `required` defaults to true - a declared parameter was always one
+             * you passed - and a `default` is stringified here, where it was
+             * written, so what reaches the server is the JSON it will store and
+             * later pass. Doing it there instead would mean the server
+             * re-encoding a value that had already crossed as text.
+             *
+             * A default implies the parameter is optional: writing one and
+             * having it never apply is the trap this exists to remove.
+             */
+            globalThis.__orknuxParams = function (name, params) {
+              if (params === undefined) return [];
+              if (!Array.isArray(params)) {
+                throw new Error(name + ' declares params that are not an array');
+              }
+              return params.map(function (one) {
+                if (one === null || typeof one !== 'object') {
+                  throw new Error(name + ' has a parameter that is not a declaration');
+                }
+                var has = one.default !== undefined;
+                var required = one.required === undefined ? !has : one.required;
+                if (typeof required !== 'boolean') {
+                  throw new Error(name + "'s " + one.name + ' says required is neither true nor false');
+                }
+                if (has && required) {
+                  throw new Error(
+                    name + "'s " + one.name + ' has a default and is required, so the default can never apply',
+                  );
+                }
+                if (has && typeof one.default === 'function') {
+                  throw new Error(name + "'s " + one.name + ' has a default that is a function');
+                }
+                return {
+                  name: one.name,
+                  type: one.type,
+                  description: one.description === undefined ? null : one.description,
+                  required: required,
+                  defaultJson: has ? JSON.stringify(one.default) : null,
+                };
+              });
             };
 
             globalThis.OrknuxFunction = class OrknuxFunction {
@@ -1289,7 +1379,7 @@ class PluginRunner(
 
                 this.name = declared.name;
                 this.description = declared.description === undefined ? null : declared.description;
-                this.params = declared.params === undefined ? [] : declared.params;
+                this.params = globalThis.__orknuxParams(String(declared.name), declared.params);
                 this.returnType = declared.returnType;
                 this.run = declared.run;
                 // The implementation as written, for the editor to show beside
@@ -1320,7 +1410,7 @@ class PluginRunner(
 
                 this.name = declared.name;
                 this.description = declared.description === undefined ? null : declared.description;
-                this.params = declared.params === undefined ? [] : declared.params;
+                this.params = globalThis.__orknuxParams(String(declared.name), declared.params);
                 this.returnType = declared.returnType;
                 this.run = declared.run;
                 this.proxyOf = null;
@@ -1558,7 +1648,21 @@ data class DeclaredFunction(
     val source: String? = null,
 )
 
-data class DeclaredParam(val name: String, val type: String)
+/**
+ * One argument a function takes.
+ *
+ * [required] false means a call may leave it out and [default] arrives in its
+ * place - which is what deletes the sentinel a plugin otherwise invents. Every
+ * plugin written before this said neither, and every one of those parameters
+ * is required, which is what its callers already assumed.
+ */
+data class DeclaredParam(
+    val name: String,
+    val type: String,
+    val required: Boolean = true,
+    /** As JSON, because that is what crosses and what will be stored. */
+    val default: String? = null,
+)
 
 /**
  * One thing a plugin offers to agents.
@@ -1639,6 +1743,14 @@ data class DeclaredParameter(
     val type: String,
     val required: Boolean,
     val secret: Boolean,
+    /**
+     * The values this may take, where the plugin knows them all.
+     *
+     * Null where anything typed will do. A set turns the settings field into a
+     * picker, which is what deletes the hand-written check a plugin otherwise
+     * carries - and a choice that cannot be typed cannot be mistyped.
+     */
+    val options: List<String>? = null,
     /**
      * Which kind of connection, when [type] is `connection`.
      *

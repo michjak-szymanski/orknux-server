@@ -346,8 +346,21 @@ data class PluginFunctionView(
     val source: String? = null,
 )
 
-/** [objectName] is set where the type names one of the plugin's own shapes. */
-data class PluginFunctionParamView(val name: String, val type: String, val objectName: String? = null)
+/**
+ * One argument a plugin's function takes.
+ *
+ * [objectName] is set where the type names one of the plugin's own shapes.
+ * [required] false means a call may leave it out, and [default] is the JSON
+ * that arrives instead - which is what a plugin used to spell as "0 for the
+ * default" in a sentence a model read on every call.
+ */
+data class PluginFunctionParamView(
+    val name: String,
+    val type: String,
+    val objectName: String? = null,
+    val required: Boolean = true,
+    val default: String? = null,
+)
 
 /**
  * One instruction set a plugin brings.

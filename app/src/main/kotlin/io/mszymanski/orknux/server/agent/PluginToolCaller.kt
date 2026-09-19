@@ -85,7 +85,14 @@ class PluginToolCaller(
             PluginTool(
                 name = "${plugin.key}_${declared.name}",
                 description = declared.description,
-                params = declared.params.map { FunctionParam(it.name, ValueType.valueOf(it.type)) },
+                params = declared.params.map {
+                    FunctionParam(
+                        it.name,
+                        ValueType.valueOf(it.type),
+                        required = it.required,
+                        defaultJson = it.default,
+                    )
+                },
                 plugin = plugin,
                 declared = declared,
             )
@@ -144,7 +151,17 @@ class PluginToolCaller(
             val given = sent?.path(param.name)
             when {
                 given == null || given.isMissingNode || given.isNull ->
-                    if (params.size == 1) arguments.ifBlank { "{}" } else "null"
+                    /*
+                     * What was left out: the default where the parameter has
+                     * one, and null where it does not.
+                     *
+                     * This is what the sentinel used to be for - "0 for the
+                     * default", explained in a description a model read on
+                     * every call. Declared, the model simply omits the
+                     * argument and the server puts the value in.
+                     */
+                    param.defaultJson
+                        ?: if (params.size == 1) arguments.ifBlank { "{}" } else "null"
 
                 given.isString && param.type != ValueType.STRING -> unwrapped(given.stringValue().orEmpty())
                     ?: mapper.writeValueAsString(given)

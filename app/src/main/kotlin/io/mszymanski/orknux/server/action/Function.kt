@@ -132,6 +132,31 @@ class FunctionParam(
      */
     @Column(name = "object_id")
     var objectId: Long? = null,
+
+    /**
+     * Whether a caller has to supply it.
+     *
+     * True for everything written before this existed, which is what every
+     * caller already assumed: a declared parameter was a parameter you passed.
+     * False means a call may leave it out, and what arrives instead is
+     * [defaultJson].
+     */
+    @Column(nullable = false)
+    var required: Boolean = true,
+
+    /**
+     * What arrives when an optional one is left out, as JSON.
+     *
+     * JSON rather than a typed column because a parameter is one of five
+     * types and this is one column - and because what crosses into a sandbox
+     * is JSON anyway, so a default stored as the text that will be passed is
+     * a default nothing has to convert at the moment it is used.
+     *
+     * Null on an optional parameter means null is the default, which is what
+     * a function got before it could say otherwise.
+     */
+    @Column(name = "default_json", columnDefinition = "text")
+    var defaultJson: String? = null,
 )
 
 /**

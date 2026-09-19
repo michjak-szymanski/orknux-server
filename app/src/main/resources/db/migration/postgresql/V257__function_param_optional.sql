@@ -1,0 +1,22 @@
+-- A function argument that may be left out, and what arrives instead.
+--
+-- Thirty-six places in the shipped plugins said some variant of "0 for the
+-- default" or "an empty string to use the configured one". Every one was a
+-- workaround for the same thing: all positional arguments had to be supplied,
+-- so a plugin invented a sentinel and then spent a sentence explaining it --
+-- and those sentences live in tool descriptions a model reads on every call.
+--
+-- NOT NULL DEFAULT true, because that is what every existing row already means:
+-- a declared parameter was one you passed. Nothing changes for anything written
+-- before this.
+--
+-- The default is JSON rather than a typed column: a parameter is one of five
+-- types and this is one column, and what crosses into a sandbox is JSON anyway.
+-- Stored as the text that will be passed, so nothing converts it at the moment
+-- it is used. Null on an optional parameter means null is the default, which is
+-- what a function got before it could say otherwise.
+-- Only the function's own parameters. A workspace tool's are authored on a
+-- screen rather than declared by a plugin, and a person filling in a form is
+-- not the reader this is for.
+ALTER TABLE workflow_function_param ADD COLUMN required boolean NOT NULL DEFAULT true;
+ALTER TABLE workflow_function_param ADD COLUMN default_json text;

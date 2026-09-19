@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.chat
 import io.mszymanski.orknux.connector.model.ToolCall
 import io.mszymanski.orknux.connector.model.ToolParameterSpec
 import io.mszymanski.orknux.connector.model.ToolSpec
+import io.mszymanski.orknux.server.action.FunctionParam
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.McpToolCaller
@@ -133,13 +134,35 @@ class AgentTools(
                     parameters = tool.params.map { param ->
                         ToolParameterSpec(
                             name = param.name,
-                            description = meaning(param.type),
-                            required = true,
+                            description = describe(param),
+                            /*
+                             * What the plugin said, rather than true for
+                             * everything. A tool whose parameter may be left
+                             * out now says so in the schema - which is where a
+                             * model actually reads it - instead of in a
+                             * sentence explaining which value means "unset".
+                             */
+                            required = param.required,
                         )
                     },
                 ),
             )
         }
+    }
+
+    /**
+     * What one parameter is, and what happens if it is not given.
+     *
+     * The default is named because a model choosing whether to pass something
+     * is better off knowing what it would get - "how many come back, 20 if not
+     * given" answers the question the sentinel convention used to answer
+     * badly.
+     */
+    private fun describe(param: FunctionParam): String {
+        val said = meaning(param.type)
+        if (param.required) return said
+        val held = param.defaultJson
+        return if (held == null) "$said. Optional." else "$said. Optional; $held if not given."
     }
 
     /**

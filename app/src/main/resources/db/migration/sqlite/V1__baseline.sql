@@ -1153,6 +1153,11 @@ CREATE TABLE workflow_function_param
     name                         varchar(64) not null,
     type                         varchar(16) not null,
     object_id                    integer,
+    -- Whether a caller has to supply it, and what arrives when it does not.
+    -- True for everything written before this existed, which is what every
+    -- caller already assumed: a declared parameter was one you passed.
+    required                     boolean not null default true,
+    default_json                 text,
     primary key (function_id, position),
     constraint ck_workflow_function_param_object CHECK (((((type) = 'OBJECT') AND (object_id IS NOT NULL)) OR (((type) != 'OBJECT') AND (object_id IS NULL)))),
     constraint ck_workflow_function_param_type CHECK (((type) IN ('STRING', 'NUMBER', 'BOOLEAN', 'OBJECT', 'MAP', 'ARRAY', 'CONNECTION'))),

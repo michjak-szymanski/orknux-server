@@ -358,7 +358,10 @@ class ActionNodeRunner(
         // the declared ones: an external parameter is not the caller's to fill, so
         // [FunctionCaller] appends the workspace's rather than looking for them
         // among the mappings.
-        val arguments = function.params.map { byName[it.name] ?: "null" }
+        // A parameter left unset takes its default, where it has one. Before
+        // this there was nothing to take and every gap was null, which is why
+        // a plugin spelled "unset" as a value and explained it in a sentence.
+        val arguments = function.params.map { byName[it.name] ?: it.defaultJson ?: "null" }
 
         // The same call the editor's Run makes, through the same class, because a
         // test run that took another path would be testing another thing.

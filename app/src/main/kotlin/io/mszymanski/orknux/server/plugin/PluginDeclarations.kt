@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.agent.SkillFormat
 import io.mszymanski.orknux.server.obj.PropertyKind
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
 import io.mszymanski.orknux.workflow.script.DeclaredObject
+import io.mszymanski.orknux.workflow.script.DeclaredParam
 import io.mszymanski.orknux.workflow.script.DeclaredParameter
 import io.mszymanski.orknux.workflow.script.DeclaredSkill
 import io.mszymanski.orknux.workflow.script.DeclaredTool
@@ -108,7 +109,24 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                             "shapes${offered(exported)}, or use map.",
                     )
                 }
-                Taken(param.name, type, takes)
+                Taken(param.name, type, takes, param.required, checkedDefault(function.name, param, type))
+            }
+
+            /*
+             * Optional ones last, because the arguments are positional.
+             *
+             * A call leaves out what it does not set, and what is left out has
+             * to be the tail - a required parameter after an optional one is a
+             * signature where "leave it out" has no meaning, and nothing
+             * downstream could tell which argument was missing.
+             */
+            val lastRequired = params.indexOfLast { it.required }
+            val firstOptional = params.indexOfFirst { !it.required }
+            if (firstOptional >= 0 && lastRequired > firstOptional) {
+                throw PluginDeclarationInvalidException(
+                    "${function.name} takes ${params[lastRequired].name} after ${params[firstOptional].name}, " +
+                        "which is optional. Arguments are positional, so the ones that may be left out come last.",
+                )
             }
 
             Checked(function.name, function.description, params, returnType, returns, function.source)
@@ -131,6 +149,13 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             function.params.forEach { taken ->
                 val held = params.addObject().put("name", taken.name).put("type", taken.type.name)
                 taken.shape?.let { held.put("object", it) }
+                // Written only where it is not the old answer, so a declaration
+                // from before this existed and one that says "required" read
+                // the same in the database.
+                if (!taken.required) {
+                    held.put("required", false)
+                    taken.default?.let { held.put("default", it) }
+                }
             }
         }
         return mapper.writeValueAsString(array)
@@ -639,6 +664,10 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                     name = param.get("name").asString(),
                     type = param.get("type").asString(),
                     objectName = param.get("object")?.asString(),
+                    // Absent means required, which is what everything written
+                    // before this said by saying nothing.
+                    required = param.get("required")?.asBoolean() ?: true,
+                    default = param.get("default")?.asString(),
                 )
             }
             val returnType = node.get("returnType").asString()
@@ -666,7 +695,11 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
         returnType: String,
         returnObject: String? = null,
     ): String {
-        val taken = params.joinToString(", ") { "${it.name}: ${it.objectName ?: it.type.lowercase()}" }
+        // `limit?: number` - the mark TypeScript uses, because this signature is
+        // read beside TypeScript everywhere it is shown.
+        val taken = params.joinToString(", ") {
+            "${it.name}${if (it.required) "" else "?"}: ${it.objectName ?: it.type.lowercase()}"
+        }
         return "($taken): ${returnObject ?: returnType.lowercase()}"
     }
 
@@ -690,7 +723,48 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
     )
 
     /** One checked parameter, with the shape it names where it names one. */
-    private data class Taken(val name: String, val type: ValueType, val shape: String? = null)
+    private data class Taken(
+        val name: String,
+        val type: ValueType,
+        val shape: String? = null,
+        val required: Boolean = true,
+        /** As JSON, ready to be passed; null where being left out means null. */
+        val default: String? = null,
+    )
+
+    /**
+     * The default a parameter declared, checked against what it is.
+     *
+     * A default that is not of the parameter's own type is the kind of mistake
+     * that only shows up on the call that leaves the argument out - which may
+     * be months after the plugin was written, and in somebody else's workflow.
+     * It costs one parse to refuse it at load instead.
+     */
+    private fun checkedDefault(function: String, param: DeclaredParam, type: ValueType): String? {
+        val held = param.default ?: return null
+        if (param.required) return null
+
+        val read = runCatching { mapper.readTree(held) }.getOrNull()
+            ?: throw PluginDeclarationInvalidException(
+                "$function's ${param.name} has a default this server cannot read",
+            )
+        val fits = read.isNull || when (type) {
+            ValueType.STRING -> read.isString
+            ValueType.NUMBER -> read.isNumber
+            ValueType.BOOLEAN -> read.isBoolean
+            ValueType.ARRAY -> read.isArray
+            ValueType.MAP, ValueType.OBJECT -> read.isObject
+            // Neither carries a value a default could be: NONE answers nothing,
+            // and a connection names a row rather than holding one.
+            ValueType.NONE, ValueType.CONNECTION -> false
+        }
+        if (!fits) {
+            throw PluginDeclarationInvalidException(
+                "$function's ${param.name} is a ${type.name.lowercase()} and its default is not one",
+            )
+        }
+        return held
+    }
 
     /**
      * The exported shape this type names, or null where it names none.

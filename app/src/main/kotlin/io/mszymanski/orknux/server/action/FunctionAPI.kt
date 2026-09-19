@@ -448,7 +448,10 @@ class FunctionAPI(
         // Positional, in the order the function declares them, exactly as a node
         // binds them. A parameter nobody filled in is the JSON `null`, which is
         // what a node passes for a mapping it does not have.
-        val arguments = function.params.map { byName[it.name] ?: "null" }
+        // A parameter left unset takes its default, where it has one. Before
+        // this there was nothing to take and every gap was null, which is why
+        // a plugin spelled "unset" as a value and explained it in a sentence.
+        val arguments = function.params.map { byName[it.name] ?: it.defaultJson ?: "null" }
 
         /*
          * The grants somebody typed over, by name.

@@ -4751,6 +4751,19 @@ type PluginFunctionParam {
     type: String!
     "The plugin's own name for the shape, where the type names one."
     objectName: String
+    """
+    Whether a call has to supply it. True for everything declared before a
+    plugin could say otherwise, which is what every caller already assumed.
+    """
+    required: Boolean!
+    """
+    What arrives when an optional one is left out, as JSON — `20`, `"utc"`,
+    `[]`. Null means null, which is what a function got before it could say.
+
+    This is what a plugin used to spell as a sentinel: "0 for the default", in
+    a sentence a model read on every call and sometimes got wrong.
+    """
+    default: String
 }
 
 """

@@ -153,6 +153,12 @@ db-scheduler:
 orknux:
   # Filled in from the build, and reported on the monitoring screen.
   version: "@project.version@"
+  marketplace:
+    # Where the plugin catalog is read from. This server holds no catalog of
+    # its own: it asks, and installs from the URL the answer carries. Blank
+    # leaves the Catalog screen saying this installation has no marketplace,
+    # which is the honest state for an air-gapped one.
+    url: ${ORKNUX_MARKETPLACE_URL:https://orknux.io/graphql}
   chat:
     # Whether this installation has a chat at all. False here is final: an
     # administrator can turn the chat off from the screen, but not back on

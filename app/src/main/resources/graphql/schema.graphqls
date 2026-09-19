@@ -94,6 +94,16 @@ type Query {
     installationSettings: InstallationSettings!
     "The plugins loaded into this installation, by name. Administrators only."
     plugins: [Plugin!]!
+    """
+    What the marketplace offers, as this installation can see it.
+
+    Read through from the marketplace service — this server holds no catalog
+    of its own — and answered with `installed` folded in, so one query fills
+    the catalog screen. A marketplace that cannot be reached is an error
+    rather than an empty list: "nothing is offered" is not something a network
+    failure may claim. Administrators only.
+    """
+    marketplacePlugins(refresh: Boolean): [MarketplaceListing!]!
 
     """
     Every tool the loaded plugins offer to agents, under their granted names.
@@ -723,6 +733,30 @@ type Mutation {
     `POST /api/plugins` rather than described as a mutation.
     """
     unloadPlugin(id: ID!): Boolean!
+    """
+    Switches a plugin off, or back on. Administrators only.
+
+    Off keeps everything and offers nothing — the rows, the edits and every
+    workspace's parameter answers stay, while the functions stop being
+    callable and the tools leave the agents' menus. It is the reversible half
+    of unloading, for a plugin that is misbehaving or not wanted this month.
+    """
+    setPluginEnabled(id: ID!, enabled: Boolean!): Plugin!
+    """
+    Installs a plugin from the marketplace, or updates one already installed.
+
+    One mutation for both, because they are one act: the catalog entry is
+    fetched and loaded exactly as a load-from-URL is — its libraries fetched
+    from beside it, its declaration read from the code — and a plugin already
+    loaded under that key is replaced, keeping its edits, its parameter
+    answers and its enabled state.
+
+    `accept` is the same comma-separated names-and-paths the upload takes. A
+    first install, or one whose demands have grown, comes back with nothing
+    installed and the lists to accept; sending them back is the permission.
+    Administrators only.
+    """
+    installMarketplacePlugin(key: String!, accept: String): MarketplaceInstall!
     """
     Takes a library out of the installation. Administrators only.
 
@@ -4472,6 +4506,84 @@ type Plugin {
     "ISO-8601 offset date-time."
     uploadedAt: String!
     uploadedBy: String!
+    """
+    Whether this plugin is switched on.
+
+    A plugin switched off keeps everything — its rows, its edited functions,
+    every workspace's answers to its parameters — and offers nothing: its
+    functions are not callable and its tools leave the agents' menus. That is
+    the difference from unloading, which takes the lot.
+    """
+    enabled: Boolean!
+    """
+    The library files it ships with, by path. Empty for a single-file plugin.
+
+    What somebody allowed when it was loaded: these travel with the plugin and
+    are evaluated ahead of it, so the list is part of what the plugin *is*.
+    """
+    libraries: [String!]!
+    """
+    The marketplace key this was installed from, and the version at that
+    moment — null for a plugin loaded from a file or a URL of somebody's own.
+
+    Kept so a catalog listing and an installed row can be lined up: the screen
+    compares this version against the catalog's to offer an update, and
+    nothing here is re-checked against the marketplace on its own.
+    """
+    marketplaceKey: String
+    marketplaceVersion: String
+}
+
+"""
+One plugin the marketplace offers, as this installation sees it.
+
+Everything down to `published` is the marketplace's own answer, passed
+through; `installed`, `installedVersion` and `updatable` are this server's,
+folded in so the catalog screen does not have to line two lists up itself.
+"""
+type MarketplaceListing {
+    key: String!
+    name: String!
+    author: String!
+    summary: String!
+    "Markdown, from a public repository. Rendered sanitized by whoever shows it."
+    description: String!
+    version: String!
+    "An emoji, or the URL of a small image. Null where the catalog offers none."
+    icon: String
+    downloads: Int!
+    rating: Float
+    reviews: Int!
+    "ISO-8601 date."
+    published: String!
+    "Whether a plugin with this key is loaded here."
+    installed: Boolean!
+    """
+    The version recorded when it was installed, or null for one installed
+    before this was kept — an installed plugin with no version is one the
+    screen offers to update rather than one it calls current.
+    """
+    installedVersion: String
+    "Installed, and the catalog is offering a version this one is not."
+    updatable: Boolean!
+}
+
+"""
+What an install came to: the plugin, or the agreement it is waiting on.
+
+A payload rather than an error, because a pending agreement is a decision
+nobody has made yet — the same shape the upload endpoint answers a refused
+load with. `plugin` is null exactly when the lists below are not empty, and
+in that case nothing was installed.
+"""
+type MarketplaceInstall {
+    plugin: Plugin
+    needsPermissions: [PluginPermission!]!
+    needsCapabilities: [PluginPermission!]!
+    "Paths only; a screen keeps this list folded by default."
+    needsLibraries: [String!]!
+    "The refusal in a sentence, for a screen to print above the lists."
+    message: String
 }
 
 """

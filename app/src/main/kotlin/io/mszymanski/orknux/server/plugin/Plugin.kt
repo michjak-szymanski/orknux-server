@@ -161,6 +161,37 @@ class Plugin(
 
     @Column(name = "uploaded_by", nullable = false, length = 120)
     var uploadedBy: String = "",
+
+    /**
+     * Whether this plugin is switched on.
+     *
+     * The reversible half of unloading. Off keeps everything — the row, its
+     * edited functions, every workspace's answers to its parameters — and
+     * offers nothing: [PluginFunctionRegistry] keeps the function rows so a
+     * graph still draws, and the callers refuse a call through them.
+     *
+     * Survives a re-upload on purpose: somebody who switched a plugin off has
+     * said something about the plugin, not about the file, and a new version
+     * arriving is not them changing their mind.
+     */
+    @Column(nullable = false)
+    var enabled: Boolean = true,
+
+    /**
+     * The marketplace key this was installed from, and the version at that
+     * moment. Null for a plugin loaded from a file or somebody's own URL.
+     *
+     * Kept so a catalog listing and an installed row can be lined up — the
+     * screen compares the version against the catalog's to offer an update.
+     * Nothing here is ever re-checked against the marketplace on its own: a
+     * server that phoned home to compare versions would be a server that
+     * phones home.
+     */
+    @Column(name = "marketplace_key", length = 64)
+    var marketplaceKey: String? = null,
+
+    @Column(name = "marketplace_version", length = 32)
+    var marketplaceVersion: String? = null,
 )
 
 interface PluginRepository : JpaRepository<Plugin, Long> {
@@ -197,6 +228,13 @@ data class PluginView(
     val sha256: String,
     val uploadedAt: String,
     val uploadedBy: String,
+    /** Whether it is switched on; off keeps everything and offers nothing. */
+    val enabled: Boolean = true,
+    /** The files it ships with, by path. Empty for a single-file plugin. */
+    val libraries: List<String> = emptyList(),
+    /** Where it came from, when that was the marketplace. */
+    val marketplaceKey: String? = null,
+    val marketplaceVersion: String? = null,
 )
 
 /**
@@ -316,6 +354,8 @@ fun Plugin.view(
     declared: List<PluginFunctionView>,
     parameters: List<PluginParameterView> = emptyList(),
     permissions: List<PluginPermissionView> = emptyList(),
+    /** The paths of the files it ships with; read beside the declarations. */
+    libraries: List<String> = emptyList(),
 ): PluginView = PluginView(
     id = requireNotNull(id).toString(),
     key = key,
@@ -333,4 +373,8 @@ fun Plugin.view(
     sha256 = sha256,
     uploadedAt = uploadedAt.toString(),
     uploadedBy = uploadedBy,
+    enabled = enabled,
+    libraries = libraries,
+    marketplaceKey = marketplaceKey,
+    marketplaceVersion = marketplaceVersion,
 )

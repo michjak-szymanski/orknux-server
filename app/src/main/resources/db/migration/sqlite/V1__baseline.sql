@@ -612,7 +612,10 @@ CREATE TABLE plugin
     declared_capabilities        text not null default '[]',
     accepted_capabilities        text not null default '[]',
     permissions_accepted_at      timestamp,
-    permissions_accepted_by      varchar(120)
+    permissions_accepted_by      varchar(120),
+    enabled                      boolean not null default true,
+    marketplace_key              varchar(64),
+    marketplace_version          varchar(32)
 );
 
 CREATE TABLE plugin_library

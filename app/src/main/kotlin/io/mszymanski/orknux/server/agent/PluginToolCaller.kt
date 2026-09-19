@@ -72,8 +72,15 @@ class PluginToolCaller(
     fun resolve(agent: Agent, name: String): PluginTool? =
         name.takeIf { it in agent.tools }?.let { wanted -> all().firstOrNull { it.name == wanted } }
 
-    /** Every loaded plugin's tools, under their granted names. */
-    fun all(): List<PluginTool> = plugins.findAll().flatMap { plugin ->
+    /**
+     * Every loaded plugin's tools, under their granted names.
+     *
+     * A plugin switched off offers none: its tools leave the agents' menus
+     * and stop resolving, which is what the switch means. The grants naming
+     * them stay on the agents — switching it back on is meant to put things
+     * back, not to leave somebody re-granting what they never revoked.
+     */
+    fun all(): List<PluginTool> = plugins.findAll().filter { it.enabled }.flatMap { plugin ->
         declarations.readTools(plugin.declaredTools).map { declared ->
             PluginTool(
                 name = "${plugin.key}_${declared.name}",

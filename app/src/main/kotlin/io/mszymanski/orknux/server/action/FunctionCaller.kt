@@ -159,6 +159,13 @@ class FunctionCaller(
         workspaceId: Long,
         sessionId: Long? = null,
     ): ScriptResult {
+        if (!plugin.enabled) {
+            return ScriptResult.Failed(
+                "cannot run: the ${plugin.key} plugin is switched off. Switch it on under Admin → Plugins.",
+                0,
+            )
+        }
+
         val missing = pluginParameters.missingFor(plugin, workspaceId)
         if (missing.isNotEmpty()) {
             return ScriptResult.Failed(
@@ -199,6 +206,19 @@ class FunctionCaller(
     ): ScriptResult {
         val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
             ?: return ScriptResult.Failed("is declared by a plugin that is no longer loaded", 0)
+
+        /*
+         * Settled, like a missing parameter: a plugin switched off is a
+         * decision somebody made, and trying again does not change a decision.
+         * The function's row stays so a graph naming it still draws — this is
+         * where the switch is felt.
+         */
+        if (!plugin.enabled) {
+            return ScriptResult.Failed(
+                "cannot run: the ${plugin.key} plugin is switched off. Switch it on under Admin → Plugins.",
+                0,
+            )
+        }
 
         val missing = pluginParameters.missingFor(plugin, workspaceId)
         if (missing.isNotEmpty()) {

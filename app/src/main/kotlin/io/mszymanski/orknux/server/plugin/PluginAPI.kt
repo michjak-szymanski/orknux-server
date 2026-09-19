@@ -307,7 +307,20 @@ class PluginUploadAPI(
     fun uploadFromUrl(@org.springframework.web.bind.annotation.RequestBody request: PluginUrlRequest): ResponseEntity<Any> {
         access.requireAdmin()
 
-        val address = request.url.trim()
+        val (filename, source, files) = fetchedBundle(request.url.trim())
+        return loaded(filename, source, files, typescript = null, accept = request.accept)
+    }
+
+    /**
+     * The plugin at an address, and the closure of what it imports.
+     *
+     * Each fetched file is scanned and what it names is fetched next, resolved
+     * against the plugin's own URL — so every file comes from beside it and
+     * nowhere else. The bounds are the library bounds: a closure past them is
+     * a plugin this server would refuse anyway, so it is refused before the
+     * next request rather than after it.
+     */
+    fun fetchedBundle(address: String): Triple<String, String, List<PluginLibraryFile>> {
         val base = runCatching { java.net.URI.create(address) }.getOrNull()
             ?.takeIf { it.scheme?.lowercase() in setOf("http", "https") && it.path.endsWith(".js") }
             ?: throw PluginUrlInvalidException(address)
@@ -315,13 +328,6 @@ class PluginUploadAPI(
         val source = fetched(base)
         val filename = base.path.substringAfterLast('/')
 
-        /*
-         * The closure, walked import by import: each fetched file is scanned
-         * and what it names is fetched next, resolved against the plugin's
-         * URL. The bounds are the library bounds - a closure past them is a
-         * plugin this server would refuse anyway, so it is refused before the
-         * next request rather than after it.
-         */
         val files = linkedMapOf<String, PluginLibraryFile>()
         val frontier = ArrayDeque<Pair<String, String>>()
         frontier.add("" to source)
@@ -341,8 +347,26 @@ class PluginUploadAPI(
                 frontier.add(path to library)
             }
         }
+        return Triple(filename, source, files.values.toList())
+    }
 
-        return loaded(filename, source, files.values.toList(), typescript = null, accept = request.accept)
+    /**
+     * Installs from the marketplace, or updates what is installed — the same
+     * act, and the same load every other door makes.
+     *
+     * Called by [MarketplaceAPI], which is where the GraphQL mutation and the
+     * audit line live; this is the half that knows how a plugin is loaded.
+     */
+    fun installed(offering: MarketplaceOffering, accept: String?): ResponseEntity<Any> {
+        val (filename, source, files) = fetchedBundle(offering.url)
+        return loaded(
+            filename,
+            source,
+            files,
+            typescript = null,
+            accept = accept,
+            marketplace = offering.key to offering.version,
+        )
     }
 
     /** One file from beside the plugin's URL, held to the upload's own bounds. */
@@ -379,6 +403,14 @@ class PluginUploadAPI(
         files: List<PluginLibraryFile>,
         typescript: String?,
         accept: String?,
+        /**
+         * Where it came from, when that was the marketplace: the catalog key
+         * and the version at this moment. Null for every other door, and the
+         * row's own values are then left as they were — a plugin installed
+         * from the catalog and re-uploaded by hand keeps saying where it came
+         * from, which is true and is what an update would compare against.
+         */
+        marketplace: Pair<String, String>? = null,
     ): ResponseEntity<Any> {
         /*
          * The plugin is loaded and questioned before anything is stored: what it
@@ -526,6 +558,13 @@ class PluginUploadAPI(
             this.sha256 = fingerprint
             this.uploadedAt = OffsetDateTime.now()
             this.uploadedBy = currentUser()
+            marketplace?.let { (fromKey, version) ->
+                this.marketplaceKey = fromKey
+                this.marketplaceVersion = version
+            }
+            // `enabled` is deliberately untouched: somebody who switched this
+            // plugin off said something about the plugin, and a new version
+            // arriving is not them changing their mind.
         } ?: Plugin(
             key = key,
             name = name,
@@ -550,6 +589,8 @@ class PluginUploadAPI(
             permissionsAcceptedBy = acceptedBy,
             sha256 = fingerprint,
             uploadedBy = currentUser(),
+            marketplaceKey = marketplace?.first,
+            marketplaceVersion = marketplace?.second,
         )
 
         val saved = plugins.save(plugin)
@@ -577,6 +618,10 @@ class PluginUploadAPI(
                     declarations.read(saved.declaredFunctions),
                     declarations.readParameters(saved.declaredParameters),
                     permissions.viewOf(permissions.grantedTo(saved)),
+                    // The files just stored, in the order they were: read off
+                    // what arrived rather than back out of the rows, which are
+                    // the same list one flush later.
+                    files.map { it.path },
                 ),
                 "replaced" to (existing != null),
                 "provides" to provided,
@@ -1471,6 +1516,8 @@ class PluginAPI(
     /** What it asks the server to do for it; see [PluginCapabilities]. */
     private val capabilities: PluginCapabilities,
     private val functions: WorkflowFunctionRepository,
+    /** The files each plugin ships with, listed beside its declarations. */
+    private val sources: PluginSources,
 ) {
 
     /**
@@ -1511,6 +1558,7 @@ class PluginAPI(
                 // than only to whoever accepted it. A decision about what code may
                 // do that lives in a dialog is a decision nobody can audit.
                 permissions.viewOf(permissions.grantedTo(it)),
+                sources.librariesOf(it).map { library -> library.path },
             )
         }
     }

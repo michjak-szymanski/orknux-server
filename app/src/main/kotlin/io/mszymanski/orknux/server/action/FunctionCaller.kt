@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.plugin.PluginParameters
 import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
+import io.mszymanski.orknux.server.plugin.PluginSources
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import io.mszymanski.orknux.workflow.script.ScriptResult
@@ -42,6 +43,7 @@ class FunctionCaller(
     private val pluginParameters: PluginParameters,
     private val pluginPermissions: PluginPermissions,
     private val pluginCapabilities: PluginCapabilities,
+    private val pluginSources: PluginSources,
     private val externals: VariableArguments,
     private val timeouts: ScriptTimeouts,
 ) {
@@ -176,6 +178,7 @@ class FunctionCaller(
             on = workspaceId,
             surface = "tools",
             sessionId = sessionId,
+            libraries = pluginSources.librariesOf(plugin),
         )
     }
 
@@ -225,6 +228,7 @@ class FunctionCaller(
             pluginCapabilities.grantedTo(plugin),
             on = workspaceId,
             sessionId = sessionId,
+            libraries = pluginSources.librariesOf(plugin),
         )
     }
 }

@@ -812,6 +812,8 @@ type Mutation {
     installation running Temporal, where this is not set here.
     """
     setTaskSweepMinutes(minutes: Int!): InstallationSettings!
+    "How large one of a plugin's source files may be, in KB. Administrators only."
+    setPluginMaxSourceKb(kb: Int!): InstallationSettings!
     """
     Says which chat uploaded files belong to. Sent when the message is, since a
     first message is what makes the chat.
@@ -4641,6 +4643,14 @@ type InstallationSettings {
     taskSweepMinutes: Int!
     "What a fresh installation would wait - ORKNUX_TASK_SWEEP_MINUTES."
     taskSweepMinutesConfigured: Int!
+    """
+    How large one of a plugin's source files may be, in KB - the plugin itself,
+    each library it ships, and each file a load-from-URL fetches. 5120 unless
+    somebody has said otherwise.
+    """
+    pluginMaxSourceKb: Int!
+    "What a fresh installation allows: the built-in default."
+    pluginMaxSourceKbConfigured: Int!
     """
     False where the installation runs Temporal, and the field is not offered.
 

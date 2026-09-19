@@ -45,6 +45,8 @@ class InstallationSettingsAPI(
         taskSweepMinutes = settings.taskSweepMinutes(),
         taskSweepMinutesConfigured = settings.taskSweepMinutesConfigured(),
         taskSweepConfigurable = settings.taskSweepConfigurable(),
+        pluginMaxSourceKb = settings.pluginMaxSourceKb(),
+        pluginMaxSourceKbConfigured = settings.pluginMaxSourceKbConfigured(),
     )
 
     @MutationMapping
@@ -170,6 +172,26 @@ class InstallationSettingsAPI(
         return installationSettings()
     }
 
+    /**
+     * How large one of a plugin's source files may be.
+     *
+     * An administrator's for the same reason the retentions are: each file is
+     * stored whole and read whole on every call, so the number is a statement
+     * about the disk and the heap at once.
+     */
+    @MutationMapping
+    fun setPluginMaxSourceKb(@Argument kb: Int): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setPluginMaxSourceKb(kb, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Plugin source files capped at $kb KB",
+        )
+        return installationSettings()
+    }
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 }
@@ -228,6 +250,13 @@ data class InstallationSettingsView(
     val taskSweepMinutes: Int,
     /** What a fresh installation would wait - ORKNUX_TASK_SWEEP_MINUTES. */
     val taskSweepMinutesConfigured: Int,
+    /**
+     * How large one of a plugin's source files may be, in KB - the plugin
+     * itself, each library it ships, and each file a URL load fetches.
+     */
+    val pluginMaxSourceKb: Int,
+    /** What a fresh installation allows: the built-in default. */
+    val pluginMaxSourceKbConfigured: Int,
     /**
      * False on an installation running Temporal, and the field is not offered.
      *

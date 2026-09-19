@@ -615,6 +615,17 @@ CREATE TABLE plugin
     permissions_accepted_by      varchar(120)
 );
 
+CREATE TABLE plugin_library
+(
+    id                           integer not null primary key autoincrement,
+    plugin_id                    integer not null,
+    position                     integer not null,
+    path                         varchar(200) not null,
+    source                       text not null,
+    constraint uk_plugin_library_path UNIQUE (plugin_id, path),
+    constraint plugin_library_plugin_id_fkey FOREIGN KEY (plugin_id) REFERENCES plugin(id) ON DELETE CASCADE
+);
+
 CREATE TABLE plugin_parameter
 (
     id                           integer not null primary key autoincrement,

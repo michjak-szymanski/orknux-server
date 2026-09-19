@@ -9,6 +9,7 @@ import io.mszymanski.orknux.server.plugin.PluginParameters
 import io.mszymanski.orknux.server.plugin.PluginCapabilities
 import io.mszymanski.orknux.server.plugin.PluginPermissions
 import io.mszymanski.orknux.server.plugin.PluginRepository
+import io.mszymanski.orknux.server.plugin.PluginSources
 import io.mszymanski.orknux.server.variable.VariableArguments
 import io.mszymanski.orknux.server.action.ScriptImports
 import io.mszymanski.orknux.server.action.ScriptImportsResult
@@ -46,6 +47,7 @@ class ConditionEvaluator(
     private val pluginParameters: PluginParameters,
     private val pluginPermissions: PluginPermissions,
     private val pluginCapabilities: PluginCapabilities,
+    private val pluginSources: PluginSources,
     private val externals: VariableArguments,
     private val timeouts: ScriptTimeouts,
     private val mapper: ObjectMapper,
@@ -313,8 +315,8 @@ class ConditionEvaluator(
             // from its own row: a capability reaches outside the sandbox, so
             // it is granted apart from the permissions above.
             pluginCapabilities.grantedTo(plugin),
-        
             on = condition.workspaceId,
+            libraries = pluginSources.librariesOf(plugin),
         )
     }
 

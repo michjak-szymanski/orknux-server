@@ -8,8 +8,10 @@ import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
+import io.mszymanski.orknux.workflow.script.PluginBundle
 import io.mszymanski.orknux.workflow.script.PluginCapability
 import io.mszymanski.orknux.workflow.script.PluginInspection
+import io.mszymanski.orknux.workflow.script.PluginLibraryFile
 import io.mszymanski.orknux.workflow.script.PluginPermission
 import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.springframework.http.HttpHeaders
@@ -66,7 +68,26 @@ class PluginUploadAPI(
     private val capabilities: PluginCapabilities,
     /** Folds edited functions over the bundle when it is downloaded. */
     private val overrides: PluginOverrides,
+    /** The library files a plugin ships with, stored beside its row. */
+    private val libraryRows: PluginLibraryRepository,
+    /** The proxy rules, which govern this outbound caller like every other. */
+    proxies: io.mszymanski.orknux.connector.proxy.ProxyRouter,
+    /** Where the source-size cap lives now that an administrator can set it. */
+    private val installation: io.mszymanski.orknux.server.attachment.InstallationSettings,
 ) {
+
+    /** How large one source file may be right now; asked per load, so the screen's answer is this one. */
+    private fun maxSource(): Long = installation.pluginMaxSourceBytes()
+
+    /**
+     * What a load-from-URL fetches with. Built from [io.mszymanski.orknux.connector.proxy.ProxyRouter.builder]
+     * so the installation's proxy rules and trusted certificates reach it -
+     * the same seam every other outbound caller sits behind.
+     */
+    private val fetching: java.net.http.HttpClient = proxies.builder()
+        .connectTimeout(java.time.Duration.ofSeconds(10))
+        .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
+        .build()
 
     /**
      * A plugin to start from.
@@ -243,13 +264,122 @@ class PluginUploadAPI(
         access.requireAdmin()
 
         if (file.isEmpty) throw PluginEmptyException()
-        if (file.size > MAX_SIZE) throw PluginTooLargeException(MAX_SIZE / 1024)
+        if (file.size > maxSource()) throw PluginTooLargeException(maxSource() / 1024)
 
-        val filename = file.originalFilename?.trim()?.ifEmpty { null } ?: "plugin.js"
-        if (!filename.endsWith(".js") && !filename.endsWith(".mjs")) throw PluginNotJavaScriptException(filename)
+        /*
+         * One file, or a zip of them. A single .js is the plugin as it always
+         * was; a .zip is a plugin that ships libraries - the file at the
+         * archive's root is the plugin, everything else is a library under
+         * its declared path. What the archive holds and what libraries()
+         * declares are checked against each other below, so nothing rides in
+         * under cover of the other.
+         */
+        val sent = file.originalFilename?.trim()?.ifEmpty { null } ?: "plugin.js"
+        val zipped = sent.endsWith(".zip")
+        if (!zipped && !sent.endsWith(".js") && !sent.endsWith(".mjs")) throw PluginNotJavaScriptException(sent)
 
-        val source = text(file.bytes)
+        val (filename, source, files) = if (zipped) {
+            unzipped(file.bytes)
+        } else {
+            Triple(sent, text(file.bytes), emptyList())
+        }
 
+        return loaded(filename, source, files, typescript, accept)
+    }
+
+    /**
+     * Loads a plugin from where it lives, libraries and all.
+     *
+     * The URL names the plugin's own file; its imports are what says what else
+     * to fetch, resolved against that URL - a relative path is the whole of
+     * what a specifier may be, so nothing can be fetched from anywhere but
+     * beside the plugin. What arrives then answers to exactly the same
+     * questions an uploaded file does, the agreement included: the first load
+     * of a plugin that ships libraries is refused with the list, and the
+     * second - naming it in `accept` - is the permission the person gave.
+     *
+     * Fetching happens before the ask, deliberately: the list somebody is
+     * shown is the true closure, read out of the files themselves, not a
+     * promise about them. Nothing is stored until the agreement holds.
+     */
+    @PostMapping("/api/plugins/url")
+    @Transactional
+    fun uploadFromUrl(@org.springframework.web.bind.annotation.RequestBody request: PluginUrlRequest): ResponseEntity<Any> {
+        access.requireAdmin()
+
+        val address = request.url.trim()
+        val base = runCatching { java.net.URI.create(address) }.getOrNull()
+            ?.takeIf { it.scheme?.lowercase() in setOf("http", "https") && it.path.endsWith(".js") }
+            ?: throw PluginUrlInvalidException(address)
+
+        val source = fetched(base)
+        val filename = base.path.substringAfterLast('/')
+
+        /*
+         * The closure, walked import by import: each fetched file is scanned
+         * and what it names is fetched next, resolved against the plugin's
+         * URL. The bounds are the library bounds - a closure past them is a
+         * plugin this server would refuse anyway, so it is refused before the
+         * next request rather than after it.
+         */
+        val files = linkedMapOf<String, PluginLibraryFile>()
+        val frontier = ArrayDeque<Pair<String, String>>()
+        frontier.add("" to source)
+        while (frontier.isNotEmpty()) {
+            val (at, held) = frontier.removeFirst()
+            val paths = when (val scanned = PluginBundle.scan(held, at)) {
+                is PluginBundle.Scan.Paths -> scanned.paths
+                is PluginBundle.Scan.Refused -> throw PluginContractException(scanned.reason)
+            }
+            for (path in paths) {
+                if (path in files) continue
+                if (files.size >= PluginRunner.MAX_LIBRARIES) {
+                    throw PluginContractException("the plugin's imports reach more than ${PluginRunner.MAX_LIBRARIES} files")
+                }
+                val library = fetched(base.resolve(path))
+                files[path] = PluginLibraryFile(path, library)
+                frontier.add(path to library)
+            }
+        }
+
+        return loaded(filename, source, files.values.toList(), typescript = null, accept = request.accept)
+    }
+
+    /** One file from beside the plugin's URL, held to the upload's own bounds. */
+    private fun fetched(address: java.net.URI): String {
+        val request = java.net.http.HttpRequest.newBuilder(address)
+            .timeout(java.time.Duration.ofSeconds(20))
+            .GET()
+            .build()
+        val answer = try {
+            fetching.send(request, java.net.http.HttpResponse.BodyHandlers.ofByteArray())
+        } catch (failure: java.io.IOException) {
+            throw PluginUrlUnreachableException(address.toString(), failure.message ?: "it could not be reached")
+        } catch (failure: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw PluginUrlUnreachableException(address.toString(), "the request was interrupted")
+        }
+        if (answer.statusCode() != 200) {
+            throw PluginUrlUnreachableException(address.toString(), "it answered ${answer.statusCode()}")
+        }
+        val bytes = answer.body() ?: ByteArray(0)
+        if (bytes.isEmpty()) throw PluginEmptyException()
+        if (bytes.size > maxSource()) throw PluginTooLargeException(maxSource() / 1024)
+        return text(bytes)
+    }
+
+    /**
+     * The shared half of every load, wherever the files came from: the plugin
+     * is questioned, its declaration checked against what arrived, the
+     * agreement checked against what is new, and only then is anything stored.
+     */
+    private fun loaded(
+        filename: String,
+        source: String,
+        files: List<PluginLibraryFile>,
+        typescript: String?,
+        accept: String?,
+    ): ResponseEntity<Any> {
         /*
          * The plugin is loaded and questioned before anything is stored: what it
          * calls itself, which API it was written against, and what it offers. One
@@ -257,9 +387,29 @@ class PluginUploadAPI(
          * — and a plugin that fails the contract is not stored at all, so every row
          * here is a plugin that held it up.
          */
-        val inspected = when (val answered = runner.inspect(source)) {
+        val inspected = when (val answered = runner.inspect(source, files)) {
             is PluginInspection.Read -> answered
             is PluginInspection.Unreadable -> throw PluginContractException(answered.reason)
+        }
+
+        /*
+         * The declaration is what somebody is asked to allow, so it has to be
+         * exactly what arrived - a shipped file the declaration is silent
+         * about is a file nobody was asked about, and a declared file that
+         * did not arrive is a promise the imports will fall through.
+         */
+        val shipped = files.map { it.path }.toSet()
+        if (inspected.libraries.toSet() != shipped) {
+            val missing = inspected.libraries.toSet() - shipped
+            val undeclared = shipped - inspected.libraries.toSet()
+            throw PluginContractException(
+                buildString {
+                    append("what libraries() declares and what arrived do not agree")
+                    if (missing.isNotEmpty()) append(": declared and not shipped - ${missing.sorted().joinToString(", ")}")
+                    if (undeclared.isNotEmpty()) append("; shipped and not declared - ${undeclared.sorted().joinToString(", ")}")
+                    append(". The declaration is what somebody allows, so the two have to be the same list.")
+                },
+            )
         }
 
         if (inspected.apiVersion !in PluginApiVersions.SUPPORTED) {
@@ -304,6 +454,18 @@ class PluginUploadAPI(
         val agreeingCapabilities = wantedCapabilities.isNotEmpty() && !heldCapabilities.containsAll(wantedCapabilities)
 
         /*
+         * And once more for the library files, which are code riding in beside
+         * the plugin: a set already allowed is not re-asked, a changed set is.
+         * By path - the person is allowing that these files ship, the way
+         * accepting the plugin at all allows what its own source says.
+         */
+        val wantedLibraries = inspected.libraries.toSet()
+        val heldLibraries = plugins.findByKey(key)
+            ?.let { held -> libraryRows.findByPluginIdOrderByPositionAsc(requireNotNull(held.id)).map { it.path }.toSet() }
+            ?: emptySet()
+        val agreeingLibraries = wantedLibraries.isNotEmpty() && heldLibraries != wantedLibraries
+
+        /*
          * Refused as one question, with both lists. Asked one at a time this
          * could never converge: each refused load stores nothing, so a second
          * request accepting only the second list would be refused over the
@@ -312,16 +474,24 @@ class PluginUploadAPI(
          */
         val refusedPermissions = agreeing && permissions.accepted(accept) != wanted
         val refusedCapabilities = agreeingCapabilities && capabilities.accepted(accept) != wantedCapabilities
-        if (refusedPermissions || refusedCapabilities) {
+        val refusedLibraries = agreeingLibraries && acceptedLibraries(accept) != wantedLibraries
+        if (refusedPermissions || refusedCapabilities || refusedLibraries) {
             throw PluginAgreementNeededException(
                 // Each list travels only while it is being agreed to: what was
                 // accepted long ago is not re-asked beside what is new.
                 permissions = if (agreeing) permissions.viewOf(wanted) else emptyList(),
                 capabilities = if (agreeingCapabilities) capabilities.viewOf(wantedCapabilities) else emptyList(),
+                libraries = if (agreeingLibraries) wantedLibraries.sorted() else emptyList(),
             )
         }
 
         val name = filename.removeSuffix(".mjs").removeSuffix(".js").takeLast(MAX_NAME)
+
+        // The bundle as one measure and one fingerprint: what is stored is the
+        // plugin and its files, so what is sized and hashed is too.
+        val totalBytes = source.toByteArray(Charsets.UTF_8).size.toLong() +
+            files.sumOf { it.source.toByteArray(Charsets.UTF_8).size.toLong() }
+        val fingerprint = digest(files.fold(source) { acc, held -> acc + "\n// " + held.path + "\n" + held.source })
 
         val existing = plugins.findByKey(key)
         // Stamped when somebody has just agreed; carried over when nothing new was
@@ -342,7 +512,7 @@ class PluginUploadAPI(
             this.filename = filename.takeLast(MAX_NAME)
             this.source = source
             this.typescript = typescript?.ifBlank { null }
-            this.sizeBytes = file.size
+            this.sizeBytes = totalBytes
             this.apiVersion = apiVersion
             this.declaredFunctions = declared
             this.declaredTools = declaredTools
@@ -353,7 +523,7 @@ class PluginUploadAPI(
             this.acceptedCapabilities = capabilities.write(wantedCapabilities)
             this.permissionsAcceptedAt = acceptedAt
             this.permissionsAcceptedBy = acceptedBy
-            this.sha256 = digest(source)
+            this.sha256 = fingerprint
             this.uploadedAt = OffsetDateTime.now()
             this.uploadedBy = currentUser()
         } ?: Plugin(
@@ -362,7 +532,7 @@ class PluginUploadAPI(
             filename = filename.takeLast(MAX_NAME),
             source = source,
             typescript = typescript?.ifBlank { null },
-            sizeBytes = file.size,
+            sizeBytes = totalBytes,
             apiVersion = apiVersion,
             declaredFunctions = declared,
             declaredTools = declaredTools,
@@ -378,11 +548,24 @@ class PluginUploadAPI(
             acceptedCapabilities = capabilities.write(wantedCapabilities),
             permissionsAcceptedAt = acceptedAt,
             permissionsAcceptedBy = acceptedBy,
-            sha256 = digest(source),
+            sha256 = fingerprint,
             uploadedBy = currentUser(),
         )
 
         val saved = plugins.save(plugin)
+        /*
+         * The files, replaced whole beside the row - a re-upload's library set
+         * is whatever it shipped this time, in declaration order. Their whole
+         * lifetime is the plugin's: the cascade takes them when it goes.
+         */
+        libraryRows.deleteByPluginId(requireNotNull(saved.id))
+        // Pushed to the database now: Hibernate orders inserts ahead of
+        // deletes within a flush, which on a re-upload would put the new rows
+        // in before the old ones went and trip the path's unique key.
+        libraryRows.flush()
+        files.forEachIndexed { at, held ->
+            libraryRows.save(PluginLibrary(pluginId = requireNotNull(saved.id), position = at, path = held.path, source = held.source))
+        }
         // What it declares becomes what it provides, in the same transaction: a
         // plugin that is loaded but whose functions did not appear is a state
         // nobody could explain.
@@ -431,6 +614,9 @@ class PluginUploadAPI(
                 "message" to (failure.message ?: "This plugin needs to be accepted"),
                 "permissions" to failure.permissions.map { mapOf("name" to it.name, "summary" to it.summary) },
                 "capabilities" to failure.capabilities.map { mapOf("name" to it.name, "summary" to it.summary) },
+                // Paths only: what is being allowed is that these files ship
+                // with the plugin. The screen keeps the list folded by default.
+                "libraries" to failure.libraries,
             ),
         )
 
@@ -448,6 +634,9 @@ class PluginUploadAPI(
         PluginFunctionInUseException::class,
         PluginPermissionUnknownException::class,
         PluginCapabilityUnknownException::class,
+        PluginZipInvalidException::class,
+        PluginUrlInvalidException::class,
+        PluginUrlUnreachableException::class,
     )
     fun refused(failure: RuntimeException): ResponseEntity<Map<String, String>> =
         ResponseEntity.badRequest().body(mapOf("message" to (failure.message ?: "That file could not be loaded")))
@@ -472,6 +661,75 @@ class PluginUploadAPI(
         .digest(source.toByteArray(StandardCharsets.UTF_8))
         .joinToString("") { "%02x".format(it) }
 
+    /**
+     * The archive taken apart: the file at its root is the plugin, everything
+     * else is a library under its path. Anything that is not a `.js` under a
+     * relative path is refused - a zip is how a plugin ships more files, not a
+     * way for anything else to arrive - and the usual archive lint (folders,
+     * `__MACOSX/`, dotfiles) is passed over without comment.
+     */
+    private fun unzipped(bytes: ByteArray): Triple<String, String, List<PluginLibraryFile>> {
+        val held = linkedMapOf<String, ByteArray>()
+        java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(bytes)).use { zip ->
+            var total = 0L
+            var entry = zip.nextEntry
+            while (entry != null) {
+                // Windows archivers write entry names with backslashes; they
+                // mean the same path, so they are read as it.
+                val name = entry.name.replace('\\', '/')
+                val junk = entry.isDirectory ||
+                    name.startsWith("__MACOSX/") ||
+                    name.substringAfterLast('/').startsWith(".")
+                if (!junk) {
+                    val path = name.removePrefix("./")
+                    if (path.startsWith("/") || path.split('/').any { it.isEmpty() || it == ".." }) {
+                        throw PluginZipInvalidException("\"$name\" is not a path a plugin zip may hold")
+                    }
+                    if (!path.endsWith(".js")) {
+                        throw PluginZipInvalidException("a plugin zip holds JavaScript and nothing else - \"$path\" is not a .js file")
+                    }
+                    val content = zip.readBytes()
+                    total += content.size
+                    if (content.size > maxSource()) throw PluginTooLargeException(maxSource() / 1024)
+                    if (total > maxSource() * WHOLE_ZIP_TIMES) throw PluginTooLargeException(maxSource() * WHOLE_ZIP_TIMES / 1024)
+                    if (held.size >= MAX_ZIP_FILES) throw PluginZipInvalidException("a plugin zip holds at most $MAX_ZIP_FILES files")
+                    if (held.put(path, content) != null) throw PluginZipInvalidException("\"$path\" appears in the zip twice")
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        if (held.isEmpty()) throw PluginEmptyException()
+
+        // The plugin itself: the one root-level file, or plugin.js where
+        // several sit there. A rule somebody can hold in their head.
+        val roots = held.keys.filter { '/' !in it }
+        val main = when {
+            roots.size == 1 -> roots.single()
+            "plugin.js" in roots -> "plugin.js"
+            roots.isEmpty() -> throw PluginZipInvalidException("the zip has no file at its root, and the plugin itself sits there")
+            else -> throw PluginZipInvalidException(
+                "the zip has several files at its root (${roots.sorted().joinToString(", ")}) - name the plugin plugin.js",
+            )
+        }
+        val libraries = held.filterKeys { it != main }
+            .map { (path, content) -> PluginLibraryFile(path, text(content)) }
+        return Triple(main, text(held.getValue(main)), libraries)
+    }
+
+    /**
+     * The library paths an upload said it accepts, off the shared field.
+     *
+     * A path is its own kind of name there - nothing else in the field holds a
+     * slash or ends in .js - so each reader takes its own and leaves the rest.
+     */
+    private fun acceptedLibraries(field: String?): Set<String> = field.orEmpty()
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() && PluginRunner.LIBRARY_PATH.matches(it) }
+        .map { it.removePrefix("./") }
+        .toSet()
+
     private fun currentUser(): String =
         SecurityContextHolder.getContext().authentication?.name ?: "system"
 
@@ -480,7 +738,15 @@ class PluginUploadAPI(
          * A plugin is a bundled script. Generous enough for one with its
          * dependencies compiled in, small enough that the row stays a row.
          */
-        const val MAX_SIZE = 2L * 1024 * 1024
+        /**
+         * A zip bomb's ceiling, as a multiple of the per-file cap: what an
+         * archive may add up to once opened. The cap itself is the
+         * administrator's setting - see `InstallationSettings.pluginMaxSourceKb`.
+         */
+        const val WHOLE_ZIP_TIMES = 4L
+
+        /** The plugin and its libraries; the library bound plus one. */
+        const val MAX_ZIP_FILES = 51
 
         const val MAX_NAME = 200
 
@@ -571,6 +837,21 @@ class PluginUploadAPI(
                * than reaching anything.
                */
               capabilities(): OrknuxCapability[];
+              /**
+               * The library files this plugin ships with, as paths relative
+               * to its own file: 'lib/util.js' or './lib/util.js'. Defaults
+               * to none, which is every single-file plugin.
+               *
+               * The complete list - every file that arrives beside the plugin
+               * is declared here, and every relative import in the plugin or
+               * in a library resolves to a declared path. No absolute paths,
+               * no URLs, no '..', no bare specifiers - an npm dependency is
+               * still bundled in, not declared. Whoever loads the plugin is
+               * shown the list and has to allow it: a zip's contents are
+               * checked against it, and a load from a URL fetches these
+               * files, resolved against the plugin's URL, and only these.
+               */
+              libraries(): string[];
               /**
                * What a workspace set those parameters to, keyed by name.
                *
@@ -1363,6 +1644,30 @@ class PluginNotJavaScriptException(filename: String) :
     RuntimeException("$filename is not JavaScript; a plugin is a .js or .mjs file")
 
 class PluginNotTextException : RuntimeException("That file is not UTF-8 text")
+
+/** An archive that is not the shape a plugin zip has; the sentence says what is. */
+class PluginZipInvalidException(what: String) : RuntimeException(what)
+
+/**
+ * What the browser sends to load a plugin from where it lives.
+ *
+ * The creator is bound explicitly for the reason `ChatStreamRequest` binds its
+ * own: Jackson 3 has no Kotlin module here, so parameter names alone are not
+ * enough to deserialize from.
+ */
+data class PluginUrlRequest @com.fasterxml.jackson.annotation.JsonCreator constructor(
+    @com.fasterxml.jackson.annotation.JsonProperty("url") val url: String,
+    /** The same comma-separated names and paths the upload's accept field takes. */
+    @com.fasterxml.jackson.annotation.JsonProperty("accept") val accept: String? = null,
+)
+
+class PluginUrlInvalidException(what: String) : RuntimeException(
+    "\"$what\" is not a URL a plugin loads from: http or https, pointing at the plugin's own .js file.",
+)
+
+class PluginUrlUnreachableException(where: String, why: String) : RuntimeException(
+    "$where could not be fetched: $why.",
+)
 
 /**
  * The plugin never said which API it uses.

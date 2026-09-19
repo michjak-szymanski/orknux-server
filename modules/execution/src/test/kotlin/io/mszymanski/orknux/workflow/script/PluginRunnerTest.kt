@@ -48,6 +48,111 @@ class PluginRunnerTest {
     """.trimIndent()
 
     @Test
+    fun `a plugin with no libraries declares none, which is the default`() {
+        val read = runner.inspect(tracker) as PluginInspection.Read
+
+        assertThat(read.libraries).isEmpty()
+    }
+
+    @Test
+    fun `declared libraries are read, normalised, and held to their shape`() {
+        val shipped = """
+            export default class Shipped extends OrknuxPlugin {
+              id() { return 'shipped'; }
+              apiVersion() { return 1; }
+              libraries() { return ['lib/util.js', './helpers.js']; }
+            }
+        """.trimIndent()
+
+        val read = runner.inspect(shipped) as PluginInspection.Read
+        // The './' spelling is one file with the plain spelling, stored plain.
+        assertThat(read.libraries).containsExactly("lib/util.js", "helpers.js")
+    }
+
+    @Test
+    fun `a library path that could name a file elsewhere is refused in a sentence`() {
+        for (path in listOf("../outside.js", "/etc/passwd.js", "https://evil.example/x.js", "lodash", "lib\\\\win.js")) {
+            val sneaky = """
+                export default class Sneaky extends OrknuxPlugin {
+                  id() { return 'sneaky'; }
+                  apiVersion() { return 1; }
+                  libraries() { return ['$path']; }
+                }
+            """.trimIndent()
+
+            val answer = runner.inspect(sneaky)
+            assertThat(answer).describedAs(path).isInstanceOf(PluginInspection.Unreadable::class.java)
+            assertThat((answer as PluginInspection.Unreadable).reason).contains("library path")
+        }
+    }
+
+    @Test
+    fun `the same file declared twice is refused`() {
+        val twice = """
+            export default class Twice extends OrknuxPlugin {
+              id() { return 'twice'; }
+              apiVersion() { return 1; }
+              libraries() { return ['lib/util.js', './lib/util.js']; }
+            }
+        """.trimIndent()
+
+        val answer = runner.inspect(twice)
+        assertThat((answer as PluginInspection.Unreadable).reason).contains("more than once")
+    }
+
+    /**
+     * The whole point of shipping a library: the plugin imports it with an
+     * ordinary import statement, and a call reaches code that lives in it.
+     */
+    @Test
+    fun `a plugin's function reaches code that lives in a shipped library`() {
+        val shipped = listOf(
+            PluginLibraryFile("lib/format.js", "import { NAME } from './names.js';\nexport function greet(who) { return 'hello, ' + who + ' from ' + NAME; }"),
+            PluginLibraryFile("lib/names.js", "export const NAME = 'the library';"),
+        )
+        val plugin = """
+            import { greet } from './lib/format.js';
+
+            export default class Greeter extends OrknuxPlugin {
+              id() { return 'greeter'; }
+              apiVersion() { return 1; }
+              libraries() { return ['lib/format.js', 'lib/names.js']; }
+              functions() {
+                return [
+                  new OrknuxFunction({
+                    name: 'greet',
+                    params: [{ name: 'who', type: 'string' }],
+                    returnType: 'string',
+                    run: (who) => greet(who),
+                  }),
+                ];
+              }
+            }
+        """.trimIndent()
+
+        val read = runner.inspect(plugin, shipped) as PluginInspection.Read
+        assertThat(read.libraries).containsExactly("lib/format.js", "lib/names.js")
+
+        val answer = runner.call(plugin, "greet", listOf("\"dana\""), libraries = shipped)
+        assertThat((answer as ScriptResult.Returned).json).isEqualTo("\"hello, dana from the library\"")
+    }
+
+    /** Without its files the same plugin is refused in a sentence, not a stack. */
+    @Test
+    fun `a plugin whose imports have nothing to land on is refused in words`() {
+        val alone = """
+            import { greet } from './lib/format.js';
+            export default class Greeter extends OrknuxPlugin {
+              id() { return 'greeter'; }
+              apiVersion() { return 1; }
+            }
+        """.trimIndent()
+
+        val answer = runner.inspect(alone, listOf(PluginLibraryFile("lib/other.js", "export const x = 1;")))
+        assertThat((answer as PluginInspection.Unreadable).reason).contains("does not declare")
+    }
+
+    @Test
     fun `a plugin says what it has to be told, and whether it can work without it`() {
         val read = runner.inspect(tracker) as PluginInspection.Read
 

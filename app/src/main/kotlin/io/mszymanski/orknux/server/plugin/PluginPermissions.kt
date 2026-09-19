@@ -2,6 +2,7 @@ package io.mszymanski.orknux.server.plugin
 
 import io.mszymanski.orknux.workflow.script.PluginCapability
 import io.mszymanski.orknux.workflow.script.PluginPermission
+import io.mszymanski.orknux.workflow.script.PluginRunner
 import org.springframework.stereotype.Component
 import tools.jackson.databind.ObjectMapper
 
@@ -76,6 +77,9 @@ class PluginPermissions(private val mapper: ObjectMapper) {
         .split(',')
         .map { it.trim() }
         .filter { it.isNotEmpty() }
+        // A library path in the shared field is for the libraries reader, the
+        // way a capability's name is for its own.
+        .filterNot { PluginRunner.LIBRARY_PATH.matches(it) }
         .mapNotNull { name ->
             PluginPermission.named(name)
                 ?: if (PluginCapability.named(name) != null) null else throw PluginPermissionUnknownException(name)
@@ -110,12 +114,16 @@ class PluginPermissionUnknownException(asked: String) : RuntimeException(
 class PluginAgreementNeededException(
     val permissions: List<PluginPermissionView>,
     val capabilities: List<PluginCapabilityView>,
+    /** The library files it ships with, where those are new; paths only. */
+    val libraries: List<String> = emptyList(),
 ) : RuntimeException(
     buildString {
         append("This plugin needs ")
         append(
             (permissions.map { "${it.name} (${it.summary.lowercase()})" } +
-                capabilities.map { "${it.name} (${it.summary.lowercase()})" }).joinToString(", "),
+                capabilities.map { "${it.name} (${it.summary.lowercase()})" } +
+                if (libraries.isEmpty()) emptyList() else listOf("${libraries.size} library file(s) of its own")
+                ).joinToString(", "),
         )
         append(". Load it again accepting them to allow it.")
     },

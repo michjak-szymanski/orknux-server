@@ -58,6 +58,7 @@ object SettingNames {
     const val REVISION_RETENTION_DAYS = "revision.retention.days"
     const val EXECUTION_RETENTION_DAYS = "execution.retention.days"
     const val TASK_SWEEP_MINUTES = "task.sweep.minutes"
+    const val PLUGIN_MAX_SOURCE_KB = "plugin.max.source.kb"
 }
 
 /**
@@ -207,6 +208,37 @@ class InstallationSettings(
     /** What a fresh installation would keep - ORKNUX_EXECUTION_RETENTION_DAYS. */
     fun executionRetentionDaysConfigured(): Int = runs.retentionDays
 
+    /**
+     * How large one of a plugin's source files may be, in KB.
+     *
+     * One number for the plugin itself, each library it ships, and each file a
+     * URL load fetches - it is the same question asked of each of them. In KB
+     * on the screen because that is how the refusal has always said it; the
+     * byte form below is for the code that measures.
+     */
+    fun pluginMaxSourceKb(): Int {
+        val held = settings.findByIdOrNull(SettingNames.PLUGIN_MAX_SOURCE_KB)
+            ?: return DEFAULT_PLUGIN_SOURCE_KB
+        return held.value.toIntOrNull()?.takeIf { it in MIN_PLUGIN_SOURCE_KB..MAX_PLUGIN_SOURCE_KB }
+            ?: DEFAULT_PLUGIN_SOURCE_KB
+    }
+
+    /** What a fresh installation allows: the built-in default. */
+    fun pluginMaxSourceKbConfigured(): Int = DEFAULT_PLUGIN_SOURCE_KB
+
+    fun pluginMaxSourceBytes(): Long = pluginMaxSourceKb() * 1024L
+
+    @Transactional
+    fun setPluginMaxSourceKb(kb: Int, by: String) {
+        if (kb !in MIN_PLUGIN_SOURCE_KB..MAX_PLUGIN_SOURCE_KB) throw PluginSourceLimitOutOfRangeException(kb)
+        val held = settings.findByIdOrNull(SettingNames.PLUGIN_MAX_SOURCE_KB)
+            ?: InstallationSetting(name = SettingNames.PLUGIN_MAX_SOURCE_KB)
+        held.value = kb.toString()
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = by
+        settings.save(held)
+    }
+
     @Transactional
     fun setExecutionRetentionDays(days: Int, by: String) {
         if (days !in MIN_RETENTION_DAYS..MAX_RETENTION_DAYS) throw RetentionOutOfRangeException(days)
@@ -325,6 +357,25 @@ const val MAX_RETENTION_DAYS = 3650
  */
 const val MIN_SWEEP_MINUTES = 1
 const val MAX_SWEEP_MINUTES = 1440
+
+/**
+ * 64 KB and 20 MB, around a 5 MB default.
+ *
+ * The floor keeps a typo from making plugins unloadable; the ceiling keeps a
+ * typed zero too many from letting a bundle fill the table - a plugin's source
+ * is read whole on every call, so this number is also a statement about memory.
+ */
+const val MIN_PLUGIN_SOURCE_KB = 64
+const val MAX_PLUGIN_SOURCE_KB = 20 * 1024
+const val DEFAULT_PLUGIN_SOURCE_KB = 5 * 1024
+
+class PluginSourceLimitOutOfRangeException(val kb: Int) : RuntimeException(
+    "$kb is not a number of KB a plugin source can be capped at. " +
+        "Choose between $MIN_PLUGIN_SOURCE_KB and $MAX_PLUGIN_SOURCE_KB.",
+), Refusal {
+
+    override val arguments get() = mapOf("kb" to kb)
+}
 
 class TaskSweepIntervalOutOfRangeException(val minutes: Int) : RuntimeException(
     "$minutes is not a number of minutes a task can be left queued for. " +

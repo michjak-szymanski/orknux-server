@@ -118,7 +118,7 @@ class PluginRunner(
      * three times and the only way the three answers are guaranteed to come from
      * the same instance.
      */
-    fun inspect(source: String): PluginInspection {
+    fun inspect(source: String, libraries: List<PluginLibraryFile> = emptyList()): PluginInspection {
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             /*
@@ -132,7 +132,7 @@ class PluginRunner(
              * Intl at the top level cannot be loaded here. That is the safe
              * direction to be wrong in, and the template says so.
              */
-            guard.bounded(stopped, { newContext(emptySet()) }) { read(it, source) }
+            guard.bounded(stopped, { newContext(emptySet()) }) { read(it, source, libraries) }
         } catch (failure: PolyglotException) {
             PluginInspection.Unreadable(describe(failure, stopped = stopped.get()))
         } catch (failure: ScriptBusyException) {
@@ -188,13 +188,19 @@ class PluginRunner(
          * bound, and the helper says so.
          */
         sessionId: Long? = null,
+        /**
+         * The library files this plugin ships with, exactly as they were
+         * accepted at load. Evaluated ahead of the plugin, each into the
+         * registry its imports were rewritten to read from.
+         */
+        libraries: List<PluginLibraryFile> = emptyList(),
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, { newContext(permissions) }) {
                 ScriptResult.Returned(
-                    invoke(it, source, functionName, arguments, settings, capabilities, on, surface, sessionId),
+                    invoke(it, source, functionName, arguments, settings, capabilities, on, surface, sessionId, libraries),
                     millis(started),
                 )
             }
@@ -228,6 +234,7 @@ class PluginRunner(
         on: Long?,
         surface: String,
         sessionId: Long?,
+        libraries: List<PluginLibraryFile>,
     ): String? {
         polyglot.eval("js", contract)
 
@@ -236,7 +243,7 @@ class PluginRunner(
         // while it is defining `settings` on the instance.
         bindings.putMember(SETTINGS, settings)
 
-        val exported = polyglot.eval(module(source)).getMember("default")
+        val exported = evaluated(polyglot, source, libraries).getMember("default")
             ?: throw ScriptContractException("$functionName's plugin has no default export")
 
         bindings.putMember(PLUGIN, bindings.getMember(CONSTRUCT).execute(exported))
@@ -258,13 +265,16 @@ class PluginRunner(
 
     private fun millis(started: Long): Long = (System.nanoTime() - started) / 1_000_000
 
-    private fun read(polyglot: Context, source: String): PluginInspection {
+    private fun read(polyglot: Context, source: String, libraries: List<PluginLibraryFile> = emptyList()): PluginInspection {
         // The contract first: the plugin is evaluated against a sandbox that already
         // has OrknuxPlugin in it, so `extends OrknuxPlugin` resolves.
         polyglot.eval("js", contract)
 
-        val exported = polyglot.eval(module(source)).getMember("default")
-            ?: return PluginInspection.Unreadable("it has no default export")
+        val exported = try {
+            evaluated(polyglot, source, libraries).getMember("default")
+        } catch (refused: ScriptContractException) {
+            return PluginInspection.Unreadable(refused.message ?: "its files do not hold together")
+        } ?: return PluginInspection.Unreadable("it has no default export")
 
         // Constructed by the contract's own helper, which is what refuses anything
         // that is not an OrknuxPlugin — and does it by prototype, not by shape.
@@ -421,6 +431,50 @@ class PluginRunner(
             one.asString().trim()
         }.filter { it.isNotEmpty() }.distinct()
 
+        /*
+         * The library files it says it ships with. Only the shape is judged
+         * here - relative, /-joined, ending in .js - because the sandbox knows
+         * nothing about what actually arrived beside the plugin; whether the
+         * declaration and the files agree is the loader's question, asked
+         * against the zip's entries or the fetched set.
+         */
+        val shipped = if (plugin.hasMember("libraries")) {
+            val declaredLibraries = plugin.invokeMember("libraries")
+            if (!declaredLibraries.hasArrayElements()) {
+                return PluginInspection.Unreadable("libraries() did not answer with an array")
+            }
+            if (declaredLibraries.arraySize > MAX_LIBRARIES) {
+                return PluginInspection.Unreadable("libraries() declared more than $MAX_LIBRARIES files")
+            }
+            val paths = (0 until declaredLibraries.arraySize).map { at ->
+                val one = declaredLibraries.getArrayElement(at)
+                if (!one.isString) {
+                    return PluginInspection.Unreadable("libraries() answered with something that is not a path")
+                }
+                val held = one.asString().trim()
+                if (held.length > MOST_LIBRARY_PATH_CHARS) {
+                    return PluginInspection.Unreadable(
+                        "a library path is at most $MOST_LIBRARY_PATH_CHARS characters, and one is ${held.length}",
+                    )
+                }
+                if (!LIBRARY_PATH.matches(held)) {
+                    return PluginInspection.Unreadable(
+                        "\"$held\" is not a usable library path: relative, /-joined and ending in .js - " +
+                            "no absolute paths, no URLs, no .., no bare specifiers",
+                    )
+                }
+                // The same file spelled with and without './' is one file,
+                // stored without.
+                held.removePrefix("./")
+            }
+            if (paths.size != paths.distinct().size) {
+                return PluginInspection.Unreadable("libraries() declares the same file more than once")
+            }
+            paths
+        } else {
+            emptyList()
+        }
+
         return PluginInspection.Read(
             id = id.asString().trim(),
             apiVersion = version.asInt(),
@@ -429,6 +483,7 @@ class PluginRunner(
             parameters = parameters,
             permissions = permissions,
             capabilities = wantedCapabilities,
+            libraries = shipped,
         )
     }
 
@@ -657,11 +712,38 @@ class PluginRunner(
     private fun Context.Builder.granting(permissions: Set<PluginPermission>): Context.Builder =
         permissions.fold(this) { builder, granted -> builder.option(granted.option, "true") }
 
-    private fun module(source: String): Source = Source.newBuilder("js", source, "plugin.mjs")
+    private fun module(source: String, name: String = "plugin.mjs"): Source = Source.newBuilder("js", source, name)
         .mimeType("application/javascript+module")
         .buildLiteral()
 
-    private companion object {
+    /**
+     * The plugin's module, with its libraries evaluated ahead of it.
+     *
+     * A single-file plugin is evaluated as it always was. One that ships
+     * libraries is a [PluginBundle]: the files are ordered by their import
+     * graph, each is evaluated as a module of its own with its imports
+     * rewritten into registry reads, its exports land in the registry under
+     * its declared path, and the plugin - rewritten the same way - is
+     * evaluated last. Nothing resolves a path inside the sandbox; the graph
+     * was settled outside it.
+     */
+    private fun evaluated(polyglot: Context, source: String, libraries: List<PluginLibraryFile>): Value {
+        if (libraries.isEmpty()) return polyglot.eval(module(source))
+
+        val ordered = when (val bundle = PluginBundle.of(source, libraries)) {
+            is PluginBundle.Ordered -> bundle.libraries
+            is PluginBundle.Refused -> throw ScriptContractException(bundle.reason)
+        }
+        polyglot.eval("js", "globalThis.${PluginBundle.REGISTRY} = {};")
+        val registry = polyglot.getBindings("js").getMember(PluginBundle.REGISTRY)
+        for (library in ordered) {
+            val exports = polyglot.eval(module(PluginBundle.rewritten(library.source, library.path), library.path))
+            registry.putMember(library.path, exports)
+        }
+        return polyglot.eval(module(PluginBundle.rewritten(source)))
+    }
+
+    companion object {
         const val CONSTRUCT = "__orknuxConstruct"
 
         /** What the workspace set the plugin's parameters to, as JSON, on its way in. */
@@ -717,6 +799,26 @@ class PluginRunner(
          * something that is not on it is refused whatever the length of the list.
          */
         const val MAX_PERMISSIONS = 32
+
+        /**
+         * More library files than a plugin has any business shipping. Every
+         * one is a file whoever loads the plugin has to allow, and a list too
+         * long to read is a list nobody reads. `MAX_LIBRARIES` in the
+         * @orknux/plugin package mirrors it.
+         */
+        const val MAX_LIBRARIES = 50
+
+        /**
+         * The shape of one library path: relative segments joined by `/`, an
+         * optional leading `./`, ending in `.js`. What it rules out is the
+         * point - nothing absolute, no URL, no `..`, no backslashes, no bare
+         * specifier - so a declared path can only ever name a file that
+         * travels with the plugin. `LIBRARY_PATH` in @orknux/plugin mirrors it.
+         */
+        val LIBRARY_PATH = Regex("""(\./)?(?!\.)[A-Za-z0-9_\-.]+(/(?!\.)[A-Za-z0-9_\-.]+)*\.js""")
+
+        /** Longer than any sensible relative path; the column the server keeps one in. */
+        const val MOST_LIBRARY_PATH_CHARS = 200
 
         /**
          * Runs one of the plugin's declared functions and leaves JSON behind.
@@ -831,6 +933,18 @@ class PluginRunner(
                * granted apart, and shown apart to whoever accepts the plugin.
                */
               capabilities() {
+                return [];
+              }
+
+              /**
+               * The library files this plugin ships with, as paths relative
+               * to its own file: 'lib/util.js' or './lib/util.js'. The
+               * complete list - every file that arrives beside the plugin is
+               * declared here, and every relative import resolves within it.
+               * Whoever loads the plugin is shown the list and has to allow
+               * it. Defaults to none, which is every single-file plugin.
+               */
+              libraries() {
                 return [];
               }
             };
@@ -1038,6 +1152,13 @@ sealed interface PluginInspection {
          * than it asked for, which fails later for no stated reason.
          */
         val capabilities: List<String> = emptyList(),
+        /**
+         * The library files it says it ships with: relative paths, already
+         * shape-checked and normalised (no leading `./`). Whether these match
+         * the files that actually arrived is the loader's question - the
+         * sandbox only knows what the plugin declared.
+         */
+        val libraries: List<String> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */

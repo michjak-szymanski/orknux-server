@@ -75,7 +75,7 @@ class PluginFunctionRegistry(
                 this.description = declaration.description
                 this.returnType = returnType
                 this.params = params.toMutableList()
-                this.source = explanation(plugin, declaration.name)
+                this.source = explanation(plugin, declaration)
                 this.lastModifiedAt = OffsetDateTime.now()
                 this.lastModifiedBy = "plugin ${plugin.key}"
             } ?: WorkflowFunction(
@@ -84,7 +84,7 @@ class PluginFunctionRegistry(
                 pluginId = pluginId,
                 name = name,
                 description = declaration.description,
-                source = explanation(plugin, declaration.name),
+                source = explanation(plugin, declaration),
                 returnType = returnType,
                 params = params.toMutableList(),
                 lastModifiedAt = OffsetDateTime.now(),
@@ -134,19 +134,33 @@ class PluginFunctionRegistry(
     private fun qualified(key: String, name: String): String = "${key}_$name"
 
     /**
-     * What the source column holds for a function nobody wrote here.
+     * What the source column holds for a function nobody has taken over yet.
      *
-     * The column cannot be empty and the editor shows it, so it says what this is
-     * instead of pretending to be an implementation. The plugin holds the real one.
+     * The column cannot be empty and the editor shows it, so it says what this
+     * is and what saving would do - the note used to say the function could
+     * not be edited at all, which stopped being true and went on being read.
+     * The plugin's own implementation rides along for reference: a person
+     * deciding whether to take a function over wants to read what it does now.
      */
-    private fun explanation(plugin: Plugin, declared: String): String = """
-        // Provided by the "${plugin.name}" plugin (${plugin.key}).
-        //
-        // Its implementation lives in the plugin, not here, and this function
-        // cannot be edited from a workspace. Load the plugin again to change it.
-        //
-        // Declared as: $declared
-    """.trimIndent()
+    private fun explanation(plugin: Plugin, declaration: PluginFunctionView): String = buildString {
+        appendLine("/*")
+        appendLine(" * Provided by the \"${plugin.name}\" plugin (${plugin.key}), which runs the")
+        appendLine(" * real implementation out of its own bundle.")
+        appendLine(" *")
+        appendLine(" * Editing this file and saving takes the function over: from then on the")
+        appendLine(" * code here is what runs, as a module of its own - without the plugin's")
+        appendLine(" * `this.settings` - and plugin reloads leave it alone. Until then, what")
+        appendLine(" * is written here is never executed.")
+        // A run that contains the closing of a comment would close this one.
+        val reference = declaration.source?.replace("*/", "*\\/")
+        if (reference != null) {
+            appendLine(" *")
+            appendLine(" * As the plugin runs ${declaration.name}${declaration.signature}:")
+            appendLine(" *")
+            reference.lines().forEach { line -> appendLine(" * $line".trimEnd()) }
+        }
+        append(" */")
+    }
 }
 
 class PluginFunctionInUseException(name: String, callers: List<String>) : RuntimeException(

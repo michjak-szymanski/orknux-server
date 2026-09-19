@@ -287,6 +287,7 @@ class PluginRunner(
                 description = text(one, "description"),
                 params = read,
                 returnType = text(one, "returnType") ?: return PluginInspection.Unreadable("a function has no returnType"),
+                source = text(one, "runSource"),
             )
         }
 
@@ -850,6 +851,10 @@ class PluginRunner(
                 this.params = declared.params === undefined ? [] : declared.params;
                 this.returnType = declared.returnType;
                 this.run = declared.run;
+                // The implementation as written, for the editor to show beside
+                // the declaration: a person deciding whether to take a function
+                // over wants to read what it does now.
+                this.runSource = typeof this.run === 'function' ? String(this.run) : null;
 
                 if (typeof this.name !== 'string' || this.name.length === 0) {
                   throw new Error('an OrknuxFunction needs a name');
@@ -995,6 +1000,12 @@ data class DeclaredFunction(
     val params: List<DeclaredParam>,
     /** As the plugin wrote it. Whether it names a real value type is decided elsewhere. */
     val returnType: String,
+    /**
+     * The `run` as written, for the editor to show beside the declaration.
+     * Reference only - it closes over the plugin and cannot run as a module -
+     * and null where the contract could not read it.
+     */
+    val source: String? = null,
 )
 
 data class DeclaredParam(val name: String, val type: String)

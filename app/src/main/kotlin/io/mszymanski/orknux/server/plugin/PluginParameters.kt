@@ -126,7 +126,24 @@ class PluginParameters(
         if (literal != null && variableId != null) throw PluginParameterAmbiguousException(name)
         if (literal == null && variableId == null) throw PluginParameterEmptyException(name)
 
-        if (literal != null) {
+        /*
+         * A connection parameter is answered by pointing at one of the
+         * workspace's connections, and the pointing travels as the row's id in
+         * the literal. Checked on its own terms before the scalar check, which
+         * knows nothing of connections and refused every one - the page's
+         * picker offered rows the save then called "not a connection", so the
+         * one parameter type that names a row could never be answered at all.
+         */
+        if (parameter.type.equals(PluginDeclarations.CONNECTION, ignoreCase = true)) {
+            if (variableId != null) throw PluginParameterNotValueException(name, "connection", "a variable")
+            val id = literal?.trim()?.toLongOrNull()
+                ?: throw PluginParameterNotValueException(name, "connection", literal.orEmpty())
+            val connection = connections.workspaceConnection(id)
+                ?.takeIf { it.workspaceId == workspaceId }
+                ?.takeIf { parameter.connectionType == null || it.type.name == parameter.connectionType }
+                ?: throw PluginParameterNotValueException(name, "connection", literal)
+            log.debug("Plugin {} parameter {} points at connection {}", plugin.key, name, connection.id)
+        } else if (literal != null) {
             // A plugin asking for a secret is asking for something that should not
             // be sitting in a column somebody can read off this page.
             if (parameter.secret) throw PluginParameterNotSecretException(name)

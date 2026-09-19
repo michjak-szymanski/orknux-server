@@ -212,6 +212,8 @@ data class PluginFunctionView(
     val params: List<PluginFunctionParamView>,
     val returnType: String,
     val signature: String,
+    /** The `run` as the plugin wrote it, for the editor. Reference only. */
+    val source: String? = null,
 )
 
 data class PluginFunctionParamView(val name: String, val type: String)

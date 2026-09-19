@@ -222,6 +222,8 @@ data class ExecutionStepView(
      */
     val actionId: Long?,
     val conditionId: Long?,
+    /** The agent an agent step ran, for the same link back. */
+    val agentId: Long?,
     /** Which way out of a condition this step sent the run; null for the rest. */
     val branch: EdgeBranch?,
     /**
@@ -251,6 +253,7 @@ data class ExecutionStepView(
         error = step.error,
         actionId = step.actionId,
         conditionId = step.conditionId,
+        agentId = step.agentId,
         branch = step.branch,
         attempts = step.attempts,
         carriedOver = step.carriedOver,

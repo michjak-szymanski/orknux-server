@@ -89,7 +89,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 param.name to type
             }
 
-            Checked(function.name, function.description, params, returnType)
+            Checked(function.name, function.description, params, returnType, function.source)
         }
 
         val array = mapper.createArrayNode()
@@ -98,6 +98,9 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
             node.put("name", function.name)
             function.description?.let { node.put("description", it) }
             node.put("returnType", function.returnType.name)
+            // Kept as written, never validated: it is the plugin's own code,
+            // shown in the editor for reference and executed from the bundle.
+            function.source?.let { node.put("source", it) }
             val params = node.putArray("params")
             function.params.forEach { (name, type) ->
                 params.addObject().put("name", name).put("type", type.name)
@@ -353,6 +356,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 params = read,
                 returnType = returnType,
                 signature = signature(read, returnType),
+                source = node.get("source")?.asString(),
             )
         }
     }.getOrElse { emptyList() }
@@ -377,6 +381,7 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
         val description: String?,
         val params: List<Pair<String, ValueType>>,
         val returnType: ValueType,
+        val source: String? = null,
     )
 
     companion object {

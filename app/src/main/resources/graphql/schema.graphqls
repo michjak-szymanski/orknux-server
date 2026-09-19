@@ -4216,6 +4216,8 @@ type ExecutionStep {
     "The catalogue entry the step ran, so the run can link back to it."
     actionId: ID
     conditionId: ID
+    "The agent an agent step ran, for the same link back to its definition."
+    agentId: ID
     """
     Which way out this step sent the run; null where it answered nothing.
     FAILURE on a failed step means the run went on down its failure edge rather

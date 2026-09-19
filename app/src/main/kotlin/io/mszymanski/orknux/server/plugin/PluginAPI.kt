@@ -402,11 +402,16 @@ class PluginUploadAPI(
         /*
          * What it is called, what it is for and who wrote it.
          *
-         * The plugin's own `plugin.json` first, where it ships one: a plugin's
-         * account of itself is the plugin's. The catalog answers for whatever
-         * the manifest leaves out - and for a plugin that ships no manifest
-         * that is all of it, which is why the author column was empty for
-         * every marketplace install. The listing knew; nothing asked it.
+         * The catalog first, and the plugin's own `plugin.json` for whatever
+         * the catalog leaves out.
+         *
+         * That way round because this is an install *from the catalog*, and
+         * the catalog is the one that knows: it has an account that published
+         * this version, and a manifest has a string somebody typed. Every
+         * plugin in the first-party set ships `"author": "Orknux"` while the
+         * listing names the person who published it - so trusting the file
+         * put a different name in the row than the one on the page the plugin
+         * was installed from.
          *
          * Prose either way, and only prose. What a plugin is *allowed* to do
          * is still read from its code in the sandbox at the moment somebody
@@ -430,10 +435,10 @@ class PluginUploadAPI(
              */
             iconDark = faceOf(offering.iconDark),
             manifest = PluginManifest(
-                name = said?.name ?: offering.name.ifBlank { null },
-                summary = said?.summary ?: offering.summary.ifBlank { null },
-                author = said?.author ?: offering.author.ifBlank { null },
-                version = said?.version ?: offering.version.ifBlank { null },
+                name = offering.name.ifBlank { null } ?: said?.name,
+                summary = offering.summary.ifBlank { null } ?: said?.summary,
+                author = offering.author.ifBlank { null } ?: said?.author,
+                version = offering.version.ifBlank { null } ?: said?.version,
                 // The face came across already, by the route that checks it is
                 // a drawing; a path from here would be fetched a second time.
                 icon = null,

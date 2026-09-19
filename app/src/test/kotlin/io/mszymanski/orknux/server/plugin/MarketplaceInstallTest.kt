@@ -81,6 +81,34 @@ class MarketplaceInstallTest(
         assertThat(plugin.marketplaceVersion).isEqualTo("1.0.0")
         assertThat(plugin.enabled).isTrue()
         /*
+         * What the listing said about it, kept.
+         *
+         * This plugin ships no `plugin.json`, and for a long time that meant a
+         * marketplace install stored no author and no summary at all - the
+         * catalog knew both and nothing asked it, so the Installed table drew
+         * an em dash under Author for every plugin anybody installed.
+         */
+        /*
+         * The catalog's words, and the catalog outranks the file.
+         *
+         * This plugin ships a `plugin.json` that disagrees on every point, and
+         * the listing wins each of them. That way round because this is an
+         * install *from the catalog*: the catalog has an account that
+         * published this version, and a manifest has a string somebody typed.
+         * The first-party plugins all ship `"author": "Orknux"` while their
+         * listings name the person who published them - so the file's word put
+         * a different name in the row than the one on the page the plugin was
+         * installed from.
+         *
+         * For a long time neither was kept at all: the author column was empty
+         * for every marketplace install, because the catalog knew and nothing
+         * asked it.
+         */
+        assertThat(plugin.author).isEqualTo("Orknux")
+        assertThat(plugin.summary).isEqualTo("Says hello.")
+        assertThat(plugin.name).isEqualTo("Greeter")
+        assertThat(plugin.marketplaceVersion).isEqualTo("1.0.0")
+        /*
          * The face came across rather than being pointed at: what is stored is
          * the drawing, so this installation draws it whether or not it can
          * reach the marketplace again.
@@ -199,6 +227,22 @@ class MarketplaceInstallTest(
                 }
                 createContext("/plugins/greeter/lib/words.js") {
                     if (keyed(it)) answer(it, words) else refuse(it)
+                }
+                /*
+                 * A manifest that disagrees with the listing on every point,
+                 * so which one the row keeps is a fact this test establishes
+                 * rather than one it happens not to exercise.
+                 */
+                createContext("/plugins/greeter/plugin.json") {
+                    if (keyed(it)) {
+                        answer(
+                            it,
+                            """{"key":"greeter","name":"Not This","summary":"Nor this.",
+                               "author":"Someone Else","version":"9.9.9"}""",
+                        )
+                    } else {
+                        refuse(it)
+                    }
                 }
                 /*
                  * The one door that answers anybody, and deliberately: a

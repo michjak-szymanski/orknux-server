@@ -369,6 +369,16 @@ type Query {
     workspaceSkills(workspaceId: ID!, catalogId: ID, page: Int = 0, size: Int = 20): SkillPage!
     "The workspace's skill catalogs, by name, each with what it holds."
     skillCatalogs(workspaceId: ID!): [SkillCatalog!]!
+    """
+    The skill catalogs the loaded plugins bring, by the plugin's key.
+
+    Beside `skillCatalogs` rather than folded into it: these are not rows, so
+    there is nothing to rename, delete or add a skill to. What they share with
+    a workspace's own is the part an agent's settings page needs — a name to
+    grant. A plugin that is switched off, or that declares no skills, offers
+    none. Installation-wide, so the workspace is not an argument.
+    """
+    pluginSkillCatalogs: [PluginSkillCatalog!]!
     skill(id: ID!): Skill
     "The workspace's memory catalogs, by name, each with what it holds."
     memoryCatalogs(workspaceId: ID!): [MemoryCatalog!]!
@@ -3084,6 +3094,31 @@ type SkillCatalog {
 }
 
 """
+A folder of skills a plugin brought, offered under the plugin's key.
+
+Its own type rather than a `SkillCatalog` with a made-up id, because it is not
+a row: there is nothing to rename, nothing to delete, and nothing to put a
+skill into. A plugin's skills are the plugin's, replaced wholesale the next
+time it is loaded. What it shares with a workspace's catalog is the only thing
+that matters to an agent — it is granted by name, from the same field.
+"""
+type PluginSkillCatalog {
+    "The plugin's key, which is what goes on an agent's grant list."
+    name: String!
+    "What the plugin is called on screen, so a picker can show both."
+    plugin: String!
+    skills: [PluginSkill!]!
+}
+
+"One instruction set a plugin brings: markdown an agent reads, never code it runs."
+type PluginSkill {
+    name: String!
+    description: String
+    "The markdown in full, frontmatter and all."
+    content: String!
+}
+
+"""
 A folder of memories. Its own thing rather than a label, because it exists — and
 is worth counting — before anything has been put in it.
 """
@@ -4522,6 +4557,16 @@ type Plugin {
     are evaluated ahead of it, so the list is part of what the plugin *is*.
     """
     libraries: [String!]!
+    """
+    The instruction sets this plugin brings.
+
+    A third surface beside its functions and its tools, and the one that does
+    not run: markdown an agent reads before doing something, so the knowledge
+    of how this plugin's work is meant to be done travels with the code that
+    does it. They reach an agent as a catalog named after the plugin's key,
+    granted from the same field every other catalog is. Nothing is automatic.
+    """
+    skills: [PluginSkill!]!
     """
     The marketplace key this was installed from, and the version at that
     moment — null for a plugin loaded from a file or a URL of somebody's own.

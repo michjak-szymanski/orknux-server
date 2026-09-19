@@ -95,6 +95,22 @@ class Plugin(
     var declaredTools: String = "[]",
 
     /**
+     * The instruction sets the plugin brings, as JSON.
+     *
+     * A third surface with a third reader. Nothing here runs: each is markdown
+     * an agent reads before doing something, and it ships with the plugin so
+     * the knowledge of how the work is meant to be done travels with the code
+     * that does it. They reach an agent as a catalog named after the plugin,
+     * which is granted like any other — nothing is automatic.
+     *
+     * Replaced wholesale on every load, the way the functions are. An edit
+     * somebody made here would be lost on the next version, so there is
+     * nowhere to make one: a plugin's skill is the plugin's.
+     */
+    @Column(name = "declared_skills", nullable = false, columnDefinition = "text")
+    var declaredSkills: String = "[]",
+
+    /**
      * What the plugin answered when asked what it has to be told, as JSON.
      *
      * The plugin's half of the bargain: it says what it needs and a workspace says
@@ -266,6 +282,8 @@ data class PluginView(
     val enabled: Boolean = true,
     /** The files it ships with, by path. Empty for a single-file plugin. */
     val libraries: List<String> = emptyList(),
+    /** The instruction sets it brings, offered to agents as a catalog of its own. */
+    val skills: List<PluginSkillView> = emptyList(),
     /** Where it came from, when that was the marketplace. */
     val marketplaceKey: String? = null,
     val marketplaceVersion: String? = null,
@@ -295,6 +313,19 @@ data class PluginFunctionView(
 )
 
 data class PluginFunctionParamView(val name: String, val type: String)
+
+/**
+ * One instruction set a plugin brings.
+ *
+ * [content] is the markdown an agent reads, frontmatter and all — stored as it
+ * will be handed over rather than assembled on the way out, so what a screen
+ * shows and what an agent loads are the same text.
+ */
+data class PluginSkillView(
+    val name: String,
+    val description: String?,
+    val content: String,
+)
 
 /**
  * One tool a plugin says it offers to agents.
@@ -396,6 +427,8 @@ fun Plugin.view(
     permissions: List<PluginPermissionView> = emptyList(),
     /** The paths of the files it ships with; read beside the declarations. */
     libraries: List<String> = emptyList(),
+    /** The instruction sets it brings; read beside the declarations. */
+    skills: List<PluginSkillView> = emptyList(),
 ): PluginView = PluginView(
     id = requireNotNull(id).toString(),
     key = key,
@@ -415,6 +448,7 @@ fun Plugin.view(
     uploadedBy = uploadedBy,
     enabled = enabled,
     libraries = libraries,
+    skills = skills,
     marketplaceKey = marketplaceKey,
     marketplaceVersion = marketplaceVersion,
     icon = icon,

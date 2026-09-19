@@ -5,7 +5,7 @@ import io.mszymanski.orknux.server.memory.ToolParameter
 import org.springframework.stereotype.Service
 
 /**
- * Reading the workspace's skills, as an agent does it.
+ * Reading the skills this agent was given, as an agent does it.
  *
  * A built-in for the same reason the memory lookup is: a workspace tool is
  * JavaScript in a sandbox with no IO, so it cannot read a table.
@@ -16,11 +16,17 @@ import org.springframework.stereotype.Service
  * what is available by name and description, and the agent loads the one that
  * applies. What it may see is what it was granted; a catalog nobody gave it does
  * not appear in the list and cannot be loaded by guessing the name.
+ *
+ * **Two sources, one list.** A skill is either the workspace's own or one a
+ * plugin brought, and the grant is the same either way: a catalog by name. An
+ * agent following a skill has no reason to care which it was, so nothing
+ * downstream of here distinguishes them — see [PluginSkills].
  */
 @Service
 class SkillTool(
     private val catalogs: SkillCatalogRepository,
     private val skills: AgentSkillRepository,
+    private val fromPlugins: PluginSkills,
 ) {
 
     fun descriptors(): List<ToolDescriptor> = listOf(LIST, LOAD)
@@ -32,7 +38,7 @@ class SkillTool(
      * is for, and returning the text here would make the load tool pointless.
      */
     fun list(agent: Agent): List<SkillSummary> = granted(agent)
-        .map { SkillSummary(it.name, it.description, catalogName(agent, it.catalogId)) }
+        .map { SkillSummary(it.name, it.description, it.catalog) }
 
     /**
      * One skill in full, by name.
@@ -41,29 +47,41 @@ class SkillTool(
      * refused: an agent guessing at a skill it was never given should learn that
      * there is no such skill, not that there is one it may not have.
      */
-    fun load(agent: Agent, name: String): AgentSkill? =
+    fun load(agent: Agent, name: String): GrantedSkill? =
         granted(agent).firstOrNull { it.name.equals(name, ignoreCase = true) }
 
     /**
-     * The skills in the catalogs this agent holds.
+     * The skills in the catalogs this agent holds, from both sources.
      *
      * A granted name that matches no catalog is dropped rather than failing:
      * catalogs are granted by name, and a rename should cost an agent one grant
      * rather than every call it makes. A skill switched off is out of reach here
      * as everywhere.
+     *
+     * The workspace's own come first, and that ordering is the shadow rule:
+     * where a plugin brings a skill under a name the workspace already uses,
+     * [load] finds the workspace's. The same precedence a workspace tool has
+     * over a plugin's, for the same reason — what somebody wrote here wins over
+     * what arrived with a file.
      */
-    private fun granted(agent: Agent): List<AgentSkill> {
+    private fun granted(agent: Agent): List<GrantedSkill> {
         if (agent.skillCatalogs.isEmpty()) return emptyList()
         val held = agent.skillCatalogs.toSet()
-        return catalogs.findByWorkspaceIdOrderByNameAsc(agent.workspaceId)
-            .filter { it.name in held }
-            .flatMap { skills.findByCatalogId(requireNotNull(it.id)) }
-            .filter { it.enabled }
-            .sortedBy { it.name }
-    }
 
-    private fun catalogName(agent: Agent, catalogId: Long): String =
-        catalogs.findByWorkspaceIdOrderByNameAsc(agent.workspaceId).firstOrNull { it.id == catalogId }?.name.orEmpty()
+        val own = catalogs.findByWorkspaceIdOrderByNameAsc(agent.workspaceId)
+            .filter { it.name in held }
+            .flatMap { catalog ->
+                skills.findByCatalogId(requireNotNull(catalog.id))
+                    .filter { it.enabled }
+                    .map { GrantedSkill(it.name, it.description, catalog.name, it.content) }
+            }
+            .sortedBy { it.name }
+
+        val brought = fromPlugins.granted(held).filter { brought ->
+            own.none { it.name.equals(brought.name, ignoreCase = true) }
+        }
+        return own + brought
+    }
 
     private companion object {
         val LIST = ToolDescriptor(

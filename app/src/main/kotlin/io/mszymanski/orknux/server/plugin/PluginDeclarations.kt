@@ -2,8 +2,10 @@ package io.mszymanski.orknux.server.plugin
 
 import io.mszymanski.orknux.connector.connection.ConnectionType
 import io.mszymanski.orknux.server.action.ValueType
+import io.mszymanski.orknux.server.agent.SkillFormat
 import io.mszymanski.orknux.workflow.script.DeclaredFunction
 import io.mszymanski.orknux.workflow.script.DeclaredParameter
+import io.mszymanski.orknux.workflow.script.DeclaredSkill
 import io.mszymanski.orknux.workflow.script.DeclaredTool
 import org.springframework.stereotype.Component
 import tools.jackson.databind.ObjectMapper
@@ -191,6 +193,88 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
                 params = read,
                 returnType = node.get("returnType").asString(),
                 proxyOf = node.get("proxyOf")?.asString(),
+            )
+        }
+    }.getOrElse { emptyList() }
+
+    /**
+     * Checks the instruction sets a plugin brings, and returns them as JSON.
+     *
+     * A skill is held to the format a skill written in the interface is held
+     * to — [SkillFormat] decides that, here as everywhere — with one kindness:
+     * a plugin that wrote plain markdown and named the skill in its
+     * declaration has the frontmatter written for it rather than being refused
+     * for leaving out two facts it has already stated. What a plugin cannot do
+     * is ship a *broken* block; a fence that opens and never closes is the
+     * plugin's mistake and is refused as one.
+     *
+     * Names are held to the skill name rule rather than the identifier rule
+     * the functions use: nothing calls a skill, an agent reads it, so "Handling
+     * a stuck deploy" is a better name than `handling_a_stuck_deploy`.
+     *
+     * @throws PluginDeclarationInvalidException if anything about it is wrong.
+     */
+    fun validatedSkills(declared: List<DeclaredSkill>): String {
+        val names = mutableSetOf<String>()
+
+        val array = mapper.createArrayNode()
+        declared.forEach { skill ->
+            val name = skill.name.trim()
+            if (name.isEmpty() || name.length > MOST_SKILL_NAME_CHARS) {
+                throw PluginDeclarationInvalidException(
+                    "\"${skill.name}\" is not a usable skill name: one is 1 to $MOST_SKILL_NAME_CHARS characters",
+                )
+            }
+            if (!names.add(name.lowercase())) {
+                throw PluginDeclarationInvalidException("it declares the skill $name more than once")
+            }
+
+            val description = skill.description?.trim()?.takeIf { it.isNotEmpty() }
+            val content = frontmattered(name, description, skill.content)
+            val check = SkillFormat.check(content)
+            if (!check.valid) {
+                throw PluginDeclarationInvalidException(
+                    "the skill $name is not shaped like a skill: ${check.message?.lowercase()}",
+                )
+            }
+
+            val node = array.addObject()
+            node.put("name", name)
+            description?.let { node.put("description", it) }
+            node.put("content", content)
+        }
+        return mapper.writeValueAsString(array)
+    }
+
+    /**
+     * The content as it will be stored: the plugin's own, or its markdown
+     * under a block written from what it declared.
+     *
+     * Only for a body that opens with no fence at all. One that opens with a
+     * fence is the plugin's own frontmatter and is left exactly as written —
+     * including when it is wrong, which [SkillFormat] then says.
+     */
+    private fun frontmattered(name: String, description: String?, content: String): String {
+        val first = content.lines().firstOrNull { it.isNotBlank() }?.trim()
+        if (first == "---") return content
+        return buildString {
+            append("---\n")
+            append("name: ").append(name).append('\n')
+            append("description: ").append(description ?: "What this skill is for.").append('\n')
+            append("---\n\n")
+            append(content.trimStart())
+        }
+    }
+
+    /** What was kept about the skills, as the catalog and the screen want it. */
+    fun readSkills(json: String): List<PluginSkillView> = runCatching {
+        val array = mapper.readTree(json)
+        (0 until array.size()).map { at ->
+            val node = array.get(at)
+            PluginSkillView(
+                name = node.get("name").asString(),
+                description = node.get("description")?.asString(),
+                content = node.get("content").asString(),
             )
         }
     }.getOrElse { emptyList() }
@@ -402,6 +486,9 @@ class PluginDeclarations(private val mapper: ObjectMapper) {
          * this is a reference to a row.
          */
         const val CONNECTION = "connection"
+
+        /** What the `agent_skill` name column holds. */
+        const val MOST_SKILL_NAME_CHARS = 120
     }
 }
 

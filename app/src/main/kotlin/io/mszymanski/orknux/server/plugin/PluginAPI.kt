@@ -528,6 +528,7 @@ class PluginUploadAPI(
         val apiVersion = inspected.apiVersion
         val declared = declarations.validated(inspected.functions)
         val declaredTools = declarations.validatedTools(inspected.tools)
+        val declaredSkills = declarations.validatedSkills(inspected.skills)
         val parameters = declarations.validatedParameters(inspected.parameters)
 
         /*
@@ -629,6 +630,7 @@ class PluginUploadAPI(
             this.apiVersion = apiVersion
             this.declaredFunctions = declared
             this.declaredTools = declaredTools
+            this.declaredSkills = declaredSkills
             this.declaredParameters = parameters
             this.declaredPermissions = permissions.write(wanted)
             this.acceptedPermissions = permissions.write(wanted)
@@ -664,6 +666,7 @@ class PluginUploadAPI(
             apiVersion = apiVersion,
             declaredFunctions = declared,
             declaredTools = declaredTools,
+            declaredSkills = declaredSkills,
             declaredParameters = parameters,
             declaredPermissions = permissions.write(wanted),
             /*
@@ -715,6 +718,7 @@ class PluginUploadAPI(
                     // what arrived rather than back out of the rows, which are
                     // the same list one flush later.
                     files.map { it.path },
+                    declarations.readSkills(saved.declaredSkills),
                 ),
                 "replaced" to (existing != null),
                 "provides" to provided,
@@ -1717,6 +1721,7 @@ class PluginAPI(
                 // do that lives in a dialog is a decision nobody can audit.
                 permissions.viewOf(permissions.grantedTo(it)),
                 sources.librariesOf(it).map { library -> library.path },
+                declarations.readSkills(it.declaredSkills),
             )
         }
     }

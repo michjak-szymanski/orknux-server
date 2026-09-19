@@ -475,6 +475,41 @@ class PluginRunner(
             emptyList()
         }
 
+        /*
+         * The instructions it brings. Read here with the rest because they
+         * are part of what the plugin is rather than something fetched later
+         * - and because whoever loads it should see the whole of what arrives
+         * in one place. Only the shape is judged: that each has a name and a
+         * body, and that neither is longer than a row can hold. Whether the
+         * body is frontmattered the way a skill must be is the server's
+         * question, since the server is what knows that format.
+         */
+        val taught = if (plugin.hasMember("skills")) {
+            val declaredSkills = plugin.invokeMember("skills")
+            if (!declaredSkills.hasArrayElements()) {
+                return PluginInspection.Unreadable("skills() did not answer with an array")
+            }
+            if (declaredSkills.arraySize > MAX_SKILLS) {
+                return PluginInspection.Unreadable("skills() declared more than $MAX_SKILLS skills")
+            }
+            (0 until declaredSkills.arraySize).map { at ->
+                val one = declaredSkills.getArrayElement(at)
+                // Every element passed through OrknuxSkill, which has already
+                // refused anything without a name or a body.
+                val name = text(one, "name") ?: return PluginInspection.Unreadable("a skill has no name")
+                val content = text(one, "content")
+                    ?: return PluginInspection.Unreadable("the skill $name has no content")
+                if (content.length > MOST_SKILL_CHARS) {
+                    return PluginInspection.Unreadable(
+                        "the skill $name is ${content.length} characters, and a skill is at most $MOST_SKILL_CHARS",
+                    )
+                }
+                DeclaredSkill(name = name.trim(), description = text(one, "description"), content = content)
+            }
+        } else {
+            emptyList()
+        }
+
         return PluginInspection.Read(
             id = id.asString().trim(),
             apiVersion = version.asInt(),
@@ -484,6 +519,7 @@ class PluginRunner(
             permissions = permissions,
             capabilities = wantedCapabilities,
             libraries = shipped,
+            skills = taught,
         )
     }
 
@@ -821,6 +857,19 @@ class PluginRunner(
         const val MOST_LIBRARY_PATH_CHARS = 200
 
         /**
+         * More instruction sets than one plugin has to teach. A plugin that
+         * brings fifty skills is a workspace's skill catalog wearing a
+         * plugin's clothes. `MAX_SKILLS` in @orknux/plugin mirrors it.
+         */
+        const val MAX_SKILLS = 25
+
+        /**
+         * A skill is a page, not a manual. Generous enough for a long one and
+         * bounded, because this crosses out of a sandbox into a column.
+         */
+        const val MOST_SKILL_CHARS = 64 * 1024
+
+        /**
          * The same shape without the `.js`, for the files beside a plugin that
          * are not code — its manifest, its icon. Relative and contained, for
          * the reason [LIBRARY_PATH] is: a path that could climb out is a path
@@ -953,6 +1002,26 @@ class PluginRunner(
                * it. Defaults to none, which is every single-file plugin.
                */
               libraries() {
+                return [];
+              }
+
+              /**
+               * The skills this plugin brings: instructions an agent can be
+               * given, as OrknuxSkill objects.
+               *
+               * A third surface, and a third reader. functions() is called by
+               * a workflow and tools() by a model; a skill is neither called
+               * nor run - it is markdown an agent reads to learn how this
+               * plugin's work is meant to be done. A plugin that offers a
+               * Slack search tool can ship the skill that says when to reach
+               * for it, and the two travel together instead of the second
+               * being retyped into every workspace by hand.
+               *
+               * They arrive as a catalog named after the plugin, and an agent
+               * is granted that catalog the way it is granted any other.
+               * Nothing is automatic.
+               */
+              skills() {
                 return [];
               }
             };
@@ -1097,6 +1166,38 @@ class PluginRunner(
               }
             };
 
+            /*
+             * An instruction set this plugin brings with it.
+             *
+             * Neither called nor run: `content` is markdown an agent reads.
+             * It opens with a `---` frontmatter block naming and describing
+             * the skill, the same shape a skill written in the interface has
+             * - and a plugin that leaves the block out has it written from
+             * the name and description it gave here, because those are the
+             * same two facts and asking for them twice is a trap.
+             */
+            globalThis.OrknuxSkill = class OrknuxSkill {
+              constructor(declared) {
+                if (declared === null || typeof declared !== 'object') {
+                  throw new Error('an OrknuxSkill needs a declaration');
+                }
+
+                this.name = declared.name;
+                this.description = declared.description === undefined ? null : declared.description;
+                this.content = declared.content;
+
+                if (typeof this.name !== 'string' || this.name.length === 0) {
+                  throw new Error('an OrknuxSkill needs a name');
+                }
+                if (typeof this.content !== 'string' || this.content.trim().length === 0) {
+                  throw new Error(this.name + ' needs content: the markdown an agent reads');
+                }
+                if (this.description !== null && typeof this.description !== 'string') {
+                  throw new Error(this.name + " has a description that is not text");
+                }
+              }
+            };
+
             globalThis.$CONSTRUCT = function (exported) {
               if (typeof exported !== 'function') {
                 throw new Error('the default export must be a class that extends OrknuxPlugin');
@@ -1167,6 +1268,12 @@ sealed interface PluginInspection {
          * sandbox only knows what the plugin declared.
          */
         val libraries: List<String> = emptyList(),
+        /**
+         * The instructions it brings, shape-checked and no more. Whether each
+         * body carries the frontmatter a skill needs is decided by the server,
+         * which is what owns that format.
+         */
+        val skills: List<DeclaredSkill> = emptyList(),
     ) : PluginInspection
 
     /** It is not a plugin, or it did not hold up its end of the contract. */
@@ -1203,6 +1310,20 @@ data class DeclaredTool(
     val params: List<DeclaredParam>,
     val returnType: String,
     val proxyOf: String?,
+)
+
+/**
+ * One instruction set a plugin brings with it.
+ *
+ * Not a third kind of callable: nothing here runs. [content] is markdown an
+ * agent reads before doing something, and the plugin ships it so the knowledge
+ * of how its work is meant to be done travels with the code that does it.
+ */
+data class DeclaredSkill(
+    val name: String,
+    val description: String?,
+    /** Markdown. Whether it opens with the frontmatter a skill needs is the server's question. */
+    val content: String,
 )
 
 /**

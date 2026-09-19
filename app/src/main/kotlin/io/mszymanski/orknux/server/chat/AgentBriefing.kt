@@ -2,8 +2,7 @@ package io.mszymanski.orknux.server.chat
 
 import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.agent.Agent
-import io.mszymanski.orknux.server.agent.AgentSkillRepository
-import io.mszymanski.orknux.server.agent.SkillCatalogRepository
+import io.mszymanski.orknux.server.agent.SkillTool
 import org.springframework.stereotype.Service
 
 /**
@@ -23,8 +22,14 @@ import org.springframework.stereotype.Service
  */
 @Service
 class AgentBriefing(
-    private val catalogs: SkillCatalogRepository,
-    private val skills: AgentSkillRepository,
+    /**
+     * Asked rather than queried, so the briefing lists exactly what
+     * `skill_list` will list and `skill_load` will load — including the skills
+     * a plugin brought. This used to read the catalogs itself, which meant two
+     * places deciding what an agent had been granted and only one of them
+     * knowing about plugins.
+     */
+    private val skills: SkillTool,
     private val connections: WorkspaceConnectionService,
 ) {
 
@@ -37,13 +42,7 @@ class AgentBriefing(
         val parts = mutableListOf<String>()
         agent.systemPrompt?.takeIf { it.isNotBlank() }?.let(parts::add)
 
-        val granted = catalogs.findByWorkspaceIdOrderByNameAsc(agent.workspaceId)
-            .filter { it.name in agent.skillCatalogs }
-        val instructions = granted
-            .flatMap { catalog -> skills.findByCatalogId(requireNotNull(catalog.id)) }
-            // A skill switched off is defined but out of reach, here as anywhere.
-            .filter { it.enabled }
-            .sortedBy { it.name }
+        val instructions = skills.list(agent)
 
         if (instructions.isNotEmpty()) {
             parts += buildString {

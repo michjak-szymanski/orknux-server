@@ -619,7 +619,8 @@ CREATE TABLE plugin
     icon                         text,
     summary                      text,
     author                       varchar(200),
-    version                      varchar(32)
+    version                      varchar(32),
+    declared_skills              text not null default '[]'
 );
 
 CREATE TABLE plugin_library

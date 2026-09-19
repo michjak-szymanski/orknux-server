@@ -145,6 +145,7 @@ class MarketplaceAPI(
             declarations.readParameters(plugin.declaredParameters),
             permissions.viewOf(permissions.grantedTo(plugin)),
             sources.librariesOf(plugin).map { it.path },
+            declarations.readSkills(plugin.declaredSkills),
         )
     }
 }

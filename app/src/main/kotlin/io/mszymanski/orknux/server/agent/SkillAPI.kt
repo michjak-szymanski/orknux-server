@@ -38,6 +38,8 @@ class SkillAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
     private val revisions: ComponentRevisionRecorder,
     private val dependants: ComponentDependants,
+    /** What the loaded plugins bring, for the picker that grants a catalog. */
+    private val fromPlugins: PluginSkills,
 ) {
 
     /**
@@ -70,6 +72,21 @@ class SkillAPI(
         requireWorkspaceAccess(workspaceId)
         return catalogs.findByWorkspaceIdOrderByNameAsc(workspaceId).map(::describe)
     }
+
+    /**
+     * The folders the loaded plugins bring.
+     *
+     * Beside the workspace's own rather than among them: these are not rows,
+     * so there is nothing here to rename, delete or put a skill into. An
+     * agent's settings page grants them from the same field, by name, which is
+     * the only thing the two kinds have to have in common.
+     *
+     * Installation-wide, like the plugins themselves, and readable by anybody
+     * who may see this workspace — granting one is the decision, and a picker
+     * that cannot show what is on offer cannot be used to make it.
+     */
+    @QueryMapping
+    fun pluginSkillCatalogs(): List<PluginSkillCatalog> = fromPlugins.catalogs()
 
     @MutationMapping
     @Transactional

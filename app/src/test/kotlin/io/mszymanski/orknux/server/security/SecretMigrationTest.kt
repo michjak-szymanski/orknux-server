@@ -255,7 +255,7 @@ class SecretMigrationTest(
      * `@Entity`, which is Spring's own scanner rather than the JPA metamodel the
      * production code asks, and counts the annotated fields it finds.
      *
-     * And it names the eight, because "eight of something" is not a review and
+     * And it names the nine, because "nine of something" is not a review and
      * this list is the one an auditor wants to read.
      */
     @Test
@@ -268,11 +268,13 @@ class SecretMigrationTest(
             "shell.private_key",
             "workspace_connection.app_token",
             "workspace_connection.secret",
+            // The Slack user token search runs on, V247.
+            "workspace_connection.user_token",
             "workspace_variable.value",
         )
 
         assertThat(columns.all)
-            .describedAs("a ninth encrypted field anywhere on the classpath is a ninth swept column")
+            .describedAs("a tenth encrypted field anywhere on the classpath is a tenth swept column")
             .hasSize(annotatedFieldsOnTheClasspath())
     }
 

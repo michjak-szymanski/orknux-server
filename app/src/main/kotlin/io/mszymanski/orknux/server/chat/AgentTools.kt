@@ -171,7 +171,7 @@ class AgentTools(
      * failed conversation — it can apologise, try another way, or answer without
      * it, and any of those beats the whole exchange dying because a lookup did.
      */
-    fun run(agent: Agent, call: ToolCall): String = try {
+    fun run(agent: Agent, call: ToolCall, sessionId: Long? = null): String = try {
         /*
          * orknux's own, and only for an agent granted them.
          *
@@ -235,11 +235,11 @@ class AgentTools(
                 val remote = mcpTools.resolve(agent, call.name)
                 val declared = pluginTools.resolve(agent, call.name)
                 when {
-                    tool != null -> workspaceTools.call(agent, tool, call.arguments)
+                    tool != null -> workspaceTools.call(agent, tool, call.arguments, sessionId)
                     // An MCP tool takes its own named arguments, so the whole
                     // object goes through rather than being unwrapped.
                     remote != null -> mcpTools.call(remote.first, remote.second, call.arguments)
-                    declared != null -> pluginTools.call(agent, declared, call.arguments)
+                    declared != null -> pluginTools.call(agent, declared, call.arguments, sessionId)
                     else -> mapper.writeValueAsString(mapOf("error" to "There is no tool called ${call.name}"))
                 }
             }

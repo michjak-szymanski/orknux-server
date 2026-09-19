@@ -434,6 +434,15 @@ CREATE TABLE llm_session
     constraint llm_session_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
 );
 
+CREATE TABLE llm_session_store
+(
+    session_id                   integer not null,
+    name                         varchar(200) not null,
+    value                        text not null,
+    primary key (session_id, name),
+    constraint llm_session_store_session_id_fkey FOREIGN KEY (session_id) REFERENCES llm_session(id) ON DELETE CASCADE
+);
+
 CREATE TABLE llm_session_event
 (
     id                           integer not null primary key autoincrement,

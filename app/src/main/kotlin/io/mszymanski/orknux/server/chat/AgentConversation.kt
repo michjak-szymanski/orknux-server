@@ -413,7 +413,7 @@ class AgentConversation(
                         val line = into?.let { sessions.toolCalled(it, call.name, asked) }
                         watch?.called(here, call.name, asked)
                         val got = try {
-                            if (shed != null && shed.handles(call.name)) shed.run(call) else tools.run(agent, call)
+                            if (shed != null && shed.handles(call.name)) shed.run(call) else tools.run(agent, call, into)
                         } catch (halted: AgentRoundHalted) {
                             // The lent tool ended the round. What it did is
                             // still written down, or the transcript would stop

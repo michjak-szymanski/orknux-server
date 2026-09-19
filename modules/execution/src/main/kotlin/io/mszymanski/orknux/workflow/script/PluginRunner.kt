@@ -51,6 +51,12 @@ class PluginRunner(
      * something. See [PluginHost].
      */
     private val host: PluginHost? = null,
+    /**
+     * The AI session's scratchpad, for `orknux.session.store`. Null in tests
+     * and installations that wire none; the helper then says there is no
+     * store here.
+     */
+    private val scratch: SessionScratch? = null,
 ) {
 
     /**
@@ -77,6 +83,7 @@ class PluginRunner(
             )
             .replace("%HTTP%", HostHelpers.http("this plugin was not granted NETWORK_REQUEST").prependIndent("  "))
             .replace("%LOG%", HostHelpers.log(HostHelpers.threshold(properties.logLevel)).prependIndent("  "))
+            .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
     }
 
     /**
@@ -174,13 +181,20 @@ class PluginRunner(
          * it means.
          */
         surface: String = "functions",
+        /**
+         * The AI session this call is made inside, or null for one made
+         * inside none - a tool tried from its page. It is what scopes
+         * `orknux.session.store`: without it the store's doors are simply not
+         * bound, and the helper says so.
+         */
+        sessionId: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             guard.bounded(stopped, { newContext(permissions) }) {
                 ScriptResult.Returned(
-                    invoke(it, source, functionName, arguments, settings, capabilities, on, surface),
+                    invoke(it, source, functionName, arguments, settings, capabilities, on, surface, sessionId),
                     millis(started),
                 )
             }
@@ -213,6 +227,7 @@ class PluginRunner(
         capabilities: Set<PluginCapability>,
         on: Long?,
         surface: String,
+        sessionId: Long?,
     ): String? {
         polyglot.eval("js", contract)
 
@@ -231,7 +246,7 @@ class PluginRunner(
         // As text, like everything else that crosses, so the harness stays one
         // cached source rather than being respliced per call.
         bindings.putMember(RESULT_LIMIT, properties.resultLimitChars.toString())
-        bind(bindings, capabilities, on, functionName)
+        bind(bindings, capabilities, on, functionName, sessionId)
         polyglot.eval("js", CALL)
 
         val error = bindings.getMember(ERROR)
@@ -529,7 +544,7 @@ class PluginRunner(
      * could walk from it to a class loader; a plugin handed a string can read
      * the string.
      */
-    private fun bind(bindings: Value, capabilities: Set<PluginCapability>, on: Long?, named: String) {
+    private fun bind(bindings: Value, capabilities: Set<PluginCapability>, on: Long?, named: String, sessionId: Long? = null) {
         /*
          * The logging door first, and outside the guard below: it is not a
          * capability and never needed granting - nothing is reached by it - so a
@@ -551,6 +566,35 @@ class PluginRunner(
                 null
             },
         )
+
+        /*
+         * The store's doors, beside the log's and like it not a capability:
+         * nothing outside the session is reached by them. Bound only where
+         * the call was made inside an AI session, so a tool tried from its
+         * page is told there is no store here rather than writing into
+         * nowhere.
+         */
+        val store = scratch
+        if (store != null && sessionId != null) {
+            bindings.putMember(
+                STORE_PUT,
+                ProxyExecutable { given ->
+                    val key = given.getOrNull(0)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable "a key has to be a string"
+                    val value = given.getOrNull(1)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable "a value has to be given"
+                    store.put(sessionId, key, value)
+                },
+            )
+            bindings.putMember(
+                STORE_GET,
+                ProxyExecutable { given ->
+                    val key = given.getOrNull(0)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable null
+                    store.get(sessionId, key)
+                },
+            )
+        }
 
         val server = host
         if (capabilities.isEmpty() || server == null) return
@@ -638,6 +682,10 @@ class PluginRunner(
 
         /** Where `orknux.log` hands a line over. Not a capability; nothing is reached by it. */
         const val LOG = "__orknuxLog"
+
+        /** The execution store's two doors; bound only inside a workflow execution. */
+        const val STORE_PUT = "__orknuxStorePut"
+        const val STORE_GET = "__orknuxStoreGet"
 
         /**
          * The plugins' own logger, separate from this class's and from the
@@ -801,6 +849,7 @@ class PluginRunner(
 %SLACK%
 %HTTP%
 %LOG%
+%STORE%
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {

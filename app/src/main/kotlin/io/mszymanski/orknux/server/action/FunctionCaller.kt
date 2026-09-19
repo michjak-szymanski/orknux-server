@@ -87,6 +87,13 @@ class FunctionCaller(
          * else the caller knows comes in on it.
          */
         origin: ScriptOrigin = ScriptOrigin(),
+        /**
+         * The AI session this call is made inside, where it is made inside
+         * one - an agent's tool call. It is what scopes `orknux.session.store`;
+         * a workflow node and the editor's Run pass nothing, and the store's
+         * helper says there is no session there.
+         */
+        sessionId: Long? = null,
     ): ScriptResult {
         val arguments = declared + externals.of(function, insteadOfVariables)
 
@@ -102,7 +109,7 @@ class FunctionCaller(
          * `this.settings` — the editor says so where the edit is made.
          */
         if (function.scope == FunctionScope.PLUGIN && function.editedAt == null) {
-            return callPlugin(function, arguments, workspaceId)
+            return callPlugin(function, arguments, workspaceId, sessionId)
         }
 
         /*
@@ -123,6 +130,7 @@ class FunctionCaller(
                 on = workspaceId,
                 origin = origin.copy(functionId = function.id),
                 timeoutMillis = timeouts.millisFor(function.timeoutSeconds, workspaceId),
+                sessionId = sessionId,
             )
         }
     }
@@ -142,7 +150,13 @@ class FunctionCaller(
      *
      * @param toolName the name the plugin gave it, without the key prefix.
      */
-    fun callPluginTool(plugin: Plugin, toolName: String, arguments: List<String>, workspaceId: Long): ScriptResult {
+    fun callPluginTool(
+        plugin: Plugin,
+        toolName: String,
+        arguments: List<String>,
+        workspaceId: Long,
+        sessionId: Long? = null,
+    ): ScriptResult {
         val missing = pluginParameters.missingFor(plugin, workspaceId)
         if (missing.isNotEmpty()) {
             return ScriptResult.Failed(
@@ -161,6 +175,7 @@ class FunctionCaller(
             pluginCapabilities.grantedTo(plugin),
             on = workspaceId,
             surface = "tools",
+            sessionId = sessionId,
         )
     }
 
@@ -173,7 +188,12 @@ class FunctionCaller(
      * workspace's plugin page marks the same parameters, so the sentence here and
      * the red mark there are the same fact.
      */
-    private fun callPlugin(function: WorkflowFunction, arguments: List<String>, workspaceId: Long): ScriptResult {
+    private fun callPlugin(
+        function: WorkflowFunction,
+        arguments: List<String>,
+        workspaceId: Long,
+        sessionId: Long? = null,
+    ): ScriptResult {
         val plugin = function.pluginId?.let { plugins.findByIdOrNull(it) }
             ?: return ScriptResult.Failed("is declared by a plugin that is no longer loaded", 0)
 
@@ -203,8 +223,8 @@ class FunctionCaller(
             // from its own row: a capability reaches outside the sandbox, so
             // it is granted apart from the permissions above.
             pluginCapabilities.grantedTo(plugin),
-        
             on = workspaceId,
+            sessionId = sessionId,
         )
     }
 }

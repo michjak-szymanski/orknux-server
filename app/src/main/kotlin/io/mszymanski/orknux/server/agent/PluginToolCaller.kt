@@ -90,7 +90,7 @@ class PluginToolCaller(
      * schema, positionally to the plugin, the same translation a workspace
      * tool's call makes and under the same two kindnesses.
      */
-    fun call(agent: Agent, tool: PluginTool, arguments: String): String {
+    fun call(agent: Agent, tool: PluginTool, arguments: String, sessionId: Long? = null): String {
         val positional = argumentsFor(tool.params, arguments)
 
         val result = if (tool.declared.proxyOf != null) {
@@ -113,9 +113,10 @@ class PluginToolCaller(
                 ),
                 workspaceId = agent.workspaceId,
                 origin = ScriptOrigin(),
+                sessionId = sessionId,
             )
         } else {
-            caller.callPluginTool(tool.plugin, tool.declared.name, positional, agent.workspaceId)
+            caller.callPluginTool(tool.plugin, tool.declared.name, positional, agent.workspaceId, sessionId)
         }
 
         return when (result) {

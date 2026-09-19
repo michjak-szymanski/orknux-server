@@ -66,6 +66,12 @@ class ScriptRunner(
      * wired: the helper is still defined, and refuses in words.
      */
     private val host: PluginHost? = null,
+    /**
+     * The AI session's scratchpad, for `orknux.session.store`. Null in tests
+     * and installations that wire none; the helper then says there is no
+     * store here.
+     */
+    private val scratch: SessionScratch? = null,
 ) {
 
     private val engine: Engine = Engine.newBuilder("js")
@@ -132,6 +138,12 @@ class ScriptRunner(
          * every run had before timeouts were configurable.
          */
         timeoutMillis: Long? = null,
+        /**
+         * The AI session this call is made inside, or null for one made inside
+         * none. It is what scopes `orknux.session.store`: without it the
+         * store's doors are simply not bound, and the helper says so.
+         */
+        sessionId: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
@@ -145,7 +157,7 @@ class ScriptRunner(
         return try {
             guard.bounded(stopped, ::newContext, timeoutMillis) {
                 ScriptResult.Returned(
-                    evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName, origin),
+                    evaluate(it, source, functionName, arguments, context, modules, imports, on, said, functionName, origin, sessionId),
                     millisSince(started),
                     said.toList(),
                 )
@@ -414,9 +426,10 @@ class ScriptRunner(
         said: MutableList<String>,
         called: String,
         origin: ScriptOrigin,
+        sessionId: Long?,
     ): String? {
         load(polyglot, modules)
-        serve(polyglot, on, said, called, origin)
+        serve(polyglot, on, said, called, origin, sessionId)
 
         val module = polyglot.eval(module(prelude(imports) + source))
         val function = module.getMember("default")
@@ -543,6 +556,7 @@ class ScriptRunner(
             )
             .replace("%HTTP%", HostHelpers.http("this installation cannot make requests from a function").prependIndent("  "))
             .replace("%LOG%", HostHelpers.log(kept).prependIndent("  "))
+            .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
     }
 
     private fun serve(
@@ -551,6 +565,7 @@ class ScriptRunner(
         said: MutableList<String>,
         called: String,
         origin: ScriptOrigin,
+        sessionId: Long?,
     ) {
         val server = host
         val bindings = polyglot.getBindings("js")
@@ -598,6 +613,31 @@ class ScriptRunner(
             }
             bindings.putMember(HOST, ProxyObject.fromMap(granted))
         }
+        /*
+         * The store's doors, bound only where this call belongs to an AI
+         * session. A tool tried from its editor page has no session to store
+         * into, and the helper says so instead of writing into nowhere.
+         */
+        if (scratch != null && sessionId != null) {
+            bindings.putMember(
+                STORE_PUT,
+                ProxyExecutable { given ->
+                    val key = given.getOrNull(0)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable "a key has to be a string"
+                    val value = given.getOrNull(1)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable "a value has to be given"
+                    scratch.put(sessionId, key, value)
+                },
+            )
+            bindings.putMember(
+                STORE_GET,
+                ProxyExecutable { given ->
+                    val key = given.getOrNull(0)?.takeIf { it.isString }?.asString()
+                        ?: return@ProxyExecutable null
+                    scratch.get(sessionId, key)
+                },
+            )
+        }
         polyglot.eval("js", services)
     }
 
@@ -621,6 +661,10 @@ class ScriptRunner(
 
         /** Where `orknux.log` hands a line over. Not a capability; nothing is reached by it. */
         const val LOG = "__orknuxLog"
+
+        /** The execution store's two doors; bound only inside a workflow execution. */
+        const val STORE_PUT = "__orknuxStorePut"
+        const val STORE_GET = "__orknuxStoreGet"
 
         /**
          * A bound on what one call may keep.
@@ -657,6 +701,7 @@ class ScriptRunner(
 %SLACK%
 %HTTP%
 %LOG%
+%STORE%
             };
         """.trimIndent()
 

@@ -62,7 +62,7 @@ class WorkspaceToolCaller(
      * model can apologise, try another way, or answer without it — all of which
      * beat the conversation dying because a tool threw.
      */
-    fun call(agent: Agent, tool: AgentTool, arguments: String): String {
+    fun call(agent: Agent, tool: AgentTool, arguments: String, sessionId: Long? = null): String {
         /*
          * What it imports, assembled before it runs. An import that no longer
          * resolves comes back to the model as an error like any other failure: the
@@ -89,6 +89,7 @@ class WorkspaceToolCaller(
             imports = resolved.imports,
             on = agent.workspaceId,
             timeoutMillis = timeouts.millisFor(tool.timeoutSeconds, agent.workspaceId),
+            sessionId = sessionId,
         )
         return when (result) {
             is ScriptResult.Returned -> result.json ?: mapper.writeValueAsString(mapOf("result" to null))

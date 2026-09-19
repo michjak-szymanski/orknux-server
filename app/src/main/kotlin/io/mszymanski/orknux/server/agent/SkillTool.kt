@@ -58,8 +58,9 @@ class SkillTool(
      * rather than every call it makes. A skill switched off is out of reach here
      * as everywhere.
      *
-     * The two sets cannot collide: a plugin's catalog carries the `_plugin`
-     * suffix, so a grant string names one folder or the other and never both.
+     * A plugin's catalog carries the `_plugin` suffix, so a grant string
+     * naming both is a folder somebody named after a plugin. The two then
+     * merge, workspace first — see below.
      */
     private fun granted(agent: Agent): List<GrantedSkill> {
         if (agent.skillCatalogs.isEmpty()) return emptyList()
@@ -75,9 +76,17 @@ class SkillTool(
             .sortedBy { it.name }
 
         /*
-         * And the plugins', which cannot be confused with the above: a
-         * plugin's catalog is `<key>_plugin`, so one grant string never means
-         * two folders and there is nothing here to merge or shadow.
+         * And the plugins'. The `_plugin` suffix means a grant string almost
+         * never names both — a workspace would have to have a folder called
+         * `jira_plugin` — and where somebody has managed it, the two merge.
+         *
+         * Merged rather than shadowed, deliberately. A shadow rule silently
+         * takes away skills an agent was granted, which is a harder thing to
+         * notice than a list with more in it than expected; and a name that
+         * collides with `<key>_plugin` is a folder somebody named after a
+         * plugin, which is a mistake to fix rather than a case to design
+         * around. The workspace's come first, so where two skills share a
+         * name, [load] finds the workspace's.
          */
         return own + fromPlugins.granted(held)
     }

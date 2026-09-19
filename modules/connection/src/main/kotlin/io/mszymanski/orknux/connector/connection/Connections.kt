@@ -224,6 +224,20 @@ class WorkspaceConnection(
     var appTokenVariableId: Long? = null,
 
     /**
+     * A third credential, for the one Slack call a bot cannot make: search.
+     * `search.messages` answers only for a user token (`xoxp-...`, with
+     * `search:read`), so a workspace that wants search stores one here and
+     * everything else keeps using the bot token in [secret].
+     */
+    @Convert(converter = SecretConverter::class)
+    @Column(name = "user_token", length = SECRET_COLUMN_LENGTH)
+    var userToken: String? = null,
+
+    /** The workspace variable [userToken] reads its value from; its own choice. */
+    @Column(name = "user_token_variable_id")
+    var userTokenVariableId: Long? = null,
+
+    /**
      * Which port the mail server listens on. Null uses the one that goes with
      * [smtpSecurity], since a workspace that picked STARTTLS almost never means
      * anything other than 587.

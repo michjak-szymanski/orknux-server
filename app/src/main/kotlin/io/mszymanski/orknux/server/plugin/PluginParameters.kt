@@ -81,6 +81,7 @@ class PluginParameters(
                 name = parameter.name,
                 description = parameter.description,
                 type = parameter.type,
+                connectionType = parameter.connectionType,
                 required = parameter.required,
                 secret = parameter.secret,
                 literal = setting?.literalValue,

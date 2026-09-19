@@ -32,6 +32,10 @@ class ConnectionCredentials(private val references: SecretReferences) {
     fun appTokenOf(connection: WorkspaceConnection): HeldCredential =
         references.read(connection.workspaceId, connection.appToken, connection.appTokenVariableId)
 
+    /** Slack's user token, the one search answers for; chooses its source separately too. */
+    fun userTokenOf(connection: WorkspaceConnection): HeldCredential =
+        references.read(connection.workspaceId, connection.userToken, connection.userTokenVariableId)
+
     fun secretOf(server: McpServer): HeldCredential =
         references.read(server.workspaceId, server.secret, server.secretVariableId)
 

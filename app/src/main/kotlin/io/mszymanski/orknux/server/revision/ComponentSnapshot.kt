@@ -160,6 +160,9 @@ object ComponentSnapshot {
             "memoryCatalogs" to agent.memoryCatalogs.toList(),
             "skillCatalogs" to agent.skillCatalogs.toList(),
             "tools" to agent.tools.toList(),
+            // By id, which is what the column holds; a grant whose connection
+            // has since been deleted restores as exactly the reach it has.
+            "connectionIds" to agent.connections.toList(),
         ),
     )
 
@@ -303,6 +306,10 @@ object ComponentSnapshot {
         agent.memoryCatalogs = names(held, "memoryCatalogs")
         agent.skillCatalogs = names(held, "skillCatalogs")
         agent.tools = names(held, "tools")
+        // A version written before connections existed grants none, which is
+        // what an agent saved then actually held.
+        agent.connections =
+            held.path("connectionIds").values().mapNotNull { if (it.isNumber) it.asLong() else null }.toMutableList()
     }
 
     // ---------------------------------------------------------------- reading

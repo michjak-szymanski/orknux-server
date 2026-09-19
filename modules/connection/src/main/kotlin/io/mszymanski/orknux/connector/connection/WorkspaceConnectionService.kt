@@ -56,7 +56,8 @@ class WorkspaceConnectionService(
      */
     fun connectionsReading(workspaceId: Long, variableId: Long): List<CredentialReader> = (
         workspaceConnections.findByWorkspaceIdAndSecretVariableId(workspaceId, variableId) +
-            workspaceConnections.findByWorkspaceIdAndAppTokenVariableId(workspaceId, variableId)
+            workspaceConnections.findByWorkspaceIdAndAppTokenVariableId(workspaceId, variableId) +
+            workspaceConnections.findByWorkspaceIdAndUserTokenVariableId(workspaceId, variableId)
         ).map { CredentialReader(requireNotNull(it.id), it.name) }.distinctBy { it.id }.sortedBy { it.name }
 
     @Transactional
@@ -79,6 +80,8 @@ class WorkspaceConnectionService(
         val secretVariable = references.bind(input.workspaceId, input.secretVariableId, ownSecret)
         val ownAppToken = input.appToken?.trim()?.ifEmpty { null }
         val appTokenVariable = references.bind(input.workspaceId, input.appTokenVariableId, ownAppToken)
+        val ownUserToken = input.userToken?.trim()?.ifEmpty { null }
+        val userTokenVariable = references.bind(input.workspaceId, input.userTokenVariableId, ownUserToken)
 
         val connection = workspaceConnections.save(
             WorkspaceConnection(
@@ -91,6 +94,8 @@ class WorkspaceConnectionService(
                 secretVariableId = secretVariable,
                 appToken = if (appTokenVariable == null) ownAppToken else null,
                 appTokenVariableId = appTokenVariable,
+                userToken = if (userTokenVariable == null) ownUserToken else null,
+                userTokenVariableId = userTokenVariable,
                 smtpPort = input.smtpPort,
                 smtpUsername = input.smtpUsername?.trim()?.ifEmpty { null },
                 smtpFrom = input.smtpFrom?.trim()?.ifEmpty { null },
@@ -174,6 +179,21 @@ class WorkspaceConnectionService(
                 connection.appTokenVariableId = null
             }
         }
+
+        val ownUserToken = input.userToken?.trim()
+        val userTokenVariable =
+            references.bind(connection.workspaceId, input.userTokenVariableId, ownUserToken?.ifEmpty { null })
+        when {
+            userTokenVariable != null -> {
+                connection.userTokenVariableId = userTokenVariable
+                connection.userToken = null
+            }
+
+            ownUserToken != null -> {
+                connection.userToken = ownUserToken.ifEmpty { null }
+                connection.userTokenVariableId = null
+            }
+        }
         input.smtpPort?.let { connection.smtpPort = it.takeIf { port -> port > 0 } }
         input.smtpUsername?.let { connection.smtpUsername = it.trim().ifEmpty { null } }
         input.smtpFrom?.let { connection.smtpFrom = it.trim().ifEmpty { null } }
@@ -207,6 +227,8 @@ class WorkspaceConnectionService(
             connection.secretVariableId = null
             connection.appToken = null
             connection.appTokenVariableId = null
+            connection.userToken = null
+            connection.userTokenVariableId = null
             // Who the workspace logged in as and sent from is as much its own as
             // the password was, so disconnecting leaves none of it behind.
             connection.smtpUsername = null
@@ -281,6 +303,15 @@ class WorkspaceConnectionService(
         return connection.appToken
     }
 
+    /** And for the user token, for the same reason and under the same rule. */
+    @Transactional
+    fun revealWorkspaceConnectionUserToken(id: Long): String? {
+        val connection = workspaceConnections.findByIdOrNull(id) ?: throw ConnectionNotFoundException(id)
+        if (connection.userTokenVariableId != null) return null
+        log.info("User token for connection {} (workspace {}) revealed", connection.name, connection.workspaceId)
+        return connection.userToken
+    }
+
     /**
      * A connection as a screen sees it, with the variables its two credentials
      * read named.
@@ -293,6 +324,7 @@ class WorkspaceConnectionService(
         connection,
         references.describe(connection.workspaceId, connection.secretVariableId),
         references.describe(connection.workspaceId, connection.appTokenVariableId),
+        references.describe(connection.workspaceId, connection.userTokenVariableId),
     )
 
     private companion object {
@@ -323,6 +355,10 @@ data class CreateWorkspaceConnectionInput(
     val appToken: String? = null,
     /** A workspace secret to read the app-level token from; its own choice. */
     val appTokenVariableId: Long? = null,
+    /** Slack's user token (`xoxp-`). Optional: with one the connection can also search. */
+    val userToken: String? = null,
+    /** A workspace secret to read the user token from; its own choice. */
+    val userTokenVariableId: Long? = null,
     /** Where the mail server listens; null takes the port [smtpSecurity] implies. */
     val smtpPort: Int? = null,
     /** Null sends without authenticating; the password arrives as [secret]. */
@@ -354,6 +390,10 @@ data class UpdateWorkspaceConnectionInput(
     val appToken: String? = null,
     /** And the app-level token's own reference, chosen separately from [secretVariableId]. */
     val appTokenVariableId: Long? = null,
+    /** The Slack user token, with the same null and empty meaning. */
+    val userToken: String? = null,
+    /** And the user token's own reference, chosen separately again. */
+    val userTokenVariableId: Long? = null,
     val smtpPort: Int? = null,
     val smtpUsername: String? = null,
     val smtpFrom: String? = null,
@@ -400,6 +440,13 @@ data class WorkspaceConnectionView(
     val appTokenVariableName: String?,
     val appTokenVariableCatalog: String?,
     val appTokenVariableMissing: Boolean,
+    /** Whether a user token is stored, which is what makes Slack searchable. */
+    val userTokenSet: Boolean,
+    /** The user token's own answers to the same four questions. */
+    val userTokenVariableId: Long?,
+    val userTokenVariableName: String?,
+    val userTokenVariableCatalog: String?,
+    val userTokenVariableMissing: Boolean,
     /** Where a mail connection sends: the port it uses, whoever it logs in as, and who it is from. */
     val smtpPort: Int?,
     val smtpUsername: String?,
@@ -421,6 +468,7 @@ data class WorkspaceConnectionView(
         connection: WorkspaceConnection,
         secretHeld: HeldSecret? = null,
         appTokenHeld: HeldSecret? = null,
+        userTokenHeld: HeldSecret? = null,
     ) : this(
         id = requireNotNull(connection.id),
         workspaceId = connection.workspaceId,
@@ -442,6 +490,11 @@ data class WorkspaceConnectionView(
         appTokenVariableName = appTokenHeld?.name,
         appTokenVariableCatalog = appTokenHeld?.catalog,
         appTokenVariableMissing = connection.appTokenVariableId != null && appTokenHeld == null,
+        userTokenSet = !connection.userToken.isNullOrBlank(),
+        userTokenVariableId = connection.userTokenVariableId,
+        userTokenVariableName = userTokenHeld?.name,
+        userTokenVariableCatalog = userTokenHeld?.catalog,
+        userTokenVariableMissing = connection.userTokenVariableId != null && userTokenHeld == null,
         // The port as it will be used, so the form shows what sending will do
         // rather than an empty field meaning a default nobody wrote down.
         smtpPort = connection.smtpPort ?: connection.smtpSecurity.defaultPort,

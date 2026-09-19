@@ -36,11 +36,12 @@ sealed interface SlackSearched {
  * Searches Slack's messages by query, the way the search box does.
  *
  * One honesty note, and it is Slack's rather than ours: `search.messages`
- * answers only for a **user** token (`xoxp-`, with `search:read`). A
- * connection holding the usual bot token gets Slack's own
- * `not_allowed_token_type` back, and that refusal is passed through as the
- * true answer instead of being dressed up here - a workspace that wants
- * search stores a user token on a connection of its own.
+ * answers only for a **user** token (`xoxp-`, with `search:read`). So a
+ * connection's user token is what a search runs on when one is stored, and
+ * only a connection without one falls back to the bot token - whose
+ * `not_allowed_token_type` is then passed through as the true answer instead
+ * of being dressed up here, because it says exactly what to do: store a user
+ * token on the connection.
  */
 @Component
 class SlackSearch(
@@ -77,7 +78,11 @@ class SlackSearch(
             return SlackSearched.NotPossible("${connection.type} connections have no messages to search")
         }
 
-        val token = credentials.secretOf(connection).credential
+        // The user token first, because it is the one search answers for; the
+        // bot token only when there is none, so the refusal that comes back
+        // names the actual gap rather than a token that was never tried.
+        val token = credentials.userTokenOf(connection).credential
+            ?: credentials.secretOf(connection).credential
             ?: return SlackSearched.NotPossible("${connection.name} has no token stored")
 
         return try {

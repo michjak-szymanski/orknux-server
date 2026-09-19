@@ -54,6 +54,15 @@ CREATE TABLE agent_granted_tool
     constraint agent_granted_tool_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
 );
 
+CREATE TABLE agent_connection
+(
+    agent_id                     integer not null,
+    position                     integer not null,
+    connection_id                integer not null,
+    primary key (agent_id, position),
+    constraint agent_connection_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES agent(id) ON DELETE CASCADE
+);
+
 CREATE TABLE agent_mcp_server
 (
     agent_id                     integer not null,
@@ -1303,12 +1312,15 @@ CREATE TABLE workspace_connection
     last_checked_at              timestamp,
     app_token                    varchar(4000),
     app_token_variable_id        integer,
+    user_token                   varchar(4000),
+    user_token_variable_id       integer,
     smtp_port                    integer,
     smtp_username                varchar(320),
     smtp_from                    varchar(320),
     smtp_security                varchar(16) not null default 'STARTTLS',
     constraint uk_workspace_connection_name UNIQUE (workspace_id, name),
     constraint ck_workspace_connection_app_token CHECK (app_token_variable_id IS NULL OR app_token IS NULL),
+    constraint ck_workspace_connection_user_token CHECK (user_token_variable_id IS NULL OR user_token IS NULL),
     constraint ck_workspace_connection_auth CHECK (((auth_type) IN ('NONE', 'API_KEY', 'BEARER_TOKEN', 'BASIC'))),
     constraint ck_workspace_connection_secret CHECK (secret_variable_id IS NULL OR secret IS NULL),
     constraint ck_workspace_connection_check CHECK (((last_check_status IS NULL) OR ((last_check_status) IN ('CONNECTED', 'FAILED')))),

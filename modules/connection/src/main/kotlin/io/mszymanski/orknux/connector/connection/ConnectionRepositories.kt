@@ -29,6 +29,9 @@ interface WorkspaceConnectionRepository : JpaRepository<WorkspaceConnection, Lon
     /** And the same for the second credential, which chooses for itself. */
     fun findByWorkspaceIdAndAppTokenVariableId(workspaceId: Long, appTokenVariableId: Long): List<WorkspaceConnection>
 
+    /** And the third, the user token search runs on. */
+    fun findByWorkspaceIdAndUserTokenVariableId(workspaceId: Long, userTokenVariableId: Long): List<WorkspaceConnection>
+
     fun deleteByWorkspaceId(workspaceId: Long): Long
 }
 

@@ -810,10 +810,10 @@ class PluginUploadAPI(
                  *
                  * Needs the `SLACK_SEARCH` capability - and, from Slack's own
                  * side, a **user** token: `search.messages` refuses the usual
-                 * bot token with `not_allowed_token_type`, and that refusal
-                 * comes back here as the error. A workspace that wants search
-                 * stores an xoxp- token (scope `search:read`) on a connection
-                 * of its own.
+                 * bot token with `not_allowed_token_type`. A connection stores
+                 * one in its User Token field (xoxp-, scope `search:read`) and
+                 * search runs on it; a connection without one falls back to
+                 * the bot token and that refusal comes back here as the error.
                  *
                  * @param query in Slack's search syntax - `in:#channel`,
                  *   `from:@name` and the rest work as they do in the box.

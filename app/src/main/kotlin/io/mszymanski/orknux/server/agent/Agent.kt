@@ -173,6 +173,26 @@ class Agent(
     var tools: MutableList<String> = mutableListOf(),
 
     /**
+     * Which of the workspace's connections this agent may name when a tool
+     * takes one, by id.
+     *
+     * By id and not by name, unlike every other grant here: a connection
+     * parameter is stored by id everywhere else - a plugin's setting, a node's
+     * choice - and a grant that renamed itself out of meaning when somebody
+     * renamed the connection would be the trap the others avoid by naming
+     * things a workspace renames rarely.
+     *
+     * The briefing lists these with a standing instruction: use one only when
+     * explicitly told to, and otherwise leave a tool to its configured
+     * default. A grant is permission, not encouragement.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "agent_connection", joinColumns = [JoinColumn(name = "agent_id")])
+    @OrderColumn(name = "position")
+    @Column(name = "connection_id", nullable = false)
+    var connections: MutableList<Long> = mutableListOf(),
+
+    /**
      * Which icon a node drawn from this starts with.
      *
      * A seed, not a rule: the node owns its icon once it has one, the same way

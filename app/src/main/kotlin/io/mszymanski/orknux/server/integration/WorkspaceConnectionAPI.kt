@@ -250,6 +250,20 @@ class WorkspaceConnectionAPI(
         return connections.revealWorkspaceConnectionAppToken(id)
     }
 
+    /** And the user token, named the same way in the audit trail for the same reason. */
+    @MutationMapping
+    fun revealWorkspaceConnectionUserToken(@Argument id: Long): String? {
+        val connection = connections.workspaceConnection(id)?.takeIf { access.canSee(it.workspaceId) }
+            ?: throw ConnectionNotFoundException(id)
+
+        auditRecorder.record(
+            connection.workspaceId,
+            WorkspaceAuditCategory.INTEGRATION,
+            "User token for ${connection.name} revealed",
+        )
+        return connections.revealWorkspaceConnectionUserToken(id)
+    }
+
     private fun requireWorkspaceAccess(workspaceId: Long) {
         access.requireVisible(workspaceId)
     }

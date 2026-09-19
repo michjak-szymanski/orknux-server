@@ -82,6 +82,8 @@ data class PluginParameterSettingView(
     val name: String,
     val description: String?,
     val type: String,
+    /** Which kind of connection a `connection` parameter takes; null for every other type. */
+    val connectionType: String?,
     val required: Boolean,
     val secret: Boolean,
     val literal: String?,

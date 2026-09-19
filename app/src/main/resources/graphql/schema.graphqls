@@ -1376,6 +1376,8 @@ type Mutation {
     revealWorkspaceConnectionSecret(id: ID!): String
     "Returns the stored app-level token and records that it was revealed."
     revealWorkspaceConnectionAppToken(id: ID!): String
+    "Returns the stored user token and records that it was revealed."
+    revealWorkspaceConnectionUserToken(id: ID!): String
     createMcpServer(input: CreateMcpServerInput!): McpServer!
     updateMcpServer(id: ID!, input: UpdateMcpServerInput!): McpServer!
     """
@@ -2290,6 +2292,15 @@ type Agent {
     skillCatalogs: [String!]!
     "Which of the workspace's tools it may call."
     tools: [String!]!
+    """
+    Which of the workspace's connections it may name when a tool takes one.
+
+    A grant with a standing instruction attached: the briefing lists these and
+    tells the agent to use one only when explicitly told to, so granting a
+    connection widens what the agent may do without changing what it does
+    unprompted.
+    """
+    connectionIds: [ID!]!
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
     """
@@ -3137,6 +3148,8 @@ input UpdateAgentInput {
     skillCatalogs: [String!]
     "Which tools it may call; null leaves the grant alone."
     tools: [String!]
+    "Which of the workspace's connections it may name; null leaves the grant alone."
+    connectionIds: [ID!]
     "Which icon a node drawn from this starts with; null draws the kind's own."
     icon: String
     """
@@ -3568,6 +3581,13 @@ type WorkspaceConnection {
     appTokenVariableName: String
     appTokenVariableCatalog: String
     appTokenVariableMissing: Boolean!
+    "Whether a user token of the connection's own is stored, which is what lets Slack search be asked."
+    userTokenSet: Boolean!
+    "The user token's own answers to the same four questions."
+    userTokenVariableId: ID
+    userTokenVariableName: String
+    userTokenVariableCatalog: String
+    userTokenVariableMissing: Boolean!
     "Where a mail connection sends: the port it will use, which is the default when none was chosen."
     smtpPort: Int
     "Who a mail connection logs in as; null sends without authenticating."
@@ -3757,6 +3777,10 @@ input CreateWorkspaceConnectionInput {
     appToken: String
     "The app-level token's own reference, chosen separately from `secretVariableId`."
     appTokenVariableId: ID
+    "Slack's user token (xoxp-). Optional: with one the connection can also search."
+    userToken: String
+    "The user token's own reference, chosen separately again."
+    userTokenVariableId: ID
     "Where the mail server listens; null takes the port the security implies."
     smtpPort: Int
     "Who to log in as; null sends without authenticating, and the password arrives as secret."
@@ -3788,6 +3812,10 @@ input UpdateWorkspaceConnectionInput {
     appToken: String
     "And the app-level token's own reference, chosen separately from `secretVariableId`."
     appTokenVariableId: ID
+    "Slack's user token, with the same null and empty meaning."
+    userToken: String
+    "And the user token's own reference, chosen separately again."
+    userTokenVariableId: ID
     smtpPort: Int
     smtpUsername: String
     smtpFrom: String
@@ -4538,6 +4566,8 @@ type PluginParameterSetting {
     name: String!
     description: String
     type: String!
+    "Which kind of connection a `connection` parameter takes; null for every other type."
+    connectionType: String
     required: Boolean!
     secret: Boolean!
     "What somebody typed. Null when this points at a variable, or is unanswered."

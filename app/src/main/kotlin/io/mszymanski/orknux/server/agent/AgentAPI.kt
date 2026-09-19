@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.agent
 
+import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.connector.model.ModelKind
 import io.mszymanski.orknux.connector.model.ModelService
 import io.mszymanski.orknux.server.dependency.ComponentDependants
@@ -37,6 +38,7 @@ class AgentAPI(
     private val models: ModelService,
     private val revisions: ComponentRevisionRecorder,
     private val budgets: SessionMemoryBudgets,
+    private val connections: WorkspaceConnectionService,
 ) {
 
     /** The agent, with what its model is called: the screen shows the name. */
@@ -237,6 +239,7 @@ class AgentAPI(
         val previousCatalogs = agent.memoryCatalogs.toList()
         val previousSkillCatalogs = agent.skillCatalogs.toList()
         val previousTools = agent.tools.toList()
+        val previousConnections = agent.connections.toList()
         val previousShare = agent.memoryShare
 
         agent.name = name
@@ -291,6 +294,14 @@ class AgentAPI(
         }
         if (input.tools != null) {
             agent.tools = input.tools.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
+        }
+        if (input.connectionIds != null) {
+            // Another workspace's connection is not this agent's to be granted,
+            // so the id is checked here rather than trusted into the briefing.
+            agent.connections = input.connectionIds.distinct().onEach { id ->
+                connections.workspaceConnection(id)?.takeIf { it.workspaceId == agent.workspaceId }
+                    ?: throw AgentConnectionUnusableException(id)
+            }.toMutableList()
         }
         agent.lastModifiedAt = OffsetDateTime.now()
         agent.lastModifiedBy = currentUser()
@@ -370,6 +381,22 @@ class AgentAPI(
                 agent.workspaceId,
                 WorkspaceAuditCategory.AGENT,
                 "Agent ${agent.name} can no longer call tool $tool",
+            )
+        }
+        // By name where the connection still answers to its id, because a log
+        // line saying "connection 9" answers nobody's question.
+        (agent.connections - previousConnections.toSet()).forEach { granted ->
+            auditRecorder.record(
+                agent.workspaceId,
+                WorkspaceAuditCategory.AGENT,
+                "Agent ${agent.name} given connection ${connections.workspaceConnection(granted)?.name ?: granted}",
+            )
+        }
+        (previousConnections - agent.connections.toSet()).forEach { taken ->
+            auditRecorder.record(
+                agent.workspaceId,
+                WorkspaceAuditCategory.AGENT,
+                "Agent ${agent.name} no longer holds connection ${connections.workspaceConnection(taken)?.name ?: taken}",
             )
         }
         return describe(agent)
@@ -530,6 +557,8 @@ data class UpdateAgentInput(
     val skillCatalogs: List<String>? = null,
     /** Which of the workspace's tools it may call; null leaves the grant alone. */
     val tools: List<String>? = null,
+    /** Which of the workspace's connections it may name; null leaves the grant alone. */
+    val connectionIds: List<Long>? = null,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String? = null,
     /**
@@ -562,6 +591,8 @@ data class AgentView(
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
+    /** Which of the workspace's connections it may name when a tool takes one. */
+    val connectionIds: List<Long>,
     /** Which icon a node drawn from this starts with; null draws the kind's own. */
     val icon: String?,
     /** Its own share of the model's window; null follows the workspace default. */
@@ -583,6 +614,7 @@ data class AgentView(
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),
+        connectionIds = agent.connections.toList(),
         icon = agent.icon,
         memoryShare = agent.memoryShare,
     )
@@ -671,6 +703,11 @@ class AgentNameInvalidException : RuntimeException("An agent name is required")
 
 /** A model chosen for an agent has to be one this workspace can reach. */
 class AgentModelUnusableException(message: String) : RuntimeException(message)
+
+/** A connection grant naming something that is not this workspace's connection. */
+class AgentConnectionUnusableException(id: Long) : RuntimeException(
+    "Connection $id is not one of this workspace's connections, so this agent cannot be granted it.",
+)
 
 /**
  * A share of a context window that could not work, refused where it was set.

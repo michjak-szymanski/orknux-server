@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.chat
 
+import io.mszymanski.orknux.connector.connection.WorkspaceConnectionService
 import io.mszymanski.orknux.server.agent.Agent
 import io.mszymanski.orknux.server.agent.AgentSkillRepository
 import io.mszymanski.orknux.server.agent.SkillCatalogRepository
@@ -24,6 +25,7 @@ import org.springframework.stereotype.Service
 class AgentBriefing(
     private val catalogs: SkillCatalogRepository,
     private val skills: AgentSkillRepository,
+    private val connections: WorkspaceConnectionService,
 ) {
 
     /**
@@ -51,6 +53,36 @@ class AgentBriefing(
                 instructions.forEach { skill ->
                     append("\n- ").append(skill.name)
                     skill.description?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+                }
+                appendLine()
+            }
+        }
+
+        /*
+         * The connections this agent may name, and the rule for naming one.
+         *
+         * A grant is permission, not encouragement: a tool that takes a
+         * connection has a configured default, and an agent that started
+         * second-guessing that default because a list of alternatives was in
+         * its briefing would be doing exactly what granting them did not mean.
+         * So the instruction is explicit and restrictive, and stands right
+         * next to the list it governs.
+         *
+         * Read by id and dropped silently where the id no longer answers -
+         * a deleted connection is not this turn's problem, and the settings
+         * page is where a stale grant is reported.
+         */
+        val reachable = agent.connections
+            .mapNotNull { connections.workspaceConnection(it) }
+            .filter { it.workspaceId == agent.workspaceId }
+        if (reachable.isNotEmpty()) {
+            parts += buildString {
+                append("These connections have been granted to you. Where a tool takes a connection id, ")
+                append("only pass one of these when you have been explicitly told to use that connection - ")
+                appendLine("otherwise leave the tool to its configured default.")
+                reachable.forEach { connection ->
+                    append("\n- ").append(connection.name)
+                    append(" (").append(connection.type.name).append(", id ").append(connection.id).append(")")
                 }
                 appendLine()
             }

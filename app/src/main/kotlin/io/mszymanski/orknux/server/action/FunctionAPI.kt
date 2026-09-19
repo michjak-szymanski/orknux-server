@@ -78,9 +78,22 @@ class FunctionAPI(
      * somebody asks about a function they did not write.
      */
     @QueryMapping
-    fun workspaceFunctions(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): FunctionPage {
+    fun workspaceFunctions(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        // One origin, or both. Asked of the database rather than filtered off
+        // a page, because a page filtered afterwards is a page of the wrong
+        // size with a count that lies.
+        @Argument scope: FunctionScope?,
+    ): FunctionPage {
         requireWorkspaceAccess(workspaceId)
-        val found = functions.findByWorkspaceIdOrPlugin(workspaceId, pageRequest(page, size, Sort.by("name")))
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val found = if (scope == null) {
+            functions.findByWorkspaceIdOrPlugin(workspaceId, paged)
+        } else {
+            functions.findByWorkspaceIdOrPluginScoped(workspaceId, scope, paged)
+        }
         return FunctionPage(found, ::describe)
     }
 

@@ -313,8 +313,14 @@ type Query {
     "The workspace's conditions: the questions its workflows ask."
     workspaceConditions(workspaceId: ID!, page: Int = 0, size: Int = 20): ConditionPage!
     condition(id: ID!): Condition
-    "The workspace's JavaScript functions, callable from an action."
-    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20): FunctionPage!
+    """
+    The workspace's JavaScript functions, callable from an action.
+
+    `scope` narrows the list to one origin - the workspace's own rows, or the
+    ones the plugins brought - and absent means both, which is what the list
+    always showed.
+    """
+    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope): FunctionPage!
     function(id: ID!): Function
     "What starts a workspace's workflows, ordered by name."
     workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerPage!

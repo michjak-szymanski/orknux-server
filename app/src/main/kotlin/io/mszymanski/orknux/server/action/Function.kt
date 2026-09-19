@@ -373,6 +373,22 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
     @Query("select f from WorkflowFunction f where f.workspaceId = :workspaceId or f.scope = 'PLUGIN'")
     fun findByWorkspaceIdOrPlugin(workspaceId: Long, pageable: Pageable): Page<WorkflowFunction>
 
+    /**
+     * The same list, narrowed to one origin: the workspace's own rows, or the
+     * ones the plugins brought. The workspace clause stays in for the plugin
+     * half too - it is simply never what matches - so the two queries page the
+     * same population and a filter cannot show a row the full list would not.
+     */
+    @Query(
+        "select f from WorkflowFunction f " +
+            "where (f.workspaceId = :workspaceId or f.scope = 'PLUGIN') and f.scope = :scope",
+    )
+    fun findByWorkspaceIdOrPluginScoped(
+        workspaceId: Long,
+        scope: FunctionScope,
+        pageable: Pageable,
+    ): Page<WorkflowFunction>
+
     fun findByScopeAndName(scope: FunctionScope, name: String): WorkflowFunction?
 
     /** Everything one plugin declared, which is what a reload reconciles against. */

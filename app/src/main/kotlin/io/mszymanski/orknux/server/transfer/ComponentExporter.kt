@@ -219,7 +219,11 @@ class ComponentExporter(
          */
         ComponentKind.WORKFLOW -> nodes.findByWorkflowId(held.id).flatMap { node ->
             when (node.kind) {
-                NodeKind.AGENT -> held(workspaceId, ComponentKind.AGENT, node.agentId)
+                // The shape an agent's answer is held to travels too: without
+                // it the import would land a node whose answer no longer has
+                // one, which is a different workflow wearing the same name.
+                NodeKind.AGENT -> held(workspaceId, ComponentKind.AGENT, node.agentId) +
+                    held(workspaceId, ComponentKind.OBJECT, node.outputObjectId)
                 NodeKind.TRIGGER -> held(workspaceId, ComponentKind.TRIGGER, node.triggerId)
                 NodeKind.ACTION -> held(workspaceId, ComponentKind.ACTION, node.actionId)
                 NodeKind.CONDITION -> held(workspaceId, ComponentKind.CONDITION, node.conditionId)
@@ -606,6 +610,14 @@ class ComponentExporter(
             held.conditionId.takeIf { held.kind == NodeKind.CONDITION }?.let { conditions.findByIdOrNull(it)?.name },
         )
         put("objectRef", held.objectId.takeIf { held.kind == NodeKind.OBJECT }?.let { objects.findByIdOrNull(it)?.name })
+        // The two halves of an agent's answer shape: the object it is held to
+        // (by name, resolved on the far side like every other ref), and the
+        // node it is saved into (by key, which the file carries as it is).
+        put(
+            "outputShapeRef",
+            held.outputObjectId.takeIf { held.kind == NodeKind.AGENT }?.let { objects.findByIdOrNull(it)?.name },
+        )
+        put("outputNodeKey", held.outputNodeKey.takeIf { held.kind == NodeKind.AGENT })
         val mappings = putArray("mappings")
         held.mappings.forEach { mapping ->
             mappings.addObject().apply {

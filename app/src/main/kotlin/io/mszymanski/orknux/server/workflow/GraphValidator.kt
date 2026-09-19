@@ -62,8 +62,14 @@ class GraphValidator(
         val unresolved: String? = null,
     )
 
-    /** What a node needs and gives, worked out from what it points at. */
-    fun portsOf(node: WorkflowNode): Ports = when (node.kind) {
+    /**
+     * What a node needs and gives, worked out from what it points at.
+     *
+     * @param among the rest of the graph, for the one relationship that
+     *   crosses nodes: an object node an agent saves its answer into reads
+     *   that answer, and only the agent's node says so.
+     */
+    fun portsOf(node: WorkflowNode, among: List<WorkflowNode> = emptyList()): Ports = when (node.kind) {
         NodeKind.TRIGGER -> {
             val trigger = node.triggerId?.let { triggers.findByIdOrNull(it) }
             if (trigger == null) {
@@ -151,7 +157,7 @@ class GraphValidator(
             val named = node.outputName?.trim().orEmpty()
             val fields = shapeOf(node)
             Ports(
-                inputs = reads(node.mappings),
+                inputs = (reads(node.mappings) + savedAnswerReads(node, among)).distinctBy { it.name },
                 outputs = if (named.isEmpty()) fields else listOf(ActionParamView(named, ValueType.OBJECT)),
                 passThrough = true,
             )
@@ -210,6 +216,28 @@ class GraphValidator(
             return saved.properties.map { ActionParamView(it.name, typeOf(it.kind)) }
         }
         return node.mappings.map { ActionParamView(it.name, ValueType.STRING) }
+    }
+
+    /**
+     * What reaches an object node because an agent saves its answer into it.
+     *
+     * The same fields the run will resolve: the agent's output name where it
+     * has one, and the shape's own field names where it does not - an unnamed
+     * shaped answer goes on as its fields. Fields the node maps itself are
+     * its own mappings' business and already counted.
+     */
+    private fun savedAnswerReads(node: WorkflowNode, among: List<WorkflowNode>): List<ActionParamView> {
+        val filler = among.firstOrNull { it.kind == NodeKind.AGENT && it.outputNodeKey == node.nodeKey }
+            ?: return emptyList()
+        val named = filler.outputName?.trim().orEmpty()
+        if (named.isNotEmpty()) return listOf(ActionParamView(named, ValueType.OBJECT))
+        // A blank value is the row the editor seeds, not an answer - the same
+        // reading the run gives it when it folds the answer under the mappings.
+        val mapped = node.mappings
+            .filter { it.mode == MappingMode.REFERENCE || it.expression.isNotBlank() }
+            .map { it.name }
+            .toSet()
+        return shapeOf(node).filterNot { it.name in mapped }
     }
 
     /** A property's shape, as the graph's own vocabulary of types. */
@@ -352,7 +380,7 @@ class GraphValidator(
         if (hardOnly) return problems
 
         // --- What each node can see, followed along the edges ---
-        val ports = nodes.associate { it.nodeKey to portsOf(it) }
+        val ports = nodes.associate { it.nodeKey to portsOf(it, nodes) }
         val available = availability(nodes, known, ports)
 
         nodes.forEach { node ->

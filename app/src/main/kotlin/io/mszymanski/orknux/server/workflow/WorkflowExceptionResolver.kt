@@ -218,6 +218,7 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ImportNotEditableException,
             is ImportCycleException,
             is ConditionNotInCatalogueException,
+            is AgentOutputNodeInvalidException,
             is GraphInvalidException,
             is ConditionNameTakenException,
             is ConditionNameInvalidException,

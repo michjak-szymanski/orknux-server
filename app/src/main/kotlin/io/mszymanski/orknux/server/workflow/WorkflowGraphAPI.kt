@@ -95,7 +95,7 @@ class WorkflowGraphAPI(
         val workflow = workflows.findByIdOrNull(workflowId) ?: throw WorkflowNotFoundException(workflowId)
 
         val known = input.nodes.map { it.key }.toSet()
-        val proposed = input.nodes.map { nodeOf(workflowId, it, refusing = false) }
+        val proposed = shapedByTargets(input.nodes.map { nodeOf(workflowId, it, refusing = false) }, refusing = false)
         // An edge to a node that is not there is something a half-drawn graph
         // has; the validator is given the graph, not an argument about it.
         val drawn = input.edges
@@ -110,7 +110,7 @@ class WorkflowGraphAPI(
             enabled = enabledIn(workspaceId, workflowId),
             assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = proposed.map { node ->
-                val ports = validator.portsOf(node)
+                val ports = validator.portsOf(node, proposed)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
             },
             edges = drawn.map(::WorkflowEdgeView),
@@ -176,7 +176,7 @@ class WorkflowGraphAPI(
         nodes.flush()
         edges.flush()
 
-        nodes.saveAll(input.nodes.map { nodeOf(workflowId, it) })
+        nodes.saveAll(shapedByTargets(input.nodes.map { nodeOf(workflowId, it) }, refusing = true))
         edges.saveAll(
             input.edges.map { edge ->
                 WorkflowEdge(workflowId = workflowId, sourceKey = edge.source, targetKey = edge.target, branch = edge.branch)
@@ -358,7 +358,7 @@ class WorkflowGraphAPI(
             enabled = enabledIn(workspaceId, workflowId),
             assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = held.map { node ->
-                val ports = validator.portsOf(node)
+                val ports = validator.portsOf(node, held)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
             },
             edges = drawn.map(::WorkflowEdgeView),
@@ -399,6 +399,9 @@ class WorkflowGraphAPI(
         // Only an agent's answer has a shape to be held to; on any other kind
         // the id is dropped the way an object node's would be on an action.
         outputObjectId = node.outputObjectId.takeIf { node.kind == NodeKind.AGENT },
+        // Which object node the answer is saved into; the shape above is then
+        // derived from it after the whole list is built - see shapedByTargets.
+        outputNodeKey = node.outputNodeKey?.trim()?.ifEmpty { null }?.takeIf { node.kind == NodeKind.AGENT },
         imageModelId = node.imageModelId.takeIf { node.kind == NodeKind.IMAGE },
         outputName = node.outputName?.trim()?.ifEmpty { null }
             // Only a node that produces something can name it; a trigger names
@@ -632,6 +635,33 @@ class WorkflowGraphAPI(
         if (shape.workspaceId != workspaceId) throw ObjectNotInCatalogueException(objectId)
     }
 
+    /**
+     * The shape of an agent that saves into an object node, derived from it.
+     *
+     * Every save, so the two cannot disagree: the target picking a different
+     * object on a later save carries the agent's shape with it, and whatever
+     * `outputObjectId` the editor sent beside the reference is overridden. A
+     * reference that cannot be derived from - no such node, not an object
+     * node, or an object node with a shape of its own rather than a saved
+     * one - is refused on a save and left standing on a preview, where the
+     * agent simply has no shape until the graph says otherwise.
+     */
+    private fun shapedByTargets(built: List<WorkflowNode>, refusing: Boolean): List<WorkflowNode> {
+        val byKey = built.associateBy { it.nodeKey }
+        built.forEach { node ->
+            val targetKey = node.outputNodeKey ?: return@forEach
+            val target = byKey[targetKey]
+            val objectId = target?.takeIf { it.kind == NodeKind.OBJECT }?.objectId
+            if (objectId == null) {
+                if (refusing) throw AgentOutputNodeInvalidException(node.name, targetKey, target)
+                node.outputObjectId = null
+            } else {
+                node.outputObjectId = objectId
+            }
+        }
+        return built
+    }
+
     /** An agent node's answer is held to one of the workspace's shapes, and only its own workspace's. */
     private fun requireOutputShapeBelongsToWorkspace(workspaceId: Long, node: WorkflowNodeInput) {
         val objectId = node.outputObjectId ?: return
@@ -693,6 +723,15 @@ data class WorkflowNodeInput(
     val objectId: Long? = null,
     /** The shape an agent node's answer is held to; null is prose. Ignored on any other kind. */
     val outputObjectId: Long? = null,
+    /**
+     * The object node this agent's answer is saved into, named by its key.
+     *
+     * The other way to shape an answer: the shape becomes the target node's
+     * object - derived at every save, so sending [outputObjectId] beside this
+     * is overridden - and the target's unmapped fields are filled from the
+     * answer when the run reaches it. Ignored on any other kind.
+     */
+    val outputNodeKey: String? = null,
     /** The image model an image node draws with; ignored on any other kind. */
     val imageModelId: Long? = null,
     val outputName: String? = null,
@@ -765,6 +804,8 @@ data class WorkflowNodeView(
     val objectId: Long?,
     /** The shape an agent node's answer is held to; null is prose. */
     val outputObjectId: Long?,
+    /** The object node this agent's answer is saved into, by key; null is neither asked nor done. */
+    val outputNodeKey: String?,
     /** The image model an image node draws with; ignored on any other kind. */
     val imageModelId: Long?,
     val outputName: String?,
@@ -811,6 +852,7 @@ data class WorkflowNodeView(
         conditionId = node.conditionId,
         objectId = node.objectId,
         outputObjectId = node.outputObjectId,
+        outputNodeKey = node.outputNodeKey,
         imageModelId = node.imageModelId,
         outputName = node.outputName,
         icon = node.icon,
@@ -963,6 +1005,20 @@ class ValueHoldsPlaceholderException(parameter: String) : RuntimeException(
 class OutputNameInvalidException(name: String) : RuntimeException(
     "\"$name\" cannot be referred to. An output name is letters, digits and underscores, " +
         "starting with a letter — a later node has to be able to point at it",
+)
+
+class AgentOutputNodeInvalidException(agent: String, targetKey: String, target: WorkflowNode?) : RuntimeException(
+    when {
+        target == null ->
+            "$agent saves its answer into a node that is not on this graph any more. " +
+                "Pick where the answer goes again."
+        target.kind != NodeKind.OBJECT ->
+            "$agent saves its answer into ${target.name}, which is not an object node. " +
+                "An answer is saved into an object node, whose shape it is then held to."
+        else ->
+            "$agent saves its answer into ${target.name}, which has no saved shape. " +
+                "Point that node at one of the workspace's objects first - the answer is held to it."
+    },
 )
 
 class TriggerNotInCatalogueException(val id: Long) :

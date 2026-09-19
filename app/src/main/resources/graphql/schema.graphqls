@@ -1750,6 +1750,14 @@ type WorkflowNode {
     object, fields and all.
     """
     outputObjectId: ID
+    """
+    The object node this agent's answer is saved into, by that node's key.
+
+    The other way to shape an answer: the shape above is then derived from the
+    target at every save, and the target's unmapped fields are filled from the
+    answer when the run reaches it. The editor draws it as a dependency line.
+    """
+    outputNodeKey: String
     "The image model an IMAGE node draws with, if it names one."
     imageModelId: ID
     """
@@ -2023,6 +2031,12 @@ input WorkflowNodeInput {
     objectId: ID
     "The shape an AGENT node's answer is held to; null is prose. Ignored on any other kind."
     outputObjectId: ID
+    """
+    The object node this agent's answer is saved into, by key. The shape is
+    then derived from the target, overriding outputObjectId sent beside it.
+    Ignored on any other kind.
+    """
+    outputNodeKey: String
     "The image model an IMAGE node draws with; ignored on any other kind."
     imageModelId: ID
     "What this node calls what it produces; a later node points a reference at it."

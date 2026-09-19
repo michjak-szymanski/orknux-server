@@ -240,6 +240,68 @@ class AgentNodeRunnerTest(
         assertThat(received).describedAs("the node's two attempts each asked the model").hasSize(2)
     }
 
+    /**
+     * The other way to shape an answer: the agent points at an object node on
+     * the graph, the answer is held to that node's shape - derived, not
+     * chosen - and the node's fields are filled from it when the run arrives.
+     */
+    @Test
+    fun `an agent saving into an object node fills it when the run arrives`() {
+        val shape = verdictShape()
+        val agentId = agent("Reviewer", model(serveAfter(0, 200, saying = """{ "cause": "the database", "urgent": true }""")))
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId,
+                    outputNodeKey: "keep", outputName: "verdict", x: 0, y: 0 },
+                  { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape, x: 200, y: 0 }
+                ],
+                edges: [{ source: "think", target: "keep" }]
+              }) { nodes { key outputObjectId outputNodeKey } }
+            }
+            """,
+        ).execute()
+            // The shape was never sent; it is derived from the target at the save.
+            .path("saveWorkflowGraph.nodes[0].outputObjectId").entity(Long::class.java).isEqualTo(shape)
+
+        start()
+
+        val recorded = steps.findAll().associateBy { it.nodeKey }
+        assertThat(recorded.getValue("think").status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(recorded.getValue("keep").status).isEqualTo(StepStatus.COMPLETED)
+        // The object node's output is the agent's answer, field for field.
+        assertThat(recorded.getValue("keep").output)
+            .isEqualTo("""{"cause":"the database","urgent":true}""")
+        assertThat(executions.findAll().single().status).isEqualTo(ExecutionStatus.COMPLETED)
+    }
+
+    /** A reference that cannot be derived from is refused where it was typed. */
+    @Test
+    fun `saving into something that is not an object node is refused`() {
+        serveAnswer()
+        val agentId = agent("Reviewer", modelId = null)
+
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId,
+                    outputNodeKey: "other", x: 0, y: 0 },
+                  { key: "other", kind: AGENT, name: "Second opinion", x: 200, y: 0 }
+                ],
+                edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().errors().expect { error ->
+            error.message.orEmpty().contains("is not an object node")
+        }.verify()
+    }
+
     private fun verdictShape(): Long = graphQlTester.document(
         """
         mutation {

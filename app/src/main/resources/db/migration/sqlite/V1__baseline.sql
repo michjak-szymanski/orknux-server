@@ -1135,6 +1135,7 @@ CREATE TABLE workflow_node
     object_id                    integer,
     image_model_id               integer,
     output_object_id             integer,
+    output_node_key              varchar(64),
     yes_label                    varchar(40),
     no_label                     varchar(40),
     orientation                  varchar(16),

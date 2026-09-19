@@ -548,6 +548,9 @@ class ComponentImporter(
                     drawn.text("actionRef")?.let { ComponentKind.ACTION to it },
                     drawn.text("conditionRef")?.let { ComponentKind.CONDITION to it },
                     drawn.text("objectRef")?.let { ComponentKind.OBJECT to it },
+                    // The shape an agent's answer is held to is an object like
+                    // any other the graph points at.
+                    drawn.text("outputShapeRef")?.let { ComponentKind.OBJECT to it },
                 )
             }
         }
@@ -993,6 +996,11 @@ class ComponentImporter(
                     actionId = drawn.text("actionRef")?.let { idOf(ComponentKind.ACTION, it) },
                     conditionId = drawn.text("conditionRef")?.let { idOf(ComponentKind.CONDITION, it) },
                     objectId = drawn.text("objectRef")?.let { idOf(ComponentKind.OBJECT, it) },
+                    // Both halves of an agent's answer shape. Absent from every
+                    // envelope written before answers had shapes, and read as
+                    // the prose they were.
+                    outputObjectId = drawn.text("outputShapeRef")?.let { idOf(ComponentKind.OBJECT, it) },
+                    outputNodeKey = drawn.text("outputNodeKey"),
                     outputName = drawn.text("outputName"),
                     orientation = drawn.enumOrNull<NodeOrientation>("orientation", component),
                     icon = drawn.text("icon"),

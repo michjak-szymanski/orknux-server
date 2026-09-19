@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.workflow.execution.EdgeBranch
 import io.mszymanski.orknux.workflow.execution.GraphEdge
@@ -28,6 +29,7 @@ class AppWorkflowGraphSource(
     private val nodes: WorkflowNodeRepository,
     private val edges: WorkflowEdgeRepository,
     private val workspaces: WorkspaceRepository,
+    private val objects: WorkflowObjectRepository,
     private val publications: WorkflowPublicationRepository,
     private val mapper: ObjectMapper,
 ) : WorkflowGraphSource {
@@ -117,6 +119,20 @@ class AppWorkflowGraphSource(
             .filter { it.sourceKey in declared }
             .associate { it.targetKey to declared.getValue(it.sourceKey) }
 
+        /*
+         * The agents that save their answers into object nodes, by target key.
+         *
+         * The same folding the session nodes get, for the same reason: the
+         * relationship is declared on one node and runs on another, and this is
+         * the copy publishing takes - so it is resolved here, into ordinary
+         * reference mappings on the target, and the engine never learns a new
+         * word. A field the target maps itself keeps its own mapping; the rest
+         * are filled from the answer.
+         */
+        val fillers = held
+            .filter { it.kind == NodeKind.AGENT && it.outputNodeKey != null }
+            .associateBy { it.outputNodeKey!! }
+
         return RunnableGraph(
             workflowId = workflowId,
             name = name,
@@ -138,8 +154,14 @@ class AppWorkflowGraphSource(
                     triggerId = node.triggerId,
                     outputName = node.outputName,
                     // What this node passes, decided on the node. Seeded from the
-                    // action when the node was placed, its own from then on.
-                    mappings = bindings(node.mappings) + sessionOf(sessionFor[node.nodeKey]),
+                    // action when the node was placed, its own from then on. An
+                    // object node an agent saves into starts from the answer's
+                    // fields, and its own mappings override field by field -
+                    // except the blank ones the editor seeds for a fresh shape,
+                    // which are the fields nobody has answered and exactly what
+                    // the saved answer is for.
+                    mappings = answeredMappings(fillers[node.nodeKey], node) +
+                        sessionOf(sessionFor[node.nodeKey]),
                     retryAttempts = node.retryAttempts,
                     retryBackoffSeconds = node.retryBackoffSeconds,
                     retryMultiplier = node.retryMultiplier,
@@ -175,6 +197,44 @@ class AppWorkflowGraphSource(
      * quietly winning against it. Nothing wired means nothing added, which is
      * what leaves those older nodes running exactly as they did.
      */
+    /**
+     * The mappings an agent's saved answer contributes to the object node it
+     * points at: one reference per field of the node's shape, into the answer.
+     *
+     * A named answer travels as one field, so its shape's fields are dotted
+     * paths under the name; an unnamed shaped answer goes on as its fields, so
+     * the references are the field names bare. Put on *before* the node's own
+     * mappings, so a field somebody maps by hand wins over the answer's.
+     */
+    private fun savedAnswerOf(agent: WorkflowNode?, target: WorkflowNode): Map<String, NodeBinding> {
+        if (agent == null) return emptyMap()
+        val shape = target.objectId?.let { objects.findByIdOrNull(it) } ?: return emptyMap()
+        val named = agent.outputName?.trim().orEmpty()
+        return shape.properties.associate { property ->
+            property.name to NodeBinding(
+                expression = if (named.isEmpty()) property.name else "$named.${property.name}",
+                reference = true,
+                from = agent.nodeKey,
+            )
+        }
+    }
+
+    /**
+     * A node's mappings with the saved answer folded under them.
+     *
+     * The answer fills what nobody answered: a field somebody mapped keeps its
+     * mapping, and a blank value - the row the editor seeds for every field of
+     * a fresh shape - counts as nobody having answered, not as an answer of
+     * emptiness that happens to shadow the agent's.
+     */
+    private fun answeredMappings(agent: WorkflowNode?, node: WorkflowNode): Map<String, NodeBinding> {
+        val fromAnswer = savedAnswerOf(agent, node)
+        val own = bindings(node.mappings).filterNot { (name, binding) ->
+            name in fromAnswer && !binding.reference && binding.expression.isBlank()
+        }
+        return fromAnswer + own
+    }
+
     private fun sessionOf(session: WorkflowNode?): Map<String, NodeBinding> =
         session?.mappings.orEmpty()
             .filter { it.name == SESSION_KEY || it.name == SESSION_KEY_PREFIX }

@@ -249,6 +249,22 @@ class WorkflowNode(
     @Column(name = "output_object_id")
     var outputObjectId: Long? = null,
 
+    /**
+     * The object node on this graph an agent node's answer is saved into; only
+     * an agent has one, and it names another node by its key.
+     *
+     * The other way to shape an answer: instead of picking a shape inline, the
+     * agent points at an object node already on the canvas, its answer is held
+     * to that node's shape, and the node's unmapped fields are filled from it -
+     * so what stands downstream is the object node, not a fan of dotted paths.
+     * The editor draws the pointing as a dependency line, not a flow edge: the
+     * object node still receives its values through the run like any other
+     * reference. When this is set, [outputObjectId] is derived from the target
+     * at every save rather than chosen; the target losing its shape is refused.
+     */
+    @Column(name = "output_node_key", length = 64)
+    var outputNodeKey: String? = null,
+
     @Column(name = "position_x", nullable = false)
     var positionX: Double,
 
@@ -371,6 +387,7 @@ class WorkflowNode(
         conditionId = conditionId,
         objectId = objectId,
         outputObjectId = outputObjectId,
+        outputNodeKey = outputNodeKey,
         imageModelId = imageModelId,
         positionX = positionX,
         positionY = positionY,

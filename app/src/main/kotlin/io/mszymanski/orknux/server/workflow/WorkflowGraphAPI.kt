@@ -110,7 +110,7 @@ class WorkflowGraphAPI(
             enabled = enabledIn(workspaceId, workflowId),
             assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = proposed.map { node ->
-                val ports = validator.portsOf(node, proposed)
+                val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
             },
             edges = drawn.map(::WorkflowEdgeView),
@@ -358,7 +358,7 @@ class WorkflowGraphAPI(
             enabled = enabledIn(workspaceId, workflowId),
             assignmentId = assignments.findByWorkspaceIdAndWorkflowId(workspaceId, workflowId)?.id,
             nodes = held.map { node ->
-                val ports = validator.portsOf(node, held)
+                val ports = validator.portsOf(node)
                 WorkflowNodeView(node, ports.inputs, ports.outputs)
             },
             edges = drawn.map(::WorkflowEdgeView),

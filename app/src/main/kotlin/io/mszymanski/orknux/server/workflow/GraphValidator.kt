@@ -62,14 +62,8 @@ class GraphValidator(
         val unresolved: String? = null,
     )
 
-    /**
-     * What a node needs and gives, worked out from what it points at.
-     *
-     * @param among the rest of the graph, for the one relationship that
-     *   crosses nodes: an object node an agent saves its answer into reads
-     *   that answer, and only the agent's node says so.
-     */
-    fun portsOf(node: WorkflowNode, among: List<WorkflowNode> = emptyList()): Ports = when (node.kind) {
+    /** What a node needs and gives, worked out from what it points at. */
+    fun portsOf(node: WorkflowNode): Ports = when (node.kind) {
         NodeKind.TRIGGER -> {
             val trigger = node.triggerId?.let { triggers.findByIdOrNull(it) }
             if (trigger == null) {
@@ -132,6 +126,16 @@ class GraphValidator(
             val named = node.outputName?.trim().orEmpty()
             val shape = node.outputObjectId?.let { objects.findByIdOrNull(it) }
             when {
+                /*
+                 * Saved into an object node, the answer is spoken for: that
+                 * node is where it is read, and offering the fields here too
+                 * would be two places to read one answer - the fan of dotted
+                 * paths the redirection exists to retire. The node offers
+                 * nothing, a reference typed at it anyway is warned about as
+                 * reading what nothing produces, and whether the answer can
+                 * reach its node is its own question, asked in [problems].
+                 */
+                node.outputNodeKey != null -> Ports()
                 named.isEmpty() && shape == null -> Ports(passThrough = true, opaque = true)
                 shape == null -> Ports(outputs = listOf(ActionParamView(named, ValueType.STRING)))
                 named.isEmpty() -> Ports(outputs = shape.properties.map { ActionParamView(it.name, typeOf(it.kind)) })
@@ -145,10 +149,14 @@ class GraphValidator(
         /*
          * An object node makes what its fields say it makes.
          *
-         * Named, that is one field of that name holding the object, which is
-         * what a later node points at. Unnamed, the fields themselves are what
-         * goes on — an object put together and then handed over as its parts,
-         * which is the shape the run was already carrying.
+         * Named, that is one field of that name holding the object — the whole
+         * thing, for a parameter that takes one — and each of its fields as a
+         * dotted path under it, the way a shaped agent's answer is offered.
+         * Offering only the name was how the whole object could be passed but
+         * no field picked; offering only the fields, before that, was the
+         * opposite. Unnamed, the fields themselves are what goes on — an
+         * object put together and then handed over as its parts, which is the
+         * shape the run was already carrying and which nothing can name whole.
          *
          * It passes on what it was given as well: building something out of two
          * earlier steps should not throw away everything else they produced.
@@ -157,8 +165,13 @@ class GraphValidator(
             val named = node.outputName?.trim().orEmpty()
             val fields = shapeOf(node)
             Ports(
-                inputs = (reads(node.mappings) + savedAnswerReads(node, among)).distinctBy { it.name },
-                outputs = if (named.isEmpty()) fields else listOf(ActionParamView(named, ValueType.OBJECT)),
+                inputs = reads(node.mappings),
+                outputs = if (named.isEmpty()) {
+                    fields
+                } else {
+                    listOf(ActionParamView(named, ValueType.OBJECT)) +
+                        fields.map { ActionParamView("$named.${it.name}", it.type) }
+                },
                 passThrough = true,
             )
         }
@@ -216,28 +229,6 @@ class GraphValidator(
             return saved.properties.map { ActionParamView(it.name, typeOf(it.kind)) }
         }
         return node.mappings.map { ActionParamView(it.name, ValueType.STRING) }
-    }
-
-    /**
-     * What reaches an object node because an agent saves its answer into it.
-     *
-     * The same fields the run will resolve: the agent's output name where it
-     * has one, and the shape's own field names where it does not - an unnamed
-     * shaped answer goes on as its fields. Fields the node maps itself are
-     * its own mappings' business and already counted.
-     */
-    private fun savedAnswerReads(node: WorkflowNode, among: List<WorkflowNode>): List<ActionParamView> {
-        val filler = among.firstOrNull { it.kind == NodeKind.AGENT && it.outputNodeKey == node.nodeKey }
-            ?: return emptyList()
-        val named = filler.outputName?.trim().orEmpty()
-        if (named.isNotEmpty()) return listOf(ActionParamView(named, ValueType.OBJECT))
-        // A blank value is the row the editor seeds, not an answer - the same
-        // reading the run gives it when it folds the answer under the mappings.
-        val mapped = node.mappings
-            .filter { it.mode == MappingMode.REFERENCE || it.expression.isNotBlank() }
-            .map { it.name }
-            .toSet()
-        return shapeOf(node).filterNot { it.name in mapped }
     }
 
     /** A property's shape, as the graph's own vocabulary of types. */
@@ -380,7 +371,7 @@ class GraphValidator(
         if (hardOnly) return problems
 
         // --- What each node can see, followed along the edges ---
-        val ports = nodes.associate { it.nodeKey to portsOf(it, nodes) }
+        val ports = nodes.associate { it.nodeKey to portsOf(it) }
         val available = availability(nodes, known, ports)
 
         nodes.forEach { node ->
@@ -461,7 +452,63 @@ class GraphValidator(
             }
         }
 
+        /*
+         * An agent saving its answer into an object node needs a run to carry
+         * it there: the pointing is a dependency, and the answer travels the
+         * solid path like every other value. Asked as its own question rather
+         * than declared among the object node's inputs, because the agent's
+         * fields are deliberately no longer offered - the coverage rule would
+         * call the arrangement's own field unproducable.
+         */
+        nodes.filter { it.kind == NodeKind.AGENT && it.outputNodeKey != null }.forEach { agent ->
+            val target = byKey[agent.outputNodeKey]
+            when {
+                target == null || target.kind != NodeKind.OBJECT || target.objectId == null ->
+                    problems += GraphProblem(
+                        severity = GraphProblemSeverity.WARNING,
+                        nodeKey = agent.nodeKey,
+                        message = "${agent.name} saves its answer into a node that cannot take it. " +
+                            "Pick where the answer goes again.",
+                    )
+
+                !runReaches(agent.nodeKey, target.nodeKey, known, byKey) ->
+                    problems += GraphProblem(
+                        severity = GraphProblemSeverity.WARNING,
+                        nodeKey = agent.nodeKey,
+                        message = "${agent.name} saves its answer into ${target.name}, but no run carries it " +
+                            "there: the answer travels the solid path, so wire ${target.name} somewhere " +
+                            "after ${agent.name}.",
+                    )
+            }
+        }
+
         return problems.distinct().sortedBy { it.severity.ordinal }
+    }
+
+    /**
+     * Whether a run leaving [from] can arrive at [to], following the edges.
+     *
+     * A session's edge does not carry a run, and the failure edge out of the
+     * saving agent itself does not carry an answer - down it, there is none.
+     */
+    private fun runReaches(
+        from: String,
+        to: String,
+        edges: List<WorkflowEdge>,
+        byKey: Map<String, WorkflowNode>,
+    ): Boolean {
+        val queue = ArrayDeque(listOf(from))
+        val seen = mutableSetOf(from)
+        while (queue.isNotEmpty()) {
+            val here = queue.removeFirst()
+            if (here == to) return true
+            edges
+                .filter { it.sourceKey == here }
+                .filterNot { byKey[it.sourceKey]?.kind == NodeKind.SESSION }
+                .filterNot { it.sourceKey == from && it.branch == EdgeBranch.FAILURE }
+                .forEach { edge -> if (seen.add(edge.targetKey)) queue.addLast(edge.targetKey) }
+        }
+        return false
     }
 
     /** What has reached each node, following the edges from the ones that start. */

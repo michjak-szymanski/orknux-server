@@ -151,6 +151,102 @@ class GraphValidatorTest(
         assertThat(problems).anySatisfy { assertThat(it).contains("Orphan has nothing before it") }
     }
 
+    /**
+     * Saved into an object node, an answer is spoken for: the object node is
+     * where it is read, so the agent stops offering its fields - one answer,
+     * one place to read it - and the object node offers them instead.
+     */
+    @Test
+    fun `an agent saving into an object node stops offering its answer`() {
+        val shape = shape("Prompt", listOf("intentType", "userMessage"))
+
+        val problems = save(
+            nodes = """
+                { key: "think", kind: AGENT, name: "Responder", outputNodeKey: "keep",
+                  outputName: "llmResult", x: 0, y: 0 },
+                { key: "keep", kind: OBJECT, name: "Prompt", objectId: $shape, x: 200, y: 0 }
+            """,
+            edges = """{ source: "think", target: "keep" }""",
+        )
+
+        assertThat(problems).noneSatisfy { assertThat(it).contains("saves its answer") }
+
+        graphQlTester.document(
+            """
+            query {
+              workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                nodes { key outputs { display } }
+              }
+            }
+            """,
+        ).execute()
+            .path("workflowGraph.nodes[0].outputs").entityList(Any::class.java).hasSize(0)
+            .path("workflowGraph.nodes[1].outputs[*].display").entityList(String::class.java)
+            .containsExactly("intentType: string", "userMessage: string")
+    }
+
+    /** The answer travels the solid path, so a target no run reaches is said out loud. */
+    @Test
+    fun `a saving agent whose object node no run reaches is warned about`() {
+        val shape = shape("Verdict", listOf("cause"))
+
+        val problems = save(
+            nodes = """
+                { key: "think", kind: AGENT, name: "Responder", outputNodeKey: "keep",
+                  outputName: "llmResult", x: 0, y: 0 },
+                { key: "keep", kind: OBJECT, name: "Verdict", objectId: $shape, x: 200, y: 0 }
+            """,
+            edges = "",
+        )
+
+        assertThat(problems).anySatisfy {
+            assertThat(it).contains("WARNING").contains("no run carries it")
+        }
+    }
+
+    /**
+     * A named object node is the whole thing and its parts: the name for a
+     * parameter that takes the object, and each field as a dotted path under
+     * it. It offered only the name once, and only the fields before that -
+     * either way, half of what a later node wants to point at.
+     */
+    @Test
+    fun `a named object node offers the whole object and its fields`() {
+        val shape = shape("Ticket", listOf("id", "title"))
+
+        save(
+            nodes = """
+                { key: "keep", kind: OBJECT, name: "Ticket", objectId: $shape,
+                  outputName: "ticket", x: 0, y: 0 }
+            """,
+            edges = "",
+        )
+
+        graphQlTester.document(
+            """
+            query {
+              workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                nodes { key outputs { display } }
+              }
+            }
+            """,
+        ).execute()
+            .path("workflowGraph.nodes[0].outputs[*].display").entityList(String::class.java)
+            .containsExactly("ticket: object", "ticket.id: string", "ticket.title: string")
+    }
+
+    /** One of the workspace's shapes, made the way the editor makes one. */
+    private fun shape(name: String, fields: List<String>): Long = graphQlTester.document(
+        """
+        mutation {
+          createObject(input: {
+            workspaceId: $workspaceId, name: "$name",
+            properties: [${fields.joinToString(", ") { "{ name: \"$it\", kind: STRING }" }}]
+          }) { id }
+        }
+        """,
+    ).execute().path("createObject.id").entity(Long::class.java).get()
+
     @Test
     fun `nothing can feed a trigger`() {
         graphQlTester.document(

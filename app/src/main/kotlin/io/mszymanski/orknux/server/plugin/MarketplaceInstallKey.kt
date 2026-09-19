@@ -30,7 +30,7 @@ import javax.crypto.spec.SecretKeySpec
 @Component
 class MarketplaceInstallKey(
     @Value("\${orknux.marketplace.install-key:}") private val secret: String,
-    @Value("\${orknux.marketplace.url:https://orknux.io/graphql}") private val endpoint: String,
+    @Value("\${orknux.marketplace.url:https://orknux.ai/graphql}") private val endpoint: String,
 ) {
 
     /** Whether this installation has a key at all, for a refusal that says so. */
@@ -63,6 +63,25 @@ class MarketplaceInstallKey(
         val host = marketplace.host ?: return false
         return address.host?.equals(host, ignoreCase = true) == true &&
             address.scheme?.equals(marketplace.scheme, ignoreCase = true) == true
+    }
+
+    /**
+     * Why a 401 arrived from somewhere we sent no key.
+     *
+     * Worth its own sentence because the cause is almost always a setting: the
+     * catalog configured on one host, handing out file URLs on another. The
+     * key is fitted by host, so the files get nothing and the refusal used to
+     * read as a bare 401 with no hint at which of two hosts was wrong.
+     */
+    fun elsewhere(address: URI): String {
+        val host = runCatching { URI.create(endpoint) }.getOrNull()?.host
+        return if (host == null) {
+            "it wants an install key, and this installation has no marketplace configured to send one to"
+        } else {
+            "it wants an install key. This installation only sends one to $host, which is where " +
+                "orknux.marketplace.url points — set ORKNUX_MARKETPLACE_URL to the marketplace that " +
+                "serves ${address.host}"
+        }
     }
 
     /**

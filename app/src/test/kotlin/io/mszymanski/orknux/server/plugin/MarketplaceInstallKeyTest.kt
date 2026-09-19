@@ -80,6 +80,28 @@ class MarketplaceInstallKeyTest {
     }
 
     /**
+     * The 401 that is a setting rather than a key.
+     *
+     * A catalog configured on one host handing out file URLs on another is
+     * the way this actually goes wrong - it is how orknux.io and orknux.ai
+     * first met - and a bare "it answered 401" points at neither of them.
+     */
+    @Test
+    fun `a 401 from somewhere we sent no key names both hosts`() {
+        val said = key.elsewhere(URI.create("https://orknux.ai/market/plugin/slack/files/slack.js"))
+
+        assertThat(said).contains("orknux.ai").contains("ORKNUX_MARKETPLACE_URL")
+    }
+
+    @Test
+    fun `and says there is no marketplace at all where there is none`() {
+        val nowhere = MarketplaceInstallKey(secret, "")
+
+        assertThat(nowhere.elsewhere(URI.create("https://orknux.ai/x.js")))
+            .contains("no marketplace configured")
+    }
+
+    /**
      * An installation with no marketplace configured has no host to compare
      * against, so nothing is its own — which is the safe direction: a key that
      * cannot be placed is a key that is not sent.

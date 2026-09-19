@@ -158,7 +158,7 @@ orknux:
     # its own: it asks, and installs from the URL the answer carries. Blank
     # leaves the Catalog screen saying this installation has no marketplace,
     # which is the honest state for an air-gapped one.
-    url: ${ORKNUX_MARKETPLACE_URL:https://orknux.io/graphql}
+    url: ${ORKNUX_MARKETPLACE_URL:https://orknux.ai/graphql}
     # What this installation says to be answered at all. The marketplace keys
     # both its doors - the catalog query and the plugin files - and refuses
     # anything without it; what travels is a HMAC of the day over this, never

@@ -488,8 +488,22 @@ class PluginUploadAPI(
          * long to wait, and saying so is the difference between waiting and
          * retrying into the same wall.
          */
-        if (marketplace && answer.statusCode() == 401) {
-            throw PluginUrlUnreachableException(address.toString(), MarketplaceInstallKey.REFUSED)
+        if (answer.statusCode() == 401) {
+            /*
+             * Two different 401s, and saying which is the whole value of
+             * catching it here.
+             *
+             * One is a key the marketplace would not take. The other is a key
+             * this installation never sent, because the address did not look
+             * like the marketplace's - which is what happens when the catalog
+             * is configured on one host and hands out file URLs on another,
+             * and it used to surface as a bare "it answered 401" with nothing
+             * pointing at the setting that caused it.
+             */
+            throw PluginUrlUnreachableException(
+                address.toString(),
+                if (marketplace) MarketplaceInstallKey.REFUSED else installKey.elsewhere(address),
+            )
         }
         if (answer.statusCode() == 429) {
             val after = answer.headers().firstValue("Retry-After").orElse(null)

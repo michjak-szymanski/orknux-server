@@ -52,7 +52,7 @@ class Marketplace(
     private val installKey: MarketplaceInstallKey,
     proxies: ProxyRouter,
     /** Where the marketplace's GraphQL lives; empty means this installation has none. */
-    @Value("\${orknux.marketplace.url:https://orknux.io/graphql}") private val endpoint: String,
+    @Value("\${orknux.marketplace.url:https://orknux.ai/graphql}") private val endpoint: String,
 ) {
 
     private val http: HttpClient = proxies.builder()

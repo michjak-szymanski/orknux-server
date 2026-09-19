@@ -98,6 +98,7 @@ internal object HostHelpers {
         messageAbsent: String,
         userAbsent: String,
         mentionAbsent: String,
+        searchAbsent: String,
     ): String = """
         slack: {
           thread(connection, channel, threadTs, limit) {
@@ -147,6 +148,14 @@ internal object HostHelpers {
             }
             const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
             return JSON.parse(host.slack_mention(JSON.stringify([id, name])));
+          },
+          search(connection, query, limit) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.slack_search === undefined) {
+              return { error: '$searchAbsent' };
+            }
+            const id = connection === null || typeof connection !== 'object' ? connection : connection.id;
+            return JSON.parse(host.slack_search(JSON.stringify([id, query, limit ?? null])));
           },
         },
     """.trimIndent()

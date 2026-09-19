@@ -113,6 +113,17 @@ enum class PluginCapability(
     SLACK_MENTION("Resolve a name to a Slack mention, through a connection it was given", forScripts = true),
 
     /**
+     * Search Slack's messages by query.
+     *
+     * Read-only, through a connection the workspace was given, bounded by the
+     * run's workspace like the other reads. One honesty note carried in the
+     * dispatch rather than here: Slack answers `search.messages` only for a
+     * user token, so a connection holding a bot token gets Slack's own refusal
+     * back as the error - which is the true answer, not this server's.
+     */
+    SLACK_SEARCH("Search Slack messages, through a connection it was given", forScripts = true),
+
+    /**
      * Make an HTTP request, to an address of the plugin's choosing.
      *
      * **The widest thing on this list, and the summary says so** — because the

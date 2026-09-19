@@ -8,6 +8,8 @@ import io.mszymanski.orknux.connector.connection.Reaction
 import io.mszymanski.orknux.connector.connection.SlackMentions
 import io.mszymanski.orknux.connector.connection.SlackMessages
 import io.mszymanski.orknux.connector.connection.SlackReactions
+import io.mszymanski.orknux.connector.connection.SlackSearch
+import io.mszymanski.orknux.connector.connection.SlackSearched
 import io.mszymanski.orknux.connector.connection.SlackThreads
 import io.mszymanski.orknux.connector.connection.SlackUser
 import io.mszymanski.orknux.connector.connection.SlackUsers
@@ -45,6 +47,7 @@ class SlackPluginHost(
     private val linked: SlackMessages,
     private val users: SlackUsers,
     private val mentions: SlackMentions,
+    private val searches: SlackSearch,
     private val mapper: ObjectMapper,
     /**
      * The other thing the server does on a caller's behalf; see
@@ -66,6 +69,7 @@ class SlackPluginHost(
         PluginCapability.SLACK_READ_MESSAGE -> readMessage(argument, on)
         PluginCapability.SLACK_READ_USER -> readUser(argument, on)
         PluginCapability.SLACK_MENTION -> mention(argument, on)
+        PluginCapability.SLACK_SEARCH -> search(argument, on)
         /*
          * No workspace scoping, and the reason is not that it was forgotten: a
          * request names an address rather than one of the workspace's own
@@ -281,6 +285,40 @@ class SlackPluginHost(
             is Mention.NotPossible -> refusal(resolved.reason)
             is Mention.Refused -> refusal(resolved.reason)
         }.also { log.debug("A script resolved a mention on connection {}", connectionId) }
+    }
+
+    /** `[connectionId, query, limit]` - searched in Slack's own syntax. */
+    private fun search(argument: String, on: Long?): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.size() < 2) {
+            return refusal("that call takes a connection and a query")
+        }
+        val connectionId = connectionOf(given.get(0))
+            ?: return refusal("the first argument has to be a Slack connection")
+        val query = given.get(1)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the second argument has to be a query")
+        val limit = given.get(2)?.takeIf { it.isNumber }?.asInt()
+
+        return when (val found = searches.search(connectionId, query, limit ?: DEFAULT_LIMIT, on)) {
+            is SlackSearched.Found -> {
+                val answer = mapper.createObjectNode()
+                answer.put("total", found.total)
+                val matches = answer.putArray("matches")
+                found.matches.forEach { match ->
+                    matches.addObject()
+                        .put("channel", match.channel)
+                        .put("channelName", match.channelName)
+                        .put("ts", match.ts)
+                        .put("user", match.user)
+                        .put("text", match.text)
+                        .put("permalink", match.permalink)
+                }
+                mapper.writeValueAsString(answer)
+            }
+            is SlackSearched.NotPossible -> refusal(found.reason)
+            is SlackSearched.Refused -> refusal(found.reason)
+        }.also { log.debug("A script searched Slack on connection {}", connectionId) }
     }
 
     /**

@@ -152,6 +152,23 @@ class ScriptHostTest {
         })
     }
 
+    @Test
+    fun `a function can search Slack through the server`() {
+        val seeker = """
+            export default function seek(query) {
+              return orknux.slack.search({ id: 7, type: 'SLACK' }, query, 5);
+            }
+        """.trimIndent()
+
+        runner.call(seeker, "seek", listOf("\"in:#support deploy\""), on = 12)
+
+        assertThat(asked).singleElement().satisfies({ (capability, argument, on) ->
+            assertThat(capability).isEqualTo(PluginCapability.SLACK_SEARCH)
+            assertThat(on).isEqualTo(12L)
+            assertThat(argument).isEqualTo("""[7,"in:#support deploy",5]""")
+        })
+    }
+
     /** With no host wired, the helper is still there and says so in a sentence. */
     @Test
     fun `a script where the door is not wired is told, rather than thrown at`() {

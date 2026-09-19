@@ -301,6 +301,7 @@ class PluginUploadAPI(
             accept,
             manifest = opened.manifest,
             icon = opened.icon,
+            iconDark = opened.iconDark,
         )
     }
 
@@ -334,10 +335,19 @@ class PluginUploadAPI(
          */
         val base = java.net.URI.create(address)
         val said = manifest(runCatching { fetched(base.resolve(MANIFEST)) }.getOrNull())
-        val face = said?.icon?.let { icon ->
-            runCatching { fetched(base.resolve(icon)) }.getOrNull()
-                ?.let(::drawing)
+        fun drawn(path: String?): String? = path?.let {
+            runCatching { fetched(base.resolve(it)) }.getOrNull()?.let(::drawing)
         }
+
+        val face = drawn(said?.icon)
+        /*
+         * And the white one, where the manifest names it or the convention
+         * puts it. A fetch that 404s costs one request and answers null, which
+         * is the same as a plugin that ships a single icon - so following the
+         * convention here is cheap and makes a plugin loaded by hand draw the
+         * way the same plugin drawn from the catalog does.
+         */
+        val faceDark = drawn(said?.iconDark ?: besideIt(said?.icon))
 
         return loaded(
             filename,
@@ -346,6 +356,7 @@ class PluginUploadAPI(
             typescript = null,
             accept = request.accept,
             icon = face,
+            iconDark = faceDark,
             manifest = said,
         )
     }
@@ -439,11 +450,28 @@ class PluginUploadAPI(
                 summary = offering.summary.ifBlank { null } ?: said?.summary,
                 author = offering.author.ifBlank { null } ?: said?.author,
                 version = offering.version.ifBlank { null } ?: said?.version,
-                // The face came across already, by the route that checks it is
-                // a drawing; a path from here would be fetched a second time.
+                // Both faces came across already, by the route that checks
+                // each is a drawing; a path from here would be fetched twice.
                 icon = null,
+                iconDark = null,
             ),
         )
+    }
+
+    /**
+     * Where the white glyph sits when nobody said.
+     *
+     * `icon.svg` has `icon-white.svg` beside it - the marketplace's own
+     * convention, which is how its catalog answers with two files for a plugin
+     * whose manifest names one. Followed here so a plugin loaded from a zip or
+     * a URL gets the same pair the same plugin gets from the catalog; without
+     * it the Slack mark was the dark one on a dark screen, but only when it
+     * had been loaded by hand.
+     */
+    private fun besideIt(icon: String?): String? {
+        val held = icon ?: return null
+        val dot = held.lastIndexOf('.').takeIf { it > 0 } ?: return null
+        return held.substring(0, dot) + "-white" + held.substring(dot)
     }
 
     /**
@@ -1021,7 +1049,7 @@ class PluginUploadAPI(
          * goes to the sandbox.
          */
         val said = manifest(held[MANIFEST]?.let(::text))
-        val face = said?.icon?.removePrefix("./")
+        fun drawn(path: String?): String? = path?.removePrefix("./")
             ?.let { held[it] }
             ?.takeIf { it.size <= MOST_ICON_CHARS }
             ?.let(::text)
@@ -1029,6 +1057,12 @@ class PluginUploadAPI(
             // stored whatever the manifest pointed at, so a manifest naming
             // its own README got the README onto the screen.
             ?.let(::drawing)
+
+        val face = drawn(said?.icon)
+        // The white one where the manifest names it, and otherwise wherever
+        // the convention puts it - which is beside the icon, and is where it
+        // already is in every plugin that ships two.
+        val faceDark = drawn(said?.iconDark ?: besideIt(said?.icon))
 
         // The plugin itself: the one root-level .js, or plugin.js where
         // several sit there. A rule somebody can hold in their head.
@@ -1045,7 +1079,7 @@ class PluginUploadAPI(
         }
         val libraries = code.filterKeys { it != main }
             .map { (path, content) -> PluginLibraryFile(path, text(content)) }
-        return Unzipped(main, text(code.getValue(main)), libraries, said, face)
+        return Unzipped(main, text(code.getValue(main)), libraries, said, face, faceDark)
     }
 
 
@@ -1076,6 +1110,7 @@ class PluginUploadAPI(
             version = said("version", 32),
             // A path beside the plugin, so it cannot name anything else.
             icon = said("icon", 200)?.takeIf { PluginRunner.LIBRARY_PATH_ANY.matches(it) },
+            iconDark = said("iconDark", 200)?.takeIf { PluginRunner.LIBRARY_PATH_ANY.matches(it) },
         )
     }
 
@@ -2049,6 +2084,8 @@ data class Unzipped(
     val libraries: List<PluginLibraryFile>,
     val manifest: PluginManifest?,
     val icon: String?,
+    /** The white glyph, where the archive held one. */
+    val iconDark: String? = null,
 )
 
 data class PluginManifest(
@@ -2058,6 +2095,15 @@ data class PluginManifest(
     val version: String?,
     /** A path beside the plugin, for the face it wears. */
     val icon: String?,
+    /**
+     * And the same in white, for a dark ground.
+     *
+     * Usually absent, and usually there anyway: the marketplace's own
+     * convention is a `-white` sibling of the icon, so a manifest that names
+     * only `icon.svg` still has `icon-white.svg` beside it. Named here where a
+     * plugin wants to call it something else.
+     */
+    val iconDark: String?,
 )
 
 /**

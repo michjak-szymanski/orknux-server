@@ -216,6 +216,52 @@ class PluginLibrariesTest(
     }
 
     /**
+     * The white glyph, found where the convention puts it.
+     *
+     * A manifest names one icon and the folder holds two - `icon.svg` beside
+     * `icon-white.svg`, which is the marketplace's own convention and how its
+     * catalog answers with a pair for a manifest that names one. Followed here
+     * so a plugin loaded by hand draws the way the same plugin drawn from the
+     * catalog does: the Slack mark was the dark one on a dark screen, but only
+     * when it had been loaded from a file.
+     */
+    @Test
+    fun `a zip picks up the white glyph beside the icon, unasked`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to """{"key":"shipped","icon":"icon.svg"}""",
+            "icon.svg" to """<svg xmlns="http://www.w3.org/2000/svg" id="for-light"/>""",
+            "icon-white.svg" to """<svg xmlns="http://www.w3.org/2000/svg" id="for-dark"/>""",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        val stored = plugins.findByKey("shipped")!!
+        assertThat(stored.icon).contains("for-light")
+        assertThat(stored.iconDark).describedAs("found without being named").contains("for-dark")
+    }
+
+    /** And a plugin with one icon has it on both grounds, which is its choice. */
+    @Test
+    fun `a zip with one icon stores one`() {
+        val archive = zipped(
+            "plugin.js" to pluginSource,
+            "lib/format.js" to format,
+            "lib/names.js" to names,
+            "plugin.json" to """{"key":"shipped","icon":"icon.svg"}""",
+            "icon.svg" to """<svg xmlns="http://www.w3.org/2000/svg" id="only-one"/>""",
+        )
+
+        load(archive, accepting = "lib/format.js,lib/names.js")
+
+        val stored = plugins.findByKey("shipped")!!
+        assertThat(stored.icon).contains("only-one")
+        assertThat(stored.iconDark).isNull()
+    }
+
+    /**
      * And the zip path holds an icon to the same rule the others do. It held
      * it to none at all, so a manifest naming something that is not a picture
      * put that file's text on the screen.

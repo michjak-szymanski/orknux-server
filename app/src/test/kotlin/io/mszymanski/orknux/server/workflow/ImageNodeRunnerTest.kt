@@ -40,6 +40,14 @@ class ImageNodeRunnerTest {
     private val executions = mock(WorkflowExecutionRepository::class.java)
     private val settings = mock(InstallationSettings::class.java)
     private val workspaces = mock(io.mszymanski.orknux.server.workspace.WorkspaceRepository::class.java)
+    /**
+     * Where this installation is, which a picture's link has to carry: a model
+     * pastes what it was handed, and a path has no host behind it wherever it
+     * lands. Named here rather than left at the default so the assertions say
+     * which half of the address they are about.
+     */
+    private val web = io.mszymanski.orknux.server.security.WebProperties(baseUrl = "https://orknux.example")
+
     private val mapper = ObjectMapper()
     private val expressions = NodeExpressions(mapper)
 
@@ -49,7 +57,7 @@ class ImageNodeRunnerTest {
      * node called something rather than that a picture was filed against the
      * run - which is the thing that has broken before.
      */
-    private val steps = StepPictures(workspaces, drawing, pictures, store, settings)
+    private val steps = StepPictures(workspaces, web, drawing, pictures, store, settings)
 
     private val runner = ImageNodeRunner(steps, executions, settings, expressions, mapper)
 

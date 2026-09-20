@@ -93,7 +93,11 @@ class StepPictureTools(
                 is StepDrawing.Drawn -> mapper.writeValueAsString(
                     mapOf(
                         "drawn" to true,
-                        "url" to "${StepPictures.DOWNLOAD_PATH}/${requireNotNull(drawn.picture.id)}",
+                        // Absolute, for the reason `StepPictures.base` gives:
+                        // what the model is handed is what it pastes, and a
+                        // path has no host to be resolved against wherever it
+                        // lands.
+                        "url" to pictures.urlOf(requireNotNull(drawn.picture.id)),
                         "markdown" to pictures.linkTo(drawn.picture),
                         "note" to "The picture is filed against this run and is shown under this node. Put the " +
                             "markdown in your answer only if it belongs at a particular point in it.",

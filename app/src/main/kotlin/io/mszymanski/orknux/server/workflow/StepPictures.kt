@@ -30,6 +30,8 @@ import org.springframework.stereotype.Service
 @Service
 class StepPictures(
     private val workspaces: WorkspaceRepository,
+    /** Where this installation is; see [base]. */
+    private val web: io.mszymanski.orknux.server.security.WebProperties,
     private val drawing: ModelImageClient,
     private val pictures: ExecutionPictureRepository,
     private val store: AttachmentStore,
@@ -139,7 +141,31 @@ class StepPictures(
      * downstream has to be taught a new field.
      */
     fun linkTo(picture: ExecutionPicture): String =
-        "![" + alt(picture.prompt) + "](" + DOWNLOAD_PATH + "/" + requireNotNull(picture.id) + ")"
+        "![" + alt(picture.prompt) + "](" + urlOf(requireNotNull(picture.id)) + ")"
+
+    /** Where a picture is, absolutely; see [base] for why that matters. */
+    fun urlOf(id: Long): String = base() + DOWNLOAD_PATH + "/" + id
+
+    /**
+     * Where this installation is, for a link somebody else's client has to
+     * resolve.
+     *
+     * A model is handed this markdown and pastes what it was given. Slack has
+     * no document to resolve a path against, so `![alt](/api/…)` became
+     * `<…|alt>` on the way through the mrkdwn conversion and arrived as that
+     * construction, printed: angle brackets, a pipe, and an image description
+     * standing in for link text. Nothing downstream could mend it - the host
+     * was missing and cannot be invented.
+     *
+     * The same base the issue mail and the password reset write their links
+     * from. Those write no link at all where it is blank, because a mail with
+     * a broken link is worse than a mail without one; a picture is the other
+     * way round - the run's own page is where somebody would look, so this
+     * falls back to the development address rather than handing back a link to
+     * nowhere.
+     */
+    private fun base(): String =
+        web.baseUrl.trim().trimEnd('/').ifEmpty { "http://localhost:5173" }
 
     /**
      * As much of the description as belongs in one image's alt text.

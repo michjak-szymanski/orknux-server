@@ -19,7 +19,15 @@ data class WebProperties(
      *
      * The development default is the Vite server, matching [allowedOrigins].
      * Empty means no link can be written, and whatever wanted one says so in the
-     * log rather than sending a link to nowhere.
+     * log rather than sending a link to nowhere. That is the rule for a mail: a
+     * link nobody can follow is worse in somebody's inbox than no link at all.
+     *
+     * A picture is the exception, and deliberately. `StepPictures` and
+     * `TaskPictures` write an address into markdown a *model* is handed, and a
+     * model pastes what it was given - so a path with no host behind it arrives
+     * in Slack as the construction that would have been a link. They fall back
+     * to the development address rather than write one, because a wrong link is
+     * at least a link, and the alternative is a paragraph of angle brackets.
      */
     val baseUrl: String = "http://localhost:5173",
 )

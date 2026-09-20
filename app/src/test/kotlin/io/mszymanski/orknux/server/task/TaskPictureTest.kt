@@ -143,7 +143,14 @@ class TaskPictureTest(
 
         graphQlTester.document("{ task(id: $taskId) { outcome } }").execute()
             .path("task.outcome").entity(String::class.java)
-            .isEqualTo("Here is the diagram.\n\n![A red square](/api/task-pictures/${drawn.id})")
+            /*
+             * Absolute: what an outcome carries is handed on to whoever
+             * reads it - a mail, a Slack message, a model pasting it into
+             * an answer - and a path has no host behind it there. The base
+             * is `orknux.web.base-url`, the Vite address in a test as in
+             * development.
+             */
+            .isEqualTo("Here is the diagram.\n\n![A red square](http://localhost:5173/api/task-pictures/${drawn.id})")
     }
 
     /**
@@ -221,7 +228,8 @@ class TaskPictureTest(
         val drawn = pictures.findAll().single()
         graphQlTester.document("{ task(id: $taskId) { outcome endedBecause } }").execute()
             .path("task.outcome").entity(String::class.java)
-            .isEqualTo("![A red square](/api/task-pictures/${drawn.id})")
+            // Absolute; see the note on the first of these.
+            .isEqualTo("![A red square](http://localhost:5173/api/task-pictures/${drawn.id})")
             .path("task.endedBecause").entity(String::class.java).isEqualTo("out of turns after 1")
     }
 

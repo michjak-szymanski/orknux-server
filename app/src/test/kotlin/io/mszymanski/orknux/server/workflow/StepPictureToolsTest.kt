@@ -41,9 +41,17 @@ class StepPictureToolsTest {
     private val pictures = mock(ExecutionPictureRepository::class.java)
     private val store = mock(AttachmentStore::class.java)
     private val settings = mock(InstallationSettings::class.java)
+    /**
+     * Where this installation is, which a picture's link has to carry: a model
+     * pastes what it was handed, and a path has no host behind it wherever it
+     * lands. Named here rather than left at the default so the assertions say
+     * which half of the address they are about.
+     */
+    private val web = io.mszymanski.orknux.server.security.WebProperties(baseUrl = "https://orknux.example")
+
     private val mapper = ObjectMapper()
 
-    private val steps = StepPictures(workspaces, drawing, pictures, store, settings)
+    private val steps = StepPictures(workspaces, web, drawing, pictures, store, settings)
     private val tools = StepPictureTools(mapper, steps)
 
     @Suppress("UNCHECKED_CAST")
@@ -126,8 +134,18 @@ class StepPictureToolsTest {
         val answer = mapper.readTree(requireNotNull(tools.shed(100, "ask", 9)).run(call("a red bicycle")))
 
         assertThat(answer.path("drawn").booleanValue()).isTrue()
-        assertThat(answer.path("url").stringValue()).isEqualTo("/api/execution-pictures/77")
-        assertThat(answer.path("markdown").stringValue()).isEqualTo("![a red bicycle](/api/execution-pictures/77)")
+        /*
+         * Absolute, both of them.
+         *
+         * What is handed to a model is what a model pastes, and it pastes it
+         * wherever it is answering - a Slack thread has no document for a path
+         * to be resolved against, so `/api/…` arrived as the markdown
+         * construction printed out rather than as a link.
+         */
+        assertThat(answer.path("url").stringValue())
+            .isEqualTo("https://orknux.example/api/execution-pictures/77")
+        assertThat(answer.path("markdown").stringValue())
+            .isEqualTo("![a red bicycle](https://orknux.example/api/execution-pictures/77)")
 
         // Against the step that drew it, so the run graph draws it under that
         // node whatever the agent goes on to say.
@@ -138,6 +156,44 @@ class StepPictureToolsTest {
         assertThat(row.nodeKey).isEqualTo("ask")
         assertThat(row.workspaceId).isEqualTo(9)
         assertThat(row.prompt).isEqualTo("a red bicycle")
+    }
+
+    /**
+     * An installation that has not said where it is still writes a link.
+     *
+     * The opposite of the rule a mail follows. `IssueNewsMail` writes no link
+     * at all on a blank base, because a broken link in somebody's inbox is
+     * worse than none - but a picture handed to a model with no host in front
+     * of it is not a worse link, it is the markdown printed out in a Slack
+     * thread. The development address is a guess; the construction is a bug.
+     */
+    @Test
+    fun `a blank base url still produces a link, not a path`() {
+        val unsaid = StepPictures(
+            workspaces,
+            io.mszymanski.orknux.server.security.WebProperties(baseUrl = ""),
+            drawing,
+            pictures,
+            store,
+            settings,
+        )
+
+        assertThat(unsaid.urlOf(7)).isEqualTo("http://localhost:5173/api/execution-pictures/7")
+    }
+
+    /** A base with a trailing slash does not become a double one. */
+    @Test
+    fun `a base url is joined once`() {
+        val trailing = StepPictures(
+            workspaces,
+            io.mszymanski.orknux.server.security.WebProperties(baseUrl = "https://orknux.example/"),
+            drawing,
+            pictures,
+            store,
+            settings,
+        )
+
+        assertThat(trailing.urlOf(7)).isEqualTo("https://orknux.example/api/execution-pictures/7")
     }
 
     @Test
@@ -206,6 +262,6 @@ class StepPictureToolsTest {
         )
 
         assertThat(answer.path("markdown").stringValue())
-            .isEqualTo("![a bicycle red and a hill](/api/execution-pictures/78)")
+            .isEqualTo("![a bicycle red and a hill](https://orknux.example/api/execution-pictures/78)")
     }
 }

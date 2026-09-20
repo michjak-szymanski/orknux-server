@@ -15,6 +15,141 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.8
+
+### ✨ Added
+
+- 🛒 **Plugins install from a marketplace.** The Plugins screen gained a catalog
+  beside the list of what is installed: a shelf of listings with icons,
+  descriptions, tags and versions, browsable and searchable, installed with one
+  press. A listing is fetched through the server rather than the browser, so an
+  installation behind a proxy reaches it under the same rules as everything
+  else, and the bytes are checked against the digest the catalog published
+  before anything is loaded. The catalog outranks the zip's own manifest where
+  the two disagree, an install key travels on both doors, and a release carries
+  the notes its author wrote — read under a Changelog tab on the listing.
+
+- 📦 **The plugins and the SDK moved out to `orknux-extension`.** They were
+  folders in this repository, released when the server was released. They are
+  now their own repository and their own package, `@orknux/plugin`, which is
+  what a plugin is written against — so a plugin ships when its author ships it,
+  and an installation takes a new plugin without taking a new server.
+
+- 🧩 **A plugin brings more than functions.** Its own libraries, allowed by
+  whoever loads it; skills, granted to an agent as a catalog of their own;
+  object shapes its functions can return and a workflow can hold an answer to;
+  and tools declared for agents apart from its functions, which appear in the
+  Tools list beside the workspace's own and on the agent form's grant list. A
+  plugin's function can be edited in place, and the edit survives a reload, a
+  restart and a re-install.
+
+- 🎨 **An agent can draw, and can see.** `chat_draw_picture` in a chat and
+  `draw_picture` in a run, both behind a grant that can be seen in the Tools
+  list and switched off; a picture already on the conversation is handed to the
+  model as an image rather than described to it; and an image node draws one as
+  a step of a workflow, keeping its prompt and passing the picture on beside
+  whatever reached it. A drawn PNG says how big it came out, and what a picture
+  tool answers is a key into the session's store — the thing another tool can
+  take to *deliver* it — rather than a link into this installation.
+
+- 🗂️ **Everything a workspace has made, in one place.** An Artifacts page, and
+  `save_artifact` for an agent to add to it. A picture opens in the viewer; a
+  document an agent wrote — HTML, markdown, text, PDF — opens to be read, served
+  inline under a sandbox that allows it no script, no cookies and no network. An
+  open artifact is in the address bar, so a link to one opens it.
+
+- 🧾 **An AI session carries a store of its own.** A key and a JSON value per
+  session, which is how one tool hands bytes to another: a plugin that makes a
+  PDF, a tool that draws a picture, and whatever uploads them all speak the same
+  key. It is what makes a picture deliverable without a link.
+
+- 🔍 **Nine paged listings are searched by the database.** Tools, functions,
+  conditions, actions, triggers, objects, agents, workflows and libraries: what
+  is typed narrows the whole list rather than the page that happens to be on
+  screen, so a match on page four is a match.
+
+- 💬 **A chat is answered whether its reader stays or not.** A text turn is a
+  record kept for whoever comes back, so closing the tab no longer loses the
+  answer being written; Stop still stops it. Chat messages say when they were
+  sent, a compaction carries the summary it made rather than only a count, and a
+  run's transcript says what the model is thinking while it is thinking it.
+
+- 🧰 **The sandbox learned a few things.** `orknux.encoding` for base64 both
+  ways, `orknux.crypto` because the engine has none, `orknux.render` to turn a
+  page or a PDF into a picture, and three more Slack doors — follow a message
+  link, name a mention, write one.
+
+- ⏱️ **How long a plugin may run is a setting.** A plugin call is bounded by the
+  number on the Settings screen rather than the one the server was started with:
+  1–300 seconds, 30 by default. That page now has one Save at the top for every
+  number on it, rather than one beside each.
+
+### 🔧 Changed
+
+- ⚠️ **A listing carries tags, not one category.** A marketplace still answering
+  with a single category word has it read as a tag, so nothing breaks — but the
+  shelf narrows by tag now, and a plugin can be in more than one place. Both
+  catalog queries climb down a ladder of fields, asking for the newest shape
+  first and falling back a rung at a time, because GraphQL fails a whole query
+  over one field a server has not heard of.
+
+- 🔌 **A capability a plugin did not ask for is a question, not a 500.** Loading
+  one that reaches further than its manifest declared asks whoever is loading it
+  to allow the difference, in the same modal that allows its libraries.
+
+- 🖼️ **A picture handed to a model carries its host.** The links were relative,
+  so a model that pasted one pasted a path with no host behind it. They are
+  absolute now, built from the installation's own address — and what the picture
+  tools answer is a key rather than a link at all, because a link pasted into a
+  chat is punctuation. `save_artifact` is the one tool that still answers with
+  one, and composes the markdown itself: an artifact *is* a thing at an address.
+
+- 🔎 **The tools list is searched by name.** It was name or description, and a
+  description here is a paragraph written for a model to read — so "date"
+  returned every GitHub tool, because their descriptions mention a commit's
+  date. Both halves of that list, the workspace's own and the plugins', narrow
+  by the same rule.
+
+- 🧹 **Run history is swept, and a deleted workspace takes its runs with it.** A
+  retention the Settings screen sets, and a delete that no longer leaves rows
+  nobody can reach.
+
+- 📡 **MCP servers are checked on a timer**, not only when somebody presses the
+  button — so a server that went away is marked as away before somebody's run
+  finds out.
+
+- 🧱 **A workflow name is taken only in its own workspace.** It was installation
+  wide, which meant two teams could not both have a workflow called
+  "Onboarding".
+
+### 🐛 Fixed
+
+- 📎 **A file shared in Slack reaches the agent.** It arrives with the message
+  and is carried on the thread's other messages too, so "look at this" works
+  when the picture came a turn earlier. A mention with no files at all is a
+  mention rather than a crash.
+
+- 🔁 **Slack sending the same event twice does not run it twice.** A retried
+  delivery is recognised and dropped, so one message starts one workflow.
+
+- 🧭 **Two nodes in one workflow may share a definition name**, and a workflow's
+  own definition is named among its own rather than competing with every
+  workspace's. Deleting a condition no longer raises about a workflow nobody
+  named.
+
+- 🪟 **A new node lands in view.** It was placed where the canvas was rather than
+  where somebody was looking, which on a large graph meant adding a node and
+  seeing nothing happen.
+
+- 🖱️ **A picture drawn in a chat opens when clicked**, and is in the chat's
+  files at once rather than after a reload — the one place in the application
+  where a picture is made was the one place it was neither.
+
+- 📛 **A plugin's tools are not named by the core.** The note on a drawn picture
+  told a model to call `slack_uploadBinary`, which exists only where that plugin
+  is loaded; it now says what kind of tool to look for and lets the agent read
+  its own list.
+
 ## 0.9.7
 
 ### ✨ Added

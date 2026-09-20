@@ -957,6 +957,56 @@ before the upgrade is recovered: a component's history begins with the first sav
 after it. A workflow is not one of the four because a workflow's versions are its
 publications — see **Publishing**.
 
+### Pictures
+
+An agent can look at one and can make one.
+
+**Looking.** A picture already on the conversation — pasted into a chat, shared
+in the Slack thread a run is answering — is handed to the model as an image
+rather than described to it. The links that carry them are absolute, built from
+`ORKNUX_BASE_URL`, because a relative path has no host behind it once a model has
+copied it somewhere else. What is not a picture stays where it is and is named on
+the payload: a PDF handed to a provider as an image is a request refused in the
+provider's own words.
+
+**Drawing.** `chat_draw_picture` in a chat, `draw_picture` in a run, and an
+**image node** as a step of a workflow. All three ask the workspace's image model,
+and all three file what comes back: a chat picture against the chat, a run's
+against the step that drew it — shown under that node in the run log — and an
+image node's alongside whatever reached the node, so the next node has both.
+
+Drawing is a **grant**, listed in Tools beside everything else an agent may be
+given and switched off the same way. An installation with no image model offers
+none of it rather than offering a tool that fails.
+
+What a picture tool *answers* is a key, not a link. The bytes go into the
+session's store under `picture.<id>`, and a key is what every tool that uploads a
+file takes — which is the difference between a picture somebody is shown and a
+picture filed where they are not looking. Handed a link instead, a model pastes
+it into a chat that has no document to resolve an address against, and the reader
+sees the construction rather than the picture. `save_artifact` is the one tool
+that answers with a link, because an artifact *is* a thing at an address.
+
+### Artifacts
+
+Everything a workspace has made, in one place: pictures its runs drew, documents
+its agents wrote, whatever `save_artifact` was handed.
+
+A picture opens in the viewer. A **document** — HTML, markdown, plain text, a PDF
+— opens to be read, served inline rather than downloaded, under a content policy
+that allows it nothing: `sandbox` with no permissions at all, so the page has an
+opaque origin, runs no script, keeps no cookies and reaches no network. That is
+what makes it safe to render something a model wrote. Anything else downloads.
+
+An open artifact is in the address bar, so a link to one opens it — including on
+an installation somebody has not signed into yet, which asks for the sign-in and
+then opens what was asked for.
+
+The ids are composite — `IMAGE-7`, `SAVED-2` — because three tables number
+independently and a bare `7` would be ambiguous between them. They are never
+reused: the sequences behind them do not cycle, so a link to a deleted artifact
+stays a link to nothing rather than quietly becoming a link to something else.
+
 ### Memory
 
 A **memory catalog** is a folder of notes a workspace keeps: an incident writeup,
@@ -1304,6 +1354,58 @@ A file that is not a module with a default export is refused on the way in.
 A plugin is the exception and imports no library at all: a plugin **embeds** what
 it needs, because a plugin is meant to be portable between installations and one
 that assumed a library was loaded here would not be.
+
+### Plugins and the marketplace
+
+A **plugin** is a signed-for bundle of JavaScript that an installation loads and
+every workspace in it can then use. It lives in
+[orknux-extension](https://github.com/michjak-szymanski/orknux-extension), is
+written against the `@orknux/plugin` package, and ships when its author ships it
+— which is the point of the split. A plugin was once a folder in this
+repository, released when the server was released; an installation now takes a
+new plugin without taking a new server.
+
+What one may bring:
+
+- **Functions**, callable from an action node like the workspace's own, and
+  editable in place — an edit survives a reload, a restart and a re-install.
+- **Tools**, declared for agents apart from its functions. They appear in the
+  Tools list beside the workspace's own, each row saying which plugin offers it,
+  and on the agent form's grant list.
+- **Skills**, granted to an agent as a catalog of their own.
+- **Object shapes** its functions return, which a workflow can hold an answer to.
+- **Libraries** it embeds, allowed by whoever loads it — see **Plugin
+  permissions**, which is the same modal and the same rule.
+- **A face**: an icon that follows the theme, and a README carried in the zip.
+
+**The marketplace** is the other half of the Plugins screen: a catalog of
+listings with icons, descriptions, tags and versions, searchable, installed with
+one press. Four things about how it is reached:
+
+- **The server fetches it, not the browser.** Both doors — the catalog and the
+  install — go out through `ProxyRouter` like every other outbound call, so an
+  installation behind a proxy reaches the marketplace under the rules it already
+  has. A test pins that; see `OutboundClientSeamTest`.
+- **The bytes are checked.** What arrives is hashed against the digest the
+  catalog published before anything is loaded, and the catalog's word outranks
+  the zip's own manifest where the two disagree.
+- **The query climbs down.** GraphQL fails a whole query over one field a server
+  has not heard of, so both queries ask for the newest shape first and fall back
+  a rung at a time — a marketplace that predates tags answers a query that does
+  not mention them, and its single category word is read as one.
+- **`ORKNUX_MARKETPLACE_URL` decides where from**, and an install key travels on
+  both doors. A keyless installation is told which host refused it rather than
+  being handed a bare 401.
+
+A plugin can be switched off without being uninstalled, an update is offered only
+when it is actually newer than what is held, and the release notes its author
+wrote are read on the listing, under Changelog.
+
+**How long one may run** is a setting rather than a start-up flag:
+`ORKNUX_PLUGIN_TIMEOUT_MILLIS` is the floor an installation ships with, the
+Settings screen is the switch, and the bound is read per call — 1 to 300 seconds,
+30 by default. A call that overruns is stopped and says the number it was held
+to.
 
 ### Plugin permissions
 

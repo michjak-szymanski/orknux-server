@@ -91,6 +91,11 @@ of a run leaves that execution at RUNNING for ever — there is no engine left t
 finish it or fail it. In a real installation a step that fails is retried
 according to the workflow's settings.
 
+**The marketplace needs a way out.** Plugins install from a catalog the server
+fetches over the network; an installation with no way out has the Plugins screen
+and the upload, and an empty shelf. Point `ORKNUX_MARKETPLACE_URL` at your own
+mirror, or leave it empty and load plugins by hand.
+
 **A workflow that waits longer than five minutes fails, by design.** The inline
 engine waits on the thread carrying the run, so a wait is capped
 (`ORKNUX_INLINE_MAX_WAIT`) and the step fails with a message telling you to
@@ -151,7 +156,7 @@ when everything is one container.
 | `ORKNUX_PORT` | The server, behind nginx. Not the published port. | `8081` |
 | `ORKNUX_SERVER_URL` | Where nginx forwards `/api`, `/graphql` and `/mcp`. | `http://127.0.0.1:8081` |
 | `ORKNUX_ATTACHMENTS_LOCATION` | Chat attachments, in the volume. | `/var/lib/orknux/attachments` |
-| `ORKNUX_BASE_URL` | What a mailed password reset link points at. | `http://localhost:8080` |
+| `ORKNUX_BASE_URL` | Where this installation is: what a mailed password reset link points at, and the host on every picture link handed to a model. A path with no host behind it is a link that resolves nowhere once a model has copied it into a message. | `http://localhost:8080` |
 | `ORKNUX_ALLOWED_ORIGINS` | Empty, because the interface is served from this origin. | empty |
 | `JAVA_OPTS` | | `-XX:MaxRAMPercentage=75` |
 

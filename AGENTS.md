@@ -54,6 +54,15 @@ is plainly there in the source. `-am` builds them alongside; `./mvnw install
 -DskipTests` first is the other way out. A plain `./mvnw test` builds the whole
 reactor and does not have the problem.
 
+**The plugins are not in this repository.** They and the `@orknux/plugin`
+package live in
+[orknux-extension](https://github.com/michjak-szymanski/orknux-extension), and a
+plugin is released when its author releases it rather than when the server is.
+What is here is the half that loads one: `PluginRunner`, `PluginCapability`, the
+marketplace client, and the tables a loaded plugin's functions, tools, skills,
+objects and libraries live in. A change to what a plugin may *do* is a change in
+both repositories, and the manifest is the contract between them.
+
 **The interface is a submodule with its own AGENTS.md**, and its checks run in
 its container - there is no Node on this machine:
 
@@ -61,6 +70,15 @@ its container - there is no Node on this machine:
 cd orknux-ui
 docker compose run --rm dev npm run typecheck   # tsc -b
 ```
+
+**The interface's checks are Playwright scripts**, one per behaviour, under
+`orknux-ui/scripts/*-check.mjs` and registered in `scripts/suite/suite.mjs`. They
+drive a real browser against a running server and assert what is *drawn* - a
+number read off `getBoundingClientRect`, a row counted in the DOM - which is the
+only way a rendering bug is caught by anything but a person looking. They are
+tests, not receipts: CI runs the suite, so a check written to prove one fix is a
+check that keeps proving it. Write one for anything visual, and prove it fails
+without the fix before keeping it.
 
 **`npm run typecheck` is `tsc -b`, and nothing else will do.** `tsc --noEmit -p
 tsconfig.json` exits 0 whatever state the code is in: the root config is
@@ -281,6 +299,26 @@ is reported to the module rather than cascaded.
   function has nobody, so `forScripts` is a decision about what holds it in:
   reading a thread is bounded by the run's own workspace, and `NETWORK_REQUEST`
   by the installation's proxy rules. Write the reason beside the entry.
+- **Core does not name a plugin's tool.** The note on a drawn picture told a
+  model to call `slack_uploadBinary`, which exists only where that plugin is
+  loaded - so the instruction was wrong on every installation that had not
+  loaded it, and core knew a plugin by name. Say what *kind* of tool to look for
+  and let the agent read its own list. `StepPictureToolsTest` asserts the note
+  names none.
+- **What makes bytes answers a key; what has an address answers a link.** A
+  picture a tool draws goes into the session's store under `picture.<id>`, and
+  the key is what every tool that uploads a file takes. Handed a link instead, a
+  model pastes it into a chat with no document to resolve an address against and
+  the reader sees the construction. `save_artifact` is the exception, and the
+  only one: an artifact *is* a thing at an address. Any link handed to a model is
+  absolute - `WebProperties.baseUrl` - because a path has no host behind it once
+  it has been copied somewhere else. The `url` fields the browser consumes stay
+  relative; they are DTOs, not prose.
+- **A query across a version boundary climbs down.** GraphQL fails a whole query
+  over one field the far side has not heard of, so the marketplace client asks
+  for the newest shape first and falls back a rung at a time - `Marketplace.LADDER`
+  - and the browser's catalog query does the same. A field added on one side must
+  be a new rung, never an edit to the bottom one.
 - **What an action needs is derived, not stored.** `ActionAPI.inputsOf` reads
   the placeholders off the settings; a second copy in the database would drift.
 - **A graph is checked by ports, not by kinds.** `GraphValidator` asks each node

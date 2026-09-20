@@ -321,13 +321,16 @@ or in a `.env` file next to `compose.yaml`.
 | `ORKNUX_OIDC_CLIENT_ID` | *empty* | This installation, as the provider knows it. |
 | `ORKNUX_OIDC_CLIENT_SECRET` | *empty* | Its secret, where the provider issued one. |
 | `ORKNUX_OIDC_AUDIENCES` | *the client id* | Which audiences a bearer token may name, comma separated. **The one that can lock an upgrade out** - see below. |
-| `ORKNUX_BASE_URL` | *empty* | Where this installation is reached from, as a browser spells it, and what a mailed password reset link points at. Empty writes no link and sends none. |
+| `ORKNUX_BASE_URL` | *empty* | Where this installation is reached from, as a browser spells it. It is what a mailed password reset link points at, and the host on every picture link handed to a model - a path with no host behind it resolves nowhere once a model has copied it into a message. Empty writes no reset link and sends none. |
 | `ORKNUX_MAIL_HOST` | *empty* | The relay this installation sends its own mail through. Empty means it cannot, so there is no password reset. |
 | `ORKNUX_MAIL_FROM` | *empty* | What that mail is from. A relay will not take a message without one. |
 | `ORKNUX_MAIL_PORT` | *by security* | Empty takes 587 for STARTTLS, 465 for TLS, 25 for none. |
 | `ORKNUX_MAIL_USERNAME`, `ORKNUX_MAIL_PASSWORD` | *empty* | Empty sends without authenticating, which is what an internal relay usually wants. |
 | `ORKNUX_MAIL_SECURITY` | `STARTTLS` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than merely offered. |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `lax` | `strict` once nothing links into Orknux from elsewhere. |
+| `ORKNUX_MARKETPLACE_URL` | `https://orknux.ai/graphql` | Where the plugin catalog is asked. The server fetches it, not the browser, so it goes out through the proxy rules. Point it at your own mirror, or set it empty on an installation with no way out: the Plugins page then offers the upload alone. |
+| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | `30000` | How long a plugin call may take. The floor this installation starts at; Admin -> Settings is the switch, between 1 and 300 seconds, and what it holds wins. |
+| `ORKNUX_EXECUTION_RETENTION_DAYS` | `90` | How long a finished run is kept before it is swept, with its steps. Admin -> Settings is the switch. |
 | `ORKNUX_LIBRARY_REGISTRY_URL` | `https://registry.npmjs.org` | Where an administrator installing a library by name fetches from - once, into the database, through the proxy rules. Point it at your own mirror, or set it empty on an installation with no way out: the Libraries page then offers the upload alone. |
 
 **Resetting a forgotten password needs three of those.** A reset is a link mailed

@@ -1,8 +1,9 @@
 # orknux-server
 
 Workspace-based agent orchestration: workflows drawn as a graph and run durably,
-with the agents, models, connections and credentials a workspace holds, and an
-issue tracker an assistant can work through over MCP.
+with the agents, models, connections and credentials a workspace holds, plugins
+installed from a marketplace, and an issue tracker an assistant can work through
+over MCP.
 
 This image is the API and the engine. The interface people sign in to is
 [`orknux/orknux-ui`](https://hub.docker.com/r/orknux/orknux-ui), which talks only
@@ -227,6 +228,11 @@ README's **Publishing**.
 | `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting to be approved counts for none. | `2h` | No |
 | `ORKNUX_TASK_PATIENCE` | How long a parked task waits for a person. | `7d` | No |
 | `ORKNUX_TASK_SWEEP_MINUTES` | How long a task may sit at Queued before being handed over again, so a hand-over lost to a restart leaves nothing stranded. An installation carrying its own tasks sets this on Admin -> Settings instead and is shown a field; one running Temporal takes it from here and is shown none. | `5` | No |
+| `ORKNUX_EXECUTION_RETENTION_DAYS` | How long a finished run is kept before it is swept, with its steps. Admin -> Settings is the switch; this is the floor. A deleted workspace takes its runs with it whatever this says. | `90` | No |
+| `ORKNUX_EXECUTION_SWEEP_ENABLED` | `false` sweeps nothing on a timer. | `true` | No |
+| `ORKNUX_REVISION_RETENTION_DAYS` | How long a replaced version of a function, tool, skill or agent is kept, measured from when it stopped being current. Admin -> Settings is the switch. | `14` | No |
+| `ORKNUX_REVISION_SWEEP_ENABLED` | `false` keeps every version forever. | `true` | No |
+| `ORKNUX_REVISION_SWEEP_INTERVAL` | How often that sweep runs. | `6h` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
 | `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
 | `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |
@@ -247,11 +253,29 @@ stopped.
 | `ORKNUX_SCRIPT_STATEMENT_LIMIT` | How many statements one may execute - what catches a loop that never ends. | `5000000` | No |
 | `ORKNUX_SCRIPT_LOG_LEVEL` | The lowest level `orknux.log` keeps, decided inside the sandbox: `debug`, `info`, `warn`, `error`, `off`. | `info` | No |
 | `ORKNUX_PLUGIN_LOG_LEVEL` | The same, for plugins. Separate so debugging one does not turn up every function. | `info` | No |
-| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same, for a plugin, which is a bundle and takes longer to load. | `10000` | No |
+| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same, for a plugin, which is a bundle and takes longer to load. The floor an installation ships with: Admin -> Settings is the switch, 1 to 300 seconds, and what it holds wins. | `30000` | No |
 | `ORKNUX_PLUGIN_STATEMENT_LIMIT` | The same, for a plugin. | `10000000` | No |
 | `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | How long a workflow's own HTTP request may take. | `30` | No |
 | `ORKNUX_LIBRARY_REGISTRY_URL` | Where installing a library by name fetches from - once, on the server, into the database, through the proxy rules. Point it at a mirror, or empty to offer the upload alone. | `https://registry.npmjs.org` | No |
 | `ORKNUX_LIBRARY_REGISTRY_TIMEOUT` | How long it has to answer. | `30s` | No |
+
+## Plugins and the marketplace
+
+A plugin is a bundle an installation loads and every workspace in it can then
+use - functions, tools, skills, object shapes and the libraries it embeds. They
+are written against `@orknux/plugin` and live in
+[orknux-extension](https://github.com/michjak-szymanski/orknux-extension), so a
+new plugin does not mean a new server.
+
+The Plugins screen carries a catalog beside what is installed. The server
+fetches it, not the browser, so it goes out through the proxy rules above like
+every other outbound call, and what arrives is checked against the digest the
+catalog published before anything is loaded.
+
+| Variable | What it does | Default | Required |
+| --- | --- | --- | --- |
+| `ORKNUX_MARKETPLACE_URL` | Where the catalog is asked. Point it at your own; empty offers the upload alone. | `https://orknux.ai/graphql` | No |
+| `ORKNUX_INSTALL_KEY` | What this installation says to be answered at all. The shipped key is a shared one; an installation that wants its own asks for one. | a shared key | No |
 
 ## Models and connections
 

@@ -220,7 +220,7 @@ class WebhookAPI(
                     modules = resolved.modules,
                     imports = resolved.imports,
                     on = trigger.workspaceId,
-                    timeoutMillis = timeouts.millisFor(function.timeoutSeconds, trigger.workspaceId),
+                    timeoutMillis = timeouts.forFunction(function.timeoutSeconds, trigger.workspaceId),
                 )
             }
         }

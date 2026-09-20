@@ -88,7 +88,7 @@ class WorkspaceToolCaller(
             modules = resolved.modules,
             imports = resolved.imports,
             on = agent.workspaceId,
-            timeoutMillis = timeouts.millisFor(tool.timeoutSeconds, agent.workspaceId),
+            timeoutMillis = timeouts.forTool(tool.timeoutSeconds, agent.workspaceId),
             sessionId = sessionId,
         )
         return when (result) {

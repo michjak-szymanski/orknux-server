@@ -256,7 +256,7 @@ class ConditionEvaluator(
                     resolved.imports,
                     on = condition.workspaceId,
                     origin = origin.copy(functionId = function.id),
-                    timeoutMillis = timeouts.millisFor(function.timeoutSeconds, condition.workspaceId),
+                    timeoutMillis = timeouts.forFunction(function.timeoutSeconds, condition.workspaceId),
                 )
             }
         }

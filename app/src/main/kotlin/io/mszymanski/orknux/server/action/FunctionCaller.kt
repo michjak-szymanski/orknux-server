@@ -131,7 +131,7 @@ class FunctionCaller(
                 resolved.imports,
                 on = workspaceId,
                 origin = origin.copy(functionId = function.id),
-                timeoutMillis = timeouts.millisFor(function.timeoutSeconds, workspaceId),
+                timeoutMillis = timeouts.forFunction(function.timeoutSeconds, workspaceId),
                 sessionId = sessionId,
             )
         }

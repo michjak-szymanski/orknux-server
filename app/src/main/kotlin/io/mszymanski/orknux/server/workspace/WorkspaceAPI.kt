@@ -260,9 +260,20 @@ class WorkspaceAPI(
     /**
      * The installation's script timeout, in seconds, for the same box: the
      * default the workspace inherits while it has decided nothing.
+     *
+     * One number behind both boxes, because the installation bounds a script
+     * rather than an occasion: what the operator set is how long this server
+     * will let any sandbox hold a thread. The two workspace settings are about
+     * what the work is worth waiting for, which is a judgement the workspace
+     * makes and the operator does not.
      */
     @SchemaMapping(typeName = "Workspace")
-    fun scriptTimeoutSecondsDefault(workspace: Workspace): Int =
+    fun functionTimeoutSecondsDefault(workspace: Workspace): Int =
+        (scriptProperties.timeoutMillis / 1000).toInt().coerceAtLeast(1)
+
+    /** The same number, for the tool box. See above. */
+    @SchemaMapping(typeName = "Workspace")
+    fun toolTimeoutSecondsDefault(workspace: Workspace): Int =
         (scriptProperties.timeoutMillis / 1000).toInt().coerceAtLeast(1)
 
     /**
@@ -587,7 +598,7 @@ class WorkspaceAPI(
      */
     @MutationMapping
     @Transactional
-    fun setWorkspaceScriptTimeout(@Argument workspaceId: Long, @Argument seconds: Int?): Workspace {
+    fun setWorkspaceFunctionTimeout(@Argument workspaceId: Long, @Argument seconds: Int?): Workspace {
         val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
         access.requireVisible(workspace)
 
@@ -595,12 +606,43 @@ class WorkspaceAPI(
             throw ScriptTimeoutOutOfRangeException(seconds)
         }
 
-        workspace.scriptTimeoutSeconds = seconds
+        workspace.functionTimeoutSeconds = seconds
         auditRecorder.record(
             workspaceId,
             WorkspaceAuditCategory.WORKSPACE,
-            seconds?.let { "A tool or function may run for $it seconds" }
-                ?: "The time a tool or function may run is the installation's again",
+            seconds?.let { "A function may run for $it seconds" }
+                ?: "The time a function may run is the installation's again",
+        )
+        return workspace
+    }
+
+    /**
+     * And how long a tool an agent called may run for.
+     *
+     * Its own setting rather than the one above, because the wait belongs to
+     * somebody: a model is stopped mid-turn until the tool answers and, in a
+     * chat, a person is watching that happen. Twenty seconds is patience in a
+     * workflow and a failure in a conversation.
+     *
+     * The same bounds and the same null. Read per call, so this decides the
+     * next tool call and leaves the ones already going alone.
+     */
+    @MutationMapping
+    @Transactional
+    fun setWorkspaceToolTimeout(@Argument workspaceId: Long, @Argument seconds: Int?): Workspace {
+        val workspace = repository.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
+        access.requireVisible(workspace)
+
+        if (seconds != null && seconds !in MIN_SCRIPT_TIMEOUT_SECONDS..MAX_SCRIPT_TIMEOUT_SECONDS) {
+            throw ScriptTimeoutOutOfRangeException(seconds)
+        }
+
+        workspace.toolTimeoutSeconds = seconds
+        auditRecorder.record(
+            workspaceId,
+            WorkspaceAuditCategory.WORKSPACE,
+            seconds?.let { "A tool an agent calls may run for $it seconds" }
+                ?: "The time a tool an agent calls may run is the installation's again",
         )
         return workspace
     }

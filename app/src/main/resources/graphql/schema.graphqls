@@ -1294,7 +1294,9 @@ type Mutation {
     timeout of their own. Null clears it, which puts the workspace back on the
     installation's own bound; between 1 and 600 seconds otherwise.
     """
-    setWorkspaceScriptTimeout(workspaceId: ID!, seconds: Int): Workspace!
+    setWorkspaceFunctionTimeout(workspaceId: ID!, seconds: Int): Workspace!
+    "The same, for a tool an agent called. See the fields on Workspace."
+    setWorkspaceToolTimeout(workspaceId: ID!, seconds: Int): Workspace!
     """
     Sets how voice mode decides somebody has finished talking, for this
     workspace.
@@ -1661,19 +1663,40 @@ type Workspace {
     """
     taskMaxTurnsDefault: Int!
     """
-    How long one run of this workspace's tools and functions may hold its
-    thread, in seconds, where the tool or function has no timeout of its own.
+    How long one run of this workspace's functions may hold its thread, in
+    seconds, where the function has no timeout of its own.
+
+    A workflow's step, a condition being decided, a webhook answering — every
+    place a function runs with nobody in particular waiting on it. A tool an
+    agent called is bounded by `toolTimeoutSeconds` instead.
 
     Null means the workspace has decided nothing and the installation's own
     bound is used, which is where every workspace starts. Read per call, so
     changing this decides the next run and leaves one already going alone.
     """
-    scriptTimeoutSeconds: Int
+    functionTimeoutSeconds: Int
     """
-    What a run gets when `scriptTimeoutSeconds` is null: the installation's own
-    bound. Sent so a field can show it rather than describe where it lives.
+    What a run gets when `functionTimeoutSeconds` is null: the installation's
+    own bound. Sent so a field can show it rather than describe where it lives.
     """
-    scriptTimeoutSecondsDefault: Int!
+    functionTimeoutSecondsDefault: Int!
+    """
+    How long a tool an agent called may hold its thread, in seconds, where the
+    tool has no timeout of its own.
+
+    Its own setting because the wait belongs to somebody: a model is stopped
+    mid-turn until the tool answers and, in a chat, a person is watching it
+    happen. Twenty seconds is patience in a workflow and a failure in a
+    conversation.
+
+    Null means the installation's bound, as above.
+    """
+    toolTimeoutSeconds: Int
+    """
+    What a tool call gets when `toolTimeoutSeconds` is null: the installation's
+    own bound.
+    """
+    toolTimeoutSecondsDefault: Int!
     """
     How long a pause has to run, after somebody has been talking, before their
     turn ends and what they said is sent.

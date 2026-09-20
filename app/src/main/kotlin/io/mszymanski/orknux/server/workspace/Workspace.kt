@@ -233,16 +233,44 @@ class Workspace(
     var taskMaxTurns: Int? = null,
 
     /**
-     * How long one run of this workspace's tools and functions may hold its
-     * thread, in seconds, where the tool or function has no timeout of its own.
+     * How long one run of this workspace's functions may hold its thread, in
+     * seconds, where the function has no timeout of its own.
+     *
+     * A function runs in four places and only one of them has an agent in it:
+     * a workflow's step, a condition being decided, a webhook answering, and a
+     * tool an agent called. This bounds the first three — see
+     * [toolTimeoutSeconds] for the fourth — because they are different kinds
+     * of wait. A webhook answers into a request somebody's server is holding
+     * open; a workflow step has all night.
      *
      * Null is what every workspace starts as and means it has decided nothing,
      * so the installation's bound is used — the same shape [taskMaxTurns] has,
      * and for the same reason. Read per call, so changing it changes the next
      * run rather than one in flight.
+     *
+     * The column keeps its old name. It held both of these until they were
+     * split, and renaming a column to match a Kotlin property is a migration
+     * that can only go wrong for the sake of a word nobody outside this file
+     * reads.
      */
     @Column(name = "script_timeout_seconds")
-    var scriptTimeoutSeconds: Int? = null,
+    var functionTimeoutSeconds: Int? = null,
+
+    /**
+     * And how long a tool an agent called may hold its thread.
+     *
+     * Its own setting because the wait belongs to somebody: a model is
+     * stopped mid-turn until the tool answers, and on a chat a person is
+     * watching it happen. Twenty seconds is patience in a workflow and a
+     * failure in a conversation, which is why one number for both was a number
+     * that suited neither.
+     *
+     * Null means the installation's bound, as above. Existing workspaces were
+     * given whatever their single setting was, so nothing changed the day this
+     * was split.
+     */
+    @Column(name = "tool_timeout_seconds")
+    var toolTimeoutSeconds: Int? = null,
 
     /**
      * How long a pause has to run, after somebody has been talking, before

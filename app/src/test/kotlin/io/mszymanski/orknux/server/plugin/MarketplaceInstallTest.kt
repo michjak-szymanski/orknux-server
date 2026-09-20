@@ -39,6 +39,9 @@ class MarketplaceInstallTest(
     @Autowired val functions: WorkflowFunctionRepository,
     @Autowired val tools: io.mszymanski.orknux.server.agent.PluginToolCaller,
     @Autowired val audit: WorkspaceAuditRepository,
+    /** For pointing this installation's marketplace through a proxy; see the test at the end. */
+    @Autowired val proxyRules: io.mszymanski.orknux.connector.proxy.ProxyRuleRepository,
+    @Autowired val proxies: io.mszymanski.orknux.connector.proxy.ProxyRouter,
 ) {
 
     @BeforeEach
@@ -50,6 +53,9 @@ class MarketplaceInstallTest(
         offeredDigest = digestOf(plugin)
         offeredAvailable = true
         refuseNewFields = false
+        proxyRules.deleteAll()
+        proxies.reload()
+        relayed.clear()
     }
 
     @Test
@@ -228,6 +234,66 @@ class MarketplaceInstallTest(
         assertThat(listing.versions.first().files).isEqualTo(2)
     }
 
+    /* ------------------------------------------------- where the bytes travel */
+
+    /**
+     * Both of the marketplace's doors go through the proxy a rule names.
+     *
+     * The catalog is a GraphQL call and an install is a series of file
+     * fetches, and they are made by two different clients in two different
+     * classes - so "the marketplace is proxied" is two claims, and a
+     * refactoring that moved one of them off the seam would leave an
+     * installation able to browse a catalog it cannot install from, or the
+     * other way about.
+     *
+     * Asserted against a real proxy on the loopback address rather than
+     * against configuration. A request routed through a forward proxy arrives
+     * with the whole URL on its request line rather than just the path, so a
+     * recorded absolute URL is proof the bytes went through there and not
+     * straight to the stub - which is a thing no settings object can show.
+     */
+    @Test
+    fun `the catalog and the files it installs both go through the proxy a rule names`() {
+        proxyRules.save(
+            io.mszymanski.orknux.connector.proxy.ProxyRule(
+                name = "the stub marketplace",
+                pattern = Regex.escape(where()),
+                proxyHost = relay.address.hostString,
+                proxyPort = relay.address.port,
+                enabled = true,
+            ),
+        )
+        proxies.reload()
+
+        val listing = catalog.marketplacePlugins().single()
+        assertThat(listing.key).isEqualTo("greeter")
+        assertThat(relayed.filter { "/graphql" in it })
+            .describedAs("the catalog query, on the proxy's request line as a whole URL")
+            .isNotEmpty()
+
+        val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
+        assertThat(installed.marketplaceVersion).isEqualTo("1.0.0")
+
+        assertThat(relayed.filter { it.endsWith("/greeter.js") })
+            .describedAs("the plugin itself, fetched by a different client in a different class")
+            .isNotEmpty()
+        assertThat(relayed.filter { it.endsWith("/words.js") })
+            .describedAs("and the library it ships with")
+            .isNotEmpty()
+        assertThat(relayed.filter { it.endsWith("/greeter.svg") })
+            .describedAs("and its face, which is fetched once and stored")
+            .isNotEmpty()
+
+        /*
+         * Intact, which is the other half of what a proxy must not break. The
+         * install hashes what arrived against what the catalog published, so a
+         * relay that mangled a byte would be a digest failure rather than a
+         * quiet difference - and a proxy that swallowed the install key would
+         * be a 401 from the stub.
+         */
+        assertThat(plugins.findAll()).hasSize(1)
+    }
+
     @Test
     fun `a plugin switched off keeps everything and offers nothing`() {
         val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
@@ -385,6 +451,50 @@ class MarketplaceInstallTest(
             }
 
         fun where() = "${stub.address.hostString}:${stub.address.port}"
+
+        /** Every absolute URL the relay was asked to fetch, newest last. */
+        val relayed = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+        /**
+         * A forward proxy, standing where an installation's own would.
+         *
+         * It really fetches and really relays, headers and body both, because
+         * the two things under test on the far side of it are a keyed request
+         * and a digest: a stub that answered on the target's behalf would
+         * prove the request arrived here and nothing about whether what came
+         * back was usable.
+         */
+        private val relay: HttpServer =
+            HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0).apply {
+                createContext("/") { exchange ->
+                    // Whole URL on the request line: the one difference
+                    // between a proxied request and a direct one.
+                    val target = exchange.requestURI.toString()
+                    relayed += target
+                    val sent = exchange.requestBody.readBytes()
+                    val building = java.net.http.HttpRequest.newBuilder(java.net.URI.create(target))
+                        .method(
+                            exchange.requestMethod,
+                            if (sent.isEmpty()) {
+                                java.net.http.HttpRequest.BodyPublishers.noBody()
+                            } else {
+                                java.net.http.HttpRequest.BodyPublishers.ofByteArray(sent)
+                            },
+                        )
+                    // Everything the caller sent, minus what belongs to this
+                    // hop: the install key has to reach the stub or its door
+                    // answers 401, and Host/Content-Length are recomputed.
+                    exchange.requestHeaders
+                        .filterKeys { it.lowercase() !in setOf("host", "content-length", "connection", "upgrade") }
+                        .forEach { (name, values) -> values.forEach { building.header(name, it) } }
+                    val answer = java.net.http.HttpClient.newHttpClient()
+                        .send(building.build(), java.net.http.HttpResponse.BodyHandlers.ofByteArray())
+                    exchange.sendResponseHeaders(answer.statusCode(), answer.body().size.toLong())
+                    exchange.responseBody.use { it.write(answer.body()) }
+                    exchange.close()
+                }
+                start()
+            }
 
         /**
          * The secret both ends share, for the length of this test.

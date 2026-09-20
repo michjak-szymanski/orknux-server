@@ -14,6 +14,8 @@ import io.mszymanski.orknux.server.mcp.OrknuxScope
 import io.mszymanski.orknux.server.mcp.OrknuxTools
 import io.mszymanski.orknux.server.memory.MemoryTool
 import io.mszymanski.orknux.server.shell.ShellTools
+import io.mszymanski.orknux.server.workflow.SavedArtifacts
+import io.mszymanski.orknux.workflow.script.PluginCrypto
 import io.mszymanski.orknux.server.memory.ToolDescriptor
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -40,6 +42,7 @@ class AgentTools(
     private val mcpTools: McpToolCaller,
     private val orknux: OrknuxTools,
     private val shells: ShellTools,
+    private val savedArtifacts: SavedArtifacts,
     private val mapper: ObjectMapper,
 ) {
 
@@ -81,6 +84,21 @@ class AgentTools(
         // the design: an agent asks for a shell, not for a particular host, and
         // which one it gets is decided when the session opens.
         if (agent.shellAccess) addAll(shells.specs())
+
+        /*
+         * Somewhere to put what it made, and the one conversion getting it
+         * there needs.
+         *
+         * Offered to every agent rather than behind a grant: the other grants
+         * open a door onto something that already exists - the workspace, a
+         * machine, a catalog - and these only let an agent keep its own output
+         * where somebody can find it. The bounds that matter are on the saving
+         * (a size, a count per workspace) rather than on who may ask.
+         *
+         * Left out where attachments are off, because then there is nowhere to
+         * file bytes and offering them spends a turn teaching the model that.
+         */
+        if (agent.artifactAccess && savedArtifacts.offered()) addAll(ARTIFACT_TOOLS)
 
         // The workspace's own code, under its own names. A tool named like a
         // built-in is skipped rather than shadowing it: two tools answering to
@@ -217,7 +235,70 @@ class AgentTools(
              * grant itself and says so in the words the model needs.
              */
             shells.run(agent, call.name, call.arguments)
+        } else if (call.name in ARTIFACT_TOOL_NAMES && !agent.artifactAccess) {
+            /*
+             * Refused here as well as left off the menu.
+             *
+             * The rule orknux and the shells already keep: a model that guessed
+             * the name of a tool it was never offered is refused by the thing
+             * that would otherwise run it, and not only by the menu it was
+             * never shown.
+             */
+            mapper.writeValueAsString(
+                mapOf("error" to "This agent has not been given permission to save artifacts"),
+            )
         } else when (call.name) {
+            SAVE_ARTIFACT -> {
+                val saving = savedArtifacts.save(
+                    workspaceId = agent.workspaceId,
+                    savedBy = agent.name,
+                    name = argument(call, "name").orEmpty(),
+                    description = argument(call, "description").orEmpty(),
+                    content = argument(call, "content").orEmpty(),
+                    // Anything but "true" is text: a model that sent the flag
+                    // at all meant it, and a missing flag is the common case.
+                    base64 = argument(call, "base64")?.trim()?.lowercase() == "true",
+                )
+                when (saving) {
+                    is SavedArtifacts.Saving.Refused -> mapper.writeValueAsString(mapOf("error" to saving.reason))
+                    is SavedArtifacts.Saving.Saved -> mapper.writeValueAsString(
+                        mapOf(
+                            "saved" to saving.artifact.name,
+                            "bytes" to saving.artifact.sizeBytes,
+                            // Where it now is, so the model can link to it in
+                            // whatever it says next.
+                            "url" to "/api/artifacts/" + saving.artifact.id,
+                        ),
+                    )
+                }
+            }
+
+            BASE64_ENCODE -> mapper.writeValueAsString(
+                mapOf("base64" to PluginCrypto.encoded(argument(call, "text").orEmpty().toByteArray(Charsets.UTF_8))),
+            )
+
+            BASE64_DECODE -> {
+                val bytes = PluginCrypto.decoded(argument(call, "base64").orEmpty().trim())
+                /*
+                 * Read back only if it is text. Handing a model the replacement
+                 * characters that decoding arbitrary bytes as UTF-8 produces is
+                 * handing it something it will reason about as though it were
+                 * the file.
+                 */
+                val said = bytes?.let {
+                    runCatching {
+                        Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(it)).toString()
+                    }.getOrNull()
+                }
+                when {
+                    bytes == null -> mapper.writeValueAsString(mapOf("error" to "That is not valid base64."))
+                    said == null -> mapper.writeValueAsString(
+                        mapOf("error" to "Those bytes are not UTF-8 text, so there is nothing to read back."),
+                    )
+                    else -> mapper.writeValueAsString(mapOf("text" to said))
+                }
+            }
+
             "skill_list" -> mapper.writeValueAsString(mapOf("skills" to skills.list(agent)))
 
             "skill_load" -> {
@@ -285,6 +366,77 @@ class AgentTools(
 
     companion object {
         private val log = LoggerFactory.getLogger(AgentTools::class.java)
+
+        const val SAVE_ARTIFACT = "save_artifact"
+        const val BASE64_ENCODE = "base64_encode"
+        const val BASE64_DECODE = "base64_decode"
+
+        /**
+         * Keeping a file, and the conversion getting a binary one there.
+         *
+         * The two base64 tools are the same operation the sandbox offers
+         * plugins as `orknux.encoding`, over the same [PluginCrypto] - so a
+         * model and a plugin encoding the same bytes cannot disagree, and
+         * there is one implementation to be right rather than two.
+         *
+         * They exist because `save_artifact` takes base64 for anything that is
+         * not text, and a model asked for base64 with no way to produce it
+         * will produce something that looks like base64. A tool that actually
+         * encodes is the difference between a saved PNG and a saved apology.
+         */
+        /** The three names the grant covers, for the refusal at the running end. */
+        val ARTIFACT_TOOL_NAMES = setOf(SAVE_ARTIFACT, BASE64_ENCODE, BASE64_DECODE)
+
+        val ARTIFACT_TOOLS = listOf(
+            ToolSpec(
+                name = SAVE_ARTIFACT,
+                description = "Saves a file to this workspace's Artifacts, where people can find, view and " +
+                    "download it later. Use it for something you produced that is worth keeping - a diagram, a " +
+                    "report, a spreadsheet - rather than only saying it back. Send text as it stands: an SVG, a " +
+                    "CSV, JSON, markdown or any source you could read is text, and encoding it to base64 " +
+                    "only makes it longer and easier to get wrong. base64 is for bytes that are not text, " +
+                    "like a PDF or a PNG. Answers with the url it was saved at.",
+                parameters = listOf(
+                    ToolParameterSpec(
+                        name = "name",
+                        description = "What to call the file, extension and all, like diagram.svg. Not a path.",
+                        required = true,
+                    ),
+                    ToolParameterSpec(
+                        name = "description",
+                        description = "What the file is, in a sentence. This is how anybody finds it again.",
+                        required = true,
+                    ),
+                    ToolParameterSpec(
+                        name = "content",
+                        description = "The file itself: the text, or base64 when base64 is true.",
+                        required = true,
+                    ),
+                    ToolParameterSpec(
+                        name = "base64",
+                        description = "true when content is base64 rather than text. Left out for text files.",
+                    ),
+                ),
+            ),
+            ToolSpec(
+                name = BASE64_ENCODE,
+                description = "Turns a short piece of text into base64 - a token, a header, a small value " +
+                    "some API wants encoded. Not for whole files: everything it answers has to be copied " +
+                    "out of here character for character, and a long one gets truncated on the way. A " +
+                    "file that is text is saved and sent as text, never encoded first.",
+                parameters = listOf(
+                    ToolParameterSpec(name = "text", description = "The text to encode.", required = true),
+                ),
+            ),
+            ToolSpec(
+                name = BASE64_DECODE,
+                description = "Reads a short piece of base64 back as text. Refuses base64 that does not " +
+                    "decode to text, and is not the way to read a whole file.",
+                parameters = listOf(
+                    ToolParameterSpec(name = "base64", description = "The base64 to decode.", required = true),
+                ),
+            ),
+        )
 
         /** Its own, because this is asked of text rather than of a running tool. */
         private val reader = ObjectMapper()

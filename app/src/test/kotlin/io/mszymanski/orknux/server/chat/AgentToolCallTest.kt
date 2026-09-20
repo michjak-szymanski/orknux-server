@@ -191,8 +191,19 @@ class AgentToolCallTest(
         ).execute().path("createAgent.id").entity(Long::class.java).get()
 
         val grant = if (granted == null) "" else """, skillCatalogs: ["$granted"]"""
+        /*
+         * Saving a file is off here, and that is what "granted nothing" has to
+         * mean now.
+         *
+         * It is the one grant that is on by default - it only lets an agent
+         * keep its own output where somebody can find it - so an agent left
+         * alone is handed three tools rather than none, and a fixture written
+         * to produce an agent with nothing has to say so outright.
+         */
         graphQlTester.document(
-            """mutation { updateAgent(id: $id, input: { name: "$name", modelId: $modelId$grant }) { id } }""",
+            """mutation { updateAgent(id: $id, input: {
+                 name: "$name", modelId: $modelId, artifactAccess: false$grant
+               }) { id } }""",
         ).execute()
         return id
     }

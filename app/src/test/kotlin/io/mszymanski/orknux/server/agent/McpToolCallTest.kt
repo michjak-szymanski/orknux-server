@@ -79,6 +79,18 @@ class McpToolCallTest(
         assertThat(methods).contains("tools/list", "tools/call")
     }
 
+    /**
+     * What this agent was offered that came from a server.
+     *
+     * Not the whole list any more. Saving a file is offered to every agent
+     * without a grant - it only lets an agent keep its own output where
+     * somebody can find it - so "granted nothing" stopped meaning "offered
+     * nothing", and a test asserting the list is empty was asserting a fact
+     * about a default rather than about servers.
+     */
+    private fun fromServers(agent: io.mszymanski.orknux.server.agent.Agent) =
+        tools.specsFor(agent).filterNot { it.name in AgentTools.ARTIFACT_TOOL_NAMES }
+
     /** A server it was not granted is not listed and cannot be reached. */
     @Test
     fun `an ungranted server contributes nothing`() {
@@ -86,7 +98,7 @@ class McpToolCallTest(
         mcpServer("Brave Search", address)
         val agent = agent("Researcher", granted = null)
 
-        assertThat(tools.specsFor(agent)).isEmpty()
+        assertThat(fromServers(agent)).isEmpty()
 
         val answer = tools.run(agent, ToolCall(id = "call_1", name = "brave_search__web_search", arguments = "{}"))
         assertThat(answer).contains("There is no tool called")
@@ -106,7 +118,7 @@ class McpToolCallTest(
         mcpServer("Broken", "https://mcp.example.invalid/rpc")
         val agent = agent("Researcher", granted = "Broken")
 
-        assertThat(tools.specsFor(agent)).isEmpty()
+        assertThat(fromServers(agent)).isEmpty()
     }
 
     /** Answers initialize, tools/list and tools/call, as the protocol describes. */

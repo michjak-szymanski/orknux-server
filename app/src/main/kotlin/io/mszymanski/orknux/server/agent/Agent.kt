@@ -126,6 +126,25 @@ class Agent(
     @Column(name = "shell_access", nullable = false)
     var shellAccess: Boolean = false,
 
+    /**
+     * Whether it may keep a file it made, on the workspace's Artifacts page.
+     *
+     * On by default, which is the one grant here that is. The others open a
+     * door onto something that already exists and could be damaged through it
+     * - the workspace's own data, a machine, a catalog - so the safe default
+     * for those is off, and turning one on is a decision somebody makes.
+     *
+     * This one only lets an agent keep its own output where a person can find
+     * it. Refusing that by default would mean every agent that draws a
+     * diagram or writes a report has nowhere to put it until somebody notices
+     * a setting, and the common answer to "may it save what it made" is yes.
+     * The bounds that matter are on the saving - a size, a count per workspace
+     * - and they hold whoever is asking. It is here at all so that an agent
+     * which should not be filling the disk can be told so.
+     */
+    @Column(name = "artifact_access", nullable = false)
+    var artifactAccess: Boolean = true,
+
     /** MCP servers this agent may connect to, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "agent_mcp_server", joinColumns = [JoinColumn(name = "agent_id")])

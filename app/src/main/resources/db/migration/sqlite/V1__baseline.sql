@@ -37,7 +37,6 @@ CREATE TABLE agent
     orknux_access                boolean not null default false,
     shell_access                 boolean not null default false,
     artifact_access              boolean not null default true,
-    draw_access                  boolean not null default true,
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default '',
     memory_share                 integer,
@@ -1709,13 +1708,7 @@ WHERE builtin;
 -- unique in the workspace. See V264 on the Postgres side for why.
 create unique index if not exists uk_workflow_action_name_shared
     on workflow_action (workspace_id, name) where workflow_id is null;
-create unique index if not exists uk_workflow_action_name_owned
-    on workflow_action (workspace_id, workflow_id, name) where workflow_id is not null;
 create unique index if not exists uk_workflow_condition_name_shared
     on workflow_condition (workspace_id, name) where workflow_id is null;
-create unique index if not exists uk_workflow_condition_name_owned
-    on workflow_condition (workspace_id, workflow_id, name) where workflow_id is not null;
 create unique index if not exists uk_workflow_trigger_name_shared
     on workflow_trigger (workspace_id, name) where workflow_id is null;
-create unique index if not exists uk_workflow_trigger_name_owned
-    on workflow_trigger (workspace_id, workflow_id, name) where workflow_id is not null;

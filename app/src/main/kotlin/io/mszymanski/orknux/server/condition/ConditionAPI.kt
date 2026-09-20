@@ -84,19 +84,22 @@ class ConditionAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw ConditionNameInvalidException()
         /*
-         * Among the ones it will be listed with, rather than across the
-         * workspace.
+         * Only the shared list has names to keep apart.
          *
-         * A workflow's own definition is reached through the node that uses it
-         * and appears in no list of its own, so two workflows may each have a
-         * "Format agent output". Asking the workspace made a Custom definition
-         * named after its node collide with any of that name anywhere - and
-         * node names repeat across workflows by nature, so the second workflow
-         * to want one simply could not save.
+         * A definition a workflow owns is reached through the node that uses
+         * it and appears in no list of its own, so its name is a label rather
+         * than a way of finding it - and labels repeat. Checking those made
+         * the second Custom definition in a workflow unsaveable: every action
+         * node arrives called "Action" and the form names the definition after
+         * its node, so the panel - which has no button and writes itself -
+         * simply never saved, and the node came back from a reload with
+         * nothing on it.
          */
-        val taken = input.workflowId?.let { conditions.findByWorkspaceIdAndWorkflowIdAndName(input.workspaceId, it, name) }
-            ?: conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name).takeIf { input.workflowId == null }
-        if (taken != null) throw ConditionNameTakenException(name)
+        if (input.workflowId == null &&
+            conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name) != null
+        ) {
+            throw ConditionNameTakenException(name)
+        }
 
         val condition = conditions.save(
             WorkflowCondition(
@@ -129,10 +132,12 @@ class ConditionAPI(
         input.name?.trim()?.let { name ->
             if (name.isEmpty()) throw ConditionNameInvalidException()
             // The same scope the create uses; see the note there.
-            val clash = condition.workflowId
-                ?.let { conditions.findByWorkspaceIdAndWorkflowIdAndName(condition.workspaceId, it, name) }
-                ?: conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(condition.workspaceId, name)
-                    .takeIf { condition.workflowId == null }
+            // Only a shared definition has a name to keep apart; see the create.
+            val clash = if (condition.workflowId == null) {
+                conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(condition.workspaceId, name)
+            } else {
+                null
+            }
             if (name != condition.name && clash != null) {
                 throw ConditionNameTakenException(name)
             }

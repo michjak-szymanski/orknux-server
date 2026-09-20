@@ -99,19 +99,22 @@ class ActionAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw ActionNameInvalidException()
         /*
-         * Among the ones it will be listed with, rather than across the
-         * workspace.
+         * Only the shared list has names to keep apart.
          *
-         * A workflow's own definition is reached through the node that uses it
-         * and appears in no list of its own, so two workflows may each have a
-         * "Format agent output". Asking the workspace made a Custom definition
-         * named after its node collide with any of that name anywhere - and
-         * node names repeat across workflows by nature, so the second workflow
-         * to want one simply could not save.
+         * A definition a workflow owns is reached through the node that uses
+         * it and appears in no list of its own, so its name is a label rather
+         * than a way of finding it - and labels repeat. Checking those made
+         * the second Custom definition in a workflow unsaveable: every action
+         * node arrives called "Action" and the form names the definition after
+         * its node, so the panel - which has no button and writes itself -
+         * simply never saved, and the node came back from a reload with
+         * nothing on it.
          */
-        val taken = input.workflowId?.let { actions.findByWorkspaceIdAndWorkflowIdAndName(input.workspaceId, it, name) }
-            ?: actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name).takeIf { input.workflowId == null }
-        if (taken != null) throw ActionNameTakenException(name)
+        if (input.workflowId == null &&
+            actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name) != null
+        ) {
+            throw ActionNameTakenException(name)
+        }
 
         val action = actions.save(
             WorkflowAction(
@@ -157,10 +160,12 @@ class ActionAPI(
         input.name?.trim()?.let { name ->
             if (name.isEmpty()) throw ActionNameInvalidException()
             // The same scope the create uses; see the note there.
-            val clash = action.workflowId
-                ?.let { actions.findByWorkspaceIdAndWorkflowIdAndName(action.workspaceId, it, name) }
-                ?: actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(action.workspaceId, name)
-                    .takeIf { action.workflowId == null }
+            // Only a shared definition has a name to keep apart; see the create.
+            val clash = if (action.workflowId == null) {
+                actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(action.workspaceId, name)
+            } else {
+                null
+            }
             if (name != action.name && clash != null) {
                 throw ActionNameTakenException(name)
             }

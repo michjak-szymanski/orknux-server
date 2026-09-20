@@ -258,22 +258,22 @@ interface WorkflowConditionRepository : JpaRepository<WorkflowCondition, Long> {
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): WorkflowCondition?
 
     /**
-     * The one with this name that a new definition would collide with.
+     * The one with this name that a new *shared* definition would collide
+     * with.
      *
-     * Scoped to the owner rather than to the workspace. A workflow's own
-     * definition is reached through the node that uses it and appears nowhere
-     * else, so two workflows may each have a "Format agent output" and neither
-     * is ambiguous - while the workspace's shared list still holds one name
+     * Only the shared list has names to keep apart. A workflow's own
+     * A definition a workflow owns is reached through the node that uses it
+     * and appears in no list at all, so its name is a label rather than a way
+     * of finding it - two workflows may each have a "Format agent output", and
+     * so may two nodes of one workflow. The shared list still holds one name
      * once, because that is a list people read.
      *
-     * The old check asked the workspace, which made a Custom definition named
-     * after its node collide with any action of that name anywhere: node names
-     * repeat across workflows by nature, and "Format agent output" is a name
-     * two people write on the same afternoon.
+     * Asking wider than this has been wrong twice. Asking the workspace made
+     * a Custom definition named after its node collide with any of that name
+     * anywhere; asking the workflow made the second Custom action in one
+     * workflow unsaveable, because every action node arrives called "Action".
      */
     fun findByWorkspaceIdAndWorkflowIdIsNullAndName(workspaceId: Long, name: String): WorkflowCondition?
-
-    fun findByWorkspaceIdAndWorkflowIdAndName(workspaceId: Long, workflowId: Long, name: String): WorkflowCondition?
 }
 
 class ConditionNotFoundException(val id: Long) : RuntimeException("No condition with id $id"), Refusal {

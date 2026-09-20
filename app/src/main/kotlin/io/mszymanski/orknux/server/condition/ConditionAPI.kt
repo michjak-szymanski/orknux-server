@@ -83,7 +83,20 @@ class ConditionAPI(
         requireWorkspaceAccess(input.workspaceId)
         val name = input.name.trim()
         if (name.isEmpty()) throw ConditionNameInvalidException()
-        if (conditions.findByWorkspaceIdAndName(input.workspaceId, name) != null) throw ConditionNameTakenException(name)
+        /*
+         * Among the ones it will be listed with, rather than across the
+         * workspace.
+         *
+         * A workflow's own definition is reached through the node that uses it
+         * and appears in no list of its own, so two workflows may each have a
+         * "Format agent output". Asking the workspace made a Custom definition
+         * named after its node collide with any of that name anywhere - and
+         * node names repeat across workflows by nature, so the second workflow
+         * to want one simply could not save.
+         */
+        val taken = input.workflowId?.let { conditions.findByWorkspaceIdAndWorkflowIdAndName(input.workspaceId, it, name) }
+            ?: conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name).takeIf { input.workflowId == null }
+        if (taken != null) throw ConditionNameTakenException(name)
 
         val condition = conditions.save(
             WorkflowCondition(
@@ -115,7 +128,12 @@ class ConditionAPI(
         val previousName = condition.name
         input.name?.trim()?.let { name ->
             if (name.isEmpty()) throw ConditionNameInvalidException()
-            if (name != condition.name && conditions.findByWorkspaceIdAndName(condition.workspaceId, name) != null) {
+            // The same scope the create uses; see the note there.
+            val clash = condition.workflowId
+                ?.let { conditions.findByWorkspaceIdAndWorkflowIdAndName(condition.workspaceId, it, name) }
+                ?: conditions.findByWorkspaceIdAndWorkflowIdIsNullAndName(condition.workspaceId, name)
+                    .takeIf { condition.workflowId == null }
+            if (name != condition.name && clash != null) {
                 throw ConditionNameTakenException(name)
             }
             condition.name = name

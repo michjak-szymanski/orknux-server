@@ -101,7 +101,20 @@ class TriggerAPI(
         val name = input.name.trim()
         if (name.isEmpty()) throw TriggerNameInvalidException()
         requireWorkspaceAccess(input.workspaceId)
-        if (triggers.findByWorkspaceIdAndName(input.workspaceId, name) != null) throw TriggerNameTakenException(name)
+        /*
+         * Among the ones it will be listed with, rather than across the
+         * workspace.
+         *
+         * A workflow's own definition is reached through the node that uses it
+         * and appears in no list of its own, so two workflows may each have a
+         * "Format agent output". Asking the workspace made a Custom definition
+         * named after its node collide with any of that name anywhere - and
+         * node names repeat across workflows by nature, so the second workflow
+         * to want one simply could not save.
+         */
+        val taken = input.workflowId?.let { triggers.findByWorkspaceIdAndWorkflowIdAndName(input.workspaceId, it, name) }
+            ?: triggers.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name).takeIf { input.workflowId == null }
+        if (taken != null) throw TriggerNameTakenException(name)
 
         val trigger = triggers.save(
             WorkflowTrigger(
@@ -196,7 +209,12 @@ class TriggerAPI(
 
         val name = input.name.trim()
         if (name.isEmpty()) throw TriggerNameInvalidException()
-        if (name != trigger.name && triggers.findByWorkspaceIdAndName(trigger.workspaceId, name) != null) {
+        // The same scope the create uses; see the note there.
+        val clash = trigger.workflowId
+            ?.let { triggers.findByWorkspaceIdAndWorkflowIdAndName(trigger.workspaceId, it, name) }
+            ?: triggers.findByWorkspaceIdAndWorkflowIdIsNullAndName(trigger.workspaceId, name)
+                .takeIf { trigger.workflowId == null }
+        if (name != trigger.name && clash != null) {
             throw TriggerNameTakenException(name)
         }
         val previousName = trigger.name

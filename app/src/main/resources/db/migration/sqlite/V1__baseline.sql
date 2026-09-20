@@ -993,7 +993,6 @@ CREATE TABLE workflow_action
     email_cc                     varchar(1000),
     email_subject                varchar(500),
     email_reply_to               varchar(320),
-    constraint uk_workflow_action_name UNIQUE (workspace_id, name),
     constraint ck_workflow_action_shape CHECK (((((type) = 'EXECUTE') AND ((subtype) = 'OUTGOING_CONNECTION') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'SEND_EMAIL') AND (connection_id IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'HTTP_REQUEST') AND (url IS NOT NULL)) OR (((type) = 'EXECUTE') AND ((subtype) = 'FUNCTION') AND (function_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'INLINE_CONDITION') AND (condition_expression IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'CONDITION') AND (condition_id IS NOT NULL)) OR (((type) = 'WAIT') AND ((subtype) = 'TIME') AND (duration_seconds IS NOT NULL)))),
     constraint ck_workflow_action_subtype CHECK (((subtype) IN ('OUTGOING_CONNECTION', 'SEND_EMAIL', 'HTTP_REQUEST', 'FUNCTION', 'INLINE_CONDITION', 'CONDITION', 'TIME'))),
     constraint ck_workflow_action_type CHECK (((type) IN ('EXECUTE', 'WAIT'))),
@@ -1026,7 +1025,6 @@ CREATE TABLE workflow_condition
     negate                       boolean not null default false,
     function_id                  integer,
     icon                         varchar(40),
-    constraint uk_workflow_condition_name UNIQUE (workspace_id, name),
     constraint ck_workflow_condition_shape CHECK (((((type) IN ('ANY_OF', 'ALL_OF')) AND (property IS NULL) AND (check_by IS NULL)) OR (((type) = 'FUNCTION') AND (function_id IS NOT NULL) AND (property IS NULL) AND (check_by IS NULL)) OR (((type) IN ('SLACK', 'JIRA', 'TIME')) AND (property IS NOT NULL) AND (check_by IS NOT NULL)))),
     constraint ck_workflow_condition_type CHECK (((type) IN ('SLACK', 'JIRA', 'TIME', 'FUNCTION', 'ANY_OF', 'ALL_OF'))),
     constraint workflow_condition_function_id_fkey FOREIGN KEY (function_id) REFERENCES workflow_function(id),
@@ -1298,7 +1296,6 @@ CREATE TABLE workflow_trigger
     auth_type                    varchar(16) not null default 'NONE',
     auth_function_id             integer,
     workflow_id                  integer,
-    constraint uk_workflow_trigger_name UNIQUE (workspace_id, name),
     constraint ck_workflow_trigger_action CHECK (((action IS NULL) OR ((action) IN ('MENTION', 'REPLY', 'MESSAGE', 'ISSUE_CREATED', 'ISSUE_UPDATED')))),
     constraint ck_workflow_trigger_auth CHECK ((((auth_type) IN ('NONE', 'FUNCTION')) AND (((auth_type) != 'FUNCTION') OR (auth_function_id IS NOT NULL)))),
     constraint ck_workflow_trigger_shape CHECK (((((type) = 'INCOMING_CONNECTION') AND (connection_id IS NOT NULL) AND (action IS NOT NULL)) OR (((type) = 'SCHEDULED') AND (cron IS NOT NULL)) OR (((type) = 'WEBHOOK') AND (webhook_path IS NOT NULL) AND (object_id IS NOT NULL)))),
@@ -1706,3 +1703,18 @@ INSERT INTO security_role_scope (role_id, scope)
 SELECT id, 'ADMIN'
 FROM security_role
 WHERE builtin;
+
+-- A workflow's own definition is unique within that workflow; a shared one is
+-- unique in the workspace. See V264 on the Postgres side for why.
+create unique index if not exists uk_workflow_action_name_shared
+    on workflow_action (workspace_id, name) where workflow_id is null;
+create unique index if not exists uk_workflow_action_name_owned
+    on workflow_action (workspace_id, workflow_id, name) where workflow_id is not null;
+create unique index if not exists uk_workflow_condition_name_shared
+    on workflow_condition (workspace_id, name) where workflow_id is null;
+create unique index if not exists uk_workflow_condition_name_owned
+    on workflow_condition (workspace_id, workflow_id, name) where workflow_id is not null;
+create unique index if not exists uk_workflow_trigger_name_shared
+    on workflow_trigger (workspace_id, name) where workflow_id is null;
+create unique index if not exists uk_workflow_trigger_name_owned
+    on workflow_trigger (workspace_id, workflow_id, name) where workflow_id is not null;

@@ -98,7 +98,20 @@ class ActionAPI(
         requireWorkspaceAccess(input.workspaceId)
         val name = input.name.trim()
         if (name.isEmpty()) throw ActionNameInvalidException()
-        if (actions.findByWorkspaceIdAndName(input.workspaceId, name) != null) throw ActionNameTakenException(name)
+        /*
+         * Among the ones it will be listed with, rather than across the
+         * workspace.
+         *
+         * A workflow's own definition is reached through the node that uses it
+         * and appears in no list of its own, so two workflows may each have a
+         * "Format agent output". Asking the workspace made a Custom definition
+         * named after its node collide with any of that name anywhere - and
+         * node names repeat across workflows by nature, so the second workflow
+         * to want one simply could not save.
+         */
+        val taken = input.workflowId?.let { actions.findByWorkspaceIdAndWorkflowIdAndName(input.workspaceId, it, name) }
+            ?: actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(input.workspaceId, name).takeIf { input.workflowId == null }
+        if (taken != null) throw ActionNameTakenException(name)
 
         val action = actions.save(
             WorkflowAction(
@@ -143,7 +156,12 @@ class ActionAPI(
         val previousName = action.name
         input.name?.trim()?.let { name ->
             if (name.isEmpty()) throw ActionNameInvalidException()
-            if (name != action.name && actions.findByWorkspaceIdAndName(action.workspaceId, name) != null) {
+            // The same scope the create uses; see the note there.
+            val clash = action.workflowId
+                ?.let { actions.findByWorkspaceIdAndWorkflowIdAndName(action.workspaceId, it, name) }
+                ?: actions.findByWorkspaceIdAndWorkflowIdIsNullAndName(action.workspaceId, name)
+                    .takeIf { action.workflowId == null }
+            if (name != action.name && clash != null) {
                 throw ActionNameTakenException(name)
             }
             action.name = name

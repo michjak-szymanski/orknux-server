@@ -222,7 +222,17 @@ class ActionParameters(private val functions: WorkflowFunctionRepository) {
      * available; something that performs work answers with its own output and
      * that is all the next node sees.
      */
-    fun passesThrough(action: WorkflowAction): Boolean = action.type == ActionType.WAIT
+    /**
+     * Whether what reached this action reaches the step after it too.
+     *
+     * All of them, now. A WAIT produces nothing and always passed its payload
+     * on; an EXECUTE used to hand on only what it returned, so a function that
+     * turned an answer into Slack markup left the reply after it with a bare
+     * string and no channel, no thread and nothing to read. A step's result is
+     * something a run gains on its way past, not a thing that replaces the
+     * run - which is the rule the image node was corrected to in #333.
+     */
+    fun passesThrough(action: WorkflowAction): Boolean = true
 
     /** Every `input.x` an expression reads. */
     private fun references(expression: String?): List<String> = expression

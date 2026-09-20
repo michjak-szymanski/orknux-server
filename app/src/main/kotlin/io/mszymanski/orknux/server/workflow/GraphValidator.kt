@@ -1,6 +1,8 @@
 package io.mszymanski.orknux.server.workflow
 
 import io.mszymanski.orknux.server.action.ActionParamView
+import io.mszymanski.orknux.server.action.ActionSubtype
+import io.mszymanski.orknux.server.action.WorkflowAction
 import io.mszymanski.orknux.server.action.ActionParameters
 import io.mszymanski.orknux.server.action.ValueType
 import io.mszymanski.orknux.server.action.WorkflowActionRepository
@@ -81,8 +83,19 @@ class GraphValidator(
 
         NodeKind.ACTION -> {
             val action = node.actionId?.let { actions.findByIdOrNull(it) }
+            val unfinished = action?.let { missingFrom(it) }
             if (action == null) {
                 Ports(opaque = true, unresolved = "no action chosen")
+            } else if (unfinished != null) {
+                /*
+                 * Stored half-made on purpose - a definition belonging to one
+                 * node is filled in where it is used, and the panel writes as
+                 * it is typed, so "Function, and I have not picked one yet" is
+                 * an ordinary moment rather than a thing to refuse. It is
+                 * refused here instead, where the rest of an unfinished graph
+                 * is: what it still needs, said in the run's own words.
+                 */
+                Ports(opaque = true, unresolved = unfinished)
             } else {
                 val named = node.outputName?.trim().orEmpty()
                 Ports(
@@ -279,6 +292,26 @@ class GraphValidator(
      * @param hardOnly what a save refuses over; the rest is advice the editor
      *   shows while a workflow is still being drawn.
      */
+    /**
+     * What an action still needs before it could run, or null where it needs
+     * nothing.
+     *
+     * The shape the database used to insist on, asked here instead. A shared
+     * action still cannot be stored unfinished - it is a finished thing people
+     * pick from a list - but one belonging to a node is a draft like the graph
+     * around it, and this is where a draft is told what is missing.
+     */
+    private fun missingFrom(action: WorkflowAction): String? = when (action.subtype) {
+        ActionSubtype.OUTGOING_CONNECTION, ActionSubtype.SEND_EMAIL ->
+            "no connection chosen".takeIf { action.connectionId == null }
+
+        ActionSubtype.HTTP_REQUEST -> "no address to call".takeIf { action.url.isNullOrBlank() }
+        ActionSubtype.FUNCTION -> "no function chosen".takeIf { action.functionId == null }
+        ActionSubtype.INLINE_CONDITION -> "nothing to wait for".takeIf { action.conditionExpression.isNullOrBlank() }
+        ActionSubtype.CONDITION -> "no condition chosen".takeIf { action.conditionId == null }
+        ActionSubtype.TIME -> "no time to wait".takeIf { action.durationSeconds == null }
+    }
+
     fun problems(
         nodes: List<WorkflowNode>,
         edges: List<WorkflowEdge>,

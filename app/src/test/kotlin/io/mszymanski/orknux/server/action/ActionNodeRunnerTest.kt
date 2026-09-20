@@ -97,7 +97,18 @@ class ActionNodeRunnerTest(
 
         val step = steps.findAll().single { it.actionId == actionId }
         assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
-        assertThat(step.output).isEqualTo("""{"id":7,"format":"compact","processed":true}""")
+        /*
+         * Beside what reached the step, not instead of it.
+         *
+         * A step's result is something a run gains on its way past: a function
+         * that rewrites an answer used to hand on only what it returned, and
+         * the step after it lost the channel, the thread and every other field
+         * that arrived. Unnamed, it joins under `result`, which is the port the
+         * action declares.
+         */
+        assertThat(step.output).isEqualTo(
+            """{"payload":{"id":7},"format":"compact","result":{"id":7,"format":"compact","processed":true}}""",
+        )
         assertThat(executions.findAll().single { it.id == runId }.status).isEqualTo(ExecutionStatus.COMPLETED)
     }
 
@@ -133,7 +144,10 @@ class ActionNodeRunnerTest(
         val step = steps.findAll().single { it.actionId == actionId }
         assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
         // The word is what the importer passed; the token is what nobody passed.
-        assertThat(step.output).isEqualTo("""{"token":"s3cret","word":"compact"}""")
+        // Beside what arrived; see the note above.
+        assertThat(step.output).isEqualTo(
+            """{"payload":{"id":7},"format":"compact","result":{"token":"s3cret","word":"compact"}}""",
+        )
     }
 
     @Test
@@ -349,11 +363,12 @@ class ActionNodeRunnerTest(
             .entityList(String::class.java).containsExactly("verbose")
         val overridden = start()
 
+        // Under `result` and beside what arrived; see the note on the first test.
         assertThat(steps.findAll().single { it.executionId == suggested }.output)
-            .isEqualTo("""{"id":7,"format":"compact"}""")
+            .isEqualTo("""{"payload":{"id":7},"format":"compact","result":{"id":7,"format":"compact"}}""")
         // Same action, same input, and the plain value the node holds is what ran.
         assertThat(steps.findAll().single { it.executionId == overridden }.output)
-            .isEqualTo("""{"id":7,"format":"verbose"}""")
+            .isEqualTo("""{"payload":{"id":7},"format":"compact","result":{"id":7,"format":"verbose"}}""")
 
         // And editing the node left the action alone.
         assertThat(actions.findAll().single { it.id == actionId }.mappings.map { it.argument to it.expression })

@@ -265,7 +265,7 @@ class ActionNodeRunner(
         }
 
         return when (val answer = http.call(url, method, sent, body)) {
-            is HttpAnswer.Answered -> answered(action, step, answer, method, url)
+            is HttpAnswer.Answered -> answered(action, step, answer, method, url, input)
 
             /*
              * The call was not made and would not be worth making again — a URL that
@@ -299,13 +299,19 @@ class ActionNodeRunner(
         answer: HttpAnswer.Answered,
         method: String,
         url: String,
+        input: String?,
     ): StepResult {
         val summary = "$method ${url.take(URL_IN_ERROR)} answered ${answer.status}"
 
         return when (answer.status) {
             in 200..299 -> StepResult(
                 StepStatus.COMPLETED,
-                expressions.namedJson(step.outputName, mapper.writeValueAsString(shapeOf(answer))),
+                // Beside what reached this step; see the note in callFunction.
+                expressions.alongsideJson(
+                    step.outputName ?: DEFAULT_OUTPUT,
+                    mapper.writeValueAsString(shapeOf(answer)),
+                    input,
+                ),
             )
 
             in 400..499 -> throw ActionFailedException("${step.name}: $summary. ${detail(answer)}", permanent = true)
@@ -378,11 +384,25 @@ class ActionNodeRunner(
         return when (result) {
             is ScriptResult.Returned -> StepResult(
                 StepStatus.COMPLETED,
-                // Under the name the node gave it, if it gave one. Unnamed, the
-                // return value is handed on as it is — which is what every node
-                // did before names existed, and why the `result` port the action
-                // declares was not something a later node could actually read.
-                expressions.namedJson(step.outputName, result.json ?: "null"),
+                /*
+                 * Under the name the node gave it, beside what reached this
+                 * step rather than instead of it.
+                 *
+                 * The same correction the image node needed (#333), and the
+                 * same symptom: a function that turns an agent's answer into
+                 * Slack markup returned a bare string, that string became the
+                 * whole payload, and the reply after it lost the channel, the
+                 * thread and every field it was going to read - so it said it
+                 * had nothing to say. A step's result is something a run gains
+                 * on its way past.
+                 *
+                 * Unnamed, it joins under `result`, which is the port the
+                 * action already declares and shows on the node. Handing the
+                 * bare value on instead is what did the damage, and "give the
+                 * node an output name or it eats the payload" is not a rule
+                 * anybody should have to know.
+                 */
+                expressions.alongsideJson(step.outputName ?: DEFAULT_OUTPUT, result.json ?: "null", input),
             )
 
             /*
@@ -525,6 +545,17 @@ class ActionNodeRunner(
     }
 
     private companion object {
+        /**
+         * What an unnamed action's result is called on its way out.
+         *
+         * The port the action already declares, so a later node reading
+         * `result` reads what the node said it produces. A name is a thing to
+         * choose, not a thing to remember: without one this used to hand the
+         * bare value on as the whole payload, and the step after it lost the
+         * channel, the thread and everything else that arrived.
+         */
+        const val DEFAULT_OUTPUT = "result"
+
         val log = LoggerFactory.getLogger(ActionNodeRunner::class.java)
 
         /** How often a wait asks again, when the action does not say. */

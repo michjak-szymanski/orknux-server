@@ -23,6 +23,20 @@ import java.time.Duration
  * Saying so on the row is the difference between a disabled line and a failure
  * at the moment somebody pressed Install.
  */
+/**
+ * What changed in one version, as the plugin's author wrote it.
+ *
+ * Beside [MarketplaceRelease] rather than on it: a changelog usually reaches
+ * further back than the ten releases whose files the marketplace keeps, so an
+ * entry often has no release to hang off - and a release with nothing written
+ * about it is ordinary too. The two are matched by version where both exist.
+ */
+data class MarketplaceChange(
+    val version: String,
+    /** Markdown, rendered by whatever shows it. */
+    val notes: String,
+)
+
 data class MarketplaceRelease(
     val version: String,
     /** When this version first appeared, ISO-8601. It never moves again. */
@@ -94,6 +108,18 @@ data class MarketplaceOffering(
      * history rather than refuse to draw one at all.
      */
     val versions: List<MarketplaceRelease> = emptyList(),
+
+    /**
+     * What changed, an entry per version, in the order the author wrote them.
+     *
+     * Not sorted here and not sorted there: `2.0.0`, `2026.1` and `v3-beta`
+     * are all somebody's idea of a version and neither side parses them, so
+     * the author's order is the one that means anything.
+     *
+     * Empty for a plugin that ships none, which is most of them, and empty for
+     * a marketplace too old to be asked - see the ladder.
+     */
+    val changelog: List<MarketplaceChange> = emptyList(),
 ) {
     /**
      * The release this listing's `version` names, where the history holds it.
@@ -328,8 +354,11 @@ class Marketplace(
          * leaving something out, so this server reads what it uses and a field
          * added on the other side costs nothing until somebody wants it.
          */
-        val FIELDS =
+        /** Everything but the changelog, which is the newest thing to be asked for. */
+        val WITH_VERSIONS =
             "$WITH_TAGS versions { version published replaced digest files available }"
+
+        val FIELDS = "$WITH_VERSIONS changelog { version notes }"
 
         /** Everything but the history, which is the field marketplaces stumble on first. */
         const val WITH_TAGS = "$CORE_FIELDS tags "
@@ -359,7 +388,7 @@ class Marketplace(
          * well. So each step drops the newest thing and keeps the rest, and an
          * installation gets as much as its marketplace can say.
          */
-        val LADDER = listOf(FIELDS, WITH_TAGS, WITH_CATEGORY, CORE_FIELDS)
+        val LADDER = listOf(FIELDS, WITH_VERSIONS, WITH_TAGS, WITH_CATEGORY, CORE_FIELDS)
 
     }
 }

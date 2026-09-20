@@ -290,6 +290,19 @@ class ActionAPI(
      * A subtype belongs to one type, and each one needs the setting it runs on:
      * an HTTP request without a URL is a form that was not filled in, not an
      * action that fails later.
+     *
+     * **Except for a definition one workflow owns, which may be half-made.**
+     * That one is filled in on the node that uses it, a field at a time, and
+     * the panel holding it writes as it is typed - so "Function, and I have
+     * not picked the function yet" is where somebody is while they look
+     * through the list, not a mistake to refuse. Refusing it meant the graph
+     * was saved with the node pointing at nothing and the work was gone on the
+     * next reload, which is what people read as saving being broken.
+     *
+     * The type still has to belong to the subtype, because that pair is chosen
+     * by two controls that cannot disagree, and a run reaching an unfinished
+     * one is prevented where the rest of an unfinished graph is: publish. See
+     * `GraphValidator.missingFrom`.
      */
     private fun validate(action: WorkflowAction) {
         val allowed = when (action.type) {
@@ -307,6 +320,9 @@ class ActionAPI(
             )
         }
         if (action.subtype !in allowed) throw ActionSubtypeMismatchException(action.type, action.subtype)
+
+        // A draft belonging to one node, which is allowed to be unfinished.
+        if (action.workflowId != null) return
 
         when (action.subtype) {
             ActionSubtype.OUTGOING_CONNECTION -> {

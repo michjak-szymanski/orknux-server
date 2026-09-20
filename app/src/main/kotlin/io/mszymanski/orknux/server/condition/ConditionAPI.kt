@@ -270,6 +270,17 @@ class ConditionAPI(
      * exist and do not contain it.
      */
     private fun validate(condition: WorkflowCondition, itsOwnId: Long?) {
+        /*
+         * A draft belonging to one node, which is allowed to be unfinished.
+         *
+         * It is filled in on the node that uses it, a field at a time, and the
+         * panel writes as it is typed - so the moment between choosing a kind
+         * and choosing what it needs is where somebody is, not a mistake.
+         * A run reaching an unfinished one is prevented at publish instead;
+         * see `GraphValidator`.
+         */
+        if (condition.workflowId != null) return
+
         when (condition.type) {
             ConditionType.ANY_OF, ConditionType.ALL_OF -> {
                 if (condition.members.size < 2) throw ConditionMembersRequiredException()

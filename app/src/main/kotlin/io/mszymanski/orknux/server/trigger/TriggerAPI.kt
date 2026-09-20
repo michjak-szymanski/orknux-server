@@ -483,6 +483,17 @@ class TriggerAPI(
     }
 
     private fun validate(trigger: WorkflowTrigger) {
+        /*
+         * A draft belonging to one node, which is allowed to be unfinished.
+         *
+         * It is filled in on the node that uses it, a field at a time, and the
+         * panel writes as it is typed - so the moment between choosing a kind
+         * and choosing what it needs is where somebody is, not a mistake.
+         * A run reaching an unfinished one is prevented at publish instead;
+         * see `GraphValidator`.
+         */
+        if (trigger.workflowId != null) return
+
         when (trigger.type) {
             TriggerType.INCOMING_CONNECTION -> {
                 val connectionId = trigger.connectionId ?: throw TriggerConnectionRequiredException()

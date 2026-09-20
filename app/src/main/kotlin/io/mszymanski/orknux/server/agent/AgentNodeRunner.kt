@@ -5,6 +5,7 @@ import io.mszymanski.orknux.connector.model.ChatTurn
 import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
 import io.mszymanski.orknux.server.llm.LlmSessionKeyTooLongException
+import io.mszymanski.orknux.connector.connection.SlackFile
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 import io.mszymanski.orknux.server.llm.SessionThinking
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
@@ -59,10 +60,16 @@ class AgentNodeRunner(
     private val expressions: NodeExpressions,
     private val runLog: RunLogger,
     private val sessions: LlmSessionRecorder,
+    /** For the pictures on a message; see [picturesFor]. */
+    private val slackFiles: io.mszymanski.orknux.connector.connection.SlackFiles,
+    /** What lets an agent inside a run draw; see [io.mszymanski.orknux.server.workflow.StepPictureTools]. */
+    private val drawings: io.mszymanski.orknux.server.workflow.StepPictureTools,
     private val budgets: SessionMemoryBudgets,
     private val shapes: ObjectShapes,
     private val mapper: ObjectMapper,
 ) : NodeRunner {
+
+    private val log = org.slf4j.LoggerFactory.getLogger(javaClass)
 
     override fun supports(kind: NodeKind): Boolean = kind == NodeKind.AGENT
 
@@ -183,11 +190,27 @@ class AgentNodeRunner(
          */
         val recalled = session?.let { sessions.recalled(it, budget) }.orEmpty()
 
+        /*
+         * Pictures somebody attached to what is being answered.
+         *
+         * A model that can see reads an image part; everything else here is
+         * text, so a screenshot in Slack used to reach an agent as the word
+         * "screenshot.png" and nothing else. It would then answer questions
+         * about a picture it had never been shown, which is the worst of the
+         * three possible behaviours.
+         *
+         * Read off the payload this step was handed rather than fetched by the
+         * listener: an upload is cheap to announce and expensive to carry, and
+         * most messages are answered by a workflow that never looks at one.
+         * See [picturesFor] for what is fetched and what is left alone.
+         */
+        val pictures = picturesFor(payload, agent.workspaceId)
+
         val turns = buildList {
             instructed?.let { add(ChatTurn("system", it)) }
             addAll(remembered)
             addAll(recalled)
-            add(ChatTurn("user", question))
+            add(ChatTurn("user", question, images = pictures))
         }
 
         /*
@@ -240,8 +263,22 @@ class AgentNodeRunner(
          */
         val watching = session?.let { SessionThinking(it, agent.name, sessions) }
 
+        /*
+         * A picture is something an agent decides on while it is working, so
+         * the tool that draws one is lent for this step rather than granted on
+         * the agent.
+         *
+         * Lent rather than granted because filing a picture needs the run and
+         * the step to file it against, and only this knows which those are - an
+         * agent carrying the tool on its row would carry it into a chat, where
+         * there is no run. Null where the installation or the workspace cannot
+         * draw, and then the round is exactly the round it was before this
+         * existed.
+         */
+        val drawing = drawings.shed(step.executionId, step.nodeKey, agent.workspaceId)
+
         val answer = try {
-            conversation.answer(modelId, agent, turns, session, watch = watching)
+            conversation.answer(modelId, agent, turns, session, shed = drawing, watch = watching)
         } finally {
             // Whatever the turn did, and before anything else reads the
             // session: a line left open is one a page reads as still being
@@ -286,6 +323,62 @@ class AgentNodeRunner(
                 permanent = true,
             )
         }
+    }
+
+    /**
+     * The pictures on the message this step is answering, as data URLs.
+     *
+     * Empty for everything that is not a picture, which is most of what people
+     * attach: a PDF is not an image, and a model handed one as an image part
+     * is a request a provider refuses in its own words. Those stay where they
+     * were - named on the payload, fetched by `slack_readAttachment` when an
+     * agent decides it wants one.
+     *
+     * Bounded at [MOST_PICTURES], because a thread where somebody pasted
+     * fifteen screenshots is a context window spent on fifteen screenshots. The
+     * first few are what the question is about; the rest are still in the
+     * thread, and still fetchable by name.
+     *
+     * A picture that cannot be read is left out rather than failing the step.
+     * The question was asked and can be answered without it, and a run that
+     * died because Slack was slow would be the worse outcome by a distance.
+     */
+    private fun picturesFor(payload: JsonNode?, workspaceId: Long): List<String> {
+        val files = payload?.path("files")?.takeIf { it.isTextual }?.asString()?.ifBlank { null }
+            ?: return emptyList()
+        val connectionId = payload.path("connection").let {
+            when {
+                it.isNumber -> it.asLong()
+                it.isTextual -> it.asString().trim().toLongOrNull()
+                else -> null
+            }
+        } ?: return emptyList()
+
+        /*
+         * The payload carries the files as the text of a JSON array, because a
+         * trigger's context is a map of strings - see `SlackListener.describe`.
+         * A shape that is not that is not an error: something else put a
+         * `files` on this payload and it is not ours to read.
+         */
+        val described = runCatching { mapper.readTree(files) }.getOrNull()?.takeIf { it.isArray }
+            ?: return emptyList()
+
+        return described.values()
+            .filter { it.path("mimetype").asString("").startsWith("image/") }
+            .take(MOST_PICTURES)
+            .mapNotNull { file ->
+                val url = file.path("url").asString("").ifEmpty { null } ?: return@mapNotNull null
+                when (val got = slackFiles.read(connectionId, url, workspaceId)) {
+                    is SlackFile.Fetched -> got.asDataUrl()
+                    is SlackFile.NotRead -> {
+                        // The name and the reason, never the bytes: a picture
+                        // nobody could fetch is a line in the log rather than a
+                        // failed turn.
+                        log.info("A picture on a Slack message was not shown to the agent: {}", got.reason)
+                        null
+                    }
+                }
+            }
     }
 
     /**
@@ -391,6 +484,16 @@ class AgentNodeRunner(
     }
 
     private companion object {
+        /**
+         * How many pictures one message is worth showing.
+         *
+         * A thread where somebody pasted fifteen screenshots is a context
+         * window spent on fifteen screenshots - and the first few are what the
+         * question is about. The rest stay in the thread, named, and fetchable
+         * by name.
+         */
+        const val MOST_PICTURES = 3
+
         /** What the node asks. Blank or absent leaves the edge's value as the question. */
         const val PROMPT = "prompt"
 

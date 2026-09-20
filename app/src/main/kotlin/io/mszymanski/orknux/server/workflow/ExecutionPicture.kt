@@ -69,6 +69,9 @@ class ExecutionPicture(
 
 interface ExecutionPictureRepository : JpaRepository<ExecutionPicture, Long> {
 
+    /** How many one run has drawn, which is what bounds an agent asking for them. */
+    fun countByExecutionId(executionId: Long): Long
+
     /** One run's pictures, oldest first, which is the order the graph shows them in. */
     fun findByExecutionIdOrderByDrawnAtAscIdAsc(executionId: Long): List<ExecutionPicture>
 

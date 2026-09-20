@@ -1,10 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
-import io.mszymanski.orknux.connector.model.ModelImageClient
-import io.mszymanski.orknux.connector.model.Picture
-import io.mszymanski.orknux.server.attachment.AttachmentStore
 import io.mszymanski.orknux.server.attachment.InstallationSettings
-import io.mszymanski.orknux.server.attachment.PictureFilenames
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
 import io.mszymanski.orknux.workflow.execution.KIND_RUNNER_ORDER
 import io.mszymanski.orknux.workflow.execution.NodeKind
@@ -41,9 +37,7 @@ import tools.jackson.databind.ObjectMapper
 @Component
 @Order(KIND_RUNNER_ORDER)
 class ImageNodeRunner(
-    private val drawing: ModelImageClient,
-    private val store: AttachmentStore,
-    private val pictures: ExecutionPictureRepository,
+    private val steps: StepPictures,
     private val executions: WorkflowExecutionRepository,
     private val settings: InstallationSettings,
     private val expressions: NodeExpressions,
@@ -76,30 +70,22 @@ class ImageNodeRunner(
             return StepResult(StepStatus.SKIPPED, "${step.name} has nothing to draw: give it a prompt.")
         }
 
-        val drawn = when (val picture = drawing.draw(modelId, prompt)) {
-            is Picture.Drawn -> picture
-            // Somebody meant this to draw, and it did not. The provider's own
-            // words, which say whether it was the prompt or the endpoint.
-            is Picture.Failed -> throw StepFailedException(step.nodeKey, "${step.name} could not draw: ${picture.reason}")
+        /*
+         * Drawn and filed by the same service an agent's `draw_picture` uses,
+         * so a picture is a picture however it was asked for: one row shape,
+         * one storage call, one download endpoint. What stays here is what is
+         * the *node's* to decide - which model, and that a draw it could not do
+         * is a failed step rather than a sentence handed back to somebody.
+         *
+         * Everything this can be refused for has been ruled out above but the
+         * two the provider decides, so a refusal at this point means somebody
+         * meant this to draw and it did not. The provider's own words, which
+         * say whether it was the prompt or the endpoint.
+         */
+        val saved = when (val drew = steps.draw(step.executionId, step.nodeKey, workspaceId, prompt, modelId)) {
+            is StepDrawing.Drawn -> drew.picture
+            is StepDrawing.Refused -> throw StepFailedException(step.nodeKey, "${step.name} could not draw: ${drew.reason}")
         }
-
-        // The bytes go down before the row, the reason every picture here files
-        // in that order: a row pointing at a file that was never written is one
-        // nothing can open and nothing can tell from one whose file was deleted.
-        val filename = PictureFilenames.of(prompt, drawn.contentType)
-        val location = store.put(workspaceId, filename, drawn.image)
-        val saved = pictures.save(
-            ExecutionPicture(
-                executionId = step.executionId,
-                nodeKey = step.nodeKey,
-                workspaceId = workspaceId,
-                prompt = prompt,
-                filename = filename,
-                contentType = drawn.contentType,
-                sizeBytes = drawn.image.size.toLong(),
-                location = location,
-            ),
-        )
 
         // The output the next node is handed: where the picture is and what it
         // is, so a later node can reference `{{input.<name>.url}}`. The run graph
@@ -113,17 +99,14 @@ class ImageNodeRunner(
         val id = requireNotNull(saved.id)
         val answer = mapper.createObjectNode()
             .put("id", id)
-            .put("url", "$DOWNLOAD_PATH/$id")
+            .put("url", "${StepPictures.DOWNLOAD_PATH}/$id")
             .put("prompt", prompt)
-            .put("contentType", drawn.contentType)
+            .put("contentType", saved.contentType)
         return StepResult(StepStatus.COMPLETED, expressions.alongsideJson(step.outputName, mapper.writeValueAsString(answer), input))
     }
 
     private companion object {
         /** The mapping that carries what to draw. */
         const val PROMPT = "prompt"
-
-        /** Where the bytes are served; see ExecutionPictureAPI. */
-        const val DOWNLOAD_PATH = "/api/execution-pictures"
     }
 }

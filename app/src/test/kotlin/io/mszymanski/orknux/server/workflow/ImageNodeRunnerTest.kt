@@ -39,10 +39,19 @@ class ImageNodeRunnerTest {
     private val pictures = mock(ExecutionPictureRepository::class.java)
     private val executions = mock(WorkflowExecutionRepository::class.java)
     private val settings = mock(InstallationSettings::class.java)
+    private val workspaces = mock(io.mszymanski.orknux.server.workspace.WorkspaceRepository::class.java)
     private val mapper = ObjectMapper()
     private val expressions = NodeExpressions(mapper)
 
-    private val runner = ImageNodeRunner(drawing, store, pictures, executions, settings, expressions, mapper)
+    /*
+     * The real one over mocked collaborators, not a mock of it: the filing is
+     * what this test is about, and a mocked StepPictures would assert that the
+     * node called something rather than that a picture was filed against the
+     * run - which is the thing that has broken before.
+     */
+    private val steps = StepPictures(workspaces, drawing, pictures, store, settings)
+
+    private val runner = ImageNodeRunner(steps, executions, settings, expressions, mapper)
 
     /** Kotlin-typed `any()`, so a null matcher does not trip a non-null parameter. */
     @Suppress("UNCHECKED_CAST")

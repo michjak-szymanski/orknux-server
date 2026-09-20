@@ -208,16 +208,20 @@ class GraphValidator(
          * An image node reads a prompt and produces a picture.
          *
          * Named, that one field holds the picture reference - its url and what it
-         * is - which is what a later node points at. Unnamed, the reference is
-         * handed on as it stands and nothing downstream can say its shape. What it
-         * needs is whatever its prompt mapping reads, and what it reports unset is
-         * its model, the way an action node reports having no action.
+         * is - which is what a later node points at, and it stands beside what
+         * reached the node rather than in place of it: a picture is something a
+         * run gains on its way past, and a reply after one usually wants both the
+         * words and the picture. Unnamed, the reference is handed on as it stands
+         * and nothing downstream can say its shape. What it needs is whatever its
+         * prompt mapping reads, and what it reports unset is its model, the way an
+         * action node reports having no action.
          */
         NodeKind.IMAGE -> {
             val named = node.outputName?.trim().orEmpty()
             Ports(
                 inputs = reads(node.mappings),
                 outputs = if (named.isEmpty()) emptyList() else listOf(ActionParamView(named, ValueType.OBJECT)),
+                passThrough = named.isNotEmpty(),
                 opaque = named.isEmpty(),
                 unresolved = "no image model".takeIf { node.imageModelId == null },
             )
@@ -695,5 +699,15 @@ data class GraphProblem(
     val message: String,
 )
 
+/**
+ * The refusals, as one sentence.
+ *
+ * Each distinct message once. A problem about a name two nodes share is
+ * reported against both of them - rightly, since the canvas marks both - and
+ * joining the list verbatim said the same sentence twice in a row: *"image" is
+ * produced by 2 nodes; a name has to say which one "image" is produced by 2
+ * nodes; a name has to say which one*. The list keeps its per-node entries for
+ * the canvas; only what is read aloud here is deduplicated.
+ */
 class GraphInvalidException(problems: List<GraphProblem>) :
-    RuntimeException(problems.joinToString(" ") { it.message })
+    RuntimeException(problems.map { it.message }.distinct().joinToString(" "))

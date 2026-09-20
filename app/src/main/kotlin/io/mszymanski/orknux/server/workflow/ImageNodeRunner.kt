@@ -104,13 +104,19 @@ class ImageNodeRunner(
         // The output the next node is handed: where the picture is and what it
         // is, so a later node can reference `{{input.<name>.url}}`. The run graph
         // shows the picture itself from the ExecutionPicture rows, not from this.
+        //
+        // Beside what reached this step, not instead of it. A picture is
+        // something a run gains on its way past, and a reply after it usually
+        // wants both - the agent's words to say and the picture to attach.
+        // Replacing the payload left the picture as the only field there was,
+        // so every reference the reply held read as one nothing produces.
         val id = requireNotNull(saved.id)
         val answer = mapper.createObjectNode()
             .put("id", id)
             .put("url", "$DOWNLOAD_PATH/$id")
             .put("prompt", prompt)
             .put("contentType", drawn.contentType)
-        return StepResult(StepStatus.COMPLETED, expressions.namedJson(step.outputName, mapper.writeValueAsString(answer)))
+        return StepResult(StepStatus.COMPLETED, expressions.alongsideJson(step.outputName, mapper.writeValueAsString(answer), input))
     }
 
     private companion object {

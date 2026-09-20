@@ -376,6 +376,12 @@ class WorkflowGraphAPI(
     private val SESSION_PARAMETERS = listOf("sessionKeyPrefix", "sessionKey")
 
     /**
+     * What an image node holds, and the name is the runner's: [ImageNodeRunner]
+     * looks for `prompt`, and a node without one is a node it skips.
+     */
+    private val IMAGE_PARAMETERS = listOf("prompt")
+
+    /**
      * The node a save would write, which is also the node a preview describes.
      *
      * One place, so what the editor is shown and what it gets when it saves
@@ -512,6 +518,28 @@ class WorkflowGraphAPI(
          */
         if (node.kind == NodeKind.SESSION) {
             return SESSION_PARAMETERS
+                .map { name -> sent[name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = name) }
+                .toMutableList()
+        }
+
+        /*
+         * An image node has exactly one parameter, and always it.
+         *
+         * `prompt` is what it draws from and the whole of what the node is
+         * told, so the list is fixed here the way a session's two are - the
+         * panel cannot be talked into saving a second one, and a node saved
+         * before it was filled in comes back with the box to fill.
+         *
+         * Without this branch an image node fell through to the action one,
+         * which reads an actionId it does not have and kept nothing: a prompt
+         * was accepted by the form, saved as nothing, and gone when the page
+         * was reopened - so every run skipped the node for having no prompt
+         * and the graph looked like it went straight past it. Which is the
+         * same bug the agent branch above exists to describe, arriving a
+         * second time in a kind added later.
+         */
+        if (node.kind == NodeKind.IMAGE) {
+            return IMAGE_PARAMETERS
                 .map { name -> sent[name]?.let { mappingOf(it, refusing) } ?: NodeMapping(name = name) }
                 .toMutableList()
         }

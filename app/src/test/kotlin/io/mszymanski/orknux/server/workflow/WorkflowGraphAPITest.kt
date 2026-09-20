@@ -142,6 +142,70 @@ class WorkflowGraphAPITest(
     }
 
     /**
+     * An image node keeps the prompt it was given.
+     *
+     * The third time this bug arrived. A kind added after the save was written
+     * falls through to the action branch, which reads an actionId the node does
+     * not have and keeps nothing - so a prompt was typed, the save reported it
+     * back, and reopening the page showed "this action takes no parameters".
+     * The run then skipped the node for having no prompt, which is why the
+     * graph looked like it went straight from the agent to the reply.
+     */
+    @Test
+    fun `an image node keeps its prompt`() {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{
+                  key: "draws", kind: IMAGE, name: "Image model", x: 0, y: 0,
+                  mappings: [{ name: "prompt", expression: "a hen in a hat", mode: VALUE }]
+                }],
+                edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].key").entity(String::class.java).isEqualTo("draws")
+
+        // Read back, which is where it went missing.
+        graphQlTester.document(
+            """query { workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                 nodes { mappings { name expression } } } }""",
+        ).execute()
+            .path("workflowGraph.nodes[0].mappings[0].name").entity(String::class.java).isEqualTo("prompt")
+            .path("workflowGraph.nodes[0].mappings[0].expression").entity(String::class.java).isEqualTo("a hen in a hat")
+    }
+
+    /**
+     * And the row is there to fill even when it was not filled.
+     *
+     * The kind fixes the list, the way a session's two are fixed: a node saved
+     * before anybody typed a prompt comes back with the box, rather than with
+     * the panel claiming the node takes no parameters.
+     */
+    @Test
+    fun `an image node saved empty still offers its prompt`() {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [{ key: "draws", kind: IMAGE, name: "Image model", x: 0, y: 0, mappings: [] }],
+                edges: []
+              }) { nodes { key } }
+            }
+            """,
+        ).execute().path("saveWorkflowGraph.nodes[0].key").entity(String::class.java).isEqualTo("draws")
+
+        graphQlTester.document(
+            """query { workflowGraph(workspaceId: $workspaceId, workflowId: $workflowId) {
+                 nodes { mappings { name expression } } } }""",
+        ).execute()
+            .path("workflowGraph.nodes[0].mappings[0].name").entity(String::class.java).isEqualTo("prompt")
+            .path("workflowGraph.nodes[0].mappings[0].expression").entity(String::class.java).isEqualTo("")
+            .path("workflowGraph.nodes[0].mappings[1]").pathDoesNotExist()
+    }
+
+    /**
      * A node that fills nothing in keeps nothing.
      *
      * That empty list is what the evaluator reads as "this node says nothing",

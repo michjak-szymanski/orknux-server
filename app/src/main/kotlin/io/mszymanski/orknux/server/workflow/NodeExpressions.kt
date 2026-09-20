@@ -29,6 +29,34 @@ class NodeExpressions(private val mapper: ObjectMapper) {
         ?.let { runCatching { mapper.readTree(it) }.getOrNull() }
 
     /**
+     * The same again, with what reached the step kept alongside it.
+     *
+     * For a node that adds to a run rather than answering it. An image node is
+     * the case: it reads a prompt out of what the agent before it said and
+     * draws a picture, and a reply after it wants both - the words to say and
+     * the picture to attach. Replacing the payload, which is what every other
+     * node does, made the picture the only thing left and every reference the
+     * reply held read as a field nothing produces.
+     *
+     * The step's own field wins a collision: it is what this step did, and
+     * silently keeping the older value under the same name would be a step
+     * reporting a result it did not produce. Without a name there is nothing
+     * to merge under, so the value goes on as it stands, as it always has.
+     */
+    fun alongsideJson(outputName: String?, json: String, reaching: String?): String {
+        val name = outputName?.trim().orEmpty()
+        if (name.isEmpty()) return json
+
+        val before = parse(reaching)
+        if (before == null || !before.isObject) return namedJson(name, json)
+
+        val merged = (before.deepCopy() as tools.jackson.databind.node.ObjectNode)
+        val parsed = runCatching { mapper.readTree(json) }.getOrNull()
+        if (parsed == null) merged.put(name, json) else merged.set(name, parsed)
+        return mapper.writeValueAsString(merged)
+    }
+
+    /**
      * What a step hands on, under the name its node gave it.
      *
      * Without a name the value goes on as it is, which is what every node did

@@ -106,6 +106,45 @@ class ImageNodeRunnerTest {
         verify(pictures).save(anyOf())
     }
 
+    /**
+     * What reached the step is still there afterwards, with the picture added.
+     *
+     * A picture is something a run gains on its way past, not an answer that
+     * replaces what it was carrying: the reply after an image node usually
+     * wants both the agent's words and the picture to attach. Replacing the
+     * payload left the picture as the only field there was, so every reference
+     * the reply held read as a field nothing before it produces - which is
+     * exactly what the graph then said, at the reply node.
+     */
+    @Test
+    fun `the picture is handed on beside what reached the step`() {
+        val bytes = byteArrayOf(1, 2, 3)
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(executions.findById(100)).thenReturn(Optional.of(execution()))
+        `when`(drawing.draw(eq(5L), eqOf("a red bicycle"))).thenReturn(Picture.Drawn(bytes, "image/png", 12))
+        `when`(store.put(eq(9L), anyString(), eqOf(bytes))).thenReturn("workspace-9/abc.png")
+        `when`(pictures.save(anyOf())).thenAnswer { invocation ->
+            val given = invocation.arguments[0] as ExecutionPicture
+            ExecutionPicture(
+                id = 7,
+                executionId = given.executionId,
+                nodeKey = given.nodeKey,
+                workspaceId = given.workspaceId,
+                prompt = given.prompt,
+                filename = given.filename,
+                contentType = given.contentType,
+                sizeBytes = given.sizeBytes,
+                location = given.location,
+            )
+        }
+
+        val result = runner.run(step(), input = """{"ai_out_1":"here it is"}""", trigger = null)
+
+        assertThat(result.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(result.output).contains(""""ai_out_1":"here it is"""")
+        assertThat(result.output).contains("/api/execution-pictures/7")
+    }
+
     @Test
     fun `a node with no model draws nothing and says so`() {
         `when`(settings.attachmentsEnabled()).thenReturn(true)

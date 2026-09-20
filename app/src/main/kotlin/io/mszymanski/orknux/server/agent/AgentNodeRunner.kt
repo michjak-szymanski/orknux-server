@@ -268,18 +268,23 @@ class AgentNodeRunner(
          * the tool that draws one is lent for this step rather than granted on
          * the agent.
          *
-         * Whether it is offered at all is the agent's own grant, next to
-         * Shells and Artifacts on its form; where it goes is not, and cannot
-         * be. Filing a picture needs the run and the step to file it against,
-         * and only this knows which those are - so the grant says *may it*,
-         * and the shed says *where*. An agent carrying the tool itself would
-         * carry it into a chat, where there is no run to file against.
+         * Whether it is offered at all is a grant like any other tool's - it
+         * is ticked in the agent's Tools list, which is where somebody looks
+         * to see what an agent may do. Where the picture goes is not on the
+         * agent and cannot be: filing needs the run and the step to file
+         * against, and only this knows which those are. So the grant says
+         * *may it*, and the shed says *where*.
          *
          * Null where the agent was not granted it, or the installation keeps
          * no attachments, or the workspace has chosen no image model - and
          * then the round is exactly the round it was before this existed.
          */
-        val drawing = drawings.shed(step.executionId, step.nodeKey, agent.workspaceId, agent.drawAccess)
+        val drawing = drawings.shed(
+            step.executionId,
+            step.nodeKey,
+            agent.workspaceId,
+            granted = io.mszymanski.orknux.server.workflow.StepPictureTools.DRAW in agent.tools,
+        )
 
         val answer = try {
             conversation.answer(modelId, agent, turns, session, shed = drawing, watch = watching)

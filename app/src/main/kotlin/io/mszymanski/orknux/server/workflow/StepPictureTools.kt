@@ -19,9 +19,9 @@ import tools.jackson.databind.ObjectMapper
  *
  * ### The grant says whether, the shed says where
  *
- * Whether an agent may draw is its own switch - `drawAccess`, beside Shells on
- * its form - because that is a decision about the agent and somebody has to be
- * able to see it and turn it off. Where the picture goes is not on the agent
+ * Whether an agent may draw is a grant in its Tools list, ticked by name like
+ * every other tool, because that list is where somebody looks to see what an
+ * agent may do. Where the picture goes is not on the agent
  * and cannot be: filing needs a run and a step to file against, and only the
  * thing running the loop knows which those are. An agent that carried the tool
  * itself would carry it into a chat, where the run it needs does not exist.
@@ -118,7 +118,14 @@ class StepPictureTools(
             mapper.writeValueAsString(mapOf("drawn" to false, "reason" to reason))
     }
 
-    private companion object {
+    companion object {
+        /**
+         * The name it is granted and called by.
+         *
+         * A row in the agent's Tools list like any other, rather than a switch
+         * of its own: that list is where somebody looks to see what an agent
+         * may do, and a capability that is not in it is one nobody finds.
+         */
         const val DRAW = "draw_picture"
 
         val DRAWING = ToolSpec(

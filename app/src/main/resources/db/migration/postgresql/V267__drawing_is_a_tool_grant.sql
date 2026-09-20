@@ -1,0 +1,12 @@
+-- Drawing is granted in the agent's Tools list, not by a column of its own.
+--
+-- V265 added `draw_access` as a switch beside Shells. That is not where anybody
+-- looks: the Tools list is what says what an agent may do, and a capability
+-- kept outside it is one nobody finds. `draw_picture` is a row in that list
+-- now, granted by name like every other tool, and the column it replaced goes.
+--
+-- Nothing is lost with it. The column was a day old, it defaulted to true, and
+-- true was "may draw if the workspace has an image model" - which is what an
+-- unticked row now says no to, deliberately: a grant somebody has not made is
+-- not a grant.
+ALTER TABLE agent DROP COLUMN IF EXISTS draw_access;

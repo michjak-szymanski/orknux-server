@@ -108,7 +108,6 @@ class MarketplaceAPI(
                  */
                 updatable = here != null && (here.marketplaceVersion ?: here.version) != offering.version,
                 tags = offering.tags,
-                changelog = offering.changelog.map { MarketplaceChangeView(it.version, it.notes) },
                 versions = offering.versions.map {
                     MarketplaceReleaseView(
                         version = it.version,
@@ -116,6 +115,7 @@ class MarketplaceAPI(
                         replaced = it.replaced,
                         files = it.files,
                         available = it.available,
+                        notes = it.notes,
                     )
                 },
             )
@@ -221,22 +221,6 @@ data class MarketplaceListingView(
     /** What the plugin is for, in its author's words. Empty, never null. */
     val tags: List<String> = emptyList(),
     val versions: List<MarketplaceReleaseView> = emptyList(),
-    /**
-     * What changed, version by version, in the author's own order.
-     *
-     * Beside the releases rather than on them: a changelog usually reaches
-     * further back than the releases whose files are kept, and a release
-     * nobody wrote a line about is ordinary. Empty where the plugin ships none
-     * or the marketplace is too old to be asked.
-     */
-    val changelog: List<MarketplaceChangeView> = emptyList(),
-)
-
-/** What changed in one version, as the plugin's author wrote it. */
-data class MarketplaceChangeView(
-    val version: String,
-    /** Markdown, rendered where it is shown. */
-    val notes: String,
 )
 
 /**
@@ -252,6 +236,11 @@ data class MarketplaceReleaseView(
     val replaced: String,
     val files: Int,
     val available: Boolean,
+    /**
+     * What changed in it, as the author wrote it when publishing. Markdown,
+     * rendered where it is shown; empty for a release published without any.
+     */
+    val notes: String = "",
 )
 
 data class MarketplaceInstallView(

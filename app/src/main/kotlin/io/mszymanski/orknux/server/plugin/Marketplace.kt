@@ -23,20 +23,6 @@ import java.time.Duration
  * Saying so on the row is the difference between a disabled line and a failure
  * at the moment somebody pressed Install.
  */
-/**
- * What changed in one version, as the plugin's author wrote it.
- *
- * Beside [MarketplaceRelease] rather than on it: a changelog usually reaches
- * further back than the ten releases whose files the marketplace keeps, so an
- * entry often has no release to hang off - and a release with nothing written
- * about it is ordinary too. The two are matched by version where both exist.
- */
-data class MarketplaceChange(
-    val version: String,
-    /** Markdown, rendered by whatever shows it. */
-    val notes: String,
-)
-
 data class MarketplaceRelease(
     val version: String,
     /** When this version first appeared, ISO-8601. It never moves again. */
@@ -55,6 +41,17 @@ data class MarketplaceRelease(
     val files: Int,
     /** False for a release whose bytes are no longer held; see the note above. */
     val available: Boolean,
+
+    /**
+     * What changed in this version, as the author wrote it when publishing.
+     *
+     * On the release rather than in a list of its own. It was a `changelog`
+     * map keyed by version for a few days, which is the wrong shape twice
+     * over: an entry is *about* a release, and a map has to be matched back to
+     * one by a string neither side parses. Empty for a release published
+     * without any - most of them, before the publisher started sending them.
+     */
+    val notes: String = "",
 )
 
 /**
@@ -108,18 +105,6 @@ data class MarketplaceOffering(
      * history rather than refuse to draw one at all.
      */
     val versions: List<MarketplaceRelease> = emptyList(),
-
-    /**
-     * What changed, an entry per version, in the order the author wrote them.
-     *
-     * Not sorted here and not sorted there: `2.0.0`, `2026.1` and `v3-beta`
-     * are all somebody's idea of a version and neither side parses them, so
-     * the author's order is the one that means anything.
-     *
-     * Empty for a plugin that ships none, which is most of them, and empty for
-     * a marketplace too old to be asked - see the ladder.
-     */
-    val changelog: List<MarketplaceChange> = emptyList(),
 ) {
     /**
      * The release this listing's `version` names, where the history holds it.
@@ -236,6 +221,9 @@ class Marketplace(
         // Absent reads as available: a marketplace that does not say cannot
         // have its silence taken as "these bytes are gone".
         available = node.path("available").asBoolean(true),
+        // Absent on a rung that did not ask for them, and on a release
+        // published before the publisher sent any.
+        notes = node.path("notes").asString(""),
     )
 
     /**
@@ -354,11 +342,15 @@ class Marketplace(
          * leaving something out, so this server reads what it uses and a field
          * added on the other side costs nothing until somebody wants it.
          */
-        /** Everything but the changelog, which is the newest thing to be asked for. */
+        /**
+         * Everything but the release notes, which are the newest thing to be
+         * asked for.
+         */
         val WITH_VERSIONS =
             "$WITH_TAGS versions { version published replaced digest files available }"
 
-        val FIELDS = "$WITH_VERSIONS changelog { version notes }"
+        val FIELDS =
+            "$WITH_TAGS versions { version published replaced digest files available notes }"
 
         /** Everything but the history, which is the field marketplaces stumble on first. */
         const val WITH_TAGS = "$CORE_FIELDS tags "

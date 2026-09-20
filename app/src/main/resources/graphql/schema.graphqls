@@ -4793,24 +4793,6 @@ type MarketplaceListing {
     keep them. See the note on `available`.
     """
     versions: [MarketplaceRelease!]!
-    """
-    What changed, an entry per version, in the order the author wrote them.
-    Empty for a plugin that ships no changelog, and for a marketplace too old
-    to be asked. Never null.
-    """
-    changelog: [MarketplaceChange!]!
-}
-
-"""
-What changed in one version of a plugin.
-
-Matched to a release by version where both exist, which is not always: a
-changelog usually reaches further back than the releases whose files are kept.
-"""
-type MarketplaceChange {
-    version: String!
-    "What changed, as markdown."
-    notes: String!
 }
 
 """
@@ -4837,6 +4819,13 @@ type MarketplaceRelease {
     moment somebody pressed Install.
     """
     available: Boolean!
+    """
+    What changed in this version, as the author wrote it when publishing.
+
+    Markdown. Empty for a release published without any, and for a
+    marketplace too old to be asked - see the ladder in `Marketplace`.
+    """
+    notes: String!
 }
 
 """

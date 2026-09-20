@@ -4,6 +4,15 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Component
 
+/** One file on a message, as much of it as anything outside Slack needs. */
+data class ThreadFile(
+    /** What `readAttachment` takes to fetch the bytes. */
+    val id: String,
+    val name: String,
+    val mimetype: String,
+    val size: Int,
+)
+
 /** One message in a thread, as much of it as anything outside Slack needs. */
 data class ThreadMessage(
     val ts: String,
@@ -11,6 +20,20 @@ data class ThreadMessage(
     val text: String,
     /** Whether this is the message the thread hangs under rather than a reply to it. */
     val parent: Boolean,
+    /**
+     * What was attached to it, and empty for the ordinary message.
+     *
+     * Here because a thread is how an agent finds out what is in a
+     * conversation, and without this a file somebody uploaded three messages
+     * ago was invisible: the text said "have a look at this" and the thread
+     * read as though nothing had come with it. An agent asked to look at the
+     * file would have to guess a timestamp and ask about attachments message by
+     * message.
+     *
+     * The bytes are not here and should not be - a file is fetched when
+     * something decides it wants it - but the id that fetches them is.
+     */
+    val files: List<ThreadFile> = emptyList(),
 )
 
 /** What a thread turned out to be, or why it could not be read. */
@@ -140,6 +163,16 @@ class SlackThreads(
                         text = held.text.orEmpty(),
                         // The parent is the one whose own ts is the thread's.
                         parent = held.ts == threadTs,
+                        // Absent rather than empty on a message with nothing
+                        // attached, which is most of them.
+                        files = held.files.orEmpty().map { file ->
+                            ThreadFile(
+                                id = file.id.orEmpty(),
+                                name = file.name ?: file.title.orEmpty(),
+                                mimetype = file.mimetype.orEmpty(),
+                                size = file.size ?: 0,
+                            )
+                        },
                     )
                 },
                 /*

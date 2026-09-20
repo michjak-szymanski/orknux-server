@@ -174,11 +174,25 @@ class SlackPluginHost(
                 val answer = mapper.createObjectNode()
                 val messages = answer.putArray("messages")
                 read.messages.forEach { held ->
-                    messages.addObject()
+                    val line = messages.addObject()
                         .put("ts", held.ts)
                         .put("user", held.user)
                         .put("text", held.text)
                         .put("parent", held.parent)
+                    /*
+                     * What came with it, so an agent reading a thread can see
+                     * that a file is in it - and has the id that fetches one.
+                     * Always an array, empty where nothing was attached: a
+                     * script iterating this needs no branch for "has no files".
+                     */
+                    val files = line.putArray("files")
+                    held.files.forEach { file ->
+                        files.addObject()
+                            .put("id", file.id)
+                            .put("name", file.name)
+                            .put("mimetype", file.mimetype)
+                            .put("size", file.size)
+                    }
                 }
                 answer.put("replies", read.replies)
                 mapper.writeValueAsString(answer)

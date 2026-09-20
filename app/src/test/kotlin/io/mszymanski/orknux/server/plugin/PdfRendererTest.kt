@@ -90,7 +90,67 @@ class PdfRendererTest {
     }
 
     /** A document of however many pages, with something on each of them. */
-    private fun document(pages: Int): ByteArray {
+    /**
+     * The other half of the same door: what the document *says*.
+     *
+     * A picture answers "is the table cut in half"; this answers "what does it
+     * say", and a model reading a thousand words out of an image pays a
+     * thousand words of tokens to guess at what is already in the file.
+     */
+    @Test
+    fun `it reads a document as html`() {
+        val read = renderer.html(document(pages = 2), from = null, to = null)
+
+        assertThat(read).isInstanceOf(PdfRenderer.Reading.Read::class.java)
+        val text = read as PdfRenderer.Reading.Read
+        assertThat(text.pages).isEqualTo(2)
+        assertThat(text.from).isEqualTo(1)
+        assertThat(text.to).isEqualTo(2)
+        // A section per page, and the words in it.
+        assertThat(text.html).contains("data-page=\"1\"").contains("data-page=\"2\"")
+        assertThat(text.html).contains("Page 1").contains("Page 2")
+        assertThat(text.characters).isGreaterThan(0)
+    }
+
+    @Test
+    fun `a range reads only what was asked for`() {
+        val read = renderer.html(document(pages = 3), from = 2, to = 2) as PdfRenderer.Reading.Read
+
+        assertThat(read.from).isEqualTo(2)
+        assertThat(read.to).isEqualTo(2)
+        // The document's own count, not how many were read: a caller that asked
+        // for one page still has to know there are three.
+        assertThat(read.pages).isEqualTo(3)
+        assertThat(read.html).doesNotContain("data-page=\"1\"").contains("data-page=\"2\"")
+    }
+
+    /**
+     * A document's text is somebody's text, and it comes back as characters
+     * rather than as markup. What this produces is handed to things that render
+     * HTML, so a PDF that says `<script>` must not arrive as a tag.
+     */
+    @Test
+    fun `what a document says is escaped, not rendered`() {
+        val read = renderer.html(document(pages = 1, says = "<script>alert(1)</script>"), null, null)
+
+        val text = (read as PdfRenderer.Reading.Read).html
+        assertThat(text).contains("&lt;script&gt;")
+        assertThat(text).doesNotContain("<script>")
+    }
+
+    @Test
+    fun `reading refuses what drawing refuses, and says why`() {
+        assertThat(renderer.html(ByteArray(0), null, null))
+            .isInstanceOf(PdfRenderer.Reading.Refused::class.java)
+        assertThat((renderer.html("not a pdf".toByteArray(), null, null) as PdfRenderer.Reading.Refused).reason)
+            .contains("not a pdf")
+        assertThat((renderer.html(document(pages = 1), from = 4, to = null) as PdfRenderer.Reading.Refused).reason)
+            .contains("1 page(s)")
+        assertThat((renderer.html(document(pages = 2), from = 2, to = 1) as PdfRenderer.Reading.Refused).reason)
+            .contains("comes before")
+    }
+
+    private fun document(pages: Int, says: String? = null): ByteArray {
         PDDocument().use { document ->
             repeat(pages) { at ->
                 val page = PDPage(PDRectangle.A4)
@@ -99,7 +159,7 @@ class PdfRendererTest {
                     ink.beginText()
                     ink.setFont(PDType1Font(Standard14Fonts.FontName.HELVETICA), 24f)
                     ink.newLineAtOffset(72f, 700f)
-                    ink.showText("Page ${at + 1}")
+                    ink.showText(says ?: "Page ${at + 1}")
                     ink.endText()
                 }
             }

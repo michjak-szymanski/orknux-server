@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.plugin
 import org.apache.pdfbox.Loader
 import org.apache.pdfbox.rendering.ImageType
 import org.apache.pdfbox.rendering.PDFRenderer
+import org.apache.pdfbox.text.PDFTextStripper
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.io.ByteArrayOutputStream
@@ -123,6 +124,136 @@ class PdfRenderer {
         }
     }
 
+    /**
+     * What a PDF says, as HTML.
+     *
+     * The other question an agent has about a document it just made, and the
+     * one a picture answers badly: *what does it say*. A page drawn as a PNG
+     * is for looking at - is the table cut in half, did the diagram land on
+     * the page - and reading a thousand words back out of an image costs a
+     * vision model a thousand words' worth of tokens and some guessing. The
+     * text is already in the file.
+     *
+     * **Text, laid out; not a reproduction.** What comes back is the document's
+     * words in reading order, a paragraph per block and a heading per page. It
+     * is not the page's design: columns, tables and anything positioned rather
+     * than written are flattened into the order PDFBox reads them in. Where the
+     * layout is the question, draw the page and look at it.
+     *
+     * @param pdf the document itself.
+     * @param from the first page to read, counting from one; null starts at the
+     *   beginning.
+     * @param to the last page to read; null reads to the end. A range is here
+     *   because a caller checking one section of a long report should not have
+     *   to hold the whole of it.
+     */
+    fun html(pdf: ByteArray, from: Int?, to: Int?): Reading {
+        if (pdf.isEmpty()) return Reading.Refused("there is nothing to read: the pdf is empty")
+        if (pdf.size > MOST_BYTES) {
+            return Reading.Refused("that pdf is larger than ${MOST_BYTES / (1024 * 1024)} MB, which is the most this reads")
+        }
+        if (from != null && from < 1) return Reading.Refused("pages are counted from 1")
+        if (from != null && to != null && to < from) {
+            return Reading.Refused("the last page asked for ($to) comes before the first ($from)")
+        }
+
+        return try {
+            Loader.loadPDF(pdf).use { document ->
+                // Refused rather than opened with an empty password, for the
+                // reason `png` gives at length.
+                if (document.isEncrypted) {
+                    return Reading.Refused("that pdf is encrypted, and this does not open one")
+                }
+
+                val pages = document.numberOfPages
+                val first = from ?: 1
+                if (first > pages) {
+                    return Reading.Refused("that pdf has $pages page(s), and page $first was asked for")
+                }
+                val last = (to ?: pages).coerceAtMost(pages)
+
+                val written = StringBuilder()
+                var characters = 0
+                for (page in first..last) {
+                    val stripper = PDFTextStripper().apply {
+                        startPage = page
+                        endPage = page
+                        // Reading order, where the document says what its order
+                        // is. Without this a two-column page comes back as one
+                        // line of the left column, one of the right, all the way
+                        // down - which reads as nonsense rather than as text.
+                        sortByPosition = true
+                    }
+                    val said = stripper.getText(document)
+                    characters += said.length
+                    if (characters > MOST_CHARACTERS) {
+                        return Reading.Refused(
+                            "that pdf holds more than ${MOST_CHARACTERS / 1000}k characters of text, which is more " +
+                                "than this reads at once; ask for a range of pages",
+                        )
+                    }
+
+                    written.append("<section data-page=\"").append(page).append("\">\n")
+                    written.append("<h2>Page ").append(page).append("</h2>\n")
+                    /*
+                     * A paragraph per block of lines, which is what a blank
+                     * line means in what PDFBox hands back. Inside one, the
+                     * single newlines are where the page wrapped rather than
+                     * where a sentence ended, so they become spaces: a reader
+                     * asked for the text, not for the column width.
+                     */
+                    said.split(Regex("\n\\s*\n")).forEach { block ->
+                        val paragraph = block.trim().replace(Regex("\\s*\n\\s*"), " ")
+                        if (paragraph.isNotEmpty()) {
+                            written.append("<p>").append(escaped(paragraph)).append("</p>\n")
+                        }
+                    }
+                    written.append("</section>\n")
+                }
+
+                Reading.Read(written.toString(), pages = pages, from = first, to = last, characters = characters)
+            }
+        } catch (failure: java.io.IOException) {
+            log.warn("a pdf could not be read", failure)
+            Reading.Refused("that is not a pdf, or it is damaged: the document could not be read")
+        } catch (failure: Exception) {
+            log.warn("a pdf could not be read as text", failure)
+            Reading.Refused("could not read that pdf: ${failure.message ?: failure.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * The five characters that would otherwise make somebody's document into
+     * markup.
+     *
+     * The text arrives from a file this installation was handed, so it is
+     * untrusted in exactly the way any upload is: a PDF whose text is
+     * `<script>` must come back as characters, not as a tag. The quotes go too
+     * - what this produces is pasted into attributes by things downstream of
+     * it, and escaping four and a half characters is a rule nobody remembers.
+     */
+    private fun escaped(text: String): String = text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+
+    /** What came of reading a PDF: its text as HTML, or why there is none. */
+    sealed interface Reading {
+
+        data class Read(
+            val html: String,
+            /** The document's own page count, not how many were read. */
+            val pages: Int,
+            val from: Int,
+            val to: Int,
+            val characters: Int,
+        ) : Reading
+
+        data class Refused(val reason: String) : Reading
+    }
+
     sealed interface Drawing {
 
         data class Drawn(val png: ByteArray, val width: Int, val height: Int, val pages: Int) : Drawing
@@ -143,6 +274,15 @@ class PdfRenderer {
         /** What a page is drawn at when nobody asked for a width: 96 dpi. */
         const val SCREEN_DPI = 96f
         const val PDF_DPI = 72f
+
+        /**
+         * As much text as this hands back at once.
+         *
+         * A model reads the answer, and a hundred pages of a contract is not a
+         * thing to put in one turn - so the refusal names the number and says
+         * to ask for a range, which is a sentence the caller can act on.
+         */
+        const val MOST_CHARACTERS = 200_000
 
         const val MOST_NARROW = 64
         const val MOST_WIDE = 4096

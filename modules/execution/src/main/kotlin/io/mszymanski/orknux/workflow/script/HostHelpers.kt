@@ -454,6 +454,44 @@ internal object HostHelpers {
 
             return JSON.parse(host.render_pdf(JSON.stringify([pdf, page ?? null, width ?? null])));
           },
+
+          /**
+           * What a PDF *says*, as HTML.
+           *
+           * The other question about a document: `pngFromPdf` is for looking
+           * at a page - is the table cut in half, did the diagram land - and
+           * this is for reading it. Reading a thousand words back out of a
+           * picture costs a vision model a thousand words of tokens and some
+           * guessing; the text is already in the file.
+           *
+           * Text in reading order, a paragraph per block and a `<section>` per
+           * page. Not the page's design: columns and tables are flattened into
+           * the order they are read in. Where the layout is the question, draw
+           * the page.
+           *
+           * @param pdf the document as base64.
+           * @param from the first page to read, counting from one. Left out
+           *   starts at the beginning.
+           * @param to the last page to read. Left out reads to the end - and a
+           *   long document is refused by size, with the number in the
+           *   sentence, so a range is the answer to that.
+           * @returns `{ html, pages, from, to, characters }`, or `{ error }`
+           *   saying what was wrong.
+           */
+          htmlFromPdf(pdf, from, to) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.render_pdf === undefined) {
+              return { error: '$absentPdf' };
+            }
+            if (typeof pdf !== 'string') return { error: 'the pdf has to be base64, as a string' };
+
+            // An object rather than a third positional array, so the door can
+            // tell the two calls apart: they share one grant because they share
+            // one parser, which is what the grant is about.
+            return JSON.parse(
+              host.render_pdf(JSON.stringify({ op: 'html', pdf: pdf, from: from ?? null, to: to ?? null })),
+            );
+          },
         },
     """.trimIndent()
 

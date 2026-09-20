@@ -126,6 +126,20 @@ class SlackPluginHost(
     private fun renderPdf(argument: String): String {
         val given = runCatching { mapper.readTree(argument) }.getOrNull()
             ?: return refusal("the arguments were not JSON")
+
+        /*
+         * Two calls through one door, told apart by the shape of what arrives.
+         *
+         * `pngFromPdf` has always sent an array; `htmlFromPdf` sends an object
+         * saying so. They share a grant because they share the thing the grant
+         * is about - handing an untrusted document to PDFBox - and a second
+         * capability would ask an administrator to weigh a distinction that is
+         * not there.
+         */
+        if (given.isObject && given.path("op").takeIf { it.isTextual }?.asString() == "html") {
+            return readPdf(given)
+        }
+
         if (!given.isArray || given.isEmpty) return refusal("that call takes a pdf")
 
         val base64 = given.get(0)?.takeIf { it.isTextual }?.asString()
@@ -162,6 +176,45 @@ class SlackPluginHost(
                     "width" to drawn.width,
                     "height" to drawn.height,
                     "pages" to drawn.pages,
+                ),
+            )
+        }
+    }
+
+    /**
+     * `{op, pdf, from, to}`, as the contract's helper sends it.
+     *
+     * The document as base64 for the reason every door here takes it that way:
+     * what crosses is JSON, and bytes are not JSON.
+     *
+     * The answer carries the range that was read as well as the document's own
+     * page count, because the caller that asked for "the beginning" needs to
+     * know where the beginning ended - a long document is refused by size, and
+     * the way out of that refusal is to ask for a range.
+     */
+    private fun readPdf(given: tools.jackson.databind.JsonNode): String {
+        val base64 = given.path("pdf").takeIf { it.isTextual }?.asString()
+            ?: return refusal("the pdf has to be base64 text")
+        val pdf = runCatching { java.util.Base64.getDecoder().decode(base64.trim()) }.getOrNull()
+            ?: return refusal("that is not a pdf: the bytes are not valid base64")
+
+        fun page(field: String): Int? = given.path(field).let { asked ->
+            when {
+                asked.isNumber -> asked.asInt()
+                asked.isTextual -> asked.asString().trim().toIntOrNull()
+                else -> null
+            }
+        }
+
+        return when (val read = pdfs.html(pdf, page("from"), page("to"))) {
+            is PdfRenderer.Reading.Refused -> refusal(read.reason)
+            is PdfRenderer.Reading.Read -> mapper.writeValueAsString(
+                mapOf(
+                    "html" to read.html,
+                    "pages" to read.pages,
+                    "from" to read.from,
+                    "to" to read.to,
+                    "characters" to read.characters,
                 ),
             )
         }

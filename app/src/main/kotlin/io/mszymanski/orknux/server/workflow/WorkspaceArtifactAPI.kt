@@ -1,0 +1,266 @@
+package io.mszymanski.orknux.server.workflow
+
+import io.mszymanski.orknux.server.attachment.AttachmentStore
+import io.mszymanski.orknux.server.security.WorkspaceAccess
+import io.mszymanski.orknux.server.task.TaskPicture
+import io.mszymanski.orknux.server.task.TaskPictureRepository
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
+import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import io.mszymanski.orknux.server.workspace.page
+import io.mszymanski.orknux.server.workspace.pageRequest
+import org.slf4j.LoggerFactory
+import org.springframework.data.domain.Sort
+import org.springframework.data.repository.findByIdOrNull
+import org.springframework.graphql.data.method.annotation.Argument
+import org.springframework.graphql.data.method.annotation.MutationMapping
+import org.springframework.graphql.data.method.annotation.QueryMapping
+import org.springframework.stereotype.Controller
+import org.springframework.transaction.annotation.Transactional
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
+
+/**
+ * Everything a workspace has drawn, in one place.
+ *
+ * A picture was reachable from the thing that drew it and nowhere else - a run
+ * for an image node's, a task for an agent's - which is fine while somebody
+ * remembers which run or which task that was, and useless afterwards. They
+ * accumulate, they take up disk, and the only way to find one was to go through
+ * runs opening steps. So they are listed here, newest first, with the two
+ * things somebody wants from a file they are looking at: a copy of it, and the
+ * ability to be rid of it.
+ *
+ * Two tables, one list. They hold the same seven columns and differ only in
+ * what they hang off, so what reaches this page is one kind of thing with two
+ * origins rather than two lists somebody has to check in turn.
+ *
+ * Only what this installation hosts. Both tables carry a `location` in the
+ * [AttachmentStore] and are served from this server's own address, which is
+ * what makes Download and Delete mean anything here: the bytes are ours to
+ * hand over and ours to remove. A file living somewhere else - one uploaded to
+ * Slack, a picture behind a link a plugin produced - is that service's, and
+ * listing it would offer a Delete this server cannot perform and a copy it
+ * does not have. So a third source belongs here only if its bytes are in the
+ * store; anything else is a link, and a link belongs where it was posted.
+ */
+@Controller
+class WorkspaceArtifactAPI(
+    private val pictures: ExecutionPictureRepository,
+    private val taskPictures: TaskPictureRepository,
+    private val saved: SavedArtifactRepository,
+    private val store: AttachmentStore,
+    private val access: WorkspaceAccess,
+    private val auditRecorder: WorkspaceAuditRecorder,
+) {
+
+    private val log = LoggerFactory.getLogger(javaClass)
+
+    /**
+     * @param search what to look for in the prompt and the filename, or null for everything.
+     *
+     * Merged and paged here rather than by the database, which cannot page
+     * across two tables without a union this does not have. The cost is reading
+     * a workspace's rows to sort them; the alternative is either two paged
+     * lists somebody flips between, or one that silently omits the older half.
+     * Both were worse than the read.
+     *
+     * The search is applied before the merge so neither half can crowd the
+     * other out of the page, and it is asked of the server rather than sieved
+     * in the browser because the list is paged: narrowing what arrived on page
+     * one would hide matches on page four and call that "no results".
+     */
+    @QueryMapping
+    fun workspaceArtifacts(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): ArtifactPage {
+        access.requireVisible(workspaceId)
+        val looking = search?.trim().orEmpty()
+
+        val all = (
+            pictures.findByWorkspaceId(workspaceId).map(::describe) +
+                taskPictures.findByWorkspaceId(workspaceId).map(::describe) +
+                saved.findByWorkspaceId(workspaceId).map(::describe)
+            )
+            .filter { looking.isEmpty() || it.matches(looking) }
+            .sortedWith(compareByDescending<ArtifactView> { it.at }.thenByDescending { it.id })
+
+        val pageable = pageRequest(page, size, Sort.unsorted())
+        return ArtifactPage(
+            content = all.page(pageable),
+            page = pageable.pageNumber,
+            size = pageable.pageSize,
+            totalElements = all.size,
+            totalPages = if (all.isEmpty()) 0 else (all.size + pageable.pageSize - 1) / pageable.pageSize,
+        )
+    }
+
+    /**
+     * Gone from the list and gone from the disk.
+     *
+     * The row first, then the bytes: a row with no file behind it is a broken
+     * thumbnail somebody has to delete again, where a file with no row is disk
+     * nobody is looking at - so if only one of the two can happen, the second is
+     * the better one to be left with. A store that cannot remove the file is
+     * logged and not raised: the caller asked for the artifact to go, and it
+     * has, as far as anything that reads the list is concerned.
+     */
+    @MutationMapping
+    @Transactional
+    fun deleteArtifact(@Argument id: String): Boolean {
+        val (kind, rowId) = parse(id) ?: return false
+
+        val gone = when (kind) {
+            ArtifactKind.IMAGE -> pictures.findByIdOrNull(rowId)
+                ?.takeIf { access.canSee(it.workspaceId) }
+                ?.also { pictures.delete(it) }
+                ?.let { Removed(it.workspaceId, it.filename, it.location) }
+
+            ArtifactKind.TASK -> taskPictures.findByIdOrNull(rowId)
+                ?.takeIf { access.canSee(it.workspaceId) }
+                ?.also { taskPictures.delete(it) }
+                ?.let { Removed(it.workspaceId, it.filename, it.location) }
+
+            ArtifactKind.SAVED -> saved.findByIdOrNull(rowId)
+                ?.takeIf { access.canSee(it.workspaceId) }
+                ?.also { saved.delete(it) }
+                ?.let { Removed(it.workspaceId, it.name, it.location) }
+        } ?: return false
+
+        runCatching { store.remove(gone.location) }
+            .onFailure { log.warn("Artifact {} row deleted but its file at {} was not", id, gone.location, it) }
+
+        auditRecorder.record(
+            gone.workspaceId,
+            WorkspaceAuditCategory.WORKFLOW,
+            "Artifact ${gone.filename} deleted",
+        )
+        return true
+    }
+
+    /** What a delete took, so the audit and the sweep read one shape for both kinds. */
+    private data class Removed(val workspaceId: Long, val filename: String, val location: String)
+
+    /**
+     * An id that says which table it came from.
+     *
+     * The two tables number their rows separately, so `7` is a picture in each
+     * of them and a bare number cannot say which was meant - the kind of
+     * ambiguity that deletes the wrong file rather than failing.
+     */
+    private fun parse(id: String): Pair<ArtifactKind, Long>? {
+        val kind = ArtifactKind.entries.firstOrNull { id.startsWith("${it.name}-") } ?: return null
+        val rowId = id.removePrefix("${kind.name}-").toLongOrNull() ?: return null
+        return kind to rowId
+    }
+
+    private fun describe(picture: ExecutionPicture) = ArtifactView(
+        id = "${ArtifactKind.IMAGE.name}-${requireNotNull(picture.id)}",
+        kind = ArtifactKind.IMAGE,
+        source = "Run #${picture.executionId}",
+        sourcePath = "executions/${picture.executionId}",
+        prompt = picture.prompt,
+        filename = picture.filename,
+        contentType = picture.contentType,
+        sizeBytes = picture.sizeBytes,
+        url = "/api/execution-pictures/${picture.id}",
+        drawnAt = picture.drawnAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        at = picture.drawnAt,
+    )
+
+    private fun describe(artifact: SavedArtifact) = ArtifactView(
+        id = ArtifactKind.SAVED.name + "-" + requireNotNull(artifact.id),
+        kind = ArtifactKind.SAVED,
+        // The agent, because that is the whole of where this came from: there
+        // is no run and no task behind it, only something that decided this
+        // was worth keeping.
+        source = artifact.savedBy,
+        // Nothing to open. The page draws a link only where there is one.
+        sourcePath = "",
+        prompt = artifact.description,
+        filename = artifact.name,
+        contentType = artifact.contentType,
+        sizeBytes = artifact.sizeBytes,
+        url = "/api/artifacts/" + artifact.id,
+        drawnAt = artifact.savedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        at = artifact.savedAt,
+    )
+
+    private fun describe(picture: TaskPicture) = ArtifactView(
+        id = "${ArtifactKind.TASK.name}-${requireNotNull(picture.id)}",
+        kind = ArtifactKind.TASK,
+        source = "Task #${picture.taskId}",
+        sourcePath = "tasks/${picture.taskId}",
+        prompt = picture.prompt,
+        filename = picture.filename,
+        contentType = picture.contentType,
+        sizeBytes = picture.sizeBytes,
+        url = "/api/task-pictures/${picture.id}",
+        drawnAt = picture.drawnAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
+        at = picture.drawnAt,
+    )
+}
+
+/**
+ * Where it came from.
+ *
+ * [IMAGE] and [TASK] are drawn - by a workflow's image node and by an agent
+ * working a task. [SAVED] is not drawn at all: it is a file an agent made and
+ * decided was worth keeping, which is why it has a name it chose rather than a
+ * prompt it was given.
+ */
+enum class ArtifactKind { IMAGE, TASK, SAVED }
+
+data class ArtifactView(
+    /** Prefixed with the kind: the two tables number their rows separately. */
+    val id: String,
+    val kind: ArtifactKind,
+    /** Where it came from, named the way the page says it: "Run #12", "Task #4". */
+    val source: String,
+    /**
+     * The rest of the address of that, under the workspace; blank where there
+     * is nothing to open.
+     *
+     * A saved artifact has no run and no task behind it - an agent made it -
+     * so the page names where it came from without linking anywhere.
+     */
+    val sourcePath: String,
+    /** What was asked for - the picture's caption, and what a search reads. */
+    val prompt: String,
+    val filename: String,
+    val contentType: String,
+    val sizeBytes: Long,
+    /** Where the bytes are: the same address the run graph's `<img>` uses. */
+    val url: String,
+    /**
+     * When, as the page shows it.
+     *
+     * Beside [at] rather than derived from it at the field, because GraphQL
+     * reads a property and Kotlin will not let a data class carry both a
+     * `drawnAt` property and a `getDrawnAt()` of a different type.
+     */
+    val drawnAt: String,
+    /**
+     * The same moment, kept as one, because the merge sorts on it.
+     *
+     * As text, `2026-09-19T09:00+02:00` sorts after `2026-09-19T10:00Z` - the
+     * same instant an hour earlier - so the two halves would interleave wrongly
+     * wherever an installation wrote both offsets. Not in the schema: it exists
+     * for the sort and nothing asks for it.
+     */
+    val at: OffsetDateTime,
+) {
+    /** What the page shows is what a search reads: the caption and the name. */
+    fun matches(looking: String): Boolean =
+        prompt.contains(looking, ignoreCase = true) || filename.contains(looking, ignoreCase = true)
+}
+
+data class ArtifactPage(
+    val content: List<ArtifactView>,
+    val page: Int,
+    val size: Int,
+    val totalElements: Int,
+    val totalPages: Int,
+)

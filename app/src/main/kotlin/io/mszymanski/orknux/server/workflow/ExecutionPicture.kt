@@ -71,6 +71,15 @@ interface ExecutionPictureRepository : JpaRepository<ExecutionPicture, Long> {
 
     /** One run's pictures, oldest first, which is the order the graph shows them in. */
     fun findByExecutionIdOrderByDrawnAtAscIdAsc(executionId: Long): List<ExecutionPicture>
+
+    /**
+     * A workspace's pictures: what the Artifacts page lists, before the merge.
+     *
+     * Unpaged and unsorted, because that page holds two of these tables and
+     * decides the order and the page across both of them - a page taken from
+     * this one alone would be a page of half the artifacts.
+     */
+    fun findByWorkspaceId(workspaceId: Long): List<ExecutionPicture>
 }
 
 /**

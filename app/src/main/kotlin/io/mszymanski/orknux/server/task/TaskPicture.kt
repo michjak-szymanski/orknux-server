@@ -71,6 +71,15 @@ interface TaskPictureRepository : JpaRepository<TaskPicture, Long> {
 
     /** How many this task has drawn, which is what the ceiling is compared against. */
     fun countByTaskId(taskId: Long): Long
+
+    /**
+     * A workspace's pictures: what the Artifacts page lists, before the merge.
+     *
+     * Unpaged and unsorted, because that page holds this table and the runs'
+     * and decides the order and the page across both - a page taken from this
+     * one alone would be a page of half the artifacts.
+     */
+    fun findByWorkspaceId(workspaceId: Long): List<TaskPicture>
 }
 
 /**

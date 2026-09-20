@@ -1,0 +1,12 @@
+-- Whether an agent may keep a file it made, on the workspace's Artifacts page.
+--
+-- On by default, which is the one grant on this table that is. The others open
+-- a door onto something that already exists and could be damaged through it -
+-- the workspace's own data, a machine, a catalog - so their safe default is
+-- off. This one only lets an agent keep its own output where a person can find
+-- it, and refusing that by default would mean every agent that draws a diagram
+-- has nowhere to put it until somebody notices a setting.
+--
+-- TRUE for the rows already here for the same reason: an installation upgrading
+-- into this should find it working, not switched off everywhere.
+ALTER TABLE agent ADD COLUMN artifact_access BOOLEAN NOT NULL DEFAULT TRUE;

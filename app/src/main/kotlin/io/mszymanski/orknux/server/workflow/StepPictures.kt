@@ -8,6 +8,7 @@ import io.mszymanski.orknux.server.attachment.PictureFilenames
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import java.util.Base64
 
 /**
  * Drawing a picture inside a run, and filing it against the step that drew it.
@@ -129,7 +130,7 @@ class StepPictures(
                 location = location,
             ),
         )
-        return StepDrawing.Drawn(saved, drawn.millis)
+        return StepDrawing.Drawn(saved, drawn.millis, Base64.getEncoder().encodeToString(drawn.image))
     }
 
     /**
@@ -204,7 +205,18 @@ class StepPictures(
 /** What came of asking a run for a picture: one that was drawn and filed, or why not. */
 sealed interface StepDrawing {
 
-    data class Drawn(val picture: ExecutionPicture, val millis: Long) : StepDrawing
+    /**
+     * @param base64 the picture itself, which the caller needs for something
+     *   the row cannot give it: putting the bytes where a plugin can read
+     *   them. It is held rather than read back from storage because it is
+     *   already in hand at the moment it is filed, and reading a megabyte off
+     *   the disk to hand back what was just written is work for nothing.
+     */
+    data class Drawn(
+        val picture: ExecutionPicture,
+        val millis: Long,
+        val base64: String,
+    ) : StepDrawing
 
     /**
      * Why nothing was drawn, in words the model is handed.

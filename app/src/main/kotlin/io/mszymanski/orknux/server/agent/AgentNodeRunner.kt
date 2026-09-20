@@ -284,6 +284,10 @@ class AgentNodeRunner(
             step.nodeKey,
             agent.workspaceId,
             granted = io.mszymanski.orknux.server.workflow.StepPictureTools.DRAW in agent.tools,
+            // The session this round is written into, which is also the only
+            // place a drawn picture's bytes can be left for something else to
+            // send. A node that keeps no session gets no key; see the shed.
+            sessionId = session,
         )
 
         val answer = try {

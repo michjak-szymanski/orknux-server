@@ -52,7 +52,24 @@ class StepPictureToolsTest {
     private val mapper = ObjectMapper()
 
     private val steps = StepPictures(workspaces, web, drawing, pictures, store, settings)
-    private val tools = StepPictureTools(mapper, steps)
+    /**
+     * The session store, in memory: what is under test is that a drawn picture
+     * is *put* somewhere a plugin can read it, and under what name.
+     */
+    private val scratch = object : io.mszymanski.orknux.workflow.script.SessionScratch {
+        val held = mutableMapOf<Pair<Long, String>, String>()
+        var refuse: String? = null
+
+        override fun put(sessionId: Long, key: String, json: String): String? {
+            refuse?.let { return it }
+            held[sessionId to key] = json
+            return null
+        }
+
+        override fun get(sessionId: Long, key: String): String? = held[sessionId to key]
+    }
+
+    private val tools = StepPictureTools(mapper, steps, scratch)
 
     @Suppress("UNCHECKED_CAST")
     private fun <T> anyOf(): T = Mockito.any<T>() ?: (null as T)
@@ -131,19 +148,27 @@ class StepPictureToolsTest {
         `when`(store.put(anyLong(), anyString(), anyOf())).thenReturn("9/a-red-bicycle.png")
         `when`(pictures.save(anyOf<ExecutionPicture>())).thenReturn(filed())
 
-        val answer = mapper.readTree(requireNotNull(tools.shed(100, "ask", 9)).run(call("a red bicycle")))
+        val answer = mapper.readTree(
+            requireNotNull(tools.shed(100, "ask", 9, sessionId = 55)).run(call("a red bicycle")),
+        )
 
         assertThat(answer.path("drawn").booleanValue()).isTrue()
         /*
-         * Absolute, both of them.
+         * A key, because a key is the thing that can be delivered.
          *
-         * What is handed to a model is what a model pastes, and it pastes it
-         * wherever it is answering - a Slack thread has no document for a path
-         * to be resolved against, so `/api/…` arrived as the markdown
-         * construction printed out rather than as a link.
+         * The bytes are in the session's store under it, which is what
+         * `slack_uploadBinary` and every other tool that uploads bytes takes.
+         * Handed only a link, a model that wanted to show somebody the picture
+         * pasted the markdown - and a chat with no document to resolve an
+         * address against printed the construction instead.
          */
-        assertThat(answer.path("url").stringValue())
-            .isEqualTo("https://orknux.example/api/execution-pictures/77")
+        assertThat(answer.path("key").stringValue()).isEqualTo("picture.77")
+        assertThat(scratch.held[55L to "picture.77"]).isEqualTo(mapper.writeValueAsString("AQID"))
+        // And the note says which of the two is a delivery.
+        assertThat(answer.path("note").stringValue()).contains("slack_uploadBinary")
+        assertThat(answer.path("note").stringValue()).contains("not a way to deliver")
+
+        // The markdown stays, because the run's own interface reads it.
         assertThat(answer.path("markdown").stringValue())
             .isEqualTo("![a red bicycle](https://orknux.example/api/execution-pictures/77)")
 
@@ -194,6 +219,61 @@ class StepPictureToolsTest {
         )
 
         assertThat(trailing.urlOf(7)).isEqualTo("https://orknux.example/api/execution-pictures/7")
+    }
+
+    /**
+     * A node that keeps no session has nowhere to leave the bytes.
+     *
+     * Said by not carrying a key, and by a note that tells the model to say
+     * where the picture is rather than promise to send it - a promise it
+     * cannot keep is worse than a sentence naming a page.
+     */
+    @Test
+    fun `a node with no session answers no key, and says why`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+        `when`(pictures.countByExecutionId(100)).thenReturn(0)
+        `when`(drawing.draw(5, "a red bicycle")).thenReturn(drawn())
+        `when`(store.put(anyLong(), anyString(), anyOf())).thenReturn("9/a-red-bicycle.png")
+        `when`(pictures.save(anyOf<ExecutionPicture>())).thenReturn(filed())
+
+        val answer = mapper.readTree(
+            requireNotNull(tools.shed(100, "ask", 9, sessionId = null)).run(call("a red bicycle")),
+        )
+
+        assertThat(answer.path("drawn").booleanValue()).isTrue()
+        assertThat(answer.has("key")).isFalse()
+        assertThat(answer.path("note").stringValue()).contains("cannot be uploaded from here")
+        // The picture is still filed and still drawn under the node; what is
+        // missing is only the way to hand the bytes to something else.
+        assertThat(answer.path("markdown").stringValue()).contains("/api/execution-pictures/77")
+        assertThat(scratch.held).isEmpty()
+    }
+
+    /**
+     * And a store that refused them says so the same way.
+     *
+     * It has a size of its own and a picture is large; an answer that carried
+     * a key to nothing would have the model upload an empty file and report
+     * success.
+     */
+    @Test
+    fun `a store that refused the bytes answers no key either`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+        `when`(pictures.countByExecutionId(100)).thenReturn(0)
+        `when`(drawing.draw(5, "a red bicycle")).thenReturn(drawn())
+        `when`(store.put(anyLong(), anyString(), anyOf())).thenReturn("9/a-red-bicycle.png")
+        `when`(pictures.save(anyOf<ExecutionPicture>())).thenReturn(filed())
+        scratch.refuse = "a value is at most 256 KB of JSON"
+
+        val answer = mapper.readTree(
+            requireNotNull(tools.shed(100, "ask", 9, sessionId = 55)).run(call("a red bicycle")),
+        )
+
+        assertThat(answer.has("key")).isFalse()
+        assertThat(answer.path("drawn").booleanValue()).isTrue()
+        scratch.refuse = null
     }
 
     @Test

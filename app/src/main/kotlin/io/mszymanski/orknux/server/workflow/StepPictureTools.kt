@@ -40,7 +40,16 @@ import tools.jackson.databind.ObjectMapper
 class StepPictureTools(
     private val mapper: ObjectMapper,
     private val pictures: StepPictures,
+    /**
+     * Where a drawn picture's bytes go so that something else can send them.
+     *
+     * The session's own store, which is what every tool that produces bytes
+     * already writes to and what every tool that uploads them reads from.
+     */
+    private val scratch: io.mszymanski.orknux.workflow.script.SessionScratch,
 ) {
+
+    private val log = org.slf4j.LoggerFactory.getLogger(javaClass)
 
     /**
      * The shed for one step of one run, or null where there is nothing to draw
@@ -57,13 +66,34 @@ class StepPictureTools(
      *
      * @param granted the agent's own switch, from its form beside Shells.
      */
-    fun shed(executionId: Long, nodeKey: String, workspaceId: Long, granted: Boolean = true): ToolShed? =
-        if (granted && pictures.offered(workspaceId)) Shed(executionId, nodeKey, workspaceId) else null
+    fun shed(
+        executionId: Long,
+        nodeKey: String,
+        workspaceId: Long,
+        granted: Boolean = true,
+        /**
+         * The AI session this round is recorded in, or null for a node that
+         * keeps none.
+         *
+         * What it buys is the only thing that makes a drawn picture
+         * *deliverable*: the bytes go into that session's store under a key,
+         * and a key is the currency every tool that uploads bytes takes. With
+         * no session there is nowhere to put one, and the answer says so by
+         * not carrying one - the same thing the plugins do.
+         */
+        sessionId: Long? = null,
+    ): ToolShed? =
+        if (granted && pictures.offered(workspaceId)) {
+            Shed(executionId, nodeKey, workspaceId, sessionId)
+        } else {
+            null
+        }
 
     private inner class Shed(
         private val executionId: Long,
         private val nodeKey: String,
         private val workspaceId: Long,
+        private val sessionId: Long?,
     ) : ToolShed {
 
         override fun specs(): List<ToolSpec> = listOf(DRAWING)
@@ -82,28 +112,70 @@ class StepPictureTools(
                 is StepDrawing.Refused -> refuse(drawn.reason)
 
                 /*
-                 * The markdown goes back, and the sentence beside it says it
-                 * does not have to be used. The picture is filed against this
-                 * step and the run graph draws it under this node whatever the
-                 * model does next, so this is an offer of where to *place* it
-                 * rather than the only way it will be seen. Handing over a link
-                 * and depending on the model to repeat it would be a picture
-                 * lost every time one forgot.
+                 * A key first, because a key is the thing that can be
+                 * *delivered*.
+                 *
+                 * The model used to be handed a link and a sentence inviting
+                 * it to paste the markdown. It has no other way to put a
+                 * picture anywhere, so it pasted - and a chat client with no
+                 * document to resolve the address against printed the
+                 * construction instead of a picture. The picture was filed
+                 * under a node in an interface the reader of that chat never
+                 * sees, so the delivery failed and the consolation prize was a
+                 * link nobody could follow.
+                 *
+                 * So the bytes go into the session's store under a key, which
+                 * is what `slack_uploadBinary` and every other tool that
+                 * uploads bytes already takes. The markdown stays, because the
+                 * run's own interface reads it - and the note says which of
+                 * the two is a delivery and which is not.
                  */
-                is StepDrawing.Drawn -> mapper.writeValueAsString(
-                    mapOf(
-                        "drawn" to true,
-                        // Absolute, for the reason `StepPictures.base` gives:
-                        // what the model is handed is what it pastes, and a
-                        // path has no host to be resolved against wherever it
-                        // lands.
-                        "url" to pictures.urlOf(requireNotNull(drawn.picture.id)),
-                        "markdown" to pictures.linkTo(drawn.picture),
-                        "note" to "The picture is filed against this run and is shown under this node. Put the " +
-                            "markdown in your answer only if it belongs at a particular point in it.",
-                    ),
-                )
+                is StepDrawing.Drawn -> {
+                    val key = keyFor(drawn)
+                    mapper.writeValueAsString(
+                        buildMap {
+                            put("drawn", true)
+                            if (key != null) put("key", key)
+                            put("markdown", pictures.linkTo(drawn.picture))
+                            put("note", noteFor(key))
+                        },
+                    )
+                }
             }
+        }
+
+        /**
+         * The bytes, where they can be reached by name, or null where they
+         * cannot.
+         *
+         * Null for a node with no session - there is no store to put them in -
+         * and null where the store refused them, which it does above its own
+         * size. Both are said rather than hidden: an answer with no key is a
+         * picture the model cannot deliver, and it needs to know that before
+         * it promises somebody a screenshot.
+         */
+        private fun keyFor(drawn: StepDrawing.Drawn): String? {
+            val session = sessionId ?: return null
+            val key = "picture." + requireNotNull(drawn.picture.id)
+
+            // A JSON-encoded *string*: the sandbox does `JSON.parse` on what it
+            // reads, and the upload doors then require what comes out to be a
+            // string of base64.
+            val refused = scratch.put(session, key, mapper.writeValueAsString(drawn.base64))
+            if (refused != null) {
+                log.info("A drawn picture was not put in session {}'s store: {}", session, refused)
+                return null
+            }
+            return key
+        }
+
+        /** What to say about a picture that can be handed over, and one that cannot. */
+        private fun noteFor(key: String?): String = if (key != null) {
+            "The picture is filed against this run and shown under this node. To put it in front of somebody, pass `key` to a tool that uploads bytes - slack_uploadBinary takes one. The markdown points at this installation's own address: it is what the orknux interface reads, and it is not a way to deliver a picture to a chat."
+        } else {
+            "The picture is filed against this run and shown under this node. There is nowhere to " +
+                "hand the bytes over from, so it cannot be uploaded from here - say where it is " +
+                "rather than promising to send it."
         }
 
         private fun argument(call: ToolCall, name: String): String? = runCatching {

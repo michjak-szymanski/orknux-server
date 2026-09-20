@@ -8,6 +8,7 @@ import io.mszymanski.orknux.server.attachment.PictureFilenames
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.stereotype.Service
+import java.util.Base64
 
 /**
  * A task drawing a picture, and the pictures it has drawn.
@@ -131,7 +132,7 @@ class TaskPictures(
                 location = location,
             ),
         )
-        return Drawing.Drawn(saved, drawn.millis)
+        return Drawing.Drawn(saved, drawn.millis, Base64.getEncoder().encodeToString(drawn.image))
     }
 
     /** Everything one task drew, oldest first, which is the order it is shown in. */
@@ -237,7 +238,11 @@ class TaskPictures(
 /** What came of asking for a picture: one that was drawn and filed, or why not. */
 sealed interface Drawing {
 
-    data class Drawn(val picture: TaskPicture, val millis: Long) : Drawing
+    /**
+     * @param base64 the picture itself, for the caller that has to put the
+     *   bytes somewhere a plugin can read them. See `StepDrawing.Drawn`.
+     */
+    data class Drawn(val picture: TaskPicture, val millis: Long, val base64: String) : Drawing
 
     /**
      * Why nothing was drawn, in words the model is handed.

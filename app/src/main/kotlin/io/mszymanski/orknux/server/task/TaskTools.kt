@@ -35,7 +35,14 @@ import tools.jackson.databind.ObjectMapper
 class TaskTools(
     private val mapper: ObjectMapper,
     private val pictures: TaskPictures,
+    /**
+     * Where a drawn picture's bytes go so that something else can send them:
+     * the session's own store, which every tool that uploads bytes reads from.
+     */
+    private val scratch: io.mszymanski.orknux.workflow.script.SessionScratch,
 ) {
+
+    private val log = org.slf4j.LoggerFactory.getLogger(javaClass)
 
     /**
      * The shed for one task's round.
@@ -84,15 +91,29 @@ class TaskTools(
                          * model to repeat it would be a picture lost every time
                          * one forgot.
                          */
-                        is Drawing.Drawn -> mapper.writeValueAsString(
-                            mapOf(
-                                "drawn" to true,
-                                "markdown" to pictures.linkTo(drawn.picture),
-                                "note" to "The picture is filed against this task and will be shown with its " +
-                                    "outcome. Put the markdown in your task_done summary only if it belongs " +
-                                    "at a particular point in it.",
-                            ),
-                        )
+                        is Drawing.Drawn -> {
+                            /*
+                             * A key first, because a key is the thing that can
+                             * be *delivered*.
+                             *
+                             * The bytes go into this task's session store, which
+                             * is what every tool that uploads bytes reads from -
+                             * `slack_uploadBinary` takes one. Handed only
+                             * markdown, a model that wanted to show somebody a
+                             * picture pasted a link, and a chat client with no
+                             * document to resolve it against printed the
+                             * construction instead.
+                             */
+                            val key = keyFor(drawn)
+                            mapper.writeValueAsString(
+                                buildMap {
+                                    put("drawn", true)
+                                    if (key != null) put("key", key)
+                                    put("markdown", pictures.linkTo(drawn.picture))
+                                    put("note", noteFor(key))
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -132,6 +153,39 @@ class TaskTools(
             }
 
             else -> refuse("There is no tool called ${call.name}")
+        }
+
+        /**
+         * The bytes, where something else can reach them by name, or null.
+         *
+         * Null for a task with no session and null where the store refused
+         * them - said rather than hidden, because an answer with no key is a
+         * picture the model cannot hand over, and it should not promise one.
+         */
+        private fun keyFor(drawn: Drawing.Drawn): String? {
+            val session = task.sessionId ?: return null
+            val key = "picture." + requireNotNull(drawn.picture.id)
+
+            // A JSON-encoded *string*: the sandbox parses what it reads, and the
+            // upload doors require what comes out to be a string of base64.
+            val refused = scratch.put(session, key, mapper.writeValueAsString(drawn.base64))
+            if (refused != null) {
+                log.info("A task's picture was not put in session {}'s store: {}", session, refused)
+                return null
+            }
+            return key
+        }
+
+        /** What to say about a picture that can be handed over, and one that cannot. */
+        private fun noteFor(key: String?): String = if (key != null) {
+            "The picture is filed against this task and shown with its outcome. To put it in front " +
+                "of somebody, pass `key` to a tool that uploads bytes - slack_uploadBinary takes " +
+                "one. The markdown points at this installation's own address: put it in your " +
+                "task_done summary only if it belongs at a particular point in it."
+        } else {
+            "The picture is filed against this task and shown with its outcome. There is nowhere " +
+                "to hand the bytes over from, so it cannot be uploaded from here - say where it " +
+                "is rather than promising to send it."
         }
 
         private fun park(

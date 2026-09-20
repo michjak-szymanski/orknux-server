@@ -6,6 +6,7 @@ import com.slack.api.bolt.socket_mode.SocketModeApp
 import com.slack.api.model.event.AppMentionEvent
 import com.slack.api.model.event.MessageBotEvent
 import com.slack.api.model.event.MessageEvent
+import com.slack.api.model.event.MessageFileShareEvent
 import com.slack.api.socket_mode.SocketModeClient
 import jakarta.annotation.PreDestroy
 import org.slf4j.LoggerFactory
@@ -164,6 +165,27 @@ class SlackListener(
             }
 
             /*
+             * A message that carries a file, which Slack delivers as its own
+             * kind of event.
+             *
+             * Nothing was registered for it, so Bolt answered every upload with
+             * `no handler found` and the message was dropped on the floor -
+             * with its text, its thread and its file. What that looked like
+             * from a Slack channel is somebody attaching a PDF, asking the bot
+             * about it, and the bot replying that it has no PDF: the mention
+             * arrived, the upload never did, and the agent was telling the
+             * truth about what it had been given.
+             *
+             * The same path as an ordinary message, because that is what it is
+             * - `message` with a `file_share` subtype - and the same loop
+             * guard applies to it.
+             */
+            app.event(MessageFileShareEvent::class.java) { payload, context ->
+                receive(id, workspaceId, payload.event, payload.teamId)
+                context.ack()
+            }
+
+            /*
              * A bot's message, acknowledged and dropped.
              *
              * Registered rather than left unhandled so that the drop is written
@@ -213,6 +235,8 @@ class SlackListener(
                 // The same as for a message: which Slack this came from.
                 put("connection", connectionId.toString())
                 slackWorkspaceId?.let { put("slackWorkspaceId", it) }
+                // And what was attached to it, where anything was.
+                describe(mention.files)?.let { put("files", it) }
             },
         )
         // Worth an INFO line: "did Slack deliver anything" is the first question
@@ -249,7 +273,24 @@ class SlackListener(
      * only other caller, and a test that had to open one could not run without
      * Slack. A real payload put through here is the whole path bar the wire.
      */
-    fun receive(connectionId: Long, workspaceId: Long, message: MessageEvent, slackWorkspaceId: String?) {
+    fun receive(connectionId: Long, workspaceId: Long, message: MessageEvent, slackWorkspaceId: String?) =
+        receive(connectionId, workspaceId, said(message), slackWorkspaceId)
+
+    /**
+     * The same, for the upload Slack delivers as its own event.
+     *
+     * A `message` with a `file_share` subtype, which the SDK models as a
+     * different class carrying the same fields - so it is turned into the same
+     * [Said] and walks the same path.
+     */
+    fun receive(
+        connectionId: Long,
+        workspaceId: Long,
+        message: MessageFileShareEvent,
+        slackWorkspaceId: String?,
+    ) = receive(connectionId, workspaceId, said(message), slackWorkspaceId)
+
+    private fun receive(connectionId: Long, workspaceId: Long, message: Said, slackWorkspaceId: String?) {
         /*
          * Handed on whole, rather than filtered here and handed on after.
          *
@@ -271,7 +312,7 @@ class SlackListener(
     }
 
     /** One message, already off the socket thread. */
-    private fun deliver(connectionId: Long, workspaceId: Long, message: MessageEvent, slackWorkspaceId: String?) {
+    private fun deliver(connectionId: Long, workspaceId: Long, message: Said, slackWorkspaceId: String?) {
         if (ours(connectionId, message)) return
 
         val context = buildMap {
@@ -296,6 +337,8 @@ class SlackListener(
              */
             put("connection", connectionId.toString())
             slackWorkspaceId?.let { put("slackWorkspaceId", it) }
+            // What was attached, where anything was. See [describe].
+            describe(message.files)?.let { put("files", it) }
         }
 
         // The same INFO line a mention gets, and for the same reason: "did Slack
@@ -331,8 +374,8 @@ class SlackListener(
      * id is compared as well — resolved from the cache [SlackBotUsers] keeps,
      * never from a call made per message.
      */
-    private fun ours(connectionId: Long, message: MessageEvent): Boolean {
-        if (message.botId != null || message.botProfile != null) {
+    private fun ours(connectionId: Long, message: Said): Boolean {
+        if (message.botId != null || message.fromBotProfile) {
             log.debug("A Slack message on connection {} came from a bot and was left alone", connectionId)
             return true
         }
@@ -343,6 +386,98 @@ class SlackListener(
         }
         return false
     }
+
+    /**
+     * One message, whichever of Slack's events delivered it.
+     *
+     * An ordinary message, a mention and an upload are three classes in the SDK
+     * with the same fields on them, and everything downstream of here cares
+     * about the fields. Written out rather than handled three times: the loop
+     * guard and the context are the two things that must not differ between
+     * them, and they differed the day one of the three was simply not
+     * registered.
+     */
+    private data class Said(
+        val channel: String?,
+        val user: String?,
+        val ts: String?,
+        val threadTs: String?,
+        val parentUserId: String?,
+        val channelType: String?,
+        val text: String?,
+        val files: List<com.slack.api.model.File>,
+        /** Named by Slack when the API posted it; see [ours]. */
+        val botId: String?,
+        /** The other way Slack says the same thing. */
+        val fromBotProfile: Boolean,
+    )
+
+    private fun said(message: MessageEvent) = Said(
+        channel = message.channel,
+        user = message.user,
+        ts = message.ts,
+        threadTs = message.threadTs,
+        parentUserId = message.parentUserId,
+        channelType = message.channelType,
+        text = message.text,
+        files = message.files.orEmpty(),
+        botId = message.botId,
+        fromBotProfile = message.botProfile != null,
+    )
+
+    /**
+     * An upload, read the same way.
+     *
+     * No `bot_id` on this one: Slack does not put it on a file share, so what
+     * catches our own upload is the author check in [ours] - a file this
+     * installation posted was posted as the connection's own bot user, which
+     * that question already asks about.
+     */
+    private fun said(message: MessageFileShareEvent) = Said(
+        channel = message.channel,
+        user = message.user,
+        ts = message.ts,
+        threadTs = message.threadTs,
+        parentUserId = message.parentUserId,
+        channelType = message.channelType,
+        text = message.text,
+        files = message.files.orEmpty(),
+        botId = null,
+        fromBotProfile = false,
+    )
+
+    /**
+     * What was attached, as a line a model and a workflow can both read.
+     *
+     * The bytes are not here and should not be: a file is fetched through the
+     * Slack plugin, with the token, when something decides it wants it. What
+     * this carries is enough to decide - the id `slack_readAttachment` takes,
+     * the name, the type and the size - because the alternative is what
+     * happened before it: an agent handed a message with no sign that anything
+     * came with it, answering questions about a document it had never been
+     * told existed.
+     *
+     * JSON, so a workflow expression can read a field out of it, and compact,
+     * because this rides in the payload a model sees. Null where nothing was
+     * attached, which keeps the key off every ordinary message.
+     */
+    private fun describe(files: List<com.slack.api.model.File>): String? {
+        if (files.isEmpty()) return null
+        return files.joinToString(",", "[", "]") { file ->
+            buildString {
+                append("{")
+                append("\"id\":\"").append(quoted(file.id)).append("\",")
+                append("\"name\":\"").append(quoted(file.name ?: file.title)).append("\",")
+                append("\"mimetype\":\"").append(quoted(file.mimetype)).append("\",")
+                append("\"size\":").append(file.size ?: 0)
+                append("}")
+            }
+        }
+    }
+
+    /** A filename is somebody else's text, and it lands in JSON. */
+    private fun quoted(value: String?): String =
+        value.orEmpty().replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
 
     /** Off the socket thread, so Slack's three seconds are not spent on a workflow. */
     private fun raise(connectionId: Long, event: IncomingEvent) {

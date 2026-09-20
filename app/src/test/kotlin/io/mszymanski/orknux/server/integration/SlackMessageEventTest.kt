@@ -4,6 +4,7 @@ import com.slack.api.bolt.request.RequestHeaders
 import com.slack.api.bolt.request.builtin.EventRequest
 import com.slack.api.bolt.util.EventsApiPayloadParser
 import com.slack.api.model.event.MessageEvent
+import com.slack.api.model.event.MessageFileShareEvent
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.mszymanski.orknux.connector.connection.ConnectionType
@@ -74,6 +75,7 @@ class SlackMessageEventTest {
         // so the same registration is made by hand and the parse below is the
         // one Bolt would do.
         EventsApiPayloadParser.getEventTypeAndSubtype(MessageEvent::class.java)
+        EventsApiPayloadParser.getEventTypeAndSubtype(MessageFileShareEvent::class.java)
 
         api = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
         api.createContext("/") { exchange ->
@@ -176,6 +178,66 @@ class SlackMessageEventTest {
         assertThat(nothingArrives()).isEmpty()
     }
 
+    /**
+     * The upload, which was dropped on the floor for as long as this existed.
+     *
+     * Slack delivers a message carrying a file as its own event - `message`
+     * with a `file_share` subtype, which the SDK models as its own class - and
+     * nothing was registered for it. Bolt answered every one with `no handler
+     * found`, so the message never reached a trigger: no text, no thread, and
+     * no sign that a file had been attached at all.
+     *
+     * What that looked like from a channel is somebody attaching a PDF, asking
+     * the bot about it, and the bot answering that it has no PDF. The mention
+     * arrived; the upload did not; the agent was telling the truth about what
+     * it had been handed.
+     */
+    @Test
+    fun `an uploaded file arrives as a message, and says what was attached`() {
+        listener().receive(CONNECTION_ID, WORKSPACE_ID, shared(fileSharePayload()), "T00000001")
+
+        val published = await(2)
+        assertThat(published.map { it.action })
+            .describedAs("a file shared in a thread is a message and a reply, like any other")
+            .containsExactlyInAnyOrder(IncomingAction.MESSAGE, IncomingAction.REPLY)
+        assertThat(published.first().text).isEqualTo("here is the invoice")
+
+        /*
+         * Enough to decide with, and not the bytes. A file is fetched through
+         * the plugin, with the token, when something decides it wants it - what
+         * this carries is the id that fetch takes, and what the file is.
+         */
+        val files = published.first().context["files"]
+        assertThat(files)
+            .contains("\"id\":\"F0000000001\"")
+            .contains("\"name\":\"invoice.pdf\"")
+            .contains("\"mimetype\":\"application/pdf\"")
+            .contains("\"size\":18452")
+    }
+
+    /** An ordinary message says nothing about files, rather than saying none. */
+    @Test
+    fun `a message with nothing attached carries no files key`() {
+        listener().receive(CONNECTION_ID, WORKSPACE_ID, parsed(plainMessagePayload()), "T00000001")
+
+        assertThat(await1().single().context).doesNotContainKey("files")
+    }
+
+    /**
+     * And the loop guard still holds on an upload.
+     *
+     * Slack puts no `bot_id` on a file share, so what catches this
+     * installation's own upload is the author: a file posted through the plugin
+     * was posted as the connection's own bot user. Without this an agent that
+     * uploads into a thread it watches hands itself its own file, for ever.
+     */
+    @Test
+    fun `an upload by this connection's own bot user raises nothing`() {
+        listener().receive(CONNECTION_ID, WORKSPACE_ID, shared(ourOwnFileSharePayload()), "T00000001")
+
+        assertThat(nothingArrives()).isEmpty()
+    }
+
     /** [SlackListener] as the application builds it, with Slack on the loopback address. */
     private fun listener(): SlackListener {
         val clients = SlackClients(ProxyRouter(ProxyRuleSource { emptyList() }))
@@ -208,6 +270,12 @@ class SlackMessageEventTest {
     /** The SDK's own parse, so the test never sets a field the wire has to fill. */
     private fun parsed(body: String): MessageEvent =
         EventsApiPayloadParser.buildEventPayload<MessageEvent>(EventRequest(body, RequestHeaders(emptyMap()))).event
+
+    /** The same, for the event Slack delivers an upload as. */
+    private fun shared(body: String): MessageFileShareEvent =
+        EventsApiPayloadParser.buildEventPayload<MessageFileShareEvent>(
+            EventRequest(body, RequestHeaders(emptyMap())),
+        ).event
 
     /** Publishing is handed to a virtual thread, so what arrives is waited for. */
     private fun await(count: Int): List<IncomingEvent> {
@@ -256,6 +324,60 @@ class SlackMessageEventTest {
           "ts": "1700000000.000300",
           "event_ts": "1700000000.000300",
           "channel_type": "channel"
+        }
+        """,
+    )
+
+    /**
+     * Somebody attaching a file in a thread, as Slack sends it.
+     *
+     * The subtype is what makes this a different class in the SDK, and the
+     * `files` array is the half that never reached anything.
+     */
+    private fun fileSharePayload() = envelope(
+        """
+        {
+          "type": "message",
+          "subtype": "file_share",
+          "channel": "C0000000001",
+          "user": "U0000ALICE",
+          "text": "here is the invoice",
+          "ts": "1700000000.000400",
+          "thread_ts": "1700000000.000100",
+          "parent_user_id": "U0000ALICE",
+          "event_ts": "1700000000.000400",
+          "channel_type": "channel",
+          "files": [
+            {
+              "id": "F0000000001",
+              "name": "invoice.pdf",
+              "title": "invoice",
+              "mimetype": "application/pdf",
+              "filetype": "pdf",
+              "size": 18452,
+              "url_private": "https://files.slack.com/files-pri/T1-F0000000001/invoice.pdf"
+            }
+          ]
+        }
+        """,
+    )
+
+    /** The same shape, uploaded by this connection's own bot user. */
+    private fun ourOwnFileSharePayload() = envelope(
+        """
+        {
+          "type": "message",
+          "subtype": "file_share",
+          "channel": "C0000000001",
+          "user": "$OUR_BOT",
+          "text": "here is the report you asked for",
+          "ts": "1700000000.000500",
+          "thread_ts": "1700000000.000100",
+          "event_ts": "1700000000.000500",
+          "channel_type": "channel",
+          "files": [
+            { "id": "F0000000002", "name": "report.csv", "mimetype": "text/csv", "size": 91 }
+          ]
         }
         """,
     )

@@ -47,6 +47,9 @@ class MarketplaceInstallTest(
         functions.deleteAll()
         audit.deleteAll()
         offeredVersion = "1.0.0"
+        offeredDigest = digestOf(plugin)
+        offeredAvailable = true
+        refuseNewFields = false
     }
 
     @Test
@@ -144,6 +147,87 @@ class MarketplaceInstallTest(
             .containsExactly("lib/words.js")
     }
 
+    /* --------------------------------------------- what the catalog vouches for */
+
+    /**
+     * The bytes that arrive are the bytes the catalog published, or nothing is
+     * installed.
+     *
+     * Everything before this trusted the download completely: the URL is the
+     * catalog's own and the request goes through this installation's proxy
+     * rules, which is good and is not the same as knowing the file did not
+     * change on the way.
+     */
+    @Test
+    fun `a download that is not what the catalog published is refused, and nothing is stored`() {
+        offeredDigest = digestOf("export default class Nothing {}")
+
+        val refused = org.junit.jupiter.api.assertThrows<PluginDigestMismatchException> {
+            catalog.installMarketplacePlugin("greeter", accept = "lib/words.js")
+        }
+
+        assertThat(refused.message)
+            .describedAs("both hashes: a proxy rewriting a response and a half-finished transfer look alike")
+            .contains(offeredDigest)
+            .contains(digestOf(plugin))
+        assertThat(plugins.findAll()).isEmpty()
+        assertThat(functions.findAll()).isEmpty()
+    }
+
+    /**
+     * A release the catalog remembers and no longer holds is refused before
+     * anything is fetched - rather than as a 404 halfway through, which reads
+     * as the marketplace being broken.
+     */
+    @Test
+    fun `a version whose files the catalog no longer holds is refused by name`() {
+        offeredAvailable = false
+
+        val refused = org.junit.jupiter.api.assertThrows<PluginReleaseGoneException> {
+            catalog.installMarketplacePlugin("greeter", accept = "lib/words.js")
+        }
+
+        assertThat(refused.message).contains("greeter").contains("1.0.0").contains("newer version")
+        assertThat(plugins.findAll()).isEmpty()
+    }
+
+    /**
+     * A marketplace that will not answer the newer fields is still a
+     * marketplace.
+     *
+     * The fields a listing carries grew and the marketplaces this server talks
+     * to did not grow at the same moment. A query naming a field the far end
+     * cannot fill fails entirely - no answer, not a thinner one - so the
+     * client asks again for the fields that have always been there, and the
+     * Catalog screen goes on working. Without a digest, which is then a check
+     * nobody can perform rather than a reason to refuse an install.
+     */
+    @Test
+    fun `a marketplace that refuses the newer fields still lists and still installs`() {
+        refuseNewFields = true
+
+        val listing = catalog.marketplacePlugins().single()
+        assertThat(listing.key).isEqualTo("greeter")
+        assertThat(listing.category).isNull()
+        assertThat(listing.versions).isEmpty()
+
+        val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
+        assertThat(installed.marketplaceVersion).isEqualTo("1.0.0")
+    }
+
+    /** What the catalog files it under, and what it has shipped, reach the screen. */
+    @Test
+    fun `the listing carries its category and its releases`() {
+        val listing = catalog.marketplacePlugins().single()
+
+        assertThat(listing.category).isEqualTo("Chat")
+        assertThat(listing.versions.map { it.version }).containsExactly("1.0.0", "0.9.0")
+        assertThat(listing.versions.map { it.available })
+            .describedAs("the older one is remembered and its files are gone")
+            .containsExactly(true, false)
+        assertThat(listing.versions.first().files).isEqualTo(2)
+    }
+
     @Test
     fun `a plugin switched off keeps everything and offers nothing`() {
         val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
@@ -169,6 +253,26 @@ class MarketplaceInstallTest(
 
         /** What the stub catalog currently offers; a test moves it. */
         var offeredVersion = "1.0.0"
+
+        /** What the catalog says the plugin's bytes hash to; a test spoils it. */
+        var offeredDigest = ""
+
+        /** Whether the catalog still holds this version's files. */
+        var offeredAvailable = true
+
+        /**
+         * A marketplace that has the older fields and not the newer ones.
+         *
+         * Refused the way a real one does - an `errors` payload over a 200,
+         * which fails the whole query rather than thinning the answer.
+         */
+        var refuseNewFields = false
+
+        /** The same hash the server computes over a downloaded file. */
+        fun digestOf(source: String): String =
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(source.toByteArray(StandardCharsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
 
         private val plugin = """
             import { HELLO } from './lib/words.js';
@@ -207,12 +311,35 @@ class MarketplaceInstallTest(
                 createContext("/graphql") { exchange ->
                     if (!keyed(exchange)) return@createContext refuse(exchange)
                     val asked = exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+                    if (refuseNewFields && asked.contains("versions {")) {
+                        return@createContext answer(
+                            exchange,
+                            """{"errors":[{"message":"Field 'versions' is undefined"}]}""",
+                        )
+                    }
+                    val history = """
+                        "versions":[
+                          {"version":"$offeredVersion","published":"2026-09-19","replaced":"2026-09-19",
+                           "digest":"$offeredDigest","files":2,"available":$offeredAvailable},
+                          {"version":"0.9.0","published":"2026-08-01","replaced":"2026-08-01",
+                           "digest":"","files":1,"available":false}
+                        ]
+                    """.trimIndent()
+                    /*
+                     * Only what was asked for, the way a real marketplace
+                     * answers: a client that fell back to the older fields
+                     * gets the older fields, so the fallback is measured
+                     * rather than papered over by a stub that always
+                     * answers everything.
+                     */
+                    val extras = if (asked.contains("versions {")) """"category":"Chat",$history""" else """"category":null"""
                     val offering = """
                         {"key":"greeter","name":"Greeter","author":"Orknux","summary":"Says hello.",
                          "description":"# Greeter","version":"$offeredVersion",
                          "url":"http://${where()}/plugins/greeter/greeter.js",
                          "icon":"http://${where()}/icons/greeter.svg",
-                         "downloads":7,"rating":null,"reviews":0,"published":"2026-09-19"}
+                         "downloads":7,"rating":null,"reviews":0,"published":"2026-09-19",
+                         $extras}
                     """.trimIndent()
                     // The two queries the client makes, told apart by name.
                     val data = if (asked.contains("marketplacePlugin(")) {

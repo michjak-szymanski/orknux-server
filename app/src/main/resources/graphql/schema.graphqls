@@ -4737,6 +4737,42 @@ type MarketplaceListing {
     installedVersion: String
     "Installed, and the catalog is offering a version this one is not."
     updatable: Boolean!
+    """
+    What the marketplace files it under, or null where it files it under
+    nothing. A word the catalog chose, not one the plugin declares.
+    """
+    category: String
+    """
+    Every release, newest first, or empty from a marketplace that does not
+    keep them. See the note on `available`.
+    """
+    versions: [MarketplaceRelease!]!
+}
+
+"""
+One version of a plugin, as the marketplace remembers it.
+
+A listing answers with its whole history and not only what is current, which
+is what lets a details pane say how long a plugin has been maintained rather
+than showing one number and leaving somebody to guess.
+"""
+type MarketplaceRelease {
+    version: String!
+    "ISO-8601. When this version first appeared; it never moves again."
+    published: String!
+    "ISO-8601. When its bytes last changed — the same as `published` for most."
+    replaced: String!
+    "How many files it shipped with, the plugin and its libraries together."
+    files: Int!
+    """
+    Whether its bytes are still held.
+
+    The marketplace keeps the record of every release and the files of the ten
+    newest, so an older version is real, nameable, and cannot be installed.
+    A screen should say so on the row; the alternative is a failure at the
+    moment somebody pressed Install.
+    """
+    available: Boolean!
 }
 
 """

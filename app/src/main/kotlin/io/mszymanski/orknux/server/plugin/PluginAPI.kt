@@ -370,6 +370,15 @@ class PluginUploadAPI(
      * a plugin this server would refuse anyway, so it is refused before the
      * next request rather than after it.
      */
+    /**
+     * The SHA-256 of what was downloaded, as the catalog writes one: lowercase
+     * hex over the file's UTF-8 bytes.
+     */
+    private fun digestOf(source: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
     fun fetchedBundle(address: String): Triple<String, String, List<PluginLibraryFile>> {
         val base = runCatching { java.net.URI.create(address) }.getOrNull()
             ?.takeIf { it.scheme?.lowercase() in setOf("http", "https") && it.path.endsWith(".js") }
@@ -408,7 +417,45 @@ class PluginUploadAPI(
      * audit line live; this is the half that knows how a plugin is loaded.
      */
     fun installed(offering: MarketplaceOffering, accept: String?): ResponseEntity<Any> {
+        /*
+         * A release the marketplace still holds, or a sentence saying why not.
+         *
+         * The catalog keeps the record of every version and the bytes of the
+         * ten newest, so an older one is real, nameable and not installable.
+         * Refused here rather than at the fetch, where it arrives as a 404 and
+         * reads as the marketplace being broken.
+         */
+        val release = offering.current
+        if (release != null && !release.available) {
+            throw PluginReleaseGoneException(offering.key, offering.version)
+        }
+
         val (filename, source, files) = fetchedBundle(offering.url)
+
+        /*
+         * The bytes are the bytes the catalog published, checked rather than
+         * assumed.
+         *
+         * Everything up to here trusted whatever came back over the wire: the
+         * url is the catalog's own and the call goes through this
+         * installation's proxy rules, which is good but is not the same as
+         * knowing the file did not change on the way. The digest is the
+         * catalog saying what it published, so holding the download against it
+         * turns "it arrived" into "it arrived intact".
+         *
+         * Only the main file. It is what the catalog digests and what runs;
+         * the libraries beside it are reached *from* it, so a main file that
+         * is what it should be is a plugin whose shape nobody rearranged.
+         *
+         * Skipped where the catalog answers no digest, which is every
+         * marketplace older than the field. A check somebody cannot perform is
+         * not a reason to refuse an install that worked yesterday.
+         */
+        val expected = release?.digest?.lowercase().orEmpty()
+        if (expected.isNotEmpty()) {
+            val held = digestOf(source)
+            if (held != expected) throw PluginDigestMismatchException(offering.key, expected, held)
+        }
 
         /*
          * What it is called, what it is for and who wrote it.
@@ -2125,6 +2172,31 @@ class PluginUrlInvalidException(what: String) : RuntimeException(
 
 class PluginUrlUnreachableException(where: String, why: String) : RuntimeException(
     "$where could not be fetched: $why.",
+)
+
+/**
+ * The catalog remembers this version and no longer holds its bytes.
+ *
+ * The marketplace keeps the record of every release and the files of the ten
+ * newest, so an older one can be named, listed and discussed and cannot be
+ * installed. Said before the download rather than after, where it arrives as a
+ * 404 and reads as the marketplace being broken.
+ */
+class PluginReleaseGoneException(key: String, version: String) : RuntimeException(
+    "$key $version is in the marketplace's history but its files are no longer held; install a newer version.",
+)
+
+/**
+ * What arrived is not what the catalog published.
+ *
+ * The digest is the marketplace's own statement about the bytes of a release,
+ * so a download that does not match it is a download nobody should run - and
+ * the difference between the two is worth printing, because the honest causes
+ * (a proxy rewriting a response, a half-finished transfer) look nothing alike
+ * from the outside.
+ */
+class PluginDigestMismatchException(key: String, expected: String, held: String) : RuntimeException(
+    "$key did not arrive as the marketplace published it: it says sha256 $expected and what came back is $held.",
 )
 
 /**

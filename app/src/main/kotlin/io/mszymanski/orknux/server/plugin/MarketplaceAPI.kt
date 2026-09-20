@@ -73,6 +73,16 @@ class MarketplaceAPI(
                  * about.
                  */
                 updatable = here != null && here.marketplaceVersion != offering.version,
+                category = offering.category,
+                versions = offering.versions.map {
+                    MarketplaceReleaseView(
+                        version = it.version,
+                        published = it.published,
+                        replaced = it.replaced,
+                        files = it.files,
+                        available = it.available,
+                    )
+                },
             )
         }
     }
@@ -169,6 +179,23 @@ data class MarketplaceListingView(
     val installed: Boolean,
     val installedVersion: String?,
     val updatable: Boolean,
+    val category: String?,
+    val versions: List<MarketplaceReleaseView> = emptyList(),
+)
+
+/**
+ * One release of a plugin, as the catalog remembers it.
+ *
+ * Without the digest. It is what an install checks the downloaded bytes
+ * against and has no reader on a screen, and a hash printed next to a version
+ * number is noise that looks like information.
+ */
+data class MarketplaceReleaseView(
+    val version: String,
+    val published: String,
+    val replaced: String,
+    val files: Int,
+    val available: Boolean,
 )
 
 data class MarketplaceInstallView(

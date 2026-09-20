@@ -11,6 +11,39 @@ import java.net.http.HttpResponse
 import java.time.Duration
 
 /**
+ * One version of a plugin, as the marketplace remembers it.
+ *
+ * A listing answers with its whole history, not only what is current - which
+ * is what lets a details pane say "this is the fourth release since March"
+ * rather than showing one number and leaving somebody to wonder.
+ *
+ * [available] is the half worth reading before anything else. The marketplace
+ * keeps the bytes of the ten newest releases and the record of every one, so a
+ * version further back than that is real, nameable, and cannot be installed.
+ * Saying so on the row is the difference between a disabled line and a failure
+ * at the moment somebody pressed Install.
+ */
+data class MarketplaceRelease(
+    val version: String,
+    /** When this version first appeared, ISO-8601. It never moves again. */
+    val published: String,
+    /** When its bytes last changed; the same as [published] for almost all of them. */
+    val replaced: String,
+    /**
+     * The SHA-256 of the plugin's main file at this version, lowercase hex.
+     *
+     * What makes a download checkable. Without it an install trusts whatever
+     * arrived over the wire; with it the bytes can be held against what the
+     * marketplace says it published.
+     */
+    val digest: String,
+    /** How many files it shipped with, the plugin and its libraries together. */
+    val files: Int,
+    /** False for a release whose bytes are no longer held; see the note above. */
+    val available: Boolean,
+)
+
+/**
  * One plugin the marketplace offers, exactly as it answered.
  *
  * Whether it is installed here is not on it: that is this server's own fact,
@@ -40,7 +73,33 @@ data class MarketplaceOffering(
     val rating: Double?,
     val reviews: Int,
     val published: String,
-)
+    /**
+     * What the marketplace files it under, or null where it files it under
+     * nothing.
+     *
+     * A word the catalog chose rather than anything the plugin declares, so it
+     * is shown and filtered by and never matched against an installed row.
+     */
+    val category: String?,
+    /**
+     * Every release, newest first, or empty from a marketplace that does not
+     * answer with them.
+     *
+     * Empty rather than absent on purpose: an older marketplace simply has no
+     * such field, and a screen that reads this should draw a listing without a
+     * history rather than refuse to draw one at all.
+     */
+    val versions: List<MarketplaceRelease> = emptyList(),
+) {
+    /**
+     * The release this listing's `version` names, where the history holds it.
+     *
+     * What a caller actually wants when it asks about the current version -
+     * its digest, and whether its bytes are still there - without having to
+     * know that the two facts arrive in different shapes.
+     */
+    val current: MarketplaceRelease? get() = versions.firstOrNull { it.version == version }
+}
 
 /**
  * The marketplace, read through.
@@ -71,6 +130,8 @@ class Marketplace(
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
 
+    private val log = org.slf4j.LoggerFactory.getLogger(javaClass)
+
     /** Whether this installation has a marketplace at all, for a screen to ask. */
     val configured: Boolean get() = endpoint.isNotBlank()
 
@@ -83,20 +144,19 @@ class Marketplace(
      * again is the whole of refreshing.
      */
     fun offerings(): List<MarketplaceOffering> {
-        val answer = asked("query Catalog { marketplacePlugins { $FIELDS } }", emptyMap())
+        val answer = askedForFields { "query Catalog { marketplacePlugins { $it } }" to emptyMap<String, Any?>() }
         return answer.path("data").path("marketplacePlugins").values().map(::read)
     }
 
     /** One offering by key, or null where the catalog has none by that name. */
     fun offering(key: String): MarketplaceOffering? {
-        val answer = asked(
+        val answer = askedForFields { fields ->
             """
             query Offering(${'$'}key: String!) {
-              marketplacePlugin(key: ${'$'}key) { $FIELDS }
+              marketplacePlugin(key: ${'$'}key) { $fields }
             }
-            """.trimIndent(),
-            mapOf("key" to key),
-        )
+            """.trimIndent() to mapOf("key" to key)
+        }
         val found = answer.path("data").path("marketplacePlugin")
         return if (found.isNull || found.isMissingNode) null else read(found)
     }
@@ -115,7 +175,63 @@ class Marketplace(
         rating = node.path("rating").takeIf { it.isNumber }?.asDouble(),
         reviews = node.path("reviews").asInt(0),
         published = node.path("published").asString(""),
+        category = node.path("category").asString("").ifEmpty { null },
+        versions = node.path("versions").values().map(::release).toList(),
     )
+
+    /**
+     * One release, read defensively.
+     *
+     * A marketplace older than this field answers nothing here and the list is
+     * empty, which is a listing without a history rather than a failure - see
+     * the note on [MarketplaceOffering.versions].
+     */
+    private fun release(node: tools.jackson.databind.JsonNode) = MarketplaceRelease(
+        version = node.path("version").asString(""),
+        published = node.path("published").asString(""),
+        replaced = node.path("replaced").asString(""),
+        digest = node.path("digest").asString(""),
+        files = node.path("files").asInt(0),
+        // Absent reads as available: a marketplace that does not say cannot
+        // have its silence taken as "these bytes are gone".
+        available = node.path("available").asBoolean(true),
+    )
+
+    /**
+     * A listing asked for whole, and asked again for less where whole failed.
+     *
+     * The fields a listing carries grew, and the marketplaces this server
+     * talks to did not grow at the same moment - one is deployed here, the
+     * other is wherever an installation points. A query naming a field the far
+     * end does not have fails entirely: not that field missing from the
+     * answer, but no answer, and a Catalog screen saying the marketplace
+     * cannot be read while it is up and perfectly well.
+     *
+     * The same is true of a field that is *declared* and answers null under a
+     * non-null type, which is what the marketplace this was written against
+     * does with `versions` today - GraphQL is required to fail the whole
+     * listing over it, so a client asking for it optimistically has to be able
+     * to stop asking.
+     *
+     * So: ask for everything, and where the query itself was refused, ask once
+     * more for the fields that have always been there. Only a refusal of the
+     * query - not a timeout, a 401 or an outage, which retrying would only
+     * make slower, and which the second answer would report no better than the
+     * first.
+     */
+    private fun askedForFields(query: (String) -> Pair<String, Map<String, Any?>>): tools.jackson.databind.JsonNode {
+        val (whole, variables) = query(FIELDS)
+        return try {
+            asked(whole, variables)
+        } catch (refused: MarketplaceRefusedQueryException) {
+            log.info(
+                "the marketplace refused a listing's newer fields, asking for the older ones: {}",
+                refused.message,
+            )
+            val (fewer, sameVariables) = query(CORE_FIELDS)
+            asked(fewer, sameVariables)
+        }
+    }
 
     /**
      * One query, and the marketplace's own words when it refuses.
@@ -170,16 +286,46 @@ class Marketplace(
             ?: throw MarketplaceUnreachableException("it answered something that is not JSON")
         val errors = read.path("errors")
         if (errors.isArray && !errors.isEmpty) {
-            throw MarketplaceUnreachableException(errors.first().path("message").asString("it refused the query"))
+            // Its own kind, because this is the one failure asking differently
+            // could fix - see [askedForFields].
+            throw MarketplaceRefusedQueryException(errors.first().path("message").asString("it refused the query"))
         }
         return read
     }
 
     private companion object {
+        /**
+         * What a listing is asked for.
+         *
+         * Narrower than what the marketplace offers, and that is allowed to
+         * stay true: GraphQL breaks on asking for what is not there, never on
+         * leaving something out, so this server reads what it uses and a field
+         * added on the other side costs nothing until somebody wants it.
+         */
         val FIELDS =
+            "$CORE_FIELDS category versions { version published replaced digest files available }"
+
+        /**
+         * The fields every marketplace has ever answered with.
+         *
+         * What a listing falls back to when the whole query is refused. Kept
+         * as its own constant rather than spelled out twice, so a field added
+         * to the newer half can never quietly join the half that is meant to
+         * work everywhere.
+         */
+        const val CORE_FIELDS =
             "key name author summary description version url icon iconDark downloads rating reviews published"
     }
 }
 
+/**
+ * The marketplace answered, and refused the query.
+ *
+ * Told apart from every other failure because it is the only one asking
+ * differently could fix: a field the far end does not have, or one it declares
+ * and cannot fill. See [Marketplace.askedForFields].
+ */
+class MarketplaceRefusedQueryException(said: String) : MarketplaceUnreachableException(said)
+
 /** The marketplace could not be asked, in the words it or the network used. */
-class MarketplaceUnreachableException(why: String) : RuntimeException("The marketplace could not be read: $why.")
+open class MarketplaceUnreachableException(why: String) : RuntimeException("The marketplace could not be read: $why.")

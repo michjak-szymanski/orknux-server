@@ -20,16 +20,22 @@ class AttachmentDownloadsTest {
     private val store = mock(AttachmentStore::class.java)
     private val downloads = AttachmentDownloads(store)
 
-    private fun served(contentType: String, filename: String = "thing") = run {
+    private fun served(contentType: String, filename: String = "thing", reading: Boolean = false) = run {
         `when`(store.open("where")).thenReturn(ByteArrayInputStream(byteArrayOf(1, 2, 3)))
-        downloads.serve(filename = filename, contentType = contentType, sizeBytes = 3, location = "where")
+        downloads.serve(
+            filename = filename,
+            contentType = contentType,
+            sizeBytes = 3,
+            location = "where",
+            reading = reading,
+        )
     }
 
-    private fun headerOf(contentType: String, name: String): String =
-        served(contentType).headers.getFirst(name).orEmpty()
+    private fun headerOf(contentType: String, name: String, reading: Boolean = false): String =
+        served(contentType, reading = reading).headers.getFirst(name).orEmpty()
 
     @Test
-    fun `a picture is shown, not downloaded`() {
+    fun `a picture is shown either way, because a page draws it in an img`() {
         assertThat(headerOf("image/png", "Content-Disposition")).startsWith("inline")
         assertThat(served("image/png").headers.contentType.toString()).isEqualTo("image/png")
     }
@@ -38,18 +44,30 @@ class AttachmentDownloadsTest {
      * The one this exists for: an agent's report is a page somebody opens, not
      * a file they download and then open from their own machine - which is the
      * same HTML with more trust around it, not less.
+     *
+     * Only where the caller asked to read it. That ask is its own address -
+     * see `SavedArtifactAPI.preview` - so an artifact's own link stays a
+     * download whatever is inside it, and somebody sending that link to a
+     * colleague is sending a file rather than a page.
      */
     @Test
-    fun `a report an agent wrote is shown too`() {
-        assertThat(headerOf("text/html", "Content-Disposition")).startsWith("inline")
-        assertThat(served("text/html").headers.contentType.toString()).startsWith("text/html")
+    fun `a report an agent wrote is shown where somebody asked to read it`() {
+        assertThat(headerOf("text/html", "Content-Disposition", reading = true)).startsWith("inline")
+        assertThat(served("text/html", reading = true).headers.contentType.toString()).startsWith("text/html")
+    }
+
+    @Test
+    fun `and is handed over as a file where nobody did`() {
+        assertThat(headerOf("text/html", "Content-Disposition")).startsWith("attachment")
+        assertThat(served("text/html").headers.contentType.toString()).isEqualTo("application/octet-stream")
     }
 
     @Test
     fun `and a document carries its charset without becoming a download`() {
         // The type arrives from whatever wrote the file, and a charset on it is
         // ordinary: `text/html; charset=utf-8` is the same kind as `text/html`.
-        assertThat(headerOf("text/html; charset=utf-8", "Content-Disposition")).startsWith("inline")
+        assertThat(headerOf("text/html; charset=utf-8", "Content-Disposition", reading = true))
+            .startsWith("inline")
     }
 
     /**
@@ -59,7 +77,7 @@ class AttachmentDownloadsTest {
      */
     @Test
     fun `a document lands in a sandbox with no script and no network`() {
-        val policy = headerOf("text/html", "Content-Security-Policy")
+        val policy = headerOf("text/html", "Content-Security-Policy", reading = true)
 
         assertThat(policy).contains("sandbox")
         assertThat(policy).contains("default-src 'none'")
@@ -110,7 +128,7 @@ class AttachmentDownloadsTest {
 
     @Test
     fun `nosniff, so a document is read as what it says it is`() {
-        assertThat(headerOf("text/html", "X-Content-Type-Options")).isEqualTo("nosniff")
+        assertThat(headerOf("text/html", "X-Content-Type-Options", reading = true)).isEqualTo("nosniff")
         assertThat(headerOf("application/zip", "X-Content-Type-Options")).isEqualTo("nosniff")
     }
 }

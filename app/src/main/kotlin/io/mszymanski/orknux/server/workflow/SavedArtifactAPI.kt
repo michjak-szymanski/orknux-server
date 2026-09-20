@@ -36,7 +36,28 @@ class SavedArtifactAPI(
      * used to count what other teams have produced.
      */
     @GetMapping("/api/artifacts/{id}")
-    fun download(@PathVariable id: Long): ResponseEntity<InputStreamResource> {
+    fun download(@PathVariable id: Long): ResponseEntity<InputStreamResource> =
+        serve(id, reading = false)
+
+    /**
+     * The same bytes, to be read rather than saved.
+     *
+     * A second address rather than a second behaviour on the first. What a
+     * link *is* should not depend on what the file inside it turns out to be:
+     * the artifact's own address hands the file over, always, and anything
+     * that wants it opened asks for it here by saying so.
+     *
+     * That is worth an endpoint on its own two counts. Somebody copying an
+     * artifact's address and sending it to a colleague is sending a download,
+     * which is what they meant. And a page that renders is something this
+     * server does deliberately at one address that can be reasoned about,
+     * rather than a thing that happens to some content types and not others.
+     */
+    @GetMapping("/api/artifacts/{id}/preview")
+    fun preview(@PathVariable id: Long): ResponseEntity<InputStreamResource> =
+        serve(id, reading = true)
+
+    private fun serve(id: Long, reading: Boolean): ResponseEntity<InputStreamResource> {
         val artifact = artifacts.findByIdOrNull(id)?.takeIf { access.canSee(it.workspaceId) }
             ?: throw SavedArtifactNotFoundException(id)
 
@@ -49,6 +70,7 @@ class SavedArtifactAPI(
             contentType = artifact.contentType,
             sizeBytes = artifact.sizeBytes,
             location = artifact.location,
+            reading = reading,
         )
     }
 }

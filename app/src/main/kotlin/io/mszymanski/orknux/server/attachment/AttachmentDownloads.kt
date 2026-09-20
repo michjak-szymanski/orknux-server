@@ -42,15 +42,23 @@ class AttachmentDownloads(private val store: AttachmentStore) {
      * page, most of all - and "it is an image" is exactly the reasoning that
      * makes that a problem.
      */
+    /**
+     * @param reading whether the caller asked for the file to be *read* rather
+     *   than handed over. A picture is shown either way - a page has to be
+     *   able to draw one in an `<img>` - and a document only where somebody
+     *   asked, which is its own address: see `SavedArtifactAPI.preview`.
+     */
     fun serve(
         filename: String,
         contentType: String,
         sizeBytes: Long,
         location: String,
+        reading: Boolean = false,
     ): ResponseEntity<InputStreamResource> {
         val name = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20")
         val type = contentType.lowercase().substringBefore(';').trim()
-        val shown = type in SHOWABLE || type in READABLE
+        val readable = reading && type in READABLE
+        val shown = type in SHOWABLE || readable
         return ResponseEntity.ok()
             .contentType(if (shown) MediaType.parseMediaType(contentType) else MediaType.APPLICATION_OCTET_STREAM)
             .header(
@@ -77,7 +85,7 @@ class AttachmentDownloads(private val store: AttachmentStore) {
              */
             .header(
                 "Content-Security-Policy",
-                if (type in READABLE) {
+                if (readable) {
                     "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox"
                 } else {
                     "default-src 'none'; img-src 'self'; sandbox"

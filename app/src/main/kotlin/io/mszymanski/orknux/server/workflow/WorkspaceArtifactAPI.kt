@@ -170,6 +170,18 @@ class WorkspaceArtifactAPI(
         at = picture.drawnAt,
     )
 
+    /**
+     * Whether a browser will read this rather than save it.
+     *
+     * The same list `AttachmentDownloads` serves inline, asked here so the
+     * page can draw a way in only where there is one. A picture is not on it:
+     * a picture has a thumbnail and a viewer, which is a better way of looking
+     * at one than a tab.
+     */
+    private fun readable(contentType: String): Boolean =
+        contentType.lowercase().substringBefore(';').trim() in
+            setOf("text/html", "text/plain", "text/markdown", "application/pdf")
+
     private fun describe(artifact: SavedArtifact) = ArtifactView(
         id = ArtifactKind.SAVED.name + "-" + requireNotNull(artifact.id),
         kind = ArtifactKind.SAVED,
@@ -184,6 +196,7 @@ class WorkspaceArtifactAPI(
         contentType = artifact.contentType,
         sizeBytes = artifact.sizeBytes,
         url = "/api/artifacts/" + artifact.id,
+        previewUrl = "/api/artifacts/${artifact.id}/preview".takeIf { readable(artifact.contentType) },
         drawnAt = artifact.savedAt.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME),
         at = artifact.savedAt,
     )
@@ -234,6 +247,17 @@ data class ArtifactView(
     val sizeBytes: Long,
     /** Where the bytes are: the same address the run graph's `<img>` uses. */
     val url: String,
+    /**
+     * Where the same bytes can be *read* rather than saved, or null for a file
+     * nothing here will render.
+     *
+     * Its own address, so what a link is does not depend on what the file
+     * inside it turns out to be: [url] hands the file over, always, and this
+     * is the one that opens. Null is the answer for a zip, an executable, or
+     * anything else nobody has decided to render - and the page draws no way
+     * to open one.
+     */
+    val previewUrl: String? = null,
     /**
      * When, as the page shows it.
      *

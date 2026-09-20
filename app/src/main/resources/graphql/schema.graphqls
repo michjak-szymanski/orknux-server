@@ -4976,8 +4976,22 @@ type PluginParameterSetting {
     form reads, and a picker is drawn from what a parameter may be.
     """
     options: [String!]!
-    "What somebody typed. Null when this points at a variable, or is unanswered."
+    """
+    What somebody typed. Null when this points at a variable, is unanswered, or
+    is a secret — a secret typed here is stored encrypted and never returned,
+    and `secretSet` is how a screen learns there is one.
+    """
     literal: String
+    """
+    Whether a secret has been typed into this parameter, which is all this
+    says.
+
+    Never the value. The point of keeping a typed secret in an encrypted column
+    is that nothing carries it back out — not to this screen, not to a
+    screenshot of it. What a person needs from the page is whether the thing is
+    answered, and that is one boolean.
+    """
+    secretSet: Boolean!
     "Which of the workspace's variables this reads. Null when it was typed in."
     variableId: ID
     """

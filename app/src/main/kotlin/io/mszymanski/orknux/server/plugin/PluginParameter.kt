@@ -1,6 +1,9 @@
 package io.mszymanski.orknux.server.plugin
 
+import io.mszymanski.orknux.connector.security.SECRET_COLUMN_LENGTH
+import io.mszymanski.orknux.connector.security.SecretConverter
 import jakarta.persistence.Column
+import jakarta.persistence.Convert
 import jakarta.persistence.Entity
 import jakarta.persistence.GeneratedValue
 import jakarta.persistence.GenerationType
@@ -18,11 +21,15 @@ import java.time.OffsetDateTime
  * to the plugin and the answer belongs to the workspace, and this row is the
  * answer.
  *
- * Exactly one of [literalValue] and [variableId] is set. A literal is a value
- * somebody typed and is stored as typed, in the clear, because it is shown back to
- * them; anything that should not be stored in the clear is what [variableId] is
- * for, and a parameter the plugin declared as a secret may only be filled in that
- * way.
+ * Exactly one of [literalValue], [secretValue] and [variableId] is set.
+ *
+ * A literal is a value somebody typed and is stored as typed, in the clear,
+ * because it is shown back to them. A secret somebody typed goes to
+ * [secretValue] instead, which is encrypted and never shown back - the screen
+ * is told that it is set and nothing more. And [variableId] points at one of
+ * the workspace's variables, which is still the better answer wherever one
+ * credential serves more than one thing: it is shared, owned, has a history,
+ * and rotating it is one edit rather than four.
  *
  * A row for a parameter the plugin no longer declares is possible - a plugin can be
  * loaded again with a different declaration - and it is simply not read. Deleting
@@ -49,6 +56,25 @@ class PluginParameterSetting(
     /** What somebody typed, or null when this points at a variable. */
     @Column(name = "literal_value", columnDefinition = "text")
     var literalValue: String? = null,
+
+    /**
+     * The same thing for a parameter the plugin declares secret, kept where a
+     * secret belongs.
+     *
+     * Its own column rather than [literalValue] because the two are stored
+     * differently: this one goes through [SecretConverter], so what sits in
+     * the database is ciphertext and what leaves this server is nothing at
+     * all - the screen is told *that* a value is set and never what it is.
+     *
+     * Pointing at a workspace variable is still the better answer wherever one
+     * token serves more than one thing: a variable is shared, owned, and has a
+     * history, and rotating it is one edit rather than four. This is for the
+     * other case - one plugin, one credential - where making a variable to
+     * hold it was a step that bought nothing.
+     */
+    @Convert(converter = SecretConverter::class)
+    @Column(name = "secret_value", length = SECRET_COLUMN_LENGTH)
+    var secretValue: String? = null,
 
     /** Which of the workspace's variables this reads, or null when it was typed in. */
     @Column(name = "variable_id")
@@ -96,6 +122,16 @@ data class PluginParameterSettingView(
      */
     val options: List<String> = emptyList(),
     val literal: String?,
+    /**
+     * Whether a secret has been typed in here, which is all this says.
+     *
+     * Never the value. The point of keeping a typed secret in an encrypted
+     * column is that nothing carries it back out - not to this screen, not to
+     * a screenshot of it, and not to whoever is reading over a shoulder. What
+     * a person needs from the page is whether the thing is answered, and that
+     * is one boolean.
+     */
+    val secretSet: Boolean = false,
     val variableId: String?,
     val variableName: String?,
     /** Required, and nothing usable is set for it. What the red mark is drawn from. */
@@ -128,6 +164,16 @@ class PluginParameterEmptyException(name: String) : RuntimeException(
     "\"$name\" was given neither a value nor a variable. Clear it instead if that is what you meant.",
 )
 
+/**
+ * Kept for the callers that still catch it, and no longer thrown.
+ *
+ * A secret typed into a parameter is stored encrypted now and never shown
+ * back, so the sentence this carried - "a value typed here is stored as typed
+ * and shown back on this page" - stopped being true of secrets. Left in place
+ * rather than deleted because an installation upgrading past this may still
+ * have it recorded in an audit line somebody reads.
+ */
+@Deprecated("A secret may be typed in now; it is stored encrypted and never returned.")
 class PluginParameterNotSecretException(name: String) : RuntimeException(
     "The plugin declares \"$name\" as a secret, so it cannot be typed in here. Keep it as a variable and " +
         "point this at that - a value typed here is stored as typed and shown back on this page.",

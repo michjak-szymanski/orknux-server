@@ -40,6 +40,8 @@ class PluginParameterTest(
     @Autowired val declarations: PluginDeclarations,
     @Autowired val runner: PluginRunner,
     @Autowired val variables: WorkspaceVariableRepository,
+    /** For asking the database what it actually holds, rather than the entity. */
+    @Autowired val jdbc: org.springframework.jdbc.core.JdbcTemplate,
     @Autowired val catalogs: VariableCatalogRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
@@ -193,8 +195,18 @@ class PluginParameterTest(
         assertThat(settings.findAll()).isEmpty()
     }
 
+    /**
+     * A secret typed in is kept, encrypted, and never handed back.
+     *
+     * It used to be refused, and the sentence said why: what is typed into a
+     * parameter is stored as typed and shown back on the page. That was a fact
+     * about the column rather than about secrets - so the column changed, and
+     * what this pins is the three halves of the new bargain: the value works,
+     * the database does not hold it in the clear, and the screen is told only
+     * that there is one.
+     */
     @Test
-    fun `a parameter the plugin declared as a secret cannot be typed in`() {
+    fun `a secret typed in is stored encrypted and never returned`() {
         graphQlTester.document(
             """
             mutation {
@@ -203,11 +215,105 @@ class PluginParameterTest(
               ) { missing }
             }
             """,
-        ).execute()
-            .errors()
-            .satisfy { errors -> assertThat(errors.first().message).contains("declares \"token\" as a secret") }
+        ).execute().errors().verify()
 
-        assertThat(settings.findAll()).isEmpty()
+        val row = settings.findAll().single { it.name == "token" }
+        assertThat(row.secretValue)
+            .describedAs("read back through the converter, which is how the plugin will get it")
+            .isEqualTo("hunter2")
+        assertThat(row.literalValue)
+            .describedAs("and not in the column that is shown back to people")
+            .isNull()
+
+        // Nothing carries the secret back out; the screen is told only that
+        // there is one.
+        graphQlTester.document(
+            """
+            query {
+              workspacePlugins(workspaceId: $workspaceId) {
+                parameters { name literal secretSet missing }
+              }
+            }
+            """,
+        ).execute()
+            .path("workspacePlugins[0].parameters[1].literal").valueIsNull()
+            .path("workspacePlugins[0].parameters[1].secretSet").entity(Boolean::class.java).isEqualTo(true)
+            .path("workspacePlugins[0].parameters[1].missing").entity(Boolean::class.java).isEqualTo(false)
+    }
+
+    /**
+     * And what is actually in the database is ciphertext.
+     *
+     * Asserted against the stored column rather than the entity, because the
+     * entity reads through the converter and would answer "hunter2" whether or
+     * not anything was ever encrypted - which is the assertion that would have
+     * passed while the value sat in the clear.
+     */
+    @Test
+    fun `the stored secret is not the secret`() {
+        graphQlTester.document(
+            """
+            mutation {
+              setPluginParameter(
+                workspaceId: $workspaceId, pluginId: $pluginId, name: "token", literal: "hunter2"
+              ) { missing }
+            }
+            """,
+        ).execute().errors().verify()
+
+        val stored: String? = jdbc.queryForObject(
+            "select secret_value from plugin_parameter where name = 'token'",
+            String::class.java,
+        )
+        assertThat(stored).isNotNull()
+        assertThat(stored).isNotEqualTo("hunter2")
+        assertThat(stored).doesNotContain("hunter2")
+    }
+
+    /** A secret still takes a variable, which is the better answer when one is shared. */
+    @Test
+    fun `a secret can still point at a variable, and pointing clears what was typed`() {
+        graphQlTester.document(
+            """
+            mutation {
+              setPluginParameter(
+                workspaceId: $workspaceId, pluginId: $pluginId, name: "token", literal: "hunter2"
+              ) { missing }
+            }
+            """,
+        ).execute().errors().verify()
+
+        val catalogId = requireNotNull(
+            catalogs.save(VariableCatalog(workspaceId = workspaceId, name = "shared")).id,
+        )
+        val variableId = requireNotNull(
+            variables.save(
+                WorkspaceVariable(
+                    workspaceId = workspaceId,
+                    catalogId = catalogId,
+                    name = "sharedToken",
+                    type = VariableType.STRING,
+                    kind = VariableKind.SECRET,
+                    value = "from-the-variable",
+                ),
+            ).id,
+        )
+
+        graphQlTester.document(
+            """
+            mutation {
+              setPluginParameter(
+                workspaceId: $workspaceId, pluginId: $pluginId, name: "token", variableId: "$variableId"
+              ) { missing }
+            }
+            """,
+        ).execute().errors().verify()
+
+        val row = settings.findAll().single { it.name == "token" }
+        assertThat(row.variableId).isEqualTo(variableId)
+        assertThat(row.secretValue)
+            .describedAs("one source at a time: pointing at a variable lets go of what was typed")
+            .isNull()
     }
 
     @Test

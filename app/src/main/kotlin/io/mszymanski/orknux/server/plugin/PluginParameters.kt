@@ -86,6 +86,16 @@ class PluginParameters(
                 secret = parameter.secret,
                 options = parameter.options,
                 literal = setting?.literalValue,
+                /*
+                 * That one is set, and not what it is.
+                 *
+                 * The whole of what makes typing a secret here safe: the value
+                 * goes in, the screen learns it happened, and nothing carries
+                 * it back out. A box that shows what it holds is a box that
+                 * shows it to whoever is looking over your shoulder, and to
+                 * every screenshot of this page.
+                 */
+                secretSet = setting?.secretValue != null,
                 variableId = variable?.id?.toString(),
                 // The name only. What it holds is read on the variables screen,
                 // where reading it is recorded as something somebody did.
@@ -146,9 +156,19 @@ class PluginParameters(
                 ?: throw PluginParameterNotValueException(name, "connection", literal)
             log.debug("Plugin {} parameter {} points at connection {}", plugin.key, name, connection.id)
         } else if (literal != null) {
-            // A plugin asking for a secret is asking for something that should not
-            // be sitting in a column somebody can read off this page.
-            if (parameter.secret) throw PluginParameterNotSecretException(name)
+            /*
+             * A secret typed here is kept as a secret rather than refused.
+             *
+             * It used to be refused outright, and the sentence said why: what
+             * is typed into an ordinary parameter is stored as typed and shown
+             * back on the page. That is a fact about the column rather than
+             * about secrets, so the fix is a column that encrypts - the one
+             * connections have used all along - and a screen that is told a
+             * value is set without being told what it is.
+             *
+             * Still checked against its own type on the way in, so a number
+             * parameter does not quietly accept prose because it is secret.
+             */
             if (asJson(parameter.type, literal) == null) {
                 throw PluginParameterNotValueException(name, parameter.type.lowercase(), literal)
             }
@@ -160,9 +180,19 @@ class PluginParameters(
             if (variable.workspaceId != workspaceId) throw PluginParameterVariableElsewhereException(name)
         }
 
+        /*
+         * Which column the value lands in, decided by what the plugin declared
+         * rather than by what the caller asked for. A parameter that stops
+         * being secret in a later version of a plugin leaves its old value
+         * where it was - encrypted, and still read - rather than moving it
+         * into the readable column behind somebody's back.
+         */
+        val asSecret = parameter.secret && literal != null
+
         val existing = settings.findByPluginIdAndWorkspaceIdAndName(requireNotNull(plugin.id), workspaceId, name)
         val row = existing?.apply {
-            this.literalValue = literal
+            this.literalValue = if (asSecret) null else literal
+            this.secretValue = if (asSecret) literal else null
             this.variableId = variableId
             this.lastModifiedAt = OffsetDateTime.now()
             this.lastModifiedBy = by
@@ -170,7 +200,8 @@ class PluginParameters(
             pluginId = requireNotNull(plugin.id),
             workspaceId = workspaceId,
             name = name,
-            literalValue = literal,
+            literalValue = if (asSecret) null else literal,
+            secretValue = if (asSecret) literal else null,
             variableId = variableId,
             lastModifiedBy = by,
         )
@@ -218,6 +249,8 @@ class PluginParameters(
         }
 
         setting.literalValue?.let { return asJson(parameter.type, it) }
+        // The encrypted one, read exactly like the plain one and never logged.
+        setting.secretValue?.let { return asJson(parameter.type, it) }
 
         val variableId = setting.variableId ?: return null
         val variable = variables.findByIdOrNull(variableId)

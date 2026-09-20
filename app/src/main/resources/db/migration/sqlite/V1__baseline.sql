@@ -648,10 +648,11 @@ CREATE TABLE plugin_parameter
     workspace_id                 integer not null,
     name                         varchar(64) not null,
     literal_value                text,
+    secret_value                 varchar(4096),
     variable_id                  integer,
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default '',
-    constraint plugin_parameter_one_source CHECK ((((literal_value IS NOT NULL) AND (variable_id IS NULL)) OR ((literal_value IS NULL) AND (variable_id IS NOT NULL)) OR ((literal_value IS NULL) AND (variable_id IS NULL)))),
+    constraint plugin_parameter_one_source CHECK (((CASE WHEN literal_value IS NULL THEN 0 ELSE 1 END) + (CASE WHEN secret_value IS NULL THEN 0 ELSE 1 END) + (CASE WHEN variable_id IS NULL THEN 0 ELSE 1 END)) <= 1),
     constraint plugin_parameter_plugin_id_fkey FOREIGN KEY (plugin_id) REFERENCES plugin(id) ON DELETE CASCADE,
     constraint plugin_parameter_variable_id_fkey FOREIGN KEY (variable_id) REFERENCES workspace_variable(id) ON DELETE SET NULL,
     constraint plugin_parameter_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE

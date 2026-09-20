@@ -27,6 +27,9 @@ import org.springframework.graphql.test.tester.ExecutionGraphQlServiceTester
 import org.springframework.security.test.context.support.WithMockUser
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import io.mszymanski.orknux.connector.connection.SlackFile
+import io.mszymanski.orknux.connector.connection.SlackFiles
+import org.springframework.test.context.bean.override.mockito.MockitoBean
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -62,6 +65,18 @@ class AgentNodeRunnerTest(
     @Autowired val sessions: io.mszymanski.orknux.server.llm.LlmSessionRepository,
     @Autowired val sessionEvents: io.mszymanski.orknux.server.llm.LlmSessionEventRepository,
 ) {
+
+    /**
+     * Slack's side of a picture, stood in for.
+     *
+     * What is under test is everything after the bytes arrive: the payload's
+     * `files` read, the picture turned into a turn of its own, and the request
+     * that reaches the model carrying it. Fetching is
+     * [io.mszymanski.orknux.connector.connection.SlackFilesTest]'s business,
+     * and a test that reached Slack would be a test that needs a token.
+     */
+    @MockitoBean
+    private lateinit var slackFiles: SlackFiles
 
     private var workspaceId: Long = 0
     private var workflowId: Long = 0
@@ -544,19 +559,95 @@ class AgentNodeRunnerTest(
         ).execute()
     }
 
-    private fun start(expectFailure: Boolean = false): Long {
+    /**
+     * What a Slack trigger hands on when somebody uploads a picture.
+     *
+     * `files` is the *text* of a JSON array rather than an array, which is how
+     * the trigger's payload carries it: a payload is a flat map of strings, and
+     * SlackListener writes the description into one of them.
+     */
+    private val SLACK_WITH_A_PICTURE = """
+        {"action":"MENTION","text":"what is wrong with this","channel":"C42","connection":"1",
+         "files":"[{\"id\":\"F1\",\"name\":\"shot.png\",\"mimetype\":\"image/png\",\"size\":120,\"url\":\"https://files.slack.com/shot.png\"}]"}
+    """.trimIndent()
+
+    private val SLACK_WITH_A_DOCUMENT = """
+        {"action":"MENTION","text":"read this please","channel":"C42","connection":"1",
+         "files":"[{\"id\":\"F2\",\"name\":\"report.pdf\",\"mimetype\":\"application/pdf\",\"size\":900,\"url\":\"https://files.slack.com/report.pdf\"}]"}
+    """.trimIndent()
+
+    private fun start(
+        expectFailure: Boolean = false,
+        input: String = """{"summary":"the database fell over"}""",
+    ): Long {
         val id = graphQlTester.document(
             """
             mutation(${'$'}input: String) {
               startExecution(workspaceId: $workspaceId, workflowId: $workflowId, input: ${'$'}input) { id status }
             }
             """,
-        ).variable("input", """{"summary":"the database fell over"}""")
+        ).variable("input", input)
             .execute().path("startExecution.id").entity(Long::class.java).get()
 
         val run = executions.findAll().single { it.id == id }
         if (!expectFailure) assertThat(run.status).isIn(ExecutionStatus.COMPLETED, ExecutionStatus.RUNNING)
         return id
+    }
+
+    /**
+     * A picture somebody put in Slack reaches the model as a picture.
+     *
+     * The half that had no test at all. A file arrives on the trigger's payload
+     * as a description - id, name, mimetype, url - and what a model can read is
+     * bytes in a content part, so between the two there is a fetch, a data URL
+     * and a turn of its own. Each of those was written and none of it was
+     * pinned; what follows is the request that actually left for the provider.
+     */
+    @Test
+    fun `a picture on a slack message reaches the model`() {
+        val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        org.mockito.Mockito.`when`(
+            slackFiles.read(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+            ),
+        ).thenReturn(SlackFile.Fetched(png, "image/png", "shot.png"))
+
+        graph(agent("Support responder", model(serveAnswer())))
+
+        start(input = SLACK_WITH_A_PICTURE)
+
+        val asked = received.single()
+        assertThat(asked).contains("image_url")
+        assertThat(asked).contains("data:image/png;base64,")
+        // The words as well as the picture: a message with a file on it still
+        // said something, and an agent shown only the picture is being asked a
+        // question nobody typed.
+        assertThat(asked).contains("what is wrong with this")
+    }
+
+    /**
+     * And a file that is not a picture is left where it is.
+     *
+     * A model's request takes pictures; a PDF in one is a request the provider
+     * refuses, which is the whole turn lost for a file nobody could have shown
+     * it anyway. The description still travels in the payload, so an agent with
+     * the pdf tool can go and read it.
+     */
+    @Test
+    fun `a document on a slack message is not sent as a picture`() {
+        graph(agent("Support responder", model(serveAnswer())))
+
+        start(input = SLACK_WITH_A_DOCUMENT)
+
+        assertThat(received.single()).doesNotContain("image_url")
+        org.mockito.Mockito.verify(slackFiles, org.mockito.Mockito.never())
+            .read(
+                org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(),
+            )
     }
 
     private fun agent(name: String, modelId: Long?, prompt: String? = null): Long {

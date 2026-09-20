@@ -164,6 +164,70 @@ class MarketplaceInstallTest(
             .containsExactly("lib/words.js")
     }
 
+    /**
+     * A plugin loaded from a file is not offered an update to the version it
+     * already is.
+     *
+     * Nothing records a marketplace version for a file install - there was no
+     * marketplace in it - so holding that against the catalog said "installed:
+     * nothing, and here is an update" about a plugin whose own version matched
+     * the offer exactly. On the screen that read as *0.13.1, update to
+     * 0.13.1*, which is the catalog telling somebody to reinstall the bytes
+     * they have.
+     */
+    @Test
+    fun `a plugin loaded from a file is current when its own version matches the catalog`() {
+        plugins.save(
+            io.mszymanski.orknux.server.plugin.Plugin(
+                key = "greeter",
+                name = "Greeter",
+                filename = "greeter.js",
+                source = HAND_LOADED,
+                sizeBytes = HAND_LOADED.length.toLong(),
+                sha256 = digestOf(HAND_LOADED),
+                apiVersion = 1,
+                // Loaded by hand: no marketplace, and its own claim instead.
+                marketplaceKey = null,
+                marketplaceVersion = null,
+                version = "1.0.0",
+            ),
+        )
+
+        val listing = catalog.marketplacePlugins().single()
+
+        assertThat(listing.installed).isTrue()
+        assertThat(listing.installedVersion)
+            .describedAs("what is here, however it got here")
+            .isEqualTo("1.0.0")
+        assertThat(listing.updatable)
+            .describedAs("the same version is not an update")
+            .isFalse()
+    }
+
+    /** And one the catalog has moved past is still offered the newer bytes. */
+    @Test
+    fun `a plugin loaded from a file behind the catalog is updatable`() {
+        plugins.save(
+            io.mszymanski.orknux.server.plugin.Plugin(
+                key = "greeter",
+                name = "Greeter",
+                filename = "greeter.js",
+                source = HAND_LOADED,
+                sizeBytes = HAND_LOADED.length.toLong(),
+                sha256 = digestOf(HAND_LOADED),
+                apiVersion = 1,
+                marketplaceKey = null,
+                marketplaceVersion = null,
+                version = "0.9.0",
+            ),
+        )
+
+        val listing = catalog.marketplacePlugins().single()
+
+        assertThat(listing.installedVersion).isEqualTo("0.9.0")
+        assertThat(listing.updatable).isTrue()
+    }
+
     /* --------------------------------------------- what the catalog vouches for */
 
     /**
@@ -375,6 +439,9 @@ class MarketplaceInstallTest(
 
         /** What the stub catalog currently offers; a test moves it. */
         var offeredVersion = "1.0.0"
+
+        /** Something to stand in for a plugin somebody loaded from a file. */
+        const val HAND_LOADED = "export default class G extends OrknuxPlugin { id() { return 'greeter' } }"
 
         /** What a marketplace still on the old field files it under. */
         var offeredCategory = "chat"

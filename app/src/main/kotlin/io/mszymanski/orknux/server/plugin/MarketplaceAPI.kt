@@ -80,15 +80,33 @@ class MarketplaceAPI(
                 reviews = offering.reviews,
                 published = offering.published,
                 installed = here != null,
-                installedVersion = here?.marketplaceVersion,
                 /*
-                 * Installed and not at this version — including a plugin that
-                 * records no version at all, which is one loaded by hand or
-                 * before this was kept. Offering to update that is right: the
-                 * catalog's copy is the one this installation can reason
-                 * about.
+                 * What is actually installed, however it got here.
+                 *
+                 * The catalog's own record first - that is the version this
+                 * installation took from the marketplace - and the plugin's
+                 * own claim where there is none, which is every plugin loaded
+                 * from a file. Reading only the first said "installed: nothing"
+                 * about a plugin sitting right there with its version printed
+                 * on its own row.
                  */
-                updatable = here != null && here.marketplaceVersion != offering.version,
+                installedVersion = here?.let { it.marketplaceVersion ?: it.version },
+                /*
+                 * Installed, and not at the version on offer.
+                 *
+                 * Held against what is installed rather than against what the
+                 * catalog last handed over, because those differ for a plugin
+                 * loaded from a file: the marketplace version is null there,
+                 * so a file-installed 0.13.1 was offered an "update" to 0.13.1
+                 * - the same bytes, under a mark that exists to say something
+                 * has moved on.
+                 *
+                 * A plugin that records no version anywhere is still
+                 * updatable, which is the case the old note was about: nothing
+                 * is known about it, and the catalog's copy is the one this
+                 * installation can reason about.
+                 */
+                updatable = here != null && (here.marketplaceVersion ?: here.version) != offering.version,
                 tags = offering.tags,
                 versions = offering.versions.map {
                     MarketplaceReleaseView(

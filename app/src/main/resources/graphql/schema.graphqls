@@ -4762,12 +4762,22 @@ type MarketplaceListing {
     "Whether a plugin with this key is loaded here."
     installed: Boolean!
     """
-    The version recorded when it was installed, or null for one installed
-    before this was kept — an installed plugin with no version is one the
-    screen offers to update rather than one it calls current.
+    What is installed here, however it got here: the version recorded when it
+    came from the catalog, or the plugin's own claim where it was loaded from
+    a file.
+
+    Null only for a plugin that records no version anywhere, which is one
+    loaded before either was kept — and that one the screen offers to update
+    rather than calling it current.
     """
     installedVersion: String
-    "Installed, and the catalog is offering a version this one is not."
+    """
+    Installed, and the catalog is offering a version this one is not.
+
+    Held against `installedVersion` rather than against what the catalog
+    last handed over: those differ for a plugin loaded from a file, and
+    comparing the wrong one offered an update from 0.13.1 to 0.13.1.
+    """
     updatable: Boolean!
     """
     What the plugin is for, in its author's own words — `chat`, `files`,

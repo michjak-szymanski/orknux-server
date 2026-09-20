@@ -8,7 +8,9 @@ import org.apache.batik.transcoder.image.PNGTranscoder
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
 import java.io.StringReader
+import javax.imageio.ImageIO
 
 /**
  * An SVG, drawn as a PNG.
@@ -95,7 +97,16 @@ class SvgRenderer {
             if (bytes.isEmpty()) {
                 Drawing.Refused("the renderer produced nothing; the svg may declare no size")
             } else {
-                Drawing.Drawn(bytes)
+                /*
+                 * Measured from the file, not from the hints.
+                 *
+                 * Reading the header back is a few bytes of work and it is the
+                 * only answer that is true: a hint is a request, the aspect
+                 * ratio decides the other side, and the maximums above can
+                 * quietly bring both down.
+                 */
+                val drawn = runCatching { ImageIO.read(ByteArrayInputStream(bytes)) }.getOrNull()
+                Drawing.Drawn(bytes, drawn?.width ?: 0, drawn?.height ?: 0)
             }
         } catch (failure: TranscoderException) {
             /*
@@ -125,7 +136,18 @@ class SvgRenderer {
     }
 
     sealed interface Drawing {
-        data class Drawn(val png: ByteArray) : Drawing
+        /**
+         * The picture, and how big it came out.
+         *
+         * The size is read back off the bytes rather than assumed from what
+         * was asked for: a width is a request - the document's own aspect
+         * ratio decides the height, and the ceilings here can refuse both - so
+         * "what did I actually get" is a different question from "what did I
+         * ask for". Without it a plugin holding a blank or a giant has no way
+         * to tell which, which is the difference between diagnosing and
+         * guessing. `pngFromPdf` has always said; this now says the same.
+         */
+        data class Drawn(val png: ByteArray, val width: Int, val height: Int) : Drawing
 
         /** Said back to the caller as it stands, so it knows what to do differently. */
         data class Refused(val reason: String) : Drawing

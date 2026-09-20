@@ -40,6 +40,25 @@ class SvgRendererTest {
         assertThat(widthOf(plain.png)).isEqualTo(40)
     }
 
+    /**
+     * And the answer says how big it came out.
+     *
+     * A plugin holding only base64 and a byte count cannot tell a blank from a
+     * giant, which is the difference between diagnosing a bad drawing and
+     * guessing at it. Read off the file rather than echoed back from the
+     * request: a width is what was *asked* for, and the aspect ratio and the
+     * ceilings both have a say in what arrives.
+     */
+    @Test
+    fun `the drawing says what size it came out`() {
+        val wide = renderer.png(square, 200) as SvgRenderer.Drawing.Drawn
+
+        assertThat(wide.width).isEqualTo(200)
+        assertThat(wide.width).isEqualTo(widthOf(wide.png))
+        // Square in, square out: the height follows the document, not the ask.
+        assertThat(wide.height).isEqualTo(200)
+    }
+
     /** The IHDR width, which is the four bytes after the signature and the chunk name. */
     private fun widthOf(png: ByteArray): Int =
         ((png[16].toInt() and 0xff) shl 24) or

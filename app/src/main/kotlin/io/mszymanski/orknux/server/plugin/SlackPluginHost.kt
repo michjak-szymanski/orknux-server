@@ -196,9 +196,14 @@ class SlackPluginHost(
         return when (val drawn = renderer.png(svg, width)) {
             is SvgRenderer.Drawing.Refused -> refusal(drawn.reason)
             is SvgRenderer.Drawing.Drawn -> mapper.writeValueAsString(
+                // The size as well as the bytes, so a plugin holding a blank
+                // or a giant can tell which it is holding. `pngFromPdf`
+                // answers this way and there was no reason these differed.
                 mapOf(
                     "base64" to java.util.Base64.getEncoder().encodeToString(drawn.png),
                     "bytes" to drawn.png.size,
+                    "width" to drawn.width,
+                    "height" to drawn.height,
                 ),
             )
         }

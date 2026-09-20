@@ -136,7 +136,6 @@ class StepPictureTools(
                         buildMap {
                             put("drawn", true)
                             if (key != null) put("key", key)
-                            put("markdown", pictures.linkTo(drawn.picture))
                             put("note", noteFor(key))
                         },
                     )
@@ -169,13 +168,26 @@ class StepPictureTools(
             return key
         }
 
-        /** What to say about a picture that can be handed over, and one that cannot. */
+        /**
+         * What to say about a picture that can be handed over, and one that
+         * cannot.
+         *
+         * No markdown in either. It was in the answer so the run's own
+         * interface had a line to draw, and a model handed a link and no other
+         * way to deliver anything pasted the link - into a chat that has no
+         * document to resolve an address against, which printed the
+         * construction. The interface draws the picture from the row; the
+         * model gets the one thing it can actually act on.
+         */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is filed against this run and shown under this node. To put it in front of somebody, pass `key` to a tool that uploads bytes - slack_uploadBinary takes one. The markdown points at this installation's own address: it is what the orknux interface reads, and it is not a way to deliver a picture to a chat."
+            "The picture is drawn and its bytes are in this session's store under `key`. Pass that " +
+                "key to a tool that uploads bytes - slack_uploadBinary takes one - to put the " +
+                "picture in front of somebody. It is also filed against this run and shown under " +
+                "this node."
         } else {
-            "The picture is filed against this run and shown under this node. There is nowhere to " +
-                "hand the bytes over from, so it cannot be uploaded from here - say where it is " +
-                "rather than promising to send it."
+            "The picture is drawn and filed against this run, and is shown under this node. Its " +
+                "bytes could not be left anywhere this session can reach, so nothing here can " +
+                "upload it - say where it is rather than promising to send it."
         }
 
         private fun argument(call: ToolCall, name: String): String? = runCatching {

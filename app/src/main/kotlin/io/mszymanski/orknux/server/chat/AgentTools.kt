@@ -35,6 +35,8 @@ import tools.jackson.databind.ObjectMapper
  */
 @Service
 class AgentTools(
+    /** Where this installation is, for the one answer that carries a link. */
+    private val web: io.mszymanski.orknux.server.security.WebProperties,
     private val skills: SkillTool,
     private val memories: MemoryTool,
     private val workspaceTools: WorkspaceToolCaller,
@@ -262,12 +264,11 @@ class AgentTools(
                 when (saving) {
                     is SavedArtifacts.Saving.Refused -> mapper.writeValueAsString(mapOf("error" to saving.reason))
                     is SavedArtifacts.Saving.Saved -> mapper.writeValueAsString(
-                        mapOf(
-                            "saved" to saving.artifact.name,
-                            "bytes" to saving.artifact.sizeBytes,
-                            // Where it now is, so the model can link to it in
-                            // whatever it says next.
-                            "url" to "/api/artifacts/" + saving.artifact.id,
+                        savedAnswer(
+                            saving.artifact.name,
+                            saving.artifact.sizeBytes,
+                            requireNotNull(saving.artifact.id),
+                            base(),
                         ),
                     )
                 }
@@ -354,6 +355,17 @@ class AgentTools(
     }
 
     /** Arguments arrive as a JSON object in a string, whichever shape asked. */
+    /**
+     * Where this installation is, for a link a model may copy anywhere.
+     *
+     * The same base the mails write from, falling back to the development
+     * address rather than writing a path: a path has no host behind it
+     * wherever the answer is read, and what comes of pasting one into a chat
+     * is punctuation.
+     */
+    private fun base(): String =
+        web.baseUrl.trim().trimEnd('/').ifEmpty { "http://localhost:5173" }
+
     private fun argument(call: ToolCall, name: String): String? = runCatching {
         mapper.readTree(call.arguments).path(name).stringValue()?.takeIf { it.isNotBlank() }
     }.getOrNull()
@@ -451,6 +463,35 @@ class AgentTools(
             edited.put("pictureBytes", picture.chars / 4 * 3)
             jackson.writeValueAsString(edited)
         }.getOrElse { result }
+
+        /**
+         * What `save_artifact` answers, and the only answer here with a link
+         * in it.
+         *
+         * A saved artifact *is* a thing at an address - having one is what
+         * saving it was for - so a model that wants to point at it has nothing
+         * else to point with, and the markdown saves it composing the line by
+         * hand around an id.
+         *
+         * Every other tool that makes bytes answers with a key instead. A
+         * picture drawn for somebody in a chat is wanted *delivered*: handed a
+         * link, a model pastes it, and a client with no document to resolve
+         * the address against prints the construction. The difference is not
+         * the format, it is whether the thing has an address worth having.
+         *
+         * Absolute, so the line still works where the answer is read: a path
+         * has no host behind it once it has been copied into a mail or a
+         * message.
+         */
+        fun savedAnswer(name: String, bytes: Long, id: Long, base: String): Map<String, Any> {
+            val url = base.trimEnd('/') + "/api/artifacts/" + id
+            return mapOf(
+                "saved" to name,
+                "bytes" to bytes,
+                "url" to url,
+                "markdown" to "[$name]($url)",
+            )
+        }
 
         /** One picture a tool made, on its way to a turn of its own. */
         data class Picture(val dataUrl: String, val type: String, val chars: Int) {

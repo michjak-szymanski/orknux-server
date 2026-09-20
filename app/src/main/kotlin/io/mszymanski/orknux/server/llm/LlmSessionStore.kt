@@ -89,6 +89,20 @@ class LlmSessionStore(private val entries: LlmSessionStoreRepository) : SessionS
     private companion object {
         const val MOST_KEYS = 200
         const val MOST_KEY_CHARS = 200
-        const val MOST_VALUE_CHARS = 256 * 1024
+        /**
+         * As much as one key may hold: 8 MB of JSON, which is about 6 MB of
+         * bytes.
+         *
+         * It was 256 KB, which is smaller than the things this store exists to
+         * carry. A drawn picture is most of a megabyte of base64 and a PDF a
+         * plugin just wrote is more; both were refused, so the tool that made
+         * them had nothing to hand to the tool that uploads them - which is
+         * the whole point of the store.
+         *
+         * Still a ceiling, because the column is a row in a table read whole:
+         * what this stops is a plugin putting a video in a session, not a
+         * plugin putting its own output there.
+         */
+        const val MOST_VALUE_CHARS = 8 * 1024 * 1024
     }
 }

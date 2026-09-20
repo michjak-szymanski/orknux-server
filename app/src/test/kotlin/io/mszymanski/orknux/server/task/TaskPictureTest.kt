@@ -192,8 +192,19 @@ class TaskPictureTest(
     @Test
     fun `a picture the summary already places is not shown twice`() {
         val taskId = drawingTask { body ->
-            val link = Regex("/api/task-pictures/\\d+").find(body)
-            if (link == null) drawingCall() else finishing("Done. See ![the square](${link.value}) above.")
+            /*
+             * A model that got the address from somewhere else and put it in
+             * its summary. It cannot get one from the tool any more - that
+             * answers a key - and what is under test is the outcome refusing
+             * to carry the same picture twice, which is a question about the
+             * summary rather than about where the link came from.
+             */
+            val already = pictures.findAll().firstOrNull()
+            if (already == null) {
+                drawingCall()
+            } else {
+                finishing("Done. See ![the square](/api/task-pictures/" + already.id + ") above.")
+            }
         }
 
         assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Over)
@@ -215,7 +226,8 @@ class TaskPictureTest(
     @Test
     fun `a task that never finished still shows the picture it drew`() {
         val taskId = drawingTask(turns = 1) { body ->
-            if (body.contains("/api/task-pictures/")) saying("Drew it.") else drawingCall()
+            // The answer says it drew and names a key; there is no link in it.
+            if (body.contains("picture.")) saying("Drew it.") else drawingCall()
         }
 
         assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
@@ -378,7 +390,7 @@ class TaskPictureTest(
         turns: Int = 10,
         draws: Boolean = true,
         answer: (String) -> String = { body ->
-            if (body.contains("/api/task-pictures/")) finishing("Here is the diagram.") else drawingCall()
+            if (body.contains("picture.")) finishing("Here is the diagram.") else drawingCall()
         },
     ): Long {
         val taskId = taskFor(serve(answer), turns)

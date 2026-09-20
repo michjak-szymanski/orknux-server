@@ -109,7 +109,14 @@ class TaskTools(
                                 buildMap {
                                     put("drawn", true)
                                     if (key != null) put("key", key)
-                                    put("markdown", pictures.linkTo(drawn.picture))
+                                    /*
+                                     * The markdown a task's outcome carries is
+                                     * composed by `TaskPictures.outcomeOf`
+                                     * from the row, so the model never needed
+                                     * it - and handed a link with no other way
+                                     * to deliver anything, it pasted one into
+                                     * a chat that printed the construction.
+                                     */
                                     put("note", noteFor(key))
                                 },
                             )
@@ -178,14 +185,14 @@ class TaskTools(
 
         /** What to say about a picture that can be handed over, and one that cannot. */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is filed against this task and shown with its outcome. To put it in front " +
-                "of somebody, pass `key` to a tool that uploads bytes - slack_uploadBinary takes " +
-                "one. The markdown points at this installation's own address: put it in your " +
-                "task_done summary only if it belongs at a particular point in it."
+            "The picture is drawn and its bytes are in this task's session store under `key`. Pass " +
+                "that key to a tool that uploads bytes - slack_uploadBinary takes one - to put it " +
+                "in front of somebody. It is also shown with this task's outcome, so it does not " +
+                "have to be mentioned to be seen."
         } else {
-            "The picture is filed against this task and shown with its outcome. There is nowhere " +
-                "to hand the bytes over from, so it cannot be uploaded from here - say where it " +
-                "is rather than promising to send it."
+            "The picture is drawn and shown with this task's outcome. Its bytes could not be left " +
+                "anywhere this session can reach, so nothing here can upload it - say where it is " +
+                "rather than promising to send it."
         }
 
         private fun park(

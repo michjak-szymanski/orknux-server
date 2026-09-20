@@ -164,13 +164,19 @@ class StepPictureToolsTest {
          */
         assertThat(answer.path("key").stringValue()).isEqualTo("picture.77")
         assertThat(scratch.held[55L to "picture.77"]).isEqualTo(mapper.writeValueAsString("AQID"))
-        // And the note says which of the two is a delivery.
         assertThat(answer.path("note").stringValue()).contains("slack_uploadBinary")
-        assertThat(answer.path("note").stringValue()).contains("not a way to deliver")
 
-        // The markdown stays, because the run's own interface reads it.
-        assertThat(answer.path("markdown").stringValue())
-            .isEqualTo("![a red bicycle](https://orknux.example/api/execution-pictures/77)")
+        /*
+         * And no markdown at all.
+         *
+         * It was there so the run's own interface had a line to draw - but the
+         * interface draws the picture from the row, and the model, handed a
+         * link and no other way to deliver anything, pasted the link into a
+         * chat that printed the construction instead of a picture. What comes
+         * back is the one thing that can be acted on.
+         */
+        assertThat(answer.has("markdown")).isFalse()
+        assertThat(answer.has("url")).isFalse()
 
         // Against the step that drew it, so the run graph draws it under that
         // node whatever the agent goes on to say.
@@ -243,10 +249,9 @@ class StepPictureToolsTest {
 
         assertThat(answer.path("drawn").booleanValue()).isTrue()
         assertThat(answer.has("key")).isFalse()
-        assertThat(answer.path("note").stringValue()).contains("cannot be uploaded from here")
+        assertThat(answer.path("note").stringValue()).contains("nothing here can upload it")
         // The picture is still filed and still drawn under the node; what is
         // missing is only the way to hand the bytes to something else.
-        assertThat(answer.path("markdown").stringValue()).contains("/api/execution-pictures/77")
         assertThat(scratch.held).isEmpty()
     }
 
@@ -265,7 +270,7 @@ class StepPictureToolsTest {
         `when`(drawing.draw(5, "a red bicycle")).thenReturn(drawn())
         `when`(store.put(anyLong(), anyString(), anyOf())).thenReturn("9/a-red-bicycle.png")
         `when`(pictures.save(anyOf<ExecutionPicture>())).thenReturn(filed())
-        scratch.refuse = "a value is at most 256 KB of JSON"
+        scratch.refuse = "a value is at most 8192 KB of JSON"
 
         val answer = mapper.readTree(
             requireNotNull(tools.shed(100, "ask", 9, sessionId = 55)).run(call("a red bicycle")),
@@ -337,11 +342,15 @@ class StepPictureToolsTest {
         }
         `when`(pictures.save(anyOf<ExecutionPicture>())).thenReturn(awkward)
 
-        val answer = mapper.readTree(
-            requireNotNull(tools.shed(100, "ask", 9)).run(call("a bicycle [red]\nand a hill")),
-        )
+        requireNotNull(tools.shed(100, "ask", 9)).run(call("a bicycle [red]\nand a hill"))
 
-        assertThat(answer.path("markdown").stringValue())
+        /*
+         * Asked of the service rather than of the answer: the tool hands back
+         * a key and nothing else, and the markdown is what the run's own
+         * interface composes from the row. This pins the alt text where it is
+         * actually made.
+         */
+        assertThat(steps.linkTo(awkward))
             .isEqualTo("![a bicycle red and a hill](https://orknux.example/api/execution-pictures/78)")
     }
 }

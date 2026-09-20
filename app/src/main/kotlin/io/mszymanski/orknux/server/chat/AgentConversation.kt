@@ -65,7 +65,7 @@ interface RoundWatch {
      * has no way to know it is over until the round is, so a block of reasoning
      * sat unfinished on the screen for however many minutes the answer took,
      * counting up and cut off wherever the last flush happened to fall. See
-     * [io.mszymanski.orknux.server.task.TaskThinking].
+     * [io.mszymanski.orknux.server.llm.SessionThinking].
      *
      * Sent on the first piece of the answer and on every one after it, because
      * it is a fact about the round rather than an event to be counted - a

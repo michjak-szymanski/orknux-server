@@ -171,9 +171,9 @@ class TaskLoop(
          * showing the task had minutes with nothing to draw. It is not the
          * chat's watcher: a chat has a reader on the other end of an open
          * connection and relays to them, while a task has nobody in particular
-         * and writes to the session instead. See [TaskThinking].
+         * and writes to the session instead. See [SessionThinking].
          */
-        val watching = TaskThinking(session, agent.name, sessions)
+        val watching = io.mszymanski.orknux.server.llm.SessionThinking(session, agent.name, sessions)
 
         val begun = System.nanoTime()
         val answer = try {

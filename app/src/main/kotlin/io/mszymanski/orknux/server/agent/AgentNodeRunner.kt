@@ -6,6 +6,7 @@ import io.mszymanski.orknux.server.chat.AgentBriefing
 import io.mszymanski.orknux.server.chat.AgentConversation
 import io.mszymanski.orknux.server.llm.LlmSessionKeyTooLongException
 import io.mszymanski.orknux.server.llm.LlmSessionRecorder
+import io.mszymanski.orknux.server.llm.SessionThinking
 import io.mszymanski.orknux.server.llm.SessionMemoryBudgets
 import io.mszymanski.orknux.server.workflow.NodeExpressions
 import io.mszymanski.orknux.workflow.execution.ExecutionStep
@@ -211,7 +212,45 @@ class AgentNodeRunner(
             "${agent.name} is thinking — waiting on the model",
         )
 
-        return when (val answer = conversation.answer(modelId, agent, turns, session)) {
+        /*
+         * What the model is thinking, written down as it thinks it.
+         *
+         * Handing over a watcher is also what makes the round stream - see
+         * [AgentConversation.answer] - and that is the point rather than a side
+         * effect: a reasoning model can spend a minute before it says a word,
+         * and until this the session had a question, then nothing, then an
+         * answer. The page showing the run had nothing to draw for the part of
+         * the turn there was most to see.
+         *
+         * A watcher that writes rather than relays, for the reason a task's
+         * does: a node runs where nobody is necessarily looking, and whoever
+         * opens the session tomorrow must be given the same account as whoever
+         * is watching now. `SessionTail` follows the table, so the live view
+         * costs nothing extra.
+         *
+         * Only where there is a session to write into. A node that keeps no
+         * session keeps nothing, and a watcher would have nowhere to put this -
+         * it would also quietly switch that node to a streamed call, which is a
+         * change nobody asked for in return for nothing kept.
+         *
+         * A provider that sends no reasoning opens no line: the watcher is fed
+         * only what the model actually thought, and blank thinking is not
+         * written. So a model without thinking, or a provider that keeps it to
+         * itself, leaves the transcript exactly as it was.
+         */
+        val watching = session?.let { SessionThinking(it, agent.name, sessions) }
+
+        val answer = try {
+            conversation.answer(modelId, agent, turns, session, watch = watching)
+        } finally {
+            // Whatever the turn did, and before anything else reads the
+            // session: a line left open is one a page reads as still being
+            // thought, and on a turn that threw there is nothing left to close
+            // it later.
+            watching?.settle()
+        }
+
+        return when (answer) {
             // Named, the answer is handed on as an object holding it, so the next
             // node can refer to it by that name. Prose has no fields, and a
             // node cannot refer to something that has no name.

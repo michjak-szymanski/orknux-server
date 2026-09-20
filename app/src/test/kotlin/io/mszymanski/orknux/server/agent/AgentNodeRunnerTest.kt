@@ -58,6 +58,9 @@ class AgentNodeRunnerTest(
     @Autowired val edges: WorkflowEdgeRepository,
     @Autowired val workspaces: WorkspaceRepository,
     @Autowired val audit: WorkspaceAuditRepository,
+    /** For reading what a node's turn wrote down while the model was thinking. */
+    @Autowired val sessions: io.mszymanski.orknux.server.llm.LlmSessionRepository,
+    @Autowired val sessionEvents: io.mszymanski.orknux.server.llm.LlmSessionEventRepository,
 ) {
 
     private var workspaceId: Long = 0
@@ -80,6 +83,8 @@ class AgentNodeRunnerTest(
         models.deleteAll()
         providers.deleteAll()
         audit.deleteAll()
+        sessionEvents.deleteAll()
+        sessions.deleteAll()
         workspaces.deleteAll()
         received.clear()
 
@@ -343,6 +348,133 @@ class AgentNodeRunnerTest(
      * step that retried and a step that did not look identical from the count
      * of attempts alone if nothing watches the wire.
      */
+    /**
+     * What the model thought on its way to the answer, in the session, while it
+     * was still thinking it.
+     *
+     * A node's session had a question, then nothing, then an answer - and for a
+     * reasoning model the nothing is most of the turn. A task's turn has
+     * written its reasoning down for a while (`SessionThinking`, which began
+     * life in the task loop); a node's did not, so the same agent watched
+     * through a task page and through a run showed two different amounts of
+     * what it was doing.
+     *
+     * Handing the round a watcher is also what makes it stream, which is the
+     * half that matters: written at the end it would be a block that appears
+     * once the wait is over, which is the thing nobody was waiting for.
+     *
+     * The line is asserted whole - what was thought, and that it carries a
+     * duration - because a line with no duration is what a page reads as *still
+     * thinking*, and one left open after the turn is the bug that reads as the
+     * live view having died.
+     */
+    @Test
+    fun `a node's session keeps what the model was thinking, and closes the line when it stops`() {
+        val agentId = agent("Reviewer", model(serveThinking()), prompt = "You summarise incidents.")
+        withSession(agentId)
+
+        start()
+
+        val session = sessions.findAll().single()
+        val lines = sessionEvents.findAll().filter { it.sessionId == session.id }
+        val thinking = lines.filter { it.kind == io.mszymanski.orknux.server.llm.LlmSessionEventKind.THINKING }
+
+        assertThat(thinking)
+            .describedAs("one line for the round's reasoning, not one per frame")
+            .hasSize(1)
+        assertThat(thinking.single().content)
+            .describedAs("all of it, including the frames inside the last flush window")
+            .isEqualTo("Checking what failed. It was the database.")
+        assertThat(thinking.single().millis)
+            .describedAs("settled: a line with no duration is one a page reads as still being thought")
+            .isNotNull()
+
+        // And the turn is otherwise unchanged - the reasoning is not the answer,
+        // and is never folded into it.
+        assertThat(lines.filter { it.kind == io.mszymanski.orknux.server.llm.LlmSessionEventKind.AGENT }.map { it.content })
+            .containsExactly("The database was the cause.")
+        assertThat(steps.findAll().single { it.nodeKey == "think" }.status).isEqualTo(StepStatus.COMPLETED)
+    }
+
+    /**
+     * A provider that sends no reasoning leaves no line at all.
+     *
+     * "Provided the provider supports thinking" is not a setting anywhere: it
+     * is this. The watcher is fed what the model actually thought, blank
+     * thinking opens nothing, and a transcript from a model that does not
+     * reason reads exactly as it did before any of this.
+     */
+    @Test
+    fun `a model that does not reason leaves no thinking line`() {
+        val agentId = agent("Reviewer", model(serveThinking(thought = "")), prompt = "You summarise incidents.")
+        withSession(agentId)
+
+        start()
+
+        val session = sessions.findAll().single()
+        val kinds = sessionEvents.findAll().filter { it.sessionId == session.id }.map { it.kind }
+
+        // The turn happened, which is what makes the absence below mean
+        // something: a session with nothing in it has no thinking either.
+        assertThat(kinds).contains(
+            io.mszymanski.orknux.server.llm.LlmSessionEventKind.USER,
+            io.mszymanski.orknux.server.llm.LlmSessionEventKind.AGENT,
+        )
+        assertThat(kinds).doesNotContain(io.mszymanski.orknux.server.llm.LlmSessionEventKind.THINKING)
+    }
+
+    /** The same one agent node, with a session node wired into it. */
+    private fun withSession(agentId: Long) {
+        graphQlTester.document(
+            """
+            mutation {
+              saveWorkflowGraph(workspaceId: $workspaceId, workflowId: $workflowId, input: {
+                nodes: [
+                  { key: "talk", kind: SESSION, name: "the conversation", x: 0, y: 0,
+                    mappings: [
+                      { name: "sessionKeyPrefix", expression: "node", mode: VALUE },
+                      { name: "sessionKey", expression: "one", mode: VALUE }
+                    ] },
+                  { key: "think", kind: AGENT, name: "Reviewer", agentId: $agentId, x: 200, y: 0 }
+                ],
+                edges: [{ source: "talk", target: "think" }]
+              }) { nodes { key } problems { message } }
+            }
+            """,
+        ).execute()
+    }
+
+    /**
+     * A provider that streams, because a node with a session now asks it to.
+     *
+     * Server-sent events in the OpenAI shape, with the reasoning on
+     * `reasoning_content` - the field a provider that knows what it is holding
+     * uses, and the one [io.mszymanski.orknux.connector.model.ModelChatClient]
+     * reads. Two frames of it rather than one, so a line that recorded only
+     * what the first frame carried would be a line short of half its sentence.
+     */
+    private fun serveThinking(thought: String = "Checking what failed. It was the database."): String {
+        server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/chat/completions") { exchange ->
+            received += exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            val halves = if (thought.isEmpty()) emptyList() else thought.chunked((thought.length + 1) / 2)
+            val frames = buildList {
+                halves.forEach { add("""{"choices":[{"delta":{"reasoning_content":"$it"}}]}""") }
+                add("""{"choices":[{"delta":{"content":"The database was the cause."}}]}""")
+                add("""{"choices":[{"delta":{},"finish_reason":"stop"}],""" +
+                    """"usage":{"prompt_tokens":11,"completion_tokens":6}}""")
+            }
+            val body = (frames.joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n")
+                .toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "text/event-stream")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+            exchange.close()
+        }
+        server.start()
+        return "http://${server.address.hostString}:${server.address.port}"
+    }
+
     private fun serveAfter(
         refusals: Int,
         status: Int,

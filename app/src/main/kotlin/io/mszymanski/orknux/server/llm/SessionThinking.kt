@@ -1,19 +1,25 @@
-package io.mszymanski.orknux.server.task
+package io.mszymanski.orknux.server.llm
 
 import io.mszymanski.orknux.server.chat.RoundWatch
-import io.mszymanski.orknux.server.llm.LlmSessionRecorder
 
 /**
- * What a task's turn writes down while the model is still having it.
+ * What a turn writes down while the model is still having it.
  *
  * The chat's [RoundWatch] relays a round to somebody on the other end of an open
- * connection. A task has nobody in particular: it may be running in a Temporal
- * worker in another process, the page showing it may be closed, and whoever
- * opens it tomorrow must get the same account as whoever is watching now. So
- * this one *writes* rather than relays, into the session the turn is already
- * being recorded in, and the live view falls out of that for free - `SessionTail`
- * follows the table, so a line written here reaches every browser watching the
- * task and survives the reconnect `TaskStreamAPI` forces every four minutes.
+ * connection. A task, and a workflow's agent node, have nobody in particular:
+ * either may be running in a Temporal worker in another process, the page
+ * showing it may be closed, and whoever opens it tomorrow must get the same
+ * account as whoever is watching now. So this one *writes* rather than relays,
+ * into the session the turn is already being recorded in, and the live view
+ * falls out of that for free - `SessionTail` follows the table, so a line
+ * written here reaches every browser watching and survives the reconnect
+ * `TaskStreamAPI` forces every four minutes.
+ *
+ * It began as the task loop's and was never anything but a session's: it takes
+ * a session, an agent's name and the recorder, and knows nothing about what is
+ * running. Which is why an agent node now hands one over too - its session had
+ * every other kind of line in it and nothing at all for the minute the model
+ * spent reasoning.
  *
  * That is the whole reason the reasoning is not simply handed on and forgotten.
  * A delta relayed and not written down would vanish at the next stint, on a page
@@ -59,7 +65,7 @@ import io.mszymanski.orknux.server.llm.LlmSessionRecorder
  * moment the last result is threaded in - so a round is timed from its own
  * beginning rather than from the turn's.
  */
-class TaskThinking(
+class SessionThinking(
     private val session: Long,
     private val agent: String,
     private val sessions: LlmSessionRecorder,

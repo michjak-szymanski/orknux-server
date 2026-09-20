@@ -103,6 +103,45 @@ class IncomingTriggerListenerTest(
             .contains("Workflow Incident Response run started by trigger Slack Mention Handler")
     }
 
+    /**
+     * One message, one run of a workflow - however many events Slack makes of
+     * it.
+     *
+     * A file uploaded with a mention in the comment arrives as a message *and*
+     * as an app_mention; a message in a thread is both a message and a reply.
+     * Each is a real event and a workflow waiting on either is entitled to it,
+     * but a workflow waiting on two of them ran twice for one upload.
+     *
+     * Two triggers here, on the same connection, watching the two actions one
+     * upload raises - which is the shape that was reported.
+     */
+    @Test
+    fun `two events from one message start a workflow once`() {
+        instance(workflowId, createTrigger("On a mention", "MENTION"))
+        instance(workflowId, createTrigger("On a message", "MESSAGE"))
+
+        publisher.publishEvent(mention())
+        publisher.publishEvent(mention().copy(action = IncomingAction.MESSAGE))
+
+        assertThat(executions.findAll()).hasSize(1)
+    }
+
+    /**
+     * And a different message still runs it. The guard is about one message
+     * wearing two names, not about a workflow being run once and then quiet.
+     */
+    @Test
+    fun `a second message starts the workflow again`() {
+        instance(workflowId, createTrigger("On a mention", "MENTION"))
+
+        publisher.publishEvent(mention())
+        publisher.publishEvent(
+            mention().copy(context = mention().context + ("ts" to "1699999999.000200")),
+        )
+
+        assertThat(executions.findAll()).hasSize(2)
+    }
+
     @Test
     fun `what the workflow is handed is the message and where it came from`() {
         instance(workflowId, createTrigger("Slack Mention Handler", "MENTION"))

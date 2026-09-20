@@ -253,6 +253,31 @@ class TriggerRunner(
         return mapper.writeValueAsString(input)
     }
 
+    /**
+     * Whether this message has already started this workflow, and remembering
+     * it where it has not.
+     *
+     * Swept as it goes, the way the Slack listener's own guard is: the map
+     * holds a few minutes of one installation's traffic, and walking it when
+     * it has grown is cheaper than a thread that wakes all night to find
+     * nothing.
+     */
+    private fun firstTime(workflowId: Long, connectionId: Long?, payload: String): Boolean {
+        val ts = runCatching { mapper.readTree(payload).path("ts").takeIf { it.isTextual }?.stringValue() }
+            .getOrNull()
+            // No ts is no identity: a webhook, a schedule, or a Slack event
+            // without one. Started rather than dropped on a guess.
+            ?: return true
+
+        val key = "$workflowId:$connectionId:$ts"
+        val now = System.currentTimeMillis()
+        if (started.size > MOST_REMEMBERED) {
+            started.entries.removeIf { now - it.value > REMEMBER_FOR_MILLIS }
+        }
+        val before = started.put(key, now)
+        return before == null || now - before >= REMEMBER_FOR_MILLIS
+    }
+
     private fun start(
         trigger: WorkflowTrigger,
         workflowId: Long,
@@ -273,6 +298,36 @@ class TriggerRunner(
          */
         if (!graphs.published(workflowId)) {
             return unpublished(trigger, workflowId, WorkflowNotPublishedException(workflowId).message, refusals)
+        }
+
+        /*
+         * One message starts one workflow once.
+         *
+         * Slack delivers a single thing somebody did as more than one event: a
+         * file uploaded with a mention in the comment arrives as a message
+         * *and* as an app_mention, and a message in a thread is both a message
+         * and a reply. Each of those is a real event and a workflow waiting on
+         * either is entitled to it - but a workflow waiting on two of them ran
+         * twice for one upload, which is nobody's idea of what a trigger does.
+         *
+         * Keyed by the message rather than by the event, and by the workflow
+         * rather than the trigger: two workflows watching the same channel
+         * both still run, which is two people's separate decisions. The
+         * listener's own guard is a different question and stays - that one is
+         * about Slack sending the same event twice, this one is about one
+         * message wearing two names.
+         *
+         * Only where the payload carries a `ts`, which is Slack's identity for
+         * a message. A schedule and a webhook have no such thing and are not
+         * touched.
+         */
+        if (!firstTime(workflowId, trigger.connectionId, payload)) {
+            log.info(
+                "Workflow #{} was already started by this message; {} did not start it again",
+                workflowId,
+                trigger.name,
+            )
+            return false
         }
 
         return try {
@@ -343,7 +398,23 @@ class TriggerRunner(
         val short: String get() = "#$workflowId $reason"
     }
 
+    /**
+     * Which messages have started which workflows, and when.
+     *
+     * In memory and per instance, like the Slack listener's guard: what it
+     * protects against is one delivery arriving as several events, and those
+     * all reach the same instance within seconds of each other. A second
+     * instance running the same workflow is a different conversation.
+     */
+    private val started = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     private companion object {
+        /** How long one message is remembered as having started a workflow. */
+        const val REMEMBER_FOR_MILLIS = 10 * 60 * 1000L
+
+        /** When the map is bigger than this, the stale half is swept on the way past. */
+        const val MOST_REMEMBERED = 5_000
+
         val log = LoggerFactory.getLogger(TriggerRunner::class.java)
 
         /*

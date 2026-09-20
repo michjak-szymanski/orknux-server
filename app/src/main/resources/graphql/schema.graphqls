@@ -5360,6 +5360,14 @@ input CreateTriggerInput {
 }
 
 input UpdateTriggerInput {
+    """
+    What kind of trigger it is; null leaves it alone.
+
+    Honoured only for a definition a workflow owns: a shared trigger's kind is
+    what it is, because several workflows may point at one and changing it
+    under them rewrites every one of them.
+    """
+    type: TriggerType
     "How a webhook decides whether its caller may start anything."
     authType: WebhookAuthType
     "The function that answers that; null when nothing does."

@@ -225,6 +225,31 @@ class TriggerAPI(
         val previousName = trigger.name
         val previouslyEnabled = trigger.enabled
         trigger.name = name
+
+        /*
+         * What kind of trigger it is, for one a workflow owns.
+         *
+         * A shared trigger's kind is what it is: several workflows may point
+         * at one, and changing it under them rewrites all of them from a
+         * screen that shows none of them. A definition belonging to one node
+         * is that node's alone, and being unable to change its kind meant
+         * starting again - point the picker elsewhere, back to Custom, and
+         * fill the form in a second time.
+         *
+         * The settings of the kind it was are cleared as it changes. They
+         * belong to the old kind and nothing reads them under the new one, so
+         * leaving them would keep a cron on a trigger that watches a channel.
+         */
+        input.type?.takeIf { it != trigger.type && trigger.workflowId != null }?.let { became ->
+            trigger.type = became
+            trigger.connectionId = null
+            trigger.action = null
+            trigger.watchedConnectionIds.clear()
+            trigger.cron = null
+            trigger.timezone = null
+            trigger.webhookPath = null
+            trigger.objectId = null
+        }
         if (trigger.type == TriggerType.INCOMING_CONNECTION) {
             input.connectionId?.let { trigger.connectionId = it }
             input.action?.let {
@@ -664,6 +689,13 @@ data class CreateTriggerInput(
 
 data class UpdateTriggerInput(
     val name: String,
+    /**
+     * What kind of trigger it is; null leaves it alone, which is what every
+     * caller but a node's own panel sends.
+     *
+     * Honoured only for a definition a workflow owns. See [updateTrigger].
+     */
+    val type: TriggerType? = null,
     val connectionId: Long? = null,
     val action: TriggerAction? = null,
     /** Whose messages a `REPLY` watches; null watches nobody, which only a reply minds. */

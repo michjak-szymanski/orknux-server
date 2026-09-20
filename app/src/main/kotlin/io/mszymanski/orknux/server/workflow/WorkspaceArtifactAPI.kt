@@ -98,6 +98,38 @@ class WorkspaceArtifactAPI(
     }
 
     /**
+     * One artifact, by the id the list gave it.
+     *
+     * So a link to one is a link: the page can be opened at an artifact rather
+     * than opened at the list and clicked. Without this the only way to find
+     * one was to page through until it appeared, which is not something an
+     * address can do on somebody's behalf.
+     *
+     * Null for one that is not here or not this caller's to see - the same
+     * answer for both, so a number over HTTP cannot be used to count what
+     * other teams have produced.
+     */
+    @QueryMapping
+    fun workspaceArtifact(@Argument workspaceId: Long, @Argument id: String): ArtifactView? {
+        access.requireVisible(workspaceId)
+        val (kind, rowId) = parse(id) ?: return null
+
+        return when (kind) {
+            ArtifactKind.IMAGE -> pictures.findByIdOrNull(rowId)
+                ?.takeIf { it.workspaceId == workspaceId }
+                ?.let(::describe)
+
+            ArtifactKind.TASK -> taskPictures.findByIdOrNull(rowId)
+                ?.takeIf { it.workspaceId == workspaceId }
+                ?.let(::describe)
+
+            ArtifactKind.SAVED -> saved.findByIdOrNull(rowId)
+                ?.takeIf { it.workspaceId == workspaceId }
+                ?.let(::describe)
+        }
+    }
+
+    /**
      * Gone from the list and gone from the disk.
      *
      * The row first, then the bytes: a row with no file behind it is a broken

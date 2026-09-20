@@ -330,6 +330,14 @@ type Query {
     the disk. Listed here instead, with a copy and a delete beside each.
     """
     workspaceArtifacts(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ArtifactPage!
+    """
+    One artifact, by the id the list gave it, or null for one that is not here
+    or not yours to see.
+
+    So a link to an artifact is a link: the page opens at one rather than
+    opening at the list and being clicked through to it.
+    """
+    workspaceArtifact(workspaceId: ID!, id: ID!): Artifact
 
     """
     The "Custom" actions one workflow owns - exactly what workspaceActions

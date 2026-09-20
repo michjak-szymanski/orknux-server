@@ -4747,10 +4747,14 @@ type MarketplaceListing {
     "Installed, and the catalog is offering a version this one is not."
     updatable: Boolean!
     """
-    What the marketplace files it under, or null where it files it under
-    nothing. A word the catalog chose, not one the plugin declares.
+    What the plugin is for, in its author's own words — `chat`, `files`,
+    `search`. Lowercase, and empty for one that said nothing rather than null.
+
+    A list rather than one word: a plugin is usually more than one thing, and
+    filing it under whichever of those somebody picked hid it from the readers
+    looking for the other two.
     """
-    category: String
+    tags: [String!]!
     """
     Every release, newest first, or empty from a marketplace that does not
     keep them. See the note on `available`.

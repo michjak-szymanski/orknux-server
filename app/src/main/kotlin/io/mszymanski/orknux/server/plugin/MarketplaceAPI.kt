@@ -89,7 +89,7 @@ class MarketplaceAPI(
                  * about.
                  */
                 updatable = here != null && here.marketplaceVersion != offering.version,
-                category = offering.category,
+                tags = offering.tags,
                 versions = offering.versions.map {
                     MarketplaceReleaseView(
                         version = it.version,
@@ -199,7 +199,8 @@ data class MarketplaceListingView(
     val installed: Boolean,
     val installedVersion: String?,
     val updatable: Boolean,
-    val category: String?,
+    /** What the plugin is for, in its author's words. Empty, never null. */
+    val tags: List<String> = emptyList(),
     val versions: List<MarketplaceReleaseView> = emptyList(),
 )
 

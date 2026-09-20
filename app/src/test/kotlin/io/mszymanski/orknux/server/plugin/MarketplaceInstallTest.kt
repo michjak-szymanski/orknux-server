@@ -224,25 +224,27 @@ class MarketplaceInstallTest(
         val listing = catalog.marketplacePlugins().single()
         assertThat(listing.key).isEqualTo("greeter")
         /*
-         * The history is gone and the category is not.
+         * The history is gone and the tags are not.
          *
          * A rung at a time: the marketplace this was written against declares
          * `versions` and answers null for it, and asking for nothing new over
-         * that would hide a category it answers perfectly well.
+         * that would hide tags it answers perfectly well.
          */
-        assertThat(listing.category).isEqualTo("Chat")
+        assertThat(listing.tags).containsExactly("chat", "search")
         assertThat(listing.versions).isEmpty()
 
         val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
         assertThat(installed.marketplaceVersion).isEqualTo("1.0.0")
     }
 
-    /** What the catalog files it under, and what it has shipped, reach the screen. */
+    /** What the plugin is for, and what it has shipped, reach the screen. */
     @Test
-    fun `the listing carries its category and its releases`() {
+    fun `the listing carries its tags and its releases`() {
         val listing = catalog.marketplacePlugins().single()
 
-        assertThat(listing.category).isEqualTo("Chat")
+        assertThat(listing.tags)
+            .describedAs("more than one, because a plugin is usually more than one thing")
+            .containsExactly("chat", "search")
         assertThat(listing.versions.map { it.version }).containsExactly("1.0.0", "0.9.0")
         assertThat(listing.versions.map { it.available })
             .describedAs("the older one is remembered and its files are gone")
@@ -436,9 +438,9 @@ class MarketplaceInstallTest(
                      * answers everything.
                      */
                     val extras = when {
-                        asked.contains("versions {") -> """"category":"Chat",$history"""
-                        asked.contains(" category ") -> """"category":"Chat""""
-                        else -> """"category":null"""
+                        asked.contains("versions {") -> """"tags":["chat","search"],$history"""
+                        asked.contains(" tags ") -> """"tags":["chat","search"]"""
+                        else -> """"tags":[]"""
                     }
                     val offering = """
                         {"key":"greeter","name":"Greeter","author":"Orknux","summary":"Says hello.",

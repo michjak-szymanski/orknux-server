@@ -74,13 +74,17 @@ data class MarketplaceOffering(
     val reviews: Int,
     val published: String,
     /**
-     * What the marketplace files it under, or null where it files it under
-     * nothing.
+     * What the plugin is for, in its author's own words - `chat`, `files`,
+     * `search`. Empty for one that said nothing, never null.
      *
-     * A word the catalog chose rather than anything the plugin declares, so it
-     * is shown and filtered by and never matched against an installed row.
+     * A list rather than one word, because a plugin is usually more than one
+     * thing: the Slack plugin is chat, and files, and search, and filing it
+     * under whichever of those somebody picked hid it from the readers looking
+     * for the other two. Free text and lowercase on the marketplace's side, so
+     * these are shown and filtered by and never matched against an installed
+     * row.
      */
-    val category: String?,
+    val tags: List<String> = emptyList(),
     /**
      * Every release, newest first, or empty from a marketplace that does not
      * answer with them.
@@ -175,7 +179,9 @@ class Marketplace(
         rating = node.path("rating").takeIf { it.isNumber }?.asDouble(),
         reviews = node.path("reviews").asInt(0),
         published = node.path("published").asString(""),
-        category = node.path("category").asString("").ifEmpty { null },
+        // Never null on a marketplace that has them, and absent on one that
+        // does not - both read as no tags, which is what an older catalog is.
+        tags = node.path("tags").values().map { it.asString("") }.filter { it.isNotBlank() }.toList(),
         versions = node.path("versions").values().map(::release).toList(),
     )
 
@@ -314,10 +320,10 @@ class Marketplace(
          * added on the other side costs nothing until somebody wants it.
          */
         val FIELDS =
-            "$WITH_CATEGORY versions { version published replaced digest files available }"
+            "$WITH_TAGS versions { version published replaced digest files available }"
 
         /** Everything but the history, which is the field marketplaces stumble on first. */
-        const val WITH_CATEGORY = "$CORE_FIELDS category "
+        const val WITH_TAGS = "$CORE_FIELDS tags "
 
         /**
          * What a listing is asked for, in the order it is asked.
@@ -326,11 +332,11 @@ class Marketplace(
          * not arrive together and neither did the marketplaces: the one this
          * was written against declares `versions` and answers null for it
          * under a non-null type, which fails the whole query - and asking for
-         * nothing new over that would hide `category`, which it answers
-         * perfectly well. So each step drops the newest thing and keeps the
-         * rest, and an installation gets as much as its marketplace can say.
+         * nothing new over that would hide `tags`, which it answers perfectly
+         * well. So each step drops the newest thing and keeps the rest, and an
+         * installation gets as much as its marketplace can say.
          */
-        val LADDER = listOf(FIELDS, WITH_CATEGORY, CORE_FIELDS)
+        val LADDER = listOf(FIELDS, WITH_TAGS, CORE_FIELDS)
 
     }
 }

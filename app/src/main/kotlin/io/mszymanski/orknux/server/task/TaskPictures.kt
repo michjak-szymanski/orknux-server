@@ -180,11 +180,14 @@ class TaskPictures(
      * to remember to. `TaskViews` is the one place a task is assembled for
      * showing, and both the query and the live stream go through it.
      *
-     * A picture the summary already links to is not added again. That is not
-     * defensive: the tool hands the model the markdown for exactly this reason,
-     * so an agent that wants the picture in the middle of its summary can put
-     * it there, and appending a second copy underneath would punish it for
-     * doing the better thing.
+     * A picture the summary already places is not added again. That is not
+     * defensive: an agent that wants the picture in the middle of its summary
+     * is doing the better thing, and appending a second copy underneath would
+     * punish it for that.
+     *
+     * Two spellings count as placing it. The address is what the outcome used
+     * to carry, and the key - `![a tower](picture.22)` - is what an agent
+     * writes now, because the key is the only name a drawing tool gives it.
      */
     fun outcomeOf(taskId: Long, said: String?): String? {
         val drawn = of(taskId)
@@ -192,7 +195,10 @@ class TaskPictures(
 
         val summary = said?.trim().orEmpty()
         val shown = drawn
-            .filterNot { summary.contains("/api/task-pictures/${requireNotNull(it.id)}") }
+            .filterNot { picture ->
+                val id = requireNotNull(picture.id)
+                summary.contains("/api/task-pictures/$id") || summary.contains("(picture.$id)")
+            }
             .map(::linkTo)
         if (shown.isEmpty()) return said
 

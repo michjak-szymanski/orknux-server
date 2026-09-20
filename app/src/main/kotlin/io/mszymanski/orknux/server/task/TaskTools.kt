@@ -195,12 +195,13 @@ class TaskTools(
 
         /** What to say about a picture that can be handed over, and one that cannot. */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is drawn and its bytes are in this task's session store under `key`. To " +
-                "put it in front of somebody, pass that key to whichever of your tools sends or " +
-                "uploads a file - one that takes a content key rather than the bytes themselves. " +
-                "`key` is not a URL: writing it into a link or an image gives an address that " +
-                "resolves to nothing. It is also shown with this task's outcome, so it does not " +
-                "have to be mentioned to be seen."
+            "The picture is drawn and its bytes are in this task's session store under `key`. Two " +
+                "things to do with that key, and nothing else works: pass it to whichever of your " +
+                "tools sends or uploads a file, to put the picture in front of somebody; or write " +
+                "![caption](key) to place the picture at that point in what you write - the key " +
+                "exactly as given, as in `![a tower](picture.22)`. It is not a URL, so a link " +
+                "spelled any other way resolves to nothing. The picture is also shown with this " +
+                "task's outcome, so it does not have to be placed to be seen."
         } else {
             "The picture is drawn and shown with this task's outcome. Its bytes could not be left " +
                 "anywhere this session can reach, so nothing here can upload it - say where it is " +
@@ -303,9 +304,11 @@ class TaskTools(
                     "that is prose: each one takes time and costs money. Describe what should be in the picture " +
                     "rather than instructing a model, since the description is sent to a drawing model and not " +
                     "to you. Everything you draw is shown with the task's outcome whether or not you mention " +
-                    "it, so you never have to place it. What comes back is `key`, a handle for a tool that " +
-                    "sends or uploads a file - not an address. Never put it in a link or an image: it " +
-                    "resolves to nothing.",
+                    "it, so you never have to place it. What comes back is `key`. Pass it to a tool that " +
+                    "sends or uploads a file to put the picture in front of somebody, and write " +
+                    "![caption](key) - the key exactly as given, `![a tower](picture.22)` - to put the " +
+                    "picture at a particular point in what you write. It is not a URL and there is no " +
+                    "address to guess: that one form is how it is placed.",
             parameters = listOf(
                 ToolParameterSpec("description", "What the picture should be of.", required = true),
             ),

@@ -51,6 +51,18 @@ import java.util.concurrent.CopyOnWriteArrayList
  * bytes to a real disk: that is the point of them, and a development
  * installation's attachment folder is not the place to do it.
  */
+/**
+ * What a drawn picture's answer says, which is how the stub knows the round it
+ * is in.
+ *
+ * Not the word "picture": the tool's own description names an example key -
+ * `![a tower](picture.22)`, which is how a model is told to place one - so
+ * every request carries that string, including the first. The quotes are
+ * escaped because what this looks at is the request body, where the tool's
+ * answer is a JSON string inside JSON.
+ */
+private const val DREW = """\"drawn\":true"""
+
 @SpringBootTest(properties = ["orknux.attachments.location=target/test-task-pictures"])
 @AutoConfigureGraphQlTester
 @WithMockUser(username = "alice", roles = ["ADMINS"])
@@ -227,7 +239,7 @@ class TaskPictureTest(
     fun `a task that never finished still shows the picture it drew`() {
         val taskId = drawingTask(turns = 1) { body ->
             // The answer says it drew and names a key; there is no link in it.
-            if (body.contains("picture.")) saying("Drew it.") else drawingCall()
+            if (body.contains(DREW)) saying("Drew it.") else drawingCall()
         }
 
         assertThat(loop.advance(taskId)).isEqualTo(TaskTurn.Working)
@@ -390,7 +402,7 @@ class TaskPictureTest(
         turns: Int = 10,
         draws: Boolean = true,
         answer: (String) -> String = { body ->
-            if (body.contains("picture.")) finishing("Here is the diagram.") else drawingCall()
+            if (body.contains(DREW)) finishing("Here is the diagram.") else drawingCall()
         },
     ): Long {
         val taskId = taskFor(serve(answer), turns)

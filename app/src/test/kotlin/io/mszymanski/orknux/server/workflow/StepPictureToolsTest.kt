@@ -164,7 +164,7 @@ class StepPictureToolsTest {
          */
         assertThat(answer.path("key").stringValue()).isEqualTo("picture.77")
         assertThat(scratch.held[55L to "picture.77"]).isEqualTo(mapper.writeValueAsString("AQID"))
-        assertThat(answer.path("note").stringValue()).contains("pass that key")
+        assertThat(answer.path("note").stringValue()).contains("pass it to whichever of your tools")
 
         /*
          * And the note names no tool.

@@ -183,12 +183,13 @@ class StepPictureTools(
          * model gets the one thing it can actually act on.
          */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is drawn and its bytes are in this session's store under `key`. To put " +
-                "the picture in front of somebody, pass that key to whichever of your tools sends " +
-                "or uploads a file - one that takes a content key rather than the bytes " +
-                "themselves. `key` is not a URL: writing it into a link or an image gives an " +
-                "address that resolves to nothing. It is also filed against this run and shown " +
-                "under this node, so it is seen without being mentioned."
+            "The picture is drawn and its bytes are in this session's store under `key`. Two " +
+                "things to do with that key, and nothing else works: pass it to whichever of your " +
+                "tools sends or uploads a file, to put the picture in front of somebody; or write " +
+                "![caption](key) to place the picture at that point in your answer - the key " +
+                "exactly as given, as in `![a tower](picture.22)`. It is not a URL, so a link " +
+                "spelled any other way resolves to nothing. The picture is also filed against " +
+                "this run and shown under this node, so it is seen without being placed."
         } else {
             "The picture is drawn and filed against this run, and is shown under this node. Its " +
                 "bytes could not be left anywhere this session can reach, so nothing here can " +
@@ -237,8 +238,10 @@ class StepPictureTools(
              */
             description = "Draw a picture from a description. The picture is filed with this run and is " +
                 "shown under this step whether or not you mention it, so you never have to place it. " +
-                "What comes back is `key`, which is a handle for a tool that sends or uploads a file - " +
-                "not an address. Never put it in a link or an image: it resolves to nothing.",
+                "What comes back is `key`. Pass it to a tool that sends or uploads a file to put the " +
+                "picture in front of somebody, and write ![caption](key) - the key exactly as given, " +
+                "`![a tower](picture.22)` - to place the picture at a point in your answer. It is not " +
+                "a URL and there is no address to guess.",
             parameters = listOf(
                 ToolParameterSpec(
                     name = "description",

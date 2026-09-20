@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.integration
 import com.slack.api.bolt.request.RequestHeaders
 import com.slack.api.bolt.request.builtin.EventRequest
 import com.slack.api.bolt.util.EventsApiPayloadParser
+import com.slack.api.model.event.AppMentionEvent
 import com.slack.api.model.event.MessageEvent
 import com.slack.api.model.event.MessageFileShareEvent
 import com.sun.net.httpserver.HttpExchange
@@ -75,6 +76,7 @@ class SlackMessageEventTest {
         // so the same registration is made by hand and the parse below is the
         // one Bolt would do.
         EventsApiPayloadParser.getEventTypeAndSubtype(MessageEvent::class.java)
+        EventsApiPayloadParser.getEventTypeAndSubtype(AppMentionEvent::class.java)
         EventsApiPayloadParser.getEventTypeAndSubtype(MessageFileShareEvent::class.java)
 
         api = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -215,6 +217,38 @@ class SlackMessageEventTest {
             .contains("\"size\":18452")
     }
 
+    /**
+     * A mention with nothing attached is still a mention.
+     *
+     * The regression this exists for, and it took every Slack trigger down for
+     * a quarter of an hour: Slack leaves `files` out of an event that has
+     * none, the SDK's getter is a platform type, and reading it into a
+     * non-null `List<File>` compiles to a check that throws. One
+     * NullPointerException per mention, inside the dispatcher where nobody was
+     * left to tell, and not a single trigger fired.
+     *
+     * So the path with no files is asserted rather than assumed - which is the
+     * path every ordinary message takes.
+     */
+    @Test
+    fun `a mention carrying no files is published like any other`() {
+        listener().publish(CONNECTION_ID, WORKSPACE_ID, mentioned(mentionPayload()), "T00000001")
+
+        val published = await1()
+        assertThat(published.single().action).isEqualTo(IncomingAction.MENTION)
+        assertThat(published.single().text).isEqualTo("<@U0000OURBOT> what broke")
+        assertThat(published.single().context).doesNotContainKey("files")
+    }
+
+    /** And one carrying a file says what came with it. */
+    @Test
+    fun `a mention carrying a file says what was attached`() {
+        listener().publish(CONNECTION_ID, WORKSPACE_ID, mentioned(mentionWithFilePayload()), "T00000001")
+
+        val files = await1().single().context["files"]
+        assertThat(files).contains("\"id\":\"F0000000003\"").contains("\"name\":\"notes.txt\"")
+    }
+
     /** An ordinary message says nothing about files, rather than saying none. */
     @Test
     fun `a message with nothing attached carries no files key`() {
@@ -271,6 +305,10 @@ class SlackMessageEventTest {
     private fun parsed(body: String): MessageEvent =
         EventsApiPayloadParser.buildEventPayload<MessageEvent>(EventRequest(body, RequestHeaders(emptyMap()))).event
 
+    /** The mention, parsed the way Bolt parses one. */
+    private fun mentioned(body: String): AppMentionEvent =
+        EventsApiPayloadParser.buildEventPayload<AppMentionEvent>(EventRequest(body, RequestHeaders(emptyMap()))).event
+
     /** The same, for the event Slack delivers an upload as. */
     private fun shared(body: String): MessageFileShareEvent =
         EventsApiPayloadParser.buildEventPayload<MessageFileShareEvent>(
@@ -324,6 +362,37 @@ class SlackMessageEventTest {
           "ts": "1700000000.000300",
           "event_ts": "1700000000.000300",
           "channel_type": "channel"
+        }
+        """,
+    )
+
+    /** Somebody talking to the bot, with nothing attached. */
+    private fun mentionPayload() = envelope(
+        """
+        {
+          "type": "app_mention",
+          "channel": "C0000000001",
+          "user": "U0000ALICE",
+          "text": "<@U0000OURBOT> what broke",
+          "ts": "1700000000.000600",
+          "event_ts": "1700000000.000600"
+        }
+        """,
+    )
+
+    /** And the same with a file on it. */
+    private fun mentionWithFilePayload() = envelope(
+        """
+        {
+          "type": "app_mention",
+          "channel": "C0000000001",
+          "user": "U0000ALICE",
+          "text": "<@U0000OURBOT> what do you make of this",
+          "ts": "1700000000.000700",
+          "event_ts": "1700000000.000700",
+          "files": [
+            { "id": "F0000000003", "name": "notes.txt", "mimetype": "text/plain", "size": 12 }
+          ]
         }
         """,
     )

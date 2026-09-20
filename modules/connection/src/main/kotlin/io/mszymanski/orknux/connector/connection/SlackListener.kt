@@ -220,7 +220,13 @@ class SlackListener(
         }
     }
 
-    private fun publish(connectionId: Long, workspaceId: Long, mention: AppMentionEvent, slackWorkspaceId: String?) {
+    /**
+     * A mention, on its way to whoever is watching for one.
+     *
+     * Public for the reason [receive] is: a socket is the only other caller,
+     * and a test that had to open one could not run without Slack.
+     */
+    fun publish(connectionId: Long, workspaceId: Long, mention: AppMentionEvent, slackWorkspaceId: String?) {
         val event = IncomingEvent(
             connectionId = connectionId,
             workspaceId = workspaceId,
@@ -244,10 +250,11 @@ class SlackListener(
         // DEBUG on a third-party package. The text is left out — a mention is
         // someone's message, and this is not the place it gets stored.
         log.info(
-            "Slack mention received on connection {} (workspace {}, channel {})",
+            "Slack mention received on connection {} (workspace {}, channel {}, {} file(s))",
             connectionId,
             workspaceId,
             mention.channel,
+            filesOf(mention.files).size,
         )
 
         raise(connectionId, event)
@@ -346,11 +353,16 @@ class SlackListener(
         // not fire. The text is left out - this is somebody's message, and this
         // is not the place it gets stored.
         log.info(
-            "Slack message received on connection {} (workspace {}, channel {}, thread {})",
+            "Slack message received on connection {} (workspace {}, channel {}, thread {}, {} file(s))",
             connectionId,
             workspaceId,
             message.channel,
             message.threadTs,
+            // Counted rather than named: "did the upload arrive" is the first
+            // question asked when an agent says it cannot see a file, and
+            // answering it should not need DEBUG on somebody else's package.
+            // The names are somebody's filenames and do not belong in a log.
+            message.files.size,
         )
 
         events.publishEvent(IncomingEvent(connectionId, workspaceId, IncomingAction.MESSAGE, message.text, context))
@@ -412,6 +424,17 @@ class SlackListener(
         val fromBotProfile: Boolean,
     )
 
+    /**
+     * The files on an event, which Slack leaves out rather than sending empty.
+     *
+     * Its own function because the getter is a platform type: reading it into
+     * anything non-null compiles to a check that throws, and `orEmpty()` on
+     * the value does not save it. Taken as nullable here, so the null is
+     * handled where it arrives instead of where it lands.
+     */
+    private fun filesOf(files: List<com.slack.api.model.File>?): List<com.slack.api.model.File> =
+        files ?: emptyList()
+
     private fun said(message: MessageEvent) = Said(
         channel = message.channel,
         user = message.user,
@@ -420,7 +443,7 @@ class SlackListener(
         parentUserId = message.parentUserId,
         channelType = message.channelType,
         text = message.text,
-        files = message.files.orEmpty(),
+        files = filesOf(message.files),
         botId = message.botId,
         fromBotProfile = message.botProfile != null,
     )
@@ -441,7 +464,7 @@ class SlackListener(
         parentUserId = message.parentUserId,
         channelType = message.channelType,
         text = message.text,
-        files = message.files.orEmpty(),
+        files = filesOf(message.files),
         botId = null,
         fromBotProfile = false,
     )
@@ -461,8 +484,18 @@ class SlackListener(
      * because this rides in the payload a model sees. Null where nothing was
      * attached, which keeps the key off every ordinary message.
      */
-    private fun describe(files: List<com.slack.api.model.File>): String? {
-        if (files.isEmpty()) return null
+    private fun describe(files: List<com.slack.api.model.File>?): String? {
+        /*
+         * Null, not empty, for a message with nothing attached.
+         *
+         * Slack leaves the field out and the SDK's getter is a platform type,
+         * so a `List<File>` parameter here compiles to a null check that
+         * throws on every ordinary message - which is exactly what it did:
+         * one NullPointerException per mention, inside the dispatcher, and no
+         * trigger fired at all. Nullable at the door, once, rather than
+         * remembered at each call.
+         */
+        if (files.isNullOrEmpty()) return null
         return files.joinToString(",", "[", "]") { file ->
             buildString {
                 append("{")

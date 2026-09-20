@@ -272,6 +272,62 @@ class SlackMessageEventTest {
         assertThat(nothingArrives()).isEmpty()
     }
 
+    /**
+     * The same event twice is one event.
+     *
+     * Slack resends anything it does not see acknowledged within three
+     * seconds, and everything that arrived while a process was down lands when
+     * it comes back - so a copy is ordinary rather than exceptional. Ungarded,
+     * each copy was another workflow run: another answer in the thread,
+     * another turn billed, and a bot that reads as repeating itself. This
+     * installation's history had three runs off one message in it before
+     * anybody went looking.
+     */
+    @Test
+    fun `a mention delivered twice is raised once`() {
+        val same = mentionPayload()
+        listener().let { one ->
+            one.publish(CONNECTION_ID, WORKSPACE_ID, mentioned(same), "T00000001")
+            one.publish(CONNECTION_ID, WORKSPACE_ID, mentioned(same), "T00000001")
+        }
+
+        assertThat(nothingArrives()).hasSize(1)
+    }
+
+    /**
+     * And the two an ordinary message raises are still two.
+     *
+     * A message in a thread is a MESSAGE and a REPLY - different events about
+     * the same words, and a definition waiting on either is entitled to its
+     * one. What the guard drops is the same event again, not the other one.
+     */
+    @Test
+    fun `a thread reply delivered twice is still one message and one reply`() {
+        val same = threadReplyPayload()
+        val one = listener()
+        one.receive(CONNECTION_ID, WORKSPACE_ID, parsed(same), "T00000001")
+        one.receive(CONNECTION_ID, WORKSPACE_ID, parsed(same), "T00000001")
+
+        val published = nothingArrives()
+        assertThat(published.map { it.action })
+            .containsExactlyInAnyOrder(IncomingAction.MESSAGE, IncomingAction.REPLY)
+    }
+
+    /** Somebody sending the same words again is a different message, and runs. */
+    @Test
+    fun `the same words sent again are a different event`() {
+        val one = listener()
+        one.publish(CONNECTION_ID, WORKSPACE_ID, mentioned(mentionPayload()), "T00000001")
+        one.publish(
+            CONNECTION_ID,
+            WORKSPACE_ID,
+            mentioned(mentionPayload().replace("1700000000.000600", "1700000000.000601")),
+            "T00000001",
+        )
+
+        assertThat(nothingArrives()).hasSize(2)
+    }
+
     /** [SlackListener] as the application builds it, with Slack on the loopback address. */
     private fun listener(): SlackListener {
         val clients = SlackClients(ProxyRouter(ProxyRuleSource { emptyList() }))

@@ -77,6 +77,33 @@ class SlackListener(
      */
     private val dispatcher = Executors.newVirtualThreadPerTaskExecutor()
 
+    /**
+     * What has already been delivered, so Slack sending it again does not run
+     * it again.
+     *
+     * **Slack redelivers, and it is right to.** An event it does not see
+     * acknowledged within three seconds is sent again, up to three times, and
+     * the same is true of everything that arrived while a process was down or
+     * failing: they queue and land when it comes back. Without a guard each
+     * copy is another workflow run - another answer posted in the thread,
+     * another turn billed - and the thread reads as a bot repeating itself.
+     * Three runs off one message were sitting in this installation's history
+     * before anybody went looking.
+     *
+     * Keyed by the connection, the action and Slack's own `ts`, which names
+     * the message. The action is in the key on purpose: one message is
+     * legitimately a MESSAGE and a REPLY, and an `@` is legitimately an
+     * `app_mention` and a `message` - those are different events about the
+     * same words, and a trigger is entitled to each of them.
+     *
+     * Held in memory rather than in the database. What this must survive is a
+     * retry seconds later on a process that is running; a restart clears it,
+     * and a restart is also when Slack's queued redeliveries arrive - but a
+     * table written on every Slack message to guard a case that ends with one
+     * duplicate answer is the more expensive mistake.
+     */
+    private val delivered = ConcurrentHashMap<String, Long>()
+
     @EventListener(ApplicationReadyEvent::class)
     fun start() {
         reconciler.scheduleWithFixedDelay(
@@ -365,9 +392,15 @@ class SlackListener(
             message.files.size,
         )
 
-        events.publishEvent(IncomingEvent(connectionId, workspaceId, IncomingAction.MESSAGE, message.text, context))
+        /*
+         * Through the same door the mention goes through, so a redelivered
+         * message is dropped exactly as a redelivered mention is. Two events
+         * off one message and two keys: a definition waiting on messages and
+         * one waiting on replies are both entitled to this one.
+         */
+        raise(connectionId, IncomingEvent(connectionId, workspaceId, IncomingAction.MESSAGE, message.text, context))
         if (message.threadTs != null) {
-            events.publishEvent(IncomingEvent(connectionId, workspaceId, IncomingAction.REPLY, message.text, context))
+            raise(connectionId, IncomingEvent(connectionId, workspaceId, IncomingAction.REPLY, message.text, context))
         }
     }
 
@@ -512,8 +545,37 @@ class SlackListener(
     private fun quoted(value: String?): String =
         value.orEmpty().replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", " ").replace("\r", " ")
 
+    /**
+     * Whether this exact event has already been handed on, and remembering it
+     * where it has not.
+     *
+     * Swept as it goes rather than on a timer: the sweep is a walk of a map
+     * that holds a few minutes of one installation's Slack traffic, and doing
+     * it when the map has grown is cheaper than a thread that wakes up all
+     * night to find nothing.
+     */
+    private fun alreadySeen(connectionId: Long, action: IncomingAction, ts: String?): Boolean {
+        // No ts is no identity. Slack always sends one; an event without it is
+        // handed on rather than dropped on a guess.
+        val key = "$connectionId:$action:${ts ?: return false}"
+        val now = System.currentTimeMillis()
+        if (delivered.size > MOST_REMEMBERED) {
+            delivered.entries.removeIf { now - it.value > REMEMBER_FOR_MILLIS }
+        }
+        val before = delivered.put(key, now)
+        return before != null && now - before < REMEMBER_FOR_MILLIS
+    }
+
     /** Off the socket thread, so Slack's three seconds are not spent on a workflow. */
     private fun raise(connectionId: Long, event: IncomingEvent) {
+        if (alreadySeen(connectionId, event.action, event.context["ts"])) {
+            log.info(
+                "A Slack {} on connection {} had already been delivered and was not raised again",
+                event.action,
+                connectionId,
+            )
+            return
+        }
         dispatcher.execute {
             try {
                 events.publishEvent(event)
@@ -577,5 +639,19 @@ class SlackListener(
 
     private companion object {
         val log = LoggerFactory.getLogger(SlackListener::class.java)
+
+        /**
+         * How long an event is remembered as already delivered.
+         *
+         * Slack gives up after three retries inside a minute, so this covers
+         * that with room to spare - and stops well short of the hours over
+         * which somebody legitimately sends the same words twice. A repeat has
+         * its own `ts`, so the window is not what tells two messages apart; it
+         * only bounds what is kept.
+         */
+        const val REMEMBER_FOR_MILLIS = 10L * 60 * 1000
+
+        /** And how many, before the stale ones are walked out. */
+        const val MOST_REMEMBERED = 5_000
     }
 }

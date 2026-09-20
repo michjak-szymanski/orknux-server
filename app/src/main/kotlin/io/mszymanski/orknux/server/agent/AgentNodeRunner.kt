@@ -290,6 +290,10 @@ class AgentNodeRunner(
             // place a drawn picture's bytes can be left for something else to
             // send. A node that keeps no session gets no key; see the shed.
             sessionId = session,
+            // Drawing and linking are two decisions: an agent may be trusted to
+            // draw and still have no business writing an address into an answer
+            // that is read somewhere this installation is not.
+            mayLink = agent.pictureLinkAccess,
         )
 
         /*

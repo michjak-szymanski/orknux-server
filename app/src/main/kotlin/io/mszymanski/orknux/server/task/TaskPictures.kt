@@ -185,9 +185,9 @@ class TaskPictures(
      * is doing the better thing, and appending a second copy underneath would
      * punish it for that.
      *
-     * Two spellings count as placing it. The address is what the outcome used
-     * to carry, and the key - `![a tower](picture.22)` - is what an agent
-     * writes now, because the key is the only name a drawing tool gives it.
+     * Placing it means the address, which is what `task_picture_link` hands
+     * back for exactly this - so what an agent puts in its summary is the same
+     * markdown this would have appended, and the two cannot disagree.
      */
     fun outcomeOf(taskId: Long, said: String?): String? {
         val drawn = of(taskId)
@@ -195,10 +195,7 @@ class TaskPictures(
 
         val summary = said?.trim().orEmpty()
         val shown = drawn
-            .filterNot { picture ->
-                val id = requireNotNull(picture.id)
-                summary.contains("/api/task-pictures/$id") || summary.contains("(picture.$id)")
-            }
+            .filterNot { summary.contains("/api/task-pictures/${requireNotNull(it.id)}") }
             .map(::linkTo)
         if (shown.isEmpty()) return said
 

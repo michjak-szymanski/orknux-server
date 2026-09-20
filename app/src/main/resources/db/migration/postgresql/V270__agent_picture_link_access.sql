@@ -1,0 +1,17 @@
+-- Whether an agent may ask for an address for a picture it has drawn.
+--
+-- The drawing tools answer with a key and never a link: a key is what a tool
+-- that uploads a file takes, and a link handed over unasked is a link pasted
+-- into a chat that cannot resolve it, printing the construction where the
+-- picture should be. `picture_link` is the other case said out loud - an agent
+-- writing a report that wants the diagram at the point it is discussed asks for
+-- markdown, and gets it because it asked.
+--
+-- On by default, like artifact_access and finish_access: it opens no door onto
+-- anything and takes nothing. The switch is for the agent whose answers leave
+-- this installation - one writing into a chat somewhere else, where an address
+-- here resolves to nothing for the reader.
+--
+-- TRUE for the rows already here, so an installation upgrading into this finds
+-- it working rather than switched off everywhere.
+ALTER TABLE agent ADD COLUMN picture_link_access BOOLEAN NOT NULL DEFAULT TRUE;

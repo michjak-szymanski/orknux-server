@@ -157,6 +157,18 @@ class Agent(
     @Column(name = "finish_access", nullable = false)
     var finishAccess: Boolean = true,
 
+    /**
+     * Whether it may ask for an address for a picture it drew.
+     *
+     * On, like the two above. What it buys is placing a picture inside what
+     * the agent writes; what it costs is a link the agent could put somewhere
+     * this installation is not, where it resolves to nothing for the reader -
+     * which is the reason there is a switch at all. See
+     * [io.mszymanski.orknux.server.workflow.StepPictureTools].
+     */
+    @Column(name = "picture_link_access", nullable = false)
+    var pictureLinkAccess: Boolean = true,
+
 
     /** MCP servers this agent may connect to, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)

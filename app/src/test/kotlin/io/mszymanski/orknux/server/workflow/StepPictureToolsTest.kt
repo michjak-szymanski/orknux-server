@@ -83,6 +83,91 @@ class StepPictureToolsTest {
         arguments = if (description == null) "{}" else mapper.writeValueAsString(mapOf("description" to description)),
     )
 
+    /**
+     * A link, when the model asks for one.
+     *
+     * The drawing answers with a key and never a link: a key is what a tool
+     * that uploads a file takes, and a link handed over unasked is a link
+     * pasted into a chat that cannot resolve it, printing the construction
+     * where the picture should have been. What that left out is the model that
+     * wants the picture *inside* what it is writing, which has to name it
+     * somehow. This is that door, and being asked for is the whole difference.
+     */
+    @Test
+    fun `a model that wants the picture in its answer can ask for the markdown`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+        `when`(pictures.findByExecutionIdOrderByDrawnAtAscIdAsc(100)).thenReturn(listOf(filed()))
+
+        val shed = requireNotNull(tools.shed(100, "ask", 9, sessionId = 55))
+        val answer = mapper.readTree(shed.run(linkCall("picture.77")))
+
+        assertThat(answer.path("markdown").stringValue())
+            .describedAs("markdown, so the model does not compose a link around an id")
+            .isEqualTo("![a red bicycle](https://orknux.example/api/execution-pictures/77)")
+        // Absolute, for the reason every link handed to a model is: a path has
+        // no host behind it once it has been copied somewhere else.
+        assertThat(answer.path("url").stringValue())
+            .isEqualTo("https://orknux.example/api/execution-pictures/77")
+    }
+
+    /** The bare id is the same id, and is not worth a round trip to refuse. */
+    @Test
+    fun `the key may be written without its prefix`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+        `when`(pictures.findByExecutionIdOrderByDrawnAtAscIdAsc(100)).thenReturn(listOf(filed()))
+
+        val shed = requireNotNull(tools.shed(100, "ask", 9, sessionId = 55))
+
+        assertThat(mapper.readTree(shed.run(linkCall("77"))).path("markdown").stringValue())
+            .contains("/api/execution-pictures/77")
+    }
+
+    /**
+     * And a key this run has nothing under is refused.
+     *
+     * A key is a row id, so a model that guessed a number would otherwise be
+     * handed another run's picture - and an agent in one workspace could show
+     * somebody a drawing made in another.
+     */
+    @Test
+    fun `a key from somewhere else gets nothing`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+        `when`(pictures.findByExecutionIdOrderByDrawnAtAscIdAsc(100)).thenReturn(listOf(filed()))
+
+        val shed = requireNotNull(tools.shed(100, "ask", 9, sessionId = 55))
+        val answer = mapper.readTree(shed.run(linkCall("picture.404")))
+
+        assertThat(answer.has("markdown")).isFalse()
+        assertThat(answer.path("reason").stringValue()).contains("No picture of this run has that key")
+    }
+
+    /**
+     * Unticked, the tool is not there and the name is not answered.
+     *
+     * Both halves matter: a model is only offered tools that will run, and a
+     * name a shed does not claim falls through to the agent's own tools rather
+     * than being answered by this.
+     */
+    @Test
+    fun `an agent that may not link is offered no such tool`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+
+        val shed = requireNotNull(tools.shed(100, "ask", 9, sessionId = 55, mayLink = false))
+
+        assertThat(shed.specs().map { it.name }).containsExactly("draw_picture")
+        assertThat(shed.handles("picture_link")).isFalse()
+    }
+
+    private fun linkCall(key: String) = ToolCall(
+        id = "call-2",
+        name = "picture_link",
+        arguments = mapper.writeValueAsString(mapOf("key" to key)),
+    )
+
     private fun drawn() = Picture.Drawn(
         image = byteArrayOf(1, 2, 3),
         contentType = "image/png",
@@ -127,14 +212,18 @@ class StepPictureToolsTest {
     }
 
     @Test
-    fun `a workspace that can draw is offered one tool, by name`() {
+    fun `a workspace that can draw is offered the drawing and the link, by name`() {
         `when`(settings.attachmentsEnabled()).thenReturn(true)
         `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
 
         val shed = requireNotNull(tools.shed(100, "ask", 9))
 
-        assertThat(shed.specs().map { it.name }).containsExactly("draw_picture")
-        assertThat(shed.specs().single().parameters.map { it.name }).containsExactly("description")
+        // Two, and the second is a door rather than a second way to draw: the
+        // drawing answers with a key, and this is where a model that wants the
+        // picture inside what it writes asks for an address.
+        assertThat(shed.specs().map { it.name }).containsExactly("draw_picture", "picture_link")
+        assertThat(shed.specs().first().parameters.map { it.name }).containsExactly("description")
+        assertThat(shed.specs().last().parameters.map { it.name }).containsExactly("key")
         assertThat(shed.handles("draw_picture")).isTrue()
         assertThat(shed.handles("chat_draw_picture")).isFalse()
     }

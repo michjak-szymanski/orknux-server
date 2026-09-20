@@ -2418,6 +2418,15 @@ type Agent {
     workflow whose next node needs an answer to work with.
     """
     finishAccess: Boolean!
+    """
+    Whether it may ask for an address for a picture it has drawn.
+
+    On by default. A drawing tool answers with a key, which is what a tool that
+    uploads a file takes; this is the other case - markdown for placing the
+    picture inside what the agent writes. Turning it off suits an agent whose
+    answers are read somewhere this installation is not.
+    """
+    pictureLinkAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -3336,6 +3345,8 @@ input UpdateAgentInput {
     artifactAccess: Boolean
     "Whether it may end its turn by saying so rather than writing prose. On by default."
     finishAccess: Boolean
+    "Whether it may ask for an address for a picture it drew. On by default."
+    pictureLinkAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."

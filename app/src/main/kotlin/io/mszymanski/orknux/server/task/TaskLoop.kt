@@ -182,7 +182,8 @@ class TaskLoop(
                 agent,
                 turns,
                 session,
-                tools.shed(task),
+                // Drawing and linking are two decisions; see the shed.
+                tools.shed(task, mayLink = agent.pictureLinkAccess),
                 watching,
                 interjections = { pickUp(taskId, session) },
             )

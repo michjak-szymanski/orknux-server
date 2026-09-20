@@ -302,6 +302,7 @@ class AgentAPI(
         if (input.shellAccess != null) agent.shellAccess = input.shellAccess
         if (input.artifactAccess != null) agent.artifactAccess = input.artifactAccess
         if (input.finishAccess != null) agent.finishAccess = input.finishAccess
+        if (input.pictureLinkAccess != null) agent.pictureLinkAccess = input.pictureLinkAccess
         if (input.memoryCatalogs != null) {
             agent.memoryCatalogs =
                 input.memoryCatalogs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
@@ -573,6 +574,8 @@ data class UpdateAgentInput(
     val artifactAccess: Boolean? = null,
     /** Whether it may end its turn by saying so; on by default, see [Agent.finishAccess]. */
     val finishAccess: Boolean? = null,
+    /** Whether it may ask for a picture's address; on by default, see [Agent.pictureLinkAccess]. */
+    val pictureLinkAccess: Boolean? = null,
     /** Same rule: null leaves it alone, an empty list clears it. */
     val memoryCatalogs: List<String>? = null,
     /** Which skill catalogs it may draw on; null leaves the grant alone. */
@@ -613,6 +616,8 @@ data class AgentView(
     val artifactAccess: Boolean,
     /** Whether it may end its turn by saying so rather than by writing prose. */
     val finishAccess: Boolean,
+    /** Whether it may ask for an address for a picture it drew. */
+    val pictureLinkAccess: Boolean,
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
@@ -638,6 +643,7 @@ data class AgentView(
         shellAccess = agent.shellAccess,
         artifactAccess = agent.artifactAccess,
         finishAccess = agent.finishAccess,
+        pictureLinkAccess = agent.pictureLinkAccess,
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),

@@ -55,9 +55,17 @@ class TaskTools(
      * been paid for, and deferring them to the end of a round that may still
      * throw is losing them.
      */
-    fun shed(task: Task): ToolShed = Shed(task)
+    fun shed(
+        task: Task,
+        /**
+         * Whether this task's agent may ask for a picture's address as well as
+         * draw one. On for every agent until somebody turns it off; see
+         * [io.mszymanski.orknux.server.agent.Agent.pictureLinkAccess].
+         */
+        mayLink: Boolean = true,
+    ): ToolShed = Shed(task, mayLink)
 
-    private inner class Shed(private val task: Task) : ToolShed {
+    private inner class Shed(private val task: Task, private val mayLink: Boolean) : ToolShed {
 
         /**
          * What this task is offered, which is not always all of them.
@@ -68,11 +76,29 @@ class TaskTools(
          * and offering the tool anyway spends a turn teaching the model that.
          */
         override fun specs(): List<ToolSpec> =
-            if (pictures.offered(task)) SPECS + DRAWING else SPECS
+            when {
+                !pictures.offered(task) -> SPECS
+                mayLink -> SPECS + DRAWING + LINKING
+                else -> SPECS + DRAWING
+            }
 
-        override fun handles(name: String): Boolean = name in NAMES
+        override fun handles(name: String): Boolean =
+            name in NAMES && (mayLink || name != LINK)
 
         override fun run(call: ToolCall): String = when (call.name) {
+            /*
+             * An address for a picture, asked for when there is a use for one.
+             *
+             * The drawing answers with a key and never a link: a key is what a
+             * tool that uploads a file takes, and a link handed over unasked is
+             * a link pasted into a chat that cannot resolve it. What that left
+             * out is the agent that wants the picture *inside* what it writes -
+             * a report with the diagram at the point it is being discussed -
+             * which has to name it somehow. This is that door, and being a
+             * door is the whole of the difference: it is asked for.
+             */
+            LINK -> linkFor(argument(call, "key"))
+
             DRAW -> {
                 val description = argument(call, "description")?.trim()
                 if (description.isNullOrBlank()) {
@@ -197,15 +223,42 @@ class TaskTools(
         private fun noteFor(key: String?): String = if (key != null) {
             "The picture is drawn and its bytes are in this task's session store under `key`. Two " +
                 "things to do with that key, and nothing else works: pass it to whichever of your " +
-                "tools sends or uploads a file, to put the picture in front of somebody; or write " +
-                "![caption](key) to place the picture at that point in what you write - the key " +
-                "exactly as given, as in `![a tower](picture.22)`. It is not a URL, so a link " +
-                "spelled any other way resolves to nothing. The picture is also shown with this " +
-                "task's outcome, so it does not have to be placed to be seen."
+                "tools sends or uploads a file, to put the picture in front of somebody; or pass it " +
+                "to task_picture_link, which answers with markdown for placing the picture at a " +
+                "point in what you write. The key is not an address. The picture is also shown with " +
+                "this task's outcome, so it does not have to be placed to be seen."
         } else {
             "The picture is drawn and shown with this task's outcome. Its bytes could not be left " +
                 "anywhere this session can reach, so nothing here can upload it - say where it is " +
                 "rather than promising to send it."
+        }
+
+        /**
+         * Markdown for one of this task's pictures, or a refusal.
+         *
+         * The key is `picture.<id>` - the store key the drawing answered with -
+         * so the id is read back out of it; a bare number is the same id and is
+         * taken too, because refusing it would be a round trip spent on
+         * punctuation. Only this task's own pictures: a key is a row id, and a
+         * model that guessed a number is told there is nothing under it rather
+         * than handed somebody else's work.
+         */
+        private fun linkFor(key: String?): String {
+            val id = key?.trim()?.removePrefix("picture.")?.toLongOrNull()
+            val picture = id?.let { wanted -> pictures.of(requireNotNull(task.id)).firstOrNull { it.id == wanted } }
+                ?: return refuse(
+                    "No picture of this task has that key. Use the key $DRAW answered with, exactly as it " +
+                        "was given.",
+                )
+
+            return mapper.writeValueAsString(
+                mapOf(
+                    "markdown" to pictures.linkTo(picture),
+                    "note" to "Put the markdown where the picture belongs in what you are writing. Every " +
+                        "picture is shown with this task's outcome anyway, so one you do not place is " +
+                        "still seen - and a summary that places one is not given a second copy underneath.",
+                ),
+            )
         }
 
         private fun park(
@@ -236,7 +289,33 @@ class TaskTools(
          * to the agent's own tools and comes back as "there is no tool called
          * task_draw_picture", which is not what happened.
          */
-        val NAMES = setOf(DONE, ASK, PERMISSION, DRAW)
+        const val LINK = "task_picture_link"
+
+        val NAMES = setOf(DONE, ASK, PERMISSION, DRAW, LINK)
+
+        /**
+         * What an agent calls when it wants the picture *in* what it writes.
+         *
+         * Separate from the drawing on purpose. The drawing answers with a key
+         * because a key is the thing that can be delivered; a link is only
+         * useful for placing one, so it is asked for by whoever has somewhere
+         * to place it.
+         */
+        val LINKING = ToolSpec(
+            name = LINK,
+            description = "Answers with markdown for a picture you have drawn, so you can put it at a " +
+                "particular point in what you write. Pass the key task_draw_picture gave you. Ask for it " +
+                "only when the picture belongs at a place in your text: every picture is shown with the " +
+                "task's outcome anyway, and to send one to somebody you pass the key to a tool that " +
+                "uploads a file rather than writing a link.",
+            parameters = listOf(
+                ToolParameterSpec(
+                    name = "key",
+                    description = "The key task_draw_picture answered with, such as picture.22.",
+                    required = true,
+                ),
+            ),
+        )
 
         val SPECS = listOf(
             ToolSpec(
@@ -304,11 +383,11 @@ class TaskTools(
                     "that is prose: each one takes time and costs money. Describe what should be in the picture " +
                     "rather than instructing a model, since the description is sent to a drawing model and not " +
                     "to you. Everything you draw is shown with the task's outcome whether or not you mention " +
-                    "it, so you never have to place it. What comes back is `key`. Pass it to a tool that " +
-                    "sends or uploads a file to put the picture in front of somebody, and write " +
-                    "![caption](key) - the key exactly as given, `![a tower](picture.22)` - to put the " +
-                    "picture at a particular point in what you write. It is not a URL and there is no " +
-                    "address to guess: that one form is how it is placed.",
+                    "it, so you never have to place it. What comes back is `key`: pass it to a tool that " +
+                    "sends or uploads a file to put the picture in front of somebody, or to " +
+                    "task_picture_link to get markdown for putting the picture at a particular point in " +
+                    "what you write. The key is not an address and there is nothing to guess: those two " +
+                    "tools are what it is for.",
             parameters = listOf(
                 ToolParameterSpec("description", "What the picture should be of.", required = true),
             ),

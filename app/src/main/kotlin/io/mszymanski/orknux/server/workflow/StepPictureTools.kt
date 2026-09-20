@@ -82,9 +82,15 @@ class StepPictureTools(
          * not carrying one - the same thing the plugins do.
          */
         sessionId: Long? = null,
+        /**
+         * Whether this agent may ask for a picture's address as well as draw
+         * one. On for every agent until somebody turns it off; see
+         * [io.mszymanski.orknux.server.agent.Agent.pictureLinkAccess].
+         */
+        mayLink: Boolean = true,
     ): ToolShed? =
         if (granted && pictures.offered(workspaceId)) {
-            Shed(executionId, nodeKey, workspaceId, sessionId)
+            Shed(executionId, nodeKey, workspaceId, sessionId, mayLink)
         } else {
             null
         }
@@ -94,13 +100,27 @@ class StepPictureTools(
         private val nodeKey: String,
         private val workspaceId: Long,
         private val sessionId: Long?,
+        private val mayLink: Boolean,
     ) : ToolShed {
 
-        override fun specs(): List<ToolSpec> = listOf(DRAWING)
+        override fun specs(): List<ToolSpec> =
+            if (mayLink) listOf(DRAWING, LINKING) else listOf(DRAWING)
 
-        override fun handles(name: String): Boolean = name == DRAW
+        override fun handles(name: String): Boolean = name == DRAW || (mayLink && name == LINK)
 
         override fun run(call: ToolCall): String {
+            /*
+             * An address for a picture, asked for when there is a use for one.
+             *
+             * The drawing answers with a key and never a link, because a key
+             * is what another tool takes to *deliver* the picture, and a link
+             * handed over unasked is a link pasted into a chat that cannot
+             * resolve it. What that left out is the model that wants the
+             * picture *inside* what it is writing, which has to name it
+             * somehow. This is that door, and it is a door: asked for, so
+             * asked for on purpose.
+             */
+            if (call.name == LINK) return linkFor(argument(call, "key"))
             if (call.name != DRAW) return refuse("There is no tool called ${call.name}")
 
             val description = argument(call, "description")?.trim()
@@ -185,15 +205,41 @@ class StepPictureTools(
         private fun noteFor(key: String?): String = if (key != null) {
             "The picture is drawn and its bytes are in this session's store under `key`. Two " +
                 "things to do with that key, and nothing else works: pass it to whichever of your " +
-                "tools sends or uploads a file, to put the picture in front of somebody; or write " +
-                "![caption](key) to place the picture at that point in your answer - the key " +
-                "exactly as given, as in `![a tower](picture.22)`. It is not a URL, so a link " +
-                "spelled any other way resolves to nothing. The picture is also filed against " +
-                "this run and shown under this node, so it is seen without being placed."
+                "tools sends or uploads a file, to put the picture in front of somebody; or pass " +
+                "it to picture_link, which answers with markdown for placing the picture at a " +
+                "point in your answer. The key is not an address. The picture is also filed " +
+                "against this run and shown under this node, so it is seen without being placed."
         } else {
             "The picture is drawn and filed against this run, and is shown under this node. Its " +
                 "bytes could not be left anywhere this session can reach, so nothing here can " +
                 "upload it - say where it is rather than promising to send it."
+        }
+
+        /**
+         * The picture a key names, or null for a key this run has nothing
+         * under.
+         *
+         * The key is `picture.<id>`, which is the store key the drawing
+         * answered with, so the id is read back out of it. A bare number is
+         * accepted too - it is the same id, and refusing it would be a round
+         * trip spent on punctuation.
+         */
+        private fun linkFor(key: String?): String {
+            val id = key?.trim()?.removePrefix("picture.")?.toLongOrNull()
+            val picture = id?.let { wanted -> pictures.of(executionId).firstOrNull { it.id == wanted } }
+                ?: return refuse(
+                    "No picture of this run has that key. Use the key $DRAW answered with, exactly as " +
+                        "it was given.",
+                )
+
+            return mapper.writeValueAsString(
+                mapOf(
+                    "url" to pictures.urlOf(requireNotNull(picture.id)),
+                    "markdown" to pictures.linkTo(picture),
+                    "note" to "Put the markdown where the picture belongs in your answer. It is already " +
+                        "shown under this step, so one you do not place is still seen.",
+                ),
+            )
         }
 
         private fun argument(call: ToolCall, name: String): String? = runCatching {
@@ -222,6 +268,33 @@ class StepPictureTools(
          */
         const val DRAW = "draw_picture"
 
+        const val LINK = "picture_link"
+
+        /**
+         * What a model calls when it wants the picture *in* what it writes.
+         *
+         * Separate from the drawing on purpose. The drawing answers with a key
+         * because a key is the thing that can be delivered, and a model handed
+         * a link with no other way to deliver anything pastes the link into a
+         * chat that prints the construction. A link asked for is a link
+         * somebody decided they had a use for, which is a different act.
+         */
+        val LINKING = ToolSpec(
+            name = LINK,
+            description = "Answers with markdown for a picture this run has drawn, so you can put it at a " +
+                "particular point in what you write. Pass the key `draw_picture` gave you. Ask for this " +
+                "only when the picture belongs at a place in your text: every picture is shown under this " +
+                "step anyway, and to send one to somebody you pass the key to a tool that uploads a file " +
+                "rather than writing a link.",
+            parameters = listOf(
+                ToolParameterSpec(
+                    name = "key",
+                    description = "The key `draw_picture` answered with, such as picture.22.",
+                    required = true,
+                ),
+            ),
+        )
+
         val DRAWING = ToolSpec(
             name = DRAW,
             /*
@@ -238,10 +311,10 @@ class StepPictureTools(
              */
             description = "Draw a picture from a description. The picture is filed with this run and is " +
                 "shown under this step whether or not you mention it, so you never have to place it. " +
-                "What comes back is `key`. Pass it to a tool that sends or uploads a file to put the " +
-                "picture in front of somebody, and write ![caption](key) - the key exactly as given, " +
-                "`![a tower](picture.22)` - to place the picture at a point in your answer. It is not " +
-                "a URL and there is no address to guess.",
+                "What comes back is `key`: pass it to a tool that sends or uploads a file to put the " +
+                "picture in front of somebody, or to picture_link to get markdown for placing the " +
+                "picture at a point in your answer. The key is not an address and there is nothing to " +
+                "guess: those two tools are what it is for.",
             parameters = listOf(
                 ToolParameterSpec(
                     name = "description",

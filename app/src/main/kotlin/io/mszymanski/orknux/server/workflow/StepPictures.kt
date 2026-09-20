@@ -52,6 +52,16 @@ class StepPictures(
     fun offered(workspaceId: Long): Boolean =
         settings.attachmentsEnabled() && modelFor(workspaceId) != null
 
+    /**
+     * What one run has drawn, oldest first.
+     *
+     * The order the graph shows them in, and the list a key is resolved
+     * against: a key is a row id, and a model that guessed a number should be
+     * told there is nothing under it rather than handed another run's picture.
+     */
+    fun of(executionId: Long): List<ExecutionPicture> =
+        pictures.findByExecutionIdOrderByDrawnAtAscIdAsc(executionId)
+
     /** What a run draws with: whatever its workspace chose, or nothing. */
     fun modelFor(workspaceId: Long): Long? =
         workspaces.findByIdOrNull(workspaceId)?.imageModelId

@@ -24,10 +24,23 @@ import java.nio.charset.StandardCharsets
 class AttachmentDownloads(private val store: AttachmentStore) {
 
     /**
-     * A picture is served as itself so a page can show it; everything else is a
-     * download. The difference matters: a page that renders whatever was
-     * uploaded is a page that will one day render somebody's HTML - and an SVG
-     * is HTML with a drawing in it, which is why it is not on the list.
+     * A picture is served as itself so a page can show it; a document an agent
+     * wrote is served as itself so a tab can read it; everything else is a
+     * download.
+     *
+     * The difference used to be the whole of the rule: a page that renders
+     * whatever was uploaded is a page that will one day render somebody's
+     * HTML. What changed is not the appetite for risk, it is that the answer
+     * already carries `sandbox` - a document served under it is in an opaque
+     * origin with no script, no forms and no access to anything of ours, and
+     * that is true whatever the bytes turn out to be. An HTML report an agent
+     * wrote is then a page somebody can open and read, rather than a file they
+     * download and go looking for.
+     *
+     * SVG stays off the list. It is markup that a browser will treat as an
+     * image in contexts this header does not reach - an `<img src>` on our own
+     * page, most of all - and "it is an image" is exactly the reasoning that
+     * makes that a problem.
      */
     fun serve(
         filename: String,
@@ -36,7 +49,8 @@ class AttachmentDownloads(private val store: AttachmentStore) {
         location: String,
     ): ResponseEntity<InputStreamResource> {
         val name = URLEncoder.encode(filename, StandardCharsets.UTF_8).replace("+", "%20")
-        val shown = contentType.lowercase() in SHOWABLE
+        val type = contentType.lowercase().substringBefore(';').trim()
+        val shown = type in SHOWABLE || type in READABLE
         return ResponseEntity.ok()
             .contentType(if (shown) MediaType.parseMediaType(contentType) else MediaType.APPLICATION_OCTET_STREAM)
             .header(
@@ -44,8 +58,31 @@ class AttachmentDownloads(private val store: AttachmentStore) {
                 if (shown) "inline; filename*=UTF-8''$name" else "attachment; filename*=UTF-8''$name",
             )
             .header(HttpHeaders.CONTENT_LENGTH, sizeBytes.toString())
-            // Nothing on this page runs, whatever the type turns out to be.
-            .header("Content-Security-Policy", "default-src 'none'; img-src 'self'; sandbox")
+            /*
+             * Nothing on this page runs and nothing it names is fetched,
+             * whatever the type turns out to be.
+             *
+             * `sandbox` with nothing allowed is the load-bearing word: the
+             * document lands in an opaque origin, so there is no script, no
+             * form, no storage and no same-origin anything - our cookies are
+             * not reachable from it even though it is served from our host.
+             *
+             * A document gets a little more than a picture does, and all of it
+             * is local: styles it wrote inline, and images it carried as data.
+             * Without those an agent's report is unstyled text with gaps where
+             * its charts were, which is a page nobody opens twice. Nothing may
+             * be fetched from anywhere - `default-src 'none'` and no scheme
+             * but `data:` - so opening one cannot tell a third party that it
+             * was opened.
+             */
+            .header(
+                "Content-Security-Policy",
+                if (type in READABLE) {
+                    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox"
+                } else {
+                    "default-src 'none'; img-src 'self'; sandbox"
+                },
+            )
             .header("X-Content-Type-Options", "nosniff")
             .body(InputStreamResource(store.open(location)))
     }
@@ -59,5 +96,20 @@ class AttachmentDownloads(private val store: AttachmentStore) {
          * that makes that a problem.
          */
         val SHOWABLE = setOf("image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp")
+
+        /**
+         * What may be read in a tab rather than downloaded.
+         *
+         * Documents an agent writes, and the reason they are here is that the
+         * alternative is worse: a report saved as an artifact was a file
+         * somebody downloaded and then opened from their machine, which is the
+         * same HTML with more trust around it, not less.
+         *
+         * Safe because of the `sandbox` above rather than because of what is
+         * in the list. PDF is here for the reader every browser has; plain
+         * text and markdown because a download is an absurd way to read a
+         * paragraph.
+         */
+        val READABLE = setOf("text/html", "text/plain", "text/markdown", "application/pdf")
     }
 }

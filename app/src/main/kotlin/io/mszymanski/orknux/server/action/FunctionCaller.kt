@@ -186,6 +186,17 @@ class FunctionCaller(
             surface = "tools",
             sessionId = sessionId,
             libraries = pluginSources.librariesOf(plugin),
+            /*
+             * The workspace's tool bound, the same one a tool it wrote itself
+             * runs under. A plugin's call used to be bounded by the number
+             * meant for *loading* a plugin, so a workspace that had set two
+             * minutes was stopped at ten seconds and told so in a sentence
+             * naming a number nobody had configured.
+             *
+             * No per-tool override here: a plugin's tool has no row of its own
+             * to carry one. The workspace's is the setting somebody can reach.
+             */
+            timeoutMillis = timeouts.forTool(null, workspaceId),
         )
     }
 
@@ -249,6 +260,9 @@ class FunctionCaller(
             on = workspaceId,
             sessionId = sessionId,
             libraries = pluginSources.librariesOf(plugin),
+            // The function bound, which is what a workflow's step waits on; see
+            // the note on the tool call above.
+            timeoutMillis = timeouts.forFunction(function.timeoutSeconds, workspaceId),
         )
     }
 }

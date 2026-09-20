@@ -472,8 +472,16 @@ class AgentTools(
             ToolSpec(
                 name = SAVE_ARTIFACT,
                 description = "Saves a file to this workspace's Artifacts, where people can find, view and " +
-                    "download it later. Use it for something you produced that is worth keeping - a diagram, a " +
-                    "report, a spreadsheet - rather than only saying it back. Send text as it stands: an SVG, a " +
+                    "download it later. " +
+                    "Use it only when there is no better way to put the file in front of the person who " +
+                    "wants it, or when they asked for an artifact. If you are answering somebody in a chat, " +
+                    "attach the file to your reply instead, with whatever tool you have been given for it - " +
+                    "where Slack is connected that is slack_uploadBinary for a picture or a PDF and " +
+                    "slack_upload for text - because an artifact is reached by leaving the conversation and " +
+                    "finding the run it belongs to, and a file saved here and mentioned in a message has been " +
+                    "filed rather than delivered. This is the right place for something a later step or a " +
+                    "later day needs, and for what nobody is waiting on now. " +
+                    "Send text as it stands: an SVG, a " +
                     "CSV, JSON, markdown or any source you could read is text, and encoding it to base64 " +
                     "only makes it longer and easier to get wrong. base64 is for bytes that are not text, " +
                     "like a PDF or a PNG. Answers with the url it was saved at.",

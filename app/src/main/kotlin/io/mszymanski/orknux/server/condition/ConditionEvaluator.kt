@@ -317,6 +317,9 @@ class ConditionEvaluator(
             pluginCapabilities.grantedTo(plugin),
             on = condition.workspaceId,
             libraries = pluginSources.librariesOf(plugin),
+            // The same bound the condition's own function runs under; see the
+            // note in FunctionCaller.
+            timeoutMillis = timeouts.forFunction(function.timeoutSeconds, condition.workspaceId),
         )
     }
 

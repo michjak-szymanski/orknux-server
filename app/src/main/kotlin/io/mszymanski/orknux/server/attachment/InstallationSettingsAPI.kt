@@ -47,6 +47,8 @@ class InstallationSettingsAPI(
         taskSweepConfigurable = settings.taskSweepConfigurable(),
         pluginMaxSourceKb = settings.pluginMaxSourceKb(),
         pluginMaxSourceKbConfigured = settings.pluginMaxSourceKbConfigured(),
+        pluginTimeoutSeconds = settings.pluginTimeoutSeconds(),
+        pluginTimeoutSecondsConfigured = settings.pluginTimeoutSecondsConfigured(),
     )
 
     @MutationMapping
@@ -179,6 +181,26 @@ class InstallationSettingsAPI(
      * stored whole and read whole on every call, so the number is a statement
      * about the disk and the heap at once.
      */
+    /**
+     * How long a plugin may take to load.
+     *
+     * An administrator's, like the source cap beside it: it holds a thread
+     * while it runs, so the number is a statement about this server rather
+     * than about one workspace's work.
+     */
+    @MutationMapping
+    fun setPluginTimeoutSeconds(@Argument seconds: Int): InstallationSettingsView {
+        access.requireAdmin()
+
+        settings.setPluginTimeoutSeconds(seconds, currentUser())
+        auditRecorder.record(
+            null,
+            WorkspaceAuditCategory.WORKSPACE,
+            "Plugins given $seconds seconds to load",
+        )
+        return installationSettings()
+    }
+
     @MutationMapping
     fun setPluginMaxSourceKb(@Argument kb: Int): InstallationSettingsView {
         access.requireAdmin()
@@ -255,6 +277,10 @@ data class InstallationSettingsView(
      * itself, each library it ships, and each file a URL load fetches.
      */
     val pluginMaxSourceKb: Int,
+    /** How long a plugin may take to load, in seconds. */
+    val pluginTimeoutSeconds: Int,
+    /** What a fresh installation waits, before anybody changed it. */
+    val pluginTimeoutSecondsConfigured: Int,
     /** What a fresh installation allows: the built-in default. */
     val pluginMaxSourceKbConfigured: Int,
     /**

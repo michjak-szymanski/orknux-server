@@ -1041,7 +1041,7 @@ data class ScriptProperties(
      * How long one call may take. The context is cancelled from another thread
      * when it runs out, which stops a script that has stopped making progress.
      */
-    val timeoutMillis: Long = 5_000,
+    val timeoutMillis: Long = 30_000,
 
     /**
      * How many statements one call may run. This is what catches a tight loop

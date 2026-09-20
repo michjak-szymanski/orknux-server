@@ -280,6 +280,9 @@ class WebhookAPI(
             pluginCapabilities.grantedTo(plugin),
             on = trigger.workspaceId,
             libraries = pluginSources.librariesOf(plugin),
+            // A webhook waits on this one, so it is bounded like any other
+            // function rather than by the plugin's loading bound.
+            timeoutMillis = timeouts.forFunction(function.timeoutSeconds, trigger.workspaceId),
         )
     }
 

@@ -678,7 +678,9 @@ class PluginUploadAPI(
          * — and a plugin that fails the contract is not stored at all, so every row
          * here is a plugin that held it up.
          */
-        val inspected = when (val answered = runner.inspect(source, files)) {
+        // The installation's own answer to how long a load may take, set on the
+        // admin screen rather than in the file it starts from.
+        val inspected = when (val answered = runner.inspect(source, files, installation.pluginTimeoutMillis())) {
             is PluginInspection.Read -> answered
             is PluginInspection.Unreadable -> throw PluginContractException(answered.reason)
         }

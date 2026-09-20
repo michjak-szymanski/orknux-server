@@ -233,6 +233,14 @@ class WorkflowExceptionResolver : DataFetcherExceptionResolverAdapter() {
             is ConditionFunctionNotBooleanException,
             is RetentionOutOfRangeException,
             is TaskSweepIntervalOutOfRangeException,
+            /*
+             * The two plugin bounds an administrator sets. Neither was listed,
+             * so a typed zero came back as INTERNAL_ERROR with a correlation
+             * id - a sentence saying nothing, about a number the screen itself
+             * offered to change.
+             */
+            is io.mszymanski.orknux.server.attachment.PluginSourceLimitOutOfRangeException,
+            is io.mszymanski.orknux.server.attachment.PluginTimeoutOutOfRangeException,
             is TaskSweepNotConfigurableException,
             is RevisionNotRestorableException,
             is RevisionComponentGoneException,

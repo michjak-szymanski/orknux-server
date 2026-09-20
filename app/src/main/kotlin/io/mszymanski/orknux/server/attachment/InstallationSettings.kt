@@ -59,6 +59,7 @@ object SettingNames {
     const val EXECUTION_RETENTION_DAYS = "execution.retention.days"
     const val TASK_SWEEP_MINUTES = "task.sweep.minutes"
     const val PLUGIN_MAX_SOURCE_KB = "plugin.max.source.kb"
+    const val PLUGIN_TIMEOUT_SECONDS = "plugin.timeout.seconds"
 }
 
 /**
@@ -78,6 +79,11 @@ class InstallationSettings(
     private val revisions: RevisionProperties,
     private val tasks: TaskSweepProperties,
     private val runs: ExecutionRetentionProperties,
+    /**
+     * What the file says a plugin may take to load, which is where a fresh
+     * installation starts before anybody touches the screen.
+     */
+    private val plugins: io.mszymanski.orknux.workflow.script.PluginProperties,
     /**
      * Which engine is carrying tasks, read as the container reads it.
      *
@@ -226,6 +232,47 @@ class InstallationSettings(
     /** What a fresh installation allows: the built-in default. */
     fun pluginMaxSourceKbConfigured(): Int = DEFAULT_PLUGIN_SOURCE_KB
 
+    /**
+     * How long a plugin may take to load, in seconds.
+     *
+     * A screen rather than a restart, for the same reason the source cap is
+     * one: which plugins an installation runs is not a decision made once at
+     * deployment, and a bundle that needs twelve seconds on a small machine is
+     * found out by somebody watching it fail - not by whoever wrote the
+     * environment file.
+     *
+     * This is the *loading* bound. What one of its functions or tools may then
+     * take is the workspace's business and is set there: a plugin that is slow
+     * to parse and a tool that is slow to answer are different problems with
+     * different people to talk to.
+     */
+    fun pluginTimeoutSeconds(): Int {
+        val held = settings.findByIdOrNull(SettingNames.PLUGIN_TIMEOUT_SECONDS)
+            ?: return pluginTimeoutSecondsConfigured()
+        return held.value.toIntOrNull()?.takeIf { it in MIN_PLUGIN_TIMEOUT_SECONDS..MAX_PLUGIN_TIMEOUT_SECONDS }
+            ?: pluginTimeoutSecondsConfigured()
+    }
+
+    /** What a fresh installation waits - ORKNUX_PLUGIN_TIMEOUT_MILLIS. */
+    fun pluginTimeoutSecondsConfigured(): Int =
+        (plugins.timeoutMillis / 1000).toInt().coerceIn(MIN_PLUGIN_TIMEOUT_SECONDS, MAX_PLUGIN_TIMEOUT_SECONDS)
+
+    /** The same number where it is used, which is in milliseconds. */
+    fun pluginTimeoutMillis(): Long = pluginTimeoutSeconds() * 1000L
+
+    @Transactional
+    fun setPluginTimeoutSeconds(seconds: Int, by: String) {
+        if (seconds !in MIN_PLUGIN_TIMEOUT_SECONDS..MAX_PLUGIN_TIMEOUT_SECONDS) {
+            throw PluginTimeoutOutOfRangeException(seconds)
+        }
+        val held = settings.findByIdOrNull(SettingNames.PLUGIN_TIMEOUT_SECONDS)
+            ?: InstallationSetting(name = SettingNames.PLUGIN_TIMEOUT_SECONDS)
+        held.value = seconds.toString()
+        held.lastModifiedAt = OffsetDateTime.now()
+        held.lastModifiedBy = by
+        settings.save(held)
+    }
+
     fun pluginMaxSourceBytes(): Long = pluginMaxSourceKb() * 1024L
 
     @Transactional
@@ -368,6 +415,24 @@ const val MAX_SWEEP_MINUTES = 1440
 const val MIN_PLUGIN_SOURCE_KB = 64
 const val MAX_PLUGIN_SOURCE_KB = 20 * 1024
 const val DEFAULT_PLUGIN_SOURCE_KB = 5 * 1024
+
+/**
+ * One second and five minutes, around the file's own number.
+ *
+ * The floor is there because zero would make every plugin unloadable, and the
+ * ceiling because this bound holds a thread: a plugin that cannot be parsed in
+ * five minutes is not slow, it is wrong.
+ */
+const val MIN_PLUGIN_TIMEOUT_SECONDS = 1
+const val MAX_PLUGIN_TIMEOUT_SECONDS = 300
+
+class PluginTimeoutOutOfRangeException(val seconds: Int) : RuntimeException(
+    "$seconds is not a number of seconds a plugin can be given to load. " +
+        "Choose between $MIN_PLUGIN_TIMEOUT_SECONDS and $MAX_PLUGIN_TIMEOUT_SECONDS.",
+), Refusal {
+
+    override val arguments get() = mapOf("seconds" to seconds)
+}
 
 class PluginSourceLimitOutOfRangeException(val kb: Int) : RuntimeException(
     "$kb is not a number of KB a plugin source can be capped at. " +

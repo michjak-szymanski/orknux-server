@@ -905,6 +905,8 @@ type Mutation {
     setTaskSweepMinutes(minutes: Int!): InstallationSettings!
     "How large one of a plugin's source files may be, in KB. Administrators only."
     setPluginMaxSourceKb(kb: Int!): InstallationSettings!
+    "How long a plugin may take to load; 1 to 300 seconds."
+    setPluginTimeoutSeconds(seconds: Int!): InstallationSettings!
     """
     Says which chat uploaded files belong to. Sent when the message is, since a
     first message is what makes the chat.
@@ -5082,6 +5084,10 @@ type InstallationSettings {
     somebody has said otherwise.
     """
     pluginMaxSourceKb: Int!
+    "How long a plugin may take to load, in seconds."
+    pluginTimeoutSeconds: Int!
+    "What a fresh installation waits, before anybody changed it."
+    pluginTimeoutSecondsConfigured: Int!
     "What a fresh installation allows: the built-in default."
     pluginMaxSourceKbConfigured: Int!
     """

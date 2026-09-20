@@ -127,7 +127,16 @@ class PluginRunner(
      * three times and the only way the three answers are guaranteed to come from
      * the same instance.
      */
-    fun inspect(source: String, libraries: List<PluginLibraryFile> = emptyList()): PluginInspection {
+    fun inspect(
+        source: String,
+        libraries: List<PluginLibraryFile> = emptyList(),
+        /**
+         * How long the load may take, where the caller knows better than the
+         * file - an installation's own answer, set on the admin screen. Null
+         * is the file's number.
+         */
+        timeoutMillis: Long? = null,
+    ): PluginInspection {
         val stopped = AtomicReference<Overrun?>(null)
         return try {
             /*
@@ -141,14 +150,14 @@ class PluginRunner(
              * Intl at the top level cannot be loaded here. That is the safe
              * direction to be wrong in, and the template says so.
              */
-            guard.bounded(stopped, { newContext(emptySet()) }) { read(it, source, libraries) }
+            guard.bounded(stopped, { newContext(emptySet()) }, timeoutMillis) { read(it, source, libraries) }
         } catch (failure: PolyglotException) {
-            PluginInspection.Unreadable(describe(failure, stopped = stopped.get()))
+            PluginInspection.Unreadable(describe(failure, stopped = stopped.get(), timeoutMillis = timeoutMillis))
         } catch (failure: ScriptBusyException) {
             PluginInspection.Unreadable(failure.message ?: "could not be loaded")
         } catch (failure: IllegalStateException) {
             // Closing a cancelled context races with the call that was inside it.
-            val overrun = guard.overrunReason(stopped.get())
+            val overrun = guard.overrunReason(stopped.get(), timeoutMillis)
             PluginInspection.Unreadable(overrun?.plus(" while loading") ?: failure.message ?: "could not be loaded")
         }
     }
@@ -203,11 +212,23 @@ class PluginRunner(
          * registry its imports were rewritten to read from.
          */
         libraries: List<PluginLibraryFile> = emptyList(),
+        /**
+         * How long this one call may take, where the caller knows better than
+         * the installation's plugin bound - a tool or a function with a
+         * timeout of its own, or the workspace's default for its kind.
+         *
+         * Null is the installation's number, which is what every call used
+         * before this existed: a plugin's tool ran under the bound meant for
+         * *loading* a plugin, so a workspace that had set a two-minute tool
+         * timeout was stopped at ten seconds and told so in a sentence naming
+         * a number nobody had configured.
+         */
+        timeoutMillis: Long? = null,
     ): ScriptResult {
         val started = System.nanoTime()
         val stopped = AtomicReference<Overrun?>(null)
         return try {
-            guard.bounded(stopped, { newContext(permissions) }) {
+            guard.bounded(stopped, { newContext(permissions) }, timeoutMillis) {
                 ScriptResult.Returned(
                     invoke(it, source, functionName, arguments, settings, capabilities, on, surface, sessionId, libraries),
                     millis(started),
@@ -215,7 +236,7 @@ class PluginRunner(
             }
         } catch (failure: PolyglotException) {
             ScriptResult.Failed(
-                describe(failure, doing = "running", stopped = stopped.get()),
+                describe(failure, doing = "running", stopped = stopped.get(), timeoutMillis = timeoutMillis),
                 millis(started),
                 settled = !(failure.isCancelled || failure.isResourceExhausted) && stopped.get() == null,
             )
@@ -224,7 +245,7 @@ class PluginRunner(
         } catch (failure: ScriptContractException) {
             ScriptResult.Failed(failure.message ?: "did not return", millis(started))
         } catch (failure: IllegalStateException) {
-            val overrun = guard.overrunReason(stopped.get())
+            val overrun = guard.overrunReason(stopped.get(), timeoutMillis)
             if (overrun != null) {
                 ScriptResult.Failed("$overrun while running", millis(started), settled = false)
             } else {
@@ -642,11 +663,24 @@ class PluginRunner(
      * to run", and whoever reads the sentence needs to know which of the two they
      * are looking at.
      */
-    private fun describe(failure: PolyglotException, doing: String = "loading", stopped: Overrun? = null): String = when {
+    private fun describe(
+        failure: PolyglotException,
+        doing: String = "loading",
+        stopped: Overrun? = null,
+        /**
+         * The bound that actually applied, where this call had one of its own.
+         *
+         * Said rather than assumed: the sentence used to name the
+         * installation's plugin timeout whatever the run was given, so a tool
+         * stopped at its workspace's two minutes reported ten seconds - a
+         * number nobody had set, about a wait nobody had had.
+         */
+        timeoutMillis: Long? = null,
+    ): String = when {
         // A cancelled context says only that somebody stopped it; the guard is
         // the one who knows whether that was the clock or the heap.
-        stopped != null -> "${guard.overrunReason(stopped)} while $doing"
-        failure.isCancelled -> "took longer than ${properties.timeoutMillis} ms while $doing"
+        stopped != null -> "${guard.overrunReason(stopped, timeoutMillis)} while $doing"
+        failure.isCancelled -> "took longer than ${timeoutMillis ?: properties.timeoutMillis} ms while $doing"
         failure.isResourceExhausted -> exhausted(failure, doing)
         // A guest exception here is usually the contract refusing something, and its
         // message says what — so it is passed on rather than summarised.
@@ -1852,7 +1886,7 @@ data class PluginProperties(
      * plugin is a bundle, and evaluating it is more work than calling one small
      * exported function.
      */
-    val timeoutMillis: Long = 10_000,
+    val timeoutMillis: Long = 30_000,
 
     /** How much of a plugin may run while it is being loaded. */
     val statementLimit: Long = 10_000_000,

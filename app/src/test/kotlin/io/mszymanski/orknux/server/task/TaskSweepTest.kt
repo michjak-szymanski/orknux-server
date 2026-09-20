@@ -315,6 +315,9 @@ class TaskSweepTest(
         // Run retention, which this test says nothing about - the defaults are
         // what a fresh installation has.
         ExecutionRetentionProperties(),
+        // How long a plugin may take to load, which this test says nothing
+        // about either.
+        io.mszymanski.orknux.workflow.script.PluginProperties(),
         temporalEnabled = true,
     )
 

@@ -488,7 +488,7 @@ orknux:
   script:
     # A workspace's JavaScript runs in a GraalJS sandbox with no host access, no
     # files, no network and no threads. These bound what it can spend.
-    timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:5000}
+    timeout-millis: ${ORKNUX_SCRIPT_TIMEOUT_MILLIS:30000}
     statement-limit: ${ORKNUX_SCRIPT_STATEMENT_LIMIT:5000000}
     # The lowest level a function's own `orknux.log` calls are kept at: debug,
     # info, warn, error, or off. Decided inside the sandbox, so tracing left in
@@ -512,7 +512,7 @@ orknux:
     # A plugin runs in its own sandbox, configured separately from a workspace's
     # functions on purpose. Its budget is the larger of the two: a plugin is a
     # bundle, and loading one is more work than calling one exported function.
-    timeout-millis: ${ORKNUX_PLUGIN_TIMEOUT_MILLIS:10000}
+    timeout-millis: ${ORKNUX_PLUGIN_TIMEOUT_MILLIS:30000}
     statement-limit: ${ORKNUX_PLUGIN_STATEMENT_LIMIT:10000000}
     # The same, for plugins, and separate on purpose: a plugin is somebody
     # else's code, and debugging one should not mean turning up every function

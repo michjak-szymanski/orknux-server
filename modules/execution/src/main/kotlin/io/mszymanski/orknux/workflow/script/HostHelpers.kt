@@ -410,7 +410,7 @@ internal object HostHelpers {
      * base64 is handed straight to whatever takes bytes, inside the sandbox,
      * and never passes through anything that has to retype it.
      */
-    fun render(absent: String): String = """
+    fun render(absent: String, absentPdf: String): String = """
         render: {
           /**
            * An SVG drawn as a PNG.
@@ -428,6 +428,31 @@ internal object HostHelpers {
             if (typeof svg !== 'string') return { error: 'the svg has to be the markup, as a string' };
 
             return JSON.parse(host.render_png(JSON.stringify([svg, width ?? null])));
+          },
+
+          /**
+           * One page of a PDF, drawn as a PNG.
+           *
+           * What a plugin that just made a document uses to look at what it
+           * actually produced - and what lets an agent check its own work
+           * rather than describing what it meant to write.
+           *
+           * @param pdf the document as base64, which is the shape a plugin
+           *   already holds it in.
+           * @param page which page, counting from one. Left out for the first.
+           * @param width how wide the picture should be in pixels, or left out
+           *   for something a screen can read.
+           * @returns `{ base64, bytes, width, height, pages }`, or `{ error }`
+           *   saying what was wrong.
+           */
+          pngFromPdf(pdf, page, width) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.render_pdf === undefined) {
+              return { error: '$absentPdf' };
+            }
+            if (typeof pdf !== 'string') return { error: 'the pdf has to be base64, as a string' };
+
+            return JSON.parse(host.render_pdf(JSON.stringify([pdf, page ?? null, width ?? null])));
           },
         },
     """.trimIndent()

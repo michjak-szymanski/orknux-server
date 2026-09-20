@@ -63,6 +63,11 @@ class SlackPluginHost(
      * that reaches nothing at all: see [SvgRenderer].
      */
     private val renderer: SvgRenderer,
+    /**
+     * And the fourth, which reaches nothing either: a page of a document,
+     * drawn - see [PdfRenderer] for why something that writes a PDF needs it.
+     */
+    private val pdfs: PdfRenderer,
 ) : PluginHost {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -93,6 +98,73 @@ class SlackPluginHost(
          * workspace to be the boundary of.
          */
         PluginCapability.RENDER_PNG -> renderPng(argument)
+
+        /*
+         * Its own door and its own grant. The reach is the same as the SVG
+         * one's - nothing at all - but the parser is not, and an operator may
+         * reasonably draw markup without handing documents to PDFBox. See the
+         * note on the capability.
+         */
+        PluginCapability.RENDER_PDF -> renderPdf(argument)
+    }
+
+    /**
+     * `[base64, page, width]`, as the contract's helper sends it.
+     *
+     * The document arrives as base64 for the reason the picture leaves as
+     * base64: what crosses this door is JSON, and bytes are not JSON. A plugin
+     * that has just made a PDF already holds it in that shape.
+     *
+     * The answer carries more than the SVG door's does - the picture's size,
+     * and the document's page count. `RENDERING.md` proposed reusing
+     * `OrknuxDrawnPng` unchanged; what that misses is that the caller here is
+     * checking a layout, and "how wide did it come out" and "is there a page
+     * two" are the two questions it has. A refusal can carry the page count
+     * for the caller that asked past the end, but not for the one that asked
+     * correctly and now wants to look at the rest.
+     */
+    private fun renderPdf(argument: String): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.isEmpty) return refusal("that call takes a pdf")
+
+        val base64 = given.get(0)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the pdf has to be base64 text")
+        val pdf = runCatching { java.util.Base64.getDecoder().decode(base64.trim()) }.getOrNull()
+            ?: return refusal("that is not a pdf: the bytes are not valid base64")
+
+        // Absent and null mean the first page; a number out of range is
+        // refused by name rather than rounded into one, as the contract asks.
+        val asked = given.get(1)
+        val page = when {
+            asked == null || asked.isNull -> 1
+            asked.isNumber -> asked.asInt()
+            asked.isTextual -> asked.asString().trim().toIntOrNull() ?: 1
+            else -> 1
+        }
+
+        val wide = given.get(2)
+        val width = when {
+            wide == null || wide.isNull -> null
+            wide.isNumber -> wide.asInt().takeIf { it > 0 }
+            wide.isTextual -> wide.asString().trim().toIntOrNull()?.takeIf { it > 0 }
+            else -> null
+        }
+
+        return when (val drawn = pdfs.png(pdf, page, width)) {
+            is PdfRenderer.Drawing.Refused -> refusal(drawn.reason)
+            is PdfRenderer.Drawing.Drawn -> mapper.writeValueAsString(
+                mapOf(
+                    "base64" to java.util.Base64.getEncoder().encodeToString(drawn.png),
+                    "bytes" to drawn.png.size,
+                    // What a caller checking a layout wants next: how large the
+                    // picture came out, and whether there is a page two.
+                    "width" to drawn.width,
+                    "height" to drawn.height,
+                    "pages" to drawn.pages,
+                ),
+            )
+        }
     }
 
     /**
@@ -106,6 +178,7 @@ class SlackPluginHost(
     private fun renderPng(argument: String): String {
         val given = runCatching { mapper.readTree(argument) }.getOrNull()
             ?: return refusal("the arguments were not JSON")
+
         if (!given.isArray || given.isEmpty) return refusal("that call takes an svg")
 
         val svg = given.get(0)?.takeIf { it.isTextual }?.asString()

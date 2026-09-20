@@ -71,6 +71,23 @@
             <artifactId>batik-transcoder</artifactId>
             <version>1.19</version>
         </dependency>
+        <!--
+            The PDF rasteriser, behind the same capability as the SVG one.
+
+            An agent that made a document has no way to look at it: a PDF is
+            bytes, and a model that can see reads pictures. This turns a page
+            into one, so the thing that wrote the document can check what it
+            actually produced rather than describing what it meant to produce.
+
+            PDFBox parses an untrusted document format, so what it is allowed
+            to do is pinned where the renderer is built - see PdfRenderer - and
+            every document it is handed came from inside this installation.
+        -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.5</version>
+        </dependency>
         <dependency>
             <groupId>org.apache.xmlgraphics</groupId>
             <artifactId>batik-codec</artifactId>

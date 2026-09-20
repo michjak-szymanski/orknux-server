@@ -86,7 +86,13 @@ class PluginRunner(
             .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
             .replace("%CRYPTO%", HostHelpers.crypto().prependIndent("  "))
             .replace("%ENCODING%", HostHelpers.encoding().prependIndent("  "))
-            .replace("%RENDER%", HostHelpers.render("this plugin was not granted RENDER_PNG").prependIndent("  "))
+            .replace(
+                "%RENDER%",
+                HostHelpers.render(
+                    "this plugin was not granted RENDER_PNG",
+                    "this plugin was not granted RENDER_PDF",
+                ).prependIndent("  "),
+            )
     }
 
     /**

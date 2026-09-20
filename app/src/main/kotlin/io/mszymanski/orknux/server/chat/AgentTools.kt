@@ -387,6 +387,87 @@ class AgentTools(
         /** The three names the grant covers, for the refusal at the running end. */
         val ARTIFACT_TOOL_NAMES = setOf(SAVE_ARTIFACT, BASE64_ENCODE, BASE64_DECODE)
 
+        /**
+         * The field a tool puts a picture in when the model should see it, and
+         * the one naming what kind it is.
+         *
+         * A tool answers with text, and a model that can see does not read
+         * base64 - it reads an image part, which is a different thing in the
+         * request. So a tool that has made a picture says so in its answer and
+         * the loop lifts it out: the answer the model reads keeps a sentence
+         * where the bytes were, and the bytes are hung on a turn of their own.
+         * See [pictureIn].
+         */
+        const val PICTURE = "picture"
+        const val PICTURE_TYPE = "pictureType"
+
+        /** What a picture is hung on where the tool named no type. */
+        const val PICTURE_DEFAULT_TYPE = "image/png"
+
+        /**
+         * As large a picture as is worth showing a model.
+         *
+         * Base64 characters rather than bytes, because that is what arrives.
+         * Past this the tool's own answer is left exactly as it is: a model
+         * being handed four megabytes of image is a context window spent on
+         * one screenshot, and the tool's text still says what it made.
+         */
+        const val MOST_PICTURE_CHARS = 5 * 1024 * 1024
+
+        /**
+         * The picture in a tool's answer, where it put one there for the model
+         * to look at.
+         *
+         * Null for every ordinary answer, which is almost all of them: this
+         * reads two named fields and refuses anything else, so a tool that
+         * happens to return a large string does not become an image by
+         * accident.
+         */
+        fun pictureIn(result: String): Picture? = runCatching {
+            val node = jackson.readTree(result)
+            if (!node.isObject) return null
+            val base64 = node.path(PICTURE).asString("")
+            if (base64.isEmpty() || base64.length > MOST_PICTURE_CHARS) return null
+            val type = node.path(PICTURE_TYPE).asString("").ifEmpty { PICTURE_DEFAULT_TYPE }
+            if (!type.startsWith("image/")) return null
+            Picture(dataUrl = "data:$type;base64,$base64", type = type, chars = base64.length)
+        }.getOrNull()
+
+        /**
+         * The same answer with the bytes taken out, which is what the model is
+         * told the tool said.
+         *
+         * The picture arrives separately and a copy of it in base64 helps
+         * nobody: it is the single largest thing that can land in a context
+         * window, it is unreadable, and the transcript keeps whatever is
+         * written here for as long as the session lives.
+         */
+        fun withoutPicture(result: String, picture: Picture): String = runCatching {
+            val node = jackson.readTree(result)
+            if (!node.isObject) return result
+            val edited = (node as tools.jackson.databind.node.ObjectNode).deepCopy()
+            edited.put(PICTURE, "")
+            edited.put("shown", true)
+            edited.put("pictureBytes", picture.chars / 4 * 3)
+            jackson.writeValueAsString(edited)
+        }.getOrElse { result }
+
+        /** One picture a tool made, on its way to a turn of its own. */
+        data class Picture(val dataUrl: String, val type: String, val chars: Int) {
+
+            /**
+             * What is said above it.
+             *
+             * Something rather than nothing, because a turn of pure image
+             * reads as a message with no words in it - and the model has just
+             * called a tool, so saying which one it is looking at is the
+             * difference between an answer and a guess.
+             */
+            fun noteFor(tool: String) = "The picture $tool just made, to look at."
+        }
+
+        private val jackson = ObjectMapper()
+
         val ARTIFACT_TOOLS = listOf(
             ToolSpec(
                 name = SAVE_ARTIFACT,

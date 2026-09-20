@@ -366,6 +366,13 @@ class AgentConversation(
                      * is not.
                      */
                     record(into, agent, answer)
+
+                    /*
+                     * Pictures this round's tools made, waiting for the calls
+                     * to be answered. See below for why they wait.
+                     */
+                    val shown = mutableListOf<Pair<String, AgentTools.Companion.Picture>>()
+
                     answer.calls.forEach { call ->
                         log.debug("Agent {} called {}", agent.name, call.name)
                         val here = at++
@@ -454,15 +461,54 @@ class AgentConversation(
                          * question about what the tool answered, and the
                          * answer is `got`.
                          */
-                        val gave = AuditRedaction.redactObvious(got)
+                        /*
+                         * A picture the tool made, taken out of what it said.
+                         *
+                         * A model that can see does not read base64 - it reads
+                         * an image part, which is a different thing in the
+                         * request - and a tool's answer cannot be one: the
+                         * answer to a call is a `tool` message and its content
+                         * is a string. So the bytes come out here and go back
+                         * in below, on a turn of their own, and what the model
+                         * reads as the tool's answer keeps a sentence where
+                         * four hundred kilobytes of base64 would have been.
+                         *
+                         * Which is also what the transcript keeps: the
+                         * alternative is a session holding every picture any
+                         * tool ever made, twice.
+                         */
+                        val picture = AgentTools.pictureIn(got)
+                        val said = picture?.let { AgentTools.withoutPicture(got, it) } ?: got
+                        picture?.let { shown.add(call.name to it) }
+
+                        val gave = AuditRedaction.redactObvious(said)
                         sessions.toolReturned(line, gave)
                         watch?.returned(here, gave, failed = AgentTools.failed(got))
                         conversation += ChatTurn(
                             role = "user",
-                            content = got,
+                            content = said,
                             respondingTo = call.id,
                         )
                     }
+
+                    /*
+                     * And then the pictures, after every call in the round has
+                     * been answered.
+                     *
+                     * Not between them: a provider requires every call to be
+                     * answered before anything else is said, and a turn slipped
+                     * in the middle is a request some of them refuse outright.
+                     * So they queue and land together, in the order the tools
+                     * made them.
+                     */
+                    shown.forEach { (tool, picture) ->
+                        conversation += ChatTurn(
+                            role = "user",
+                            content = picture.noteFor(tool),
+                            images = listOf(picture.dataUrl),
+                        )
+                    }
+                    shown.clear()
 
                     /*
                      * And anything a person said while those tools ran.

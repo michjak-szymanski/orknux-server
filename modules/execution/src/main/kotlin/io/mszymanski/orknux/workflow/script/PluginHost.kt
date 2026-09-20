@@ -176,6 +176,26 @@ enum class PluginCapability(
      */
     RENDER_PNG("Turn an SVG into a PNG, here on the server", forScripts = true),
 
+    /**
+     * And a page of a PDF into one, which is how something that made a
+     * document gets to look at it.
+     *
+     * Its own grant rather than part of [RENDER_PNG], which `RENDERING.md`
+     * argued against: the reach is identical - nothing - and a second name
+     * makes an administrator weigh a distinction that does not exist.
+     *
+     * What that argument leaves out is the parser. These are two different
+     * libraries reading two different untrusted formats, and a PDF is the
+     * larger of the two by a distance: an embedded-file model, an encryption
+     * model, a font stack it will load from inside the document. An operator
+     * who is happy to draw markup and not to hand documents to PDFBox has a
+     * real position, and one grant would take it away from them.
+     *
+     * `forScripts` for the same reason as the other: bytes in, a picture out,
+     * no connection and no credential anywhere in it.
+     */
+    RENDER_PDF("Turn a page of a PDF into a PNG, here on the server", forScripts = true),
+
     ;
 
     companion object {

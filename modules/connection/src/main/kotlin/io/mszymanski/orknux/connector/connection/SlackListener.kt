@@ -535,7 +535,17 @@ class SlackListener(
                 append("\"id\":\"").append(quoted(file.id)).append("\",")
                 append("\"name\":\"").append(quoted(file.name ?: file.title)).append("\",")
                 append("\"mimetype\":\"").append(quoted(file.mimetype)).append("\",")
-                append("\"size\":").append(file.size ?: 0)
+                append("\"size\":").append(file.size ?: 0).append(",")
+                /*
+                 * Where the bytes are, which is what makes a picture fetchable
+                 * without asking Slack who it belongs to first.
+                 *
+                 * Not a credential: `url_private` answers 403 to anybody
+                 * without the bot token, so this is a location rather than a
+                 * key - and the only thing that fetches it is the connection
+                 * that already holds the token. See `SlackFiles`.
+                 */
+                append("\"url\":\"").append(quoted(file.urlPrivate)).append("\"")
                 append("}")
             }
         }

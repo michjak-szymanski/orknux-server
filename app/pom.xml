@@ -52,6 +52,31 @@
             <artifactId>orknux-execution</artifactId>
         </dependency>
 
+        <!--
+            The SVG renderer, for the RENDER_PNG capability.
+
+            Here rather than in the execution module on purpose: that module is
+            the sandbox and knows nothing about what the server can do for a
+            plugin, exactly as it knows nothing about Slack. What it holds is
+            the door; this is what stands behind it.
+
+            Batik reads an untrusted document format that has a scripting model
+            and an external-reference model of its own. Both are switched off
+            explicitly where the transcoder is built - see SvgRenderer - rather
+            than left to the library's defaults, which have moved between
+            versions.
+        -->
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-transcoder</artifactId>
+            <version>1.19</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-codec</artifactId>
+            <version>1.19</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>

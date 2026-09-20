@@ -86,6 +86,7 @@ class PluginRunner(
             .replace("%STORE%", HostHelpers.sessionStore().prependIndent("  "))
             .replace("%CRYPTO%", HostHelpers.crypto().prependIndent("  "))
             .replace("%ENCODING%", HostHelpers.encoding().prependIndent("  "))
+            .replace("%RENDER%", HostHelpers.render("this plugin was not granted RENDER_PNG").prependIndent("  "))
     }
 
     /**
@@ -1251,6 +1252,79 @@ class PluginRunner(
              * back: nothing that crosses is an object either side could walk
              * from.
              */
+            /** The standard alphabet, in the order the encoding numbers it. */
+            const ORKNUX_BASE64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+            /*
+             * Base64, as the whole world's bundles expect to find it.
+             *
+             * Not a permission and not a door: these two are arithmetic over a
+             * string. They reach nothing, so there is nothing to grant, and
+             * they are defined here rather than in `orknux` because a bundle
+             * written for a browser looks for them by these names and finds
+             * nothing else.
+             *
+             * They are here because of what a bundle does when they are
+             * missing. Mermaid decodes a table at module scope with
+             *
+             *   typeof atob == 'function' ? atob(m) : typeof Buffer.from == ...
+             *
+             * which reads like a guarded fallback and is not one: `Buffer.from`
+             * evaluates `Buffer` before `typeof` ever applies, so the absence
+             * of atob did not fall through to Node's way, it threw
+             * `ReferenceError: Buffer is not defined` and the plugin could not
+             * be loaded at all.
+             *
+             * Written out rather than switched on because GraalJS has no option
+             * for them: of its 108 `js.*` options none mentions base64, which
+             * was checked rather than assumed.
+             *
+             * Binary strings, exactly as the browser's are - one character per
+             * byte, not UTF-8. A bundle that wants text does its own decoding
+             * on top, and one that wants bytes gets bytes.
+             */
+            globalThis.atob = function atob(encoded) {
+              const text = String(encoded).replace(/[\t\n\f\r ]/g, '');
+              if (text.length % 4 === 1) throw new Error('atob: the input is not valid base64');
+
+              let bits = 0;
+              let held = 0;
+              let out = '';
+              for (const character of text) {
+                if (character === '=') break;
+                const value = ORKNUX_BASE64.indexOf(character);
+                if (value < 0) throw new Error('atob: the input is not valid base64');
+                held = (held << 6) | value;
+                bits += 6;
+                if (bits >= 8) {
+                  bits -= 8;
+                  out += String.fromCharCode((held >> bits) & 0xff);
+                }
+              }
+              return out;
+            };
+
+            globalThis.btoa = function btoa(binary) {
+              const text = String(binary);
+              let out = '';
+              for (let at = 0; at < text.length; at += 3) {
+                const one = text.charCodeAt(at);
+                const two = text.charCodeAt(at + 1);
+                const three = text.charCodeAt(at + 2);
+                if (one > 0xff || two > 0xff || three > 0xff) {
+                  throw new Error('btoa: the input has a character past one byte');
+                }
+
+                out += ORKNUX_BASE64[one >> 2];
+                out += ORKNUX_BASE64[((one & 3) << 4) | (Number.isNaN(two) ? 0 : two >> 4)];
+                out += Number.isNaN(two)
+                  ? '='
+                  : ORKNUX_BASE64[((two & 15) << 2) | (Number.isNaN(three) ? 0 : three >> 6)];
+                out += Number.isNaN(three) ? '=' : ORKNUX_BASE64[three & 63];
+              }
+              return out;
+            };
+
             globalThis.orknux = {
 %SLACK%
 %HTTP%
@@ -1258,6 +1332,7 @@ class PluginRunner(
 %STORE%
 %CRYPTO%
 %ENCODING%
+%RENDER%
             };
 
             globalThis.OrknuxParameter = class OrknuxParameter {

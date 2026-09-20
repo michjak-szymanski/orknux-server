@@ -398,6 +398,40 @@ internal object HostHelpers {
      * `TextEncoder` unless somebody granted TEXT_ENCODING, so a plugin holding
      * a string has no way to make bytes of it and no way to read bytes back.
      */
+    /**
+     * Drawing an SVG, which the sandbox cannot do for itself.
+     *
+     * There is no WebAssembly in this engine and no rasteriser in the language,
+     * so a plugin holding a diagram has no way to turn it into a picture - the
+     * work is the server's, and this is how it is asked for.
+     *
+     * The answer is base64 because bytes are not JSON and JSON is all that
+     * crosses a door. That is not the failure the model kept hitting: this
+     * base64 is handed straight to whatever takes bytes, inside the sandbox,
+     * and never passes through anything that has to retype it.
+     */
+    fun render(absent: String): String = """
+        render: {
+          /**
+           * An SVG drawn as a PNG.
+           *
+           * @param svg the markup itself, not base64 and not a url.
+           * @param width how wide the picture should be in pixels, or left out
+           *   for the size the document declares.
+           * @returns `{ base64, bytes }`, or `{ error }` saying what was wrong.
+           */
+          pngFromSvg(svg, width) {
+            const host = globalThis.__orknuxHost;
+            if (host === undefined || host.render_png === undefined) {
+              return { error: '$absent' };
+            }
+            if (typeof svg !== 'string') return { error: 'the svg has to be the markup, as a string' };
+
+            return JSON.parse(host.render_png(JSON.stringify([svg, width ?? null])));
+          },
+        },
+    """.trimIndent()
+
     fun encoding(): String = """
         encoding: {
           /** Whichever shape was handed over, as the pair a door takes. */

@@ -58,6 +58,11 @@ class SlackPluginHost(
      * list and deciding which to ask, which is a decision with nothing in it.
      */
     private val network: NetworkPluginHost,
+    /**
+     * The third thing the server does on a caller's behalf, and the only one
+     * that reaches nothing at all: see [SvgRenderer].
+     */
+    private val renderer: SvgRenderer,
 ) : PluginHost {
 
     private val log = LoggerFactory.getLogger(javaClass)
@@ -79,6 +84,51 @@ class SlackPluginHost(
          * which is said at length on the capability and on NetworkPluginHost.
          */
         PluginCapability.NETWORK_REQUEST -> network.request(argument)
+
+        /*
+         * No workspace scoping either, and for a plainer reason than a
+         * request's: what goes in is a string the caller already had and what
+         * comes back is computed from it. There is no connection, no address
+         * and no credential anywhere in it, so there is nothing for a
+         * workspace to be the boundary of.
+         */
+        PluginCapability.RENDER_PNG -> renderPng(argument)
+    }
+
+    /**
+     * `[svg, width]`, as the contract's helper sends it.
+     *
+     * Answered as base64, because what crosses this door is JSON and bytes are
+     * not JSON. That is the one place the caller has to encode - and it does
+     * not have to *retype* it: a plugin hands the answer straight to whatever
+     * takes bytes, and the model never sees it.
+     */
+    private fun renderPng(argument: String): String {
+        val given = runCatching { mapper.readTree(argument) }.getOrNull()
+            ?: return refusal("the arguments were not JSON")
+        if (!given.isArray || given.isEmpty) return refusal("that call takes an svg")
+
+        val svg = given.get(0)?.takeIf { it.isTextual }?.asString()
+            ?: return refusal("the svg has to be text")
+
+        // Absent, null and 0 all mean "the size the document declares".
+        val asked = given.get(1)
+        val width = when {
+            asked == null || asked.isNull -> null
+            asked.isNumber -> asked.asInt().takeIf { it > 0 }
+            asked.isTextual -> asked.asString().trim().toIntOrNull()?.takeIf { it > 0 }
+            else -> null
+        }
+
+        return when (val drawn = renderer.png(svg, width)) {
+            is SvgRenderer.Drawing.Refused -> refusal(drawn.reason)
+            is SvgRenderer.Drawing.Drawn -> mapper.writeValueAsString(
+                mapOf(
+                    "base64" to java.util.Base64.getEncoder().encodeToString(drawn.png),
+                    "bytes" to drawn.png.size,
+                ),
+            )
+        }
     }
 
     /**

@@ -153,6 +153,29 @@ enum class PluginCapability(
      */
     NETWORK_REQUEST("Make requests to any address this server can reach", forScripts = true),
 
+    /**
+     * Turn an SVG into a PNG.
+     *
+     * The narrowest thing on this list. It reaches nothing: what goes in is a
+     * string the caller already had, what comes back is bytes computed from it,
+     * and no connection, address or credential is involved at any point. It is
+     * a capability rather than a permission only because the work is the
+     * server's to do - the sandbox has no WebAssembly and no rasteriser, which
+     * was checked rather than assumed.
+     *
+     * `forScripts` for the same reason reading a thread is: its bound is not
+     * somebody's judgement. Size and time bound it, and they bound everybody
+     * equally, so there is nothing a grant would be deciding.
+     *
+     * What it costs is a renderer, and a renderer that reads SVG is a program
+     * that reads an untrusted document format with a scripting model and an
+     * external-reference model of its own. Both are switched off explicitly
+     * where it is built; see the implementation. A plugin handing it a diagram
+     * it just drew is the whole of the intended use, and the guards are there
+     * for the day something hands it a document from outside.
+     */
+    RENDER_PNG("Turn an SVG into a PNG, here on the server", forScripts = true),
+
     ;
 
     companion object {

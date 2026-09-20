@@ -125,8 +125,11 @@ class StepPictureTools(
                  * link nobody could follow.
                  *
                  * So the bytes go into the session's store under a key, which
-                 * is what `slack_uploadBinary` and every other tool that
-                 * uploads bytes already takes. The markdown stays, because the
+                 * is what every tool that uploads a file already takes - a
+                 * content key rather than the bytes themselves. Which tools
+                 * those are is not this one's business: they arrive with
+                 * whatever plugins an installation has loaded, and core naming
+                 * one of them would be core knowing a plugin by name. The markdown stays, because the
                  * run's own interface reads it - and the note says which of
                  * the two is a delivery and which is not.
                  */
@@ -180,10 +183,10 @@ class StepPictureTools(
          * model gets the one thing it can actually act on.
          */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is drawn and its bytes are in this session's store under `key`. Pass that " +
-                "key to a tool that uploads bytes - slack_uploadBinary takes one - to put the " +
-                "picture in front of somebody. It is also filed against this run and shown under " +
-                "this node."
+            "The picture is drawn and its bytes are in this session's store under `key`. To put " +
+                "the picture in front of somebody, pass that key to whichever of your tools sends " +
+                "or uploads a file - one that takes a content key rather than the bytes " +
+                "themselves. It is also filed against this run and shown under this node."
         } else {
             "The picture is drawn and filed against this run, and is shown under this node. Its " +
                 "bytes could not be left anywhere this session can reach, so nothing here can " +

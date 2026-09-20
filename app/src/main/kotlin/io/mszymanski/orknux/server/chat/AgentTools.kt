@@ -516,9 +516,8 @@ class AgentTools(
                     "download it later. " +
                     "Use it only when there is no better way to put the file in front of the person who " +
                     "wants it, or when they asked for an artifact. If you are answering somebody in a chat, " +
-                    "attach the file to your reply instead, with whatever tool you have been given for it - " +
-                    "where Slack is connected that is slack_uploadBinary for a picture or a PDF and " +
-                    "slack_upload for text - because an artifact is reached by leaving the conversation and " +
+                    "attach the file to your reply instead, with whatever tool you have been given that " +
+                    "sends or uploads one - because an artifact is reached by leaving the conversation and " +
                     "finding the run it belongs to, and a file saved here and mentioned in a message has been " +
                     "filed rather than delivered. This is the right place for something a later step or a " +
                     "later day needs, and for what nobody is waiting on now. " +

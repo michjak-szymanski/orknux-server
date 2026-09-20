@@ -97,8 +97,11 @@ class TaskTools(
                              * be *delivered*.
                              *
                              * The bytes go into this task's session store, which
-                             * is what every tool that uploads bytes reads from -
-                             * `slack_uploadBinary` takes one. Handed only
+                             * is what every tool that uploads a file reads
+                             * from - a content key rather than the bytes
+                             * themselves. Which tools those are depends on the
+                             * plugins an installation loaded, so this does not
+                             * name one. Handed only
                              * markdown, a model that wanted to show somebody a
                              * picture pasted a link, and a chat client with no
                              * document to resolve it against printed the
@@ -185,10 +188,11 @@ class TaskTools(
 
         /** What to say about a picture that can be handed over, and one that cannot. */
         private fun noteFor(key: String?): String = if (key != null) {
-            "The picture is drawn and its bytes are in this task's session store under `key`. Pass " +
-                "that key to a tool that uploads bytes - slack_uploadBinary takes one - to put it " +
-                "in front of somebody. It is also shown with this task's outcome, so it does not " +
-                "have to be mentioned to be seen."
+            "The picture is drawn and its bytes are in this task's session store under `key`. To " +
+                "put it in front of somebody, pass that key to whichever of your tools sends or " +
+                "uploads a file - one that takes a content key rather than the bytes themselves. " +
+                "It is also shown with this task's outcome, so it does not have to be mentioned " +
+                "to be seen."
         } else {
             "The picture is drawn and shown with this task's outcome. Its bytes could not be left " +
                 "anywhere this session can reach, so nothing here can upload it - say where it is " +

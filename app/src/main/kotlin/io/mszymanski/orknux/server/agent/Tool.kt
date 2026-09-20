@@ -196,9 +196,14 @@ interface AgentToolRepository : JpaRepository<AgentTool, Long> {
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<AgentTool>
 
     /**
-     * The same, narrowed to what a word appears in.
+     * The same, narrowed to the tools whose name carries a word.
      *
-     * The name and the description, which is what a row shows that somebody could be remembering.
+     * The name only. It was the name or the description, and a tool's
+     * description here is a paragraph written for a model to read - so
+     * searching "date" returned every github tool, because their descriptions
+     * mention a commit's date. Any ordinary word drags in half the list, which
+     * is a search that narrows nothing.
+     *
      * Case-insensitive and a substring rather than a prefix: what people recall
      * is a phrase from the middle of a name, not how it opened.
      *
@@ -210,8 +215,7 @@ interface AgentToolRepository : JpaRepository<AgentTool, Long> {
         """
         SELECT e FROM AgentTool e
         WHERE e.workspaceId = :workspaceId
-          AND (LOWER(e.name) LIKE LOWER(CONCAT('%', :looking, '%'))
-            OR LOWER(COALESCE(e.description, '')) LIKE LOWER(CONCAT('%', :looking, '%')))
+          AND LOWER(e.name) LIKE LOWER(CONCAT('%', :looking, '%'))
         """,
     )
     fun searching(

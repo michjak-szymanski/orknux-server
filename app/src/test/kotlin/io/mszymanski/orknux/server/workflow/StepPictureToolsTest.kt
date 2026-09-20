@@ -156,15 +156,28 @@ class StepPictureToolsTest {
         /*
          * A key, because a key is the thing that can be delivered.
          *
-         * The bytes are in the session's store under it, which is what
-         * `slack_uploadBinary` and every other tool that uploads bytes takes.
-         * Handed only a link, a model that wanted to show somebody the picture
-         * pasted the markdown - and a chat with no document to resolve an
-         * address against printed the construction instead.
+         * The bytes are in the session's store under it, which is what every
+         * tool that uploads a file takes. Handed only a link, a model that
+         * wanted to show somebody the picture pasted the markdown - and a chat
+         * with no document to resolve an address against printed the
+         * construction instead.
          */
         assertThat(answer.path("key").stringValue()).isEqualTo("picture.77")
         assertThat(scratch.held[55L to "picture.77"]).isEqualTo(mapper.writeValueAsString("AQID"))
-        assertThat(answer.path("note").stringValue()).contains("slack_uploadBinary")
+        assertThat(answer.path("note").stringValue()).contains("pass that key")
+
+        /*
+         * And the note names no tool.
+         *
+         * It named `slack_uploadBinary`, which is a tool the Slack plugin
+         * brings: core telling a model to call something that is only there on
+         * an installation that loaded that plugin. What tools an agent has is
+         * the agent's own business, and it can read its own list - so the note
+         * says what kind of tool to look for and stops.
+         */
+        assertThat(answer.path("note").stringValue())
+            .describedAs("core naming a plugin's tool")
+            .doesNotContain("slack")
 
         /*
          * And no markdown at all.

@@ -93,7 +93,25 @@ class AttachmentDownloadsTest {
     fun `a picture's policy stays as narrow as it was`() {
         val policy = headerOf("image/png", "Content-Security-Policy")
 
-        assertThat(policy).isEqualTo("default-src 'none'; img-src 'self'; sandbox")
+        assertThat(policy).isEqualTo("default-src 'none'; img-src 'self'; frame-ancestors 'self'; sandbox")
+    }
+
+    /**
+     * And it may be framed by us, because that is how it is read.
+     *
+     * Spring Security writes `X-Frame-Options: DENY` on everything that does
+     * not already carry the header, which is right for a page and wrong for
+     * the one response whose whole purpose is to be opened inside a frame:
+     * the reader got Chrome's "refused to connect" where the report should
+     * have been. Both headers say it, because the old one is what an older
+     * browser reads.
+     */
+    @Test
+    fun `a document may be framed by this application, and by nobody else`() {
+        assertThat(headerOf("text/html", "Content-Security-Policy", reading = true))
+            .contains("frame-ancestors 'self'")
+        assertThat(headerOf("text/html", "X-Frame-Options", reading = true)).isEqualTo("SAMEORIGIN")
+        assertThat(headerOf("image/png", "X-Frame-Options")).isEqualTo("SAMEORIGIN")
     }
 
     /**

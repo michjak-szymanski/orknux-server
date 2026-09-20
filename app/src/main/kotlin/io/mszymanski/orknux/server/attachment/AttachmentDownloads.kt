@@ -86,11 +86,32 @@ class AttachmentDownloads(private val store: AttachmentStore) {
             .header(
                 "Content-Security-Policy",
                 if (readable) {
-                    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; sandbox"
+                    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; " +
+                        // Framed by this application and nothing else. Without
+                        // it the document is framed by nobody at all: the
+                        // default below is DENY, and the page that opens one
+                        // opens it in a frame - so the reader got Chrome's
+                        // "refused to connect" where the report should have
+                        // been. 'self' is the whole of the widening; every
+                        // deployment serves the interface and the server on
+                        // one origin, the development proxy included.
+                        "frame-ancestors 'self'; sandbox"
                 } else {
-                    "default-src 'none'; img-src 'self'; sandbox"
+                    "default-src 'none'; img-src 'self'; frame-ancestors 'self'; sandbox"
                 },
             )
+            /*
+             * And the older header saying the same thing.
+             *
+             * Spring Security writes `DENY` on every response that does not
+             * already carry this one, which is the right default for an
+             * application whose pages should never be framed - and wrong for
+             * the one response that exists to be read inside a frame. Set here
+             * rather than relaxed in the security configuration, because
+             * `SAMEORIGIN` everywhere would be a decision about every page in
+             * order to fix one file.
+             */
+            .header("X-Frame-Options", "SAMEORIGIN")
             .header("X-Content-Type-Options", "nosniff")
             .body(InputStreamResource(store.open(location)))
     }

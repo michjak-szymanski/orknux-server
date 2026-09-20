@@ -119,6 +119,13 @@ class TaskTools(
                                      * it - and handed a link with no other way
                                      * to deliver anything, it pasted one into
                                      * a chat that printed the construction.
+                                     *
+                                     * The note has to say what `key` is *not*,
+                                     * as well as what it is. Told to place a
+                                     * picture and given one string, a model
+                                     * wrote `![a tower](picture.18)` - the
+                                     * store key as a URL - and the outcome
+                                     * drew "This picture is gone" four times.
                                      */
                                     put("note", noteFor(key))
                                 },
@@ -191,8 +198,9 @@ class TaskTools(
             "The picture is drawn and its bytes are in this task's session store under `key`. To " +
                 "put it in front of somebody, pass that key to whichever of your tools sends or " +
                 "uploads a file - one that takes a content key rather than the bytes themselves. " +
-                "It is also shown with this task's outcome, so it does not have to be mentioned " +
-                "to be seen."
+                "`key` is not a URL: writing it into a link or an image gives an address that " +
+                "resolves to nothing. It is also shown with this task's outcome, so it does not " +
+                "have to be mentioned to be seen."
         } else {
             "The picture is drawn and shown with this task's outcome. Its bytes could not be left " +
                 "anywhere this session can reach, so nothing here can upload it - say where it is " +
@@ -294,9 +302,10 @@ class TaskTools(
                     "a mock-up, an image to go with something you are producing - and not to decorate an answer " +
                     "that is prose: each one takes time and costs money. Describe what should be in the picture " +
                     "rather than instructing a model, since the description is sent to a drawing model and not " +
-                    "to you. Everything you draw is shown with the task's outcome whether or not you mention it, " +
-                    "so use the markdown it hands back only where the picture belongs at a particular point in " +
-                    "your summary.",
+                    "to you. Everything you draw is shown with the task's outcome whether or not you mention " +
+                    "it, so you never have to place it. What comes back is `key`, a handle for a tool that " +
+                    "sends or uploads a file - not an address. Never put it in a link or an image: it " +
+                    "resolves to nothing.",
             parameters = listOf(
                 ToolParameterSpec("description", "What the picture should be of.", required = true),
             ),

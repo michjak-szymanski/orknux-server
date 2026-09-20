@@ -665,6 +665,109 @@ class AgentNodeRunnerTest(
         return id
     }
 
+    /**
+     * The agent says the work is done, and the round stops there.
+     *
+     * A round ends when the model writes prose instead of asking for another
+     * tool, which assumes the answer is the prose. An agent that posted its own
+     * reply - a Slack message, an uploaded file - has nothing left to write,
+     * and being asked for an answer anyway made it either repeat the message or
+     * answer with nothing, which reads as a failure and is retried, which posts
+     * the whole thing twice. This is that ending said deliberately.
+     */
+    @Test
+    fun `an agent that has already delivered its work can finish the turn itself`() {
+        val agentId = agent("Responder", model(serveFinishing()))
+        graph(agentId)
+
+        start()
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(step.output)
+            .describedAs("nothing was passed, so the next node is handed nothing rather than invented prose")
+            .isEmpty()
+        assertThat(executions.findAll().single().status).isEqualTo(ExecutionStatus.COMPLETED)
+
+        // One round. The model was not asked again for an answer it had just
+        // said it did not have, which is the whole point.
+        assertThat(received).hasSize(1)
+        assertThat(received.single()).contains("finish_answer")
+    }
+
+    /** And what it passes, where it passes something, is what the step answers. */
+    @Test
+    fun `finishing with an answer hands that answer to the next node`() {
+        val agentId = agent("Responder", model(serveFinishing(answer = "posted to the incidents channel")))
+        graph(agentId)
+
+        start()
+
+        val step = steps.findAll().single { it.agentId == agentId }
+        assertThat(step.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(step.output).isEqualTo("posted to the incidents channel")
+    }
+
+    /**
+     * Unticked, it is not there at all.
+     *
+     * A workflow whose next node needs an answer to work with is the case the
+     * switch exists for, and an agent that cannot finish early answers the way
+     * it always did.
+     */
+    @Test
+    fun `an agent with finishing turned off is not offered the tool`() {
+        val modelId = model(serveAnswer())
+        val agentId = agent("Responder", modelId)
+        // The model goes back in with it: an update reads a field nobody sent
+        // as null, and null is what clears the model.
+        graphQlTester.document(
+            """mutation { updateAgent(id: $agentId, input: {
+                 name: "Responder", modelId: $modelId, finishAccess: false
+               }) { id } }""",
+        ).execute()
+        graph(agentId)
+
+        start()
+
+        assertThat(steps.findAll().single { it.agentId == agentId }.status).isEqualTo(StepStatus.COMPLETED)
+        assertThat(received.single()).doesNotContain("finish_answer")
+    }
+
+    /**
+     * A model that asks for `finish_answer` once, and answers prose if it is
+     * ever asked again.
+     *
+     * The second answer is a tripwire: reaching it means the round did not end
+     * where the tool said it did, and the test that counts the requests is what
+     * says so.
+     */
+    private fun serveFinishing(answer: String? = null): String {
+        val calls = AtomicInteger()
+        val arguments = if (answer == null) "{}" else """{"answer":"$answer"}"""
+        val escaped = arguments.replace("\"", "\\\"")
+        server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
+        server.createContext("/chat/completions") { exchange ->
+            received += exchange.requestBody.reader(StandardCharsets.UTF_8).use { it.readText() }
+            val body = if (calls.incrementAndGet() == 1) {
+                """
+                {"choices":[{"message":{"role":"assistant","content":null,
+                  "tool_calls":[{"id":"call_1","type":"function",
+                    "function":{"name":"finish_answer","arguments":"$escaped"}}]}}],
+                 "usage":{"prompt_tokens":9,"completion_tokens":4}}
+                """.trimIndent()
+            } else {
+                """{"choices":[{"message":{"role":"assistant","content":"asked again"}}]}"""
+            }.toByteArray(StandardCharsets.UTF_8)
+            exchange.responseHeaders.add("Content-Type", "application/json")
+            exchange.sendResponseHeaders(200, body.size.toLong())
+            exchange.responseBody.use { it.write(body) }
+            exchange.close()
+        }
+        server.start()
+        return "http://${server.address.hostString}:${server.address.port}"
+    }
+
     private fun model(endpoint: String): Long {
         val providerId = graphQlTester.document(
             """mutation { createModelProvider(input: {

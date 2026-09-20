@@ -1,0 +1,18 @@
+-- Whether an agent may end its turn by saying so, rather than by writing prose.
+--
+-- A round ends when the model writes an answer instead of asking for another
+-- tool, which assumes the answer is the prose. An agent that posts its reply
+-- itself - a Slack message, an uploaded file - has nothing left to write, and
+-- being asked for an answer anyway made it either repeat what it had sent or
+-- answer with nothing, which the provider reports as an empty message, which
+-- the run reads as a failure, which is retried, which posts the whole thing a
+-- second time. `finish_answer` is that ending said deliberately.
+--
+-- On by default, like artifact_access: it opens no door onto anything and
+-- takes nothing that exists. What it changes is how a turn stops. The switch
+-- exists for the workflow whose next node needs an answer to work with, where
+-- an agent finishing early would hand it an empty one.
+--
+-- TRUE for the rows already here, so an installation upgrading into this finds
+-- it working rather than switched off everywhere.
+ALTER TABLE agent ADD COLUMN finish_access BOOLEAN NOT NULL DEFAULT TRUE;

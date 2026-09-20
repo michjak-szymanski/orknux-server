@@ -37,6 +37,7 @@ CREATE TABLE agent
     orknux_access                boolean not null default false,
     shell_access                 boolean not null default false,
     artifact_access              boolean not null default true,
+    finish_access                boolean not null default true,
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default '',
     memory_share                 integer,

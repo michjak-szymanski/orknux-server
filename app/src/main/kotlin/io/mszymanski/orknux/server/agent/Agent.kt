@@ -145,6 +145,18 @@ class Agent(
     @Column(name = "artifact_access", nullable = false)
     var artifactAccess: Boolean = true,
 
+    /**
+     * Whether it may end its turn by saying so, rather than by writing prose.
+     *
+     * On, like the one above, and for a plainer reason: this takes nothing and
+     * reaches nothing. See [io.mszymanski.orknux.server.agent.FinishAnswerTools]
+     * for what a turn with nothing left to say does without it. The switch is
+     * for the workflow whose next node needs an answer to work with, where an
+     * agent finishing early hands it an empty one.
+     */
+    @Column(name = "finish_access", nullable = false)
+    var finishAccess: Boolean = true,
+
 
     /** MCP servers this agent may connect to, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)

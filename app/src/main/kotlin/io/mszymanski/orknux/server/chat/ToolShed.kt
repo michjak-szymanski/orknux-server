@@ -48,3 +48,32 @@ interface ToolShed {
  * understand.
  */
 open class AgentRoundHalted(note: String) : RuntimeException(note)
+
+/**
+ * Two sheds lent to one round, as one.
+ *
+ * A caller may have more than one thing to lend - an agent node lends drawing
+ * and lends the ending - and the round takes a single shed. Rather than one
+ * shed growing tools that have nothing to do with each other, they stay
+ * separate and are put together here: each still decides on its own whether it
+ * has anything to offer, and a caller that has only one lends only that one.
+ *
+ * Names are asked in the order given, so the first shed holding a name answers
+ * for it. Nothing in this repository lends two tools of the same name; if
+ * anything ever does, the order is the decision rather than an accident.
+ */
+fun sheds(vararg lent: ToolShed?): ToolShed? {
+    val held = lent.filterNotNull()
+    return when (held.size) {
+        0 -> null
+        1 -> held.first()
+        else -> object : ToolShed {
+            override fun specs(): List<ToolSpec> = held.flatMap { it.specs() }
+
+            override fun handles(name: String): Boolean = held.any { it.handles(name) }
+
+            override fun run(call: ToolCall): String =
+                held.first { it.handles(call.name) }.run(call)
+        }
+    }
+}

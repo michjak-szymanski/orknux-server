@@ -186,7 +186,9 @@ class StepPictureTools(
             "The picture is drawn and its bytes are in this session's store under `key`. To put " +
                 "the picture in front of somebody, pass that key to whichever of your tools sends " +
                 "or uploads a file - one that takes a content key rather than the bytes " +
-                "themselves. It is also filed against this run and shown under this node."
+                "themselves. `key` is not a URL: writing it into a link or an image gives an " +
+                "address that resolves to nothing. It is also filed against this run and shown " +
+                "under this node, so it is seen without being mentioned."
         } else {
             "The picture is drawn and filed against this run, and is shown under this node. Its " +
                 "bytes could not be left anywhere this session can reach, so nothing here can " +
@@ -221,9 +223,22 @@ class StepPictureTools(
 
         val DRAWING = ToolSpec(
             name = DRAW,
-            description = "Draw a picture from a description. The picture is filed with this run and shown " +
-                "under this step; you are handed markdown for it in case you want it at a particular point " +
-                "in your answer.",
+            /*
+             * What it answers, said exactly.
+             *
+             * This used to promise markdown, and went on promising it after
+             * the answer stopped carrying any: the tool now hands back a store
+             * key and nothing else. A model told to place markdown, and given
+             * one string, wrote the string into an image link - `![a
+             * tower](picture.18)` - which is not an address, resolves to
+             * nothing, and drew "This picture is gone" where the picture was
+             * meant to be. A description that describes a different tool is
+             * worse than none.
+             */
+            description = "Draw a picture from a description. The picture is filed with this run and is " +
+                "shown under this step whether or not you mention it, so you never have to place it. " +
+                "What comes back is `key`, which is a handle for a tool that sends or uploads a file - " +
+                "not an address. Never put it in a link or an image: it resolves to nothing.",
             parameters = listOf(
                 ToolParameterSpec(
                     name = "description",

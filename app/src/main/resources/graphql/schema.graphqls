@@ -2409,6 +2409,15 @@ type Agent {
     shellAccess: Boolean
     "Whether it may keep a file it made, on the workspace's Artifacts page. On by default."
     artifactAccess: Boolean!
+    """
+    Whether it may end its turn by saying so, rather than by writing prose.
+
+    On by default. A round ends when the model answers instead of asking for
+    another tool, which assumes the answer is the prose - and an agent that
+    posted its reply itself has nothing left to write. Turning it off suits a
+    workflow whose next node needs an answer to work with.
+    """
+    finishAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -3325,6 +3334,8 @@ input UpdateAgentInput {
     shellAccess: Boolean
     "Whether it may keep a file it made. On by default."
     artifactAccess: Boolean
+    "Whether it may end its turn by saying so rather than writing prose. On by default."
+    finishAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."

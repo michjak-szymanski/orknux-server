@@ -64,6 +64,8 @@ class AgentNodeRunner(
     private val slackFiles: io.mszymanski.orknux.connector.connection.SlackFiles,
     /** What lets an agent inside a run draw; see [io.mszymanski.orknux.server.workflow.StepPictureTools]. */
     private val drawings: io.mszymanski.orknux.server.workflow.StepPictureTools,
+    /** What lets it stop when the work is already delivered; see [FinishAnswerTools]. */
+    private val finishing: FinishAnswerTools,
     private val budgets: SessionMemoryBudgets,
     private val shapes: ObjectShapes,
     private val mapper: ObjectMapper,
@@ -290,8 +292,44 @@ class AgentNodeRunner(
             sessionId = session,
         )
 
+        /*
+         * And the ending, lent beside the drawing.
+         *
+         * A round ends when the model writes prose, which assumes the answer
+         * is the prose. An agent that posted its reply to Slack itself has
+         * nothing left to write, and being asked for an answer anyway is what
+         * made it either repeat the message or answer with nothing - an empty
+         * message, which reads as a failure, which is retried, which posts the
+         * whole thing twice. See [FinishAnswerTools].
+         */
+        val shed = io.mszymanski.orknux.server.chat.sheds(
+            drawing,
+            finishing.shed(
+                granted = agent.finishAccess,
+                shaped = step.outputObjectId != null,
+            ),
+        )
+
         val answer = try {
-            conversation.answer(modelId, agent, turns, session, shed = drawing, watch = watching)
+            conversation.answer(modelId, agent, turns, session, shed = shed, watch = watching)
+        } catch (finished: AnswerFinished) {
+            /*
+             * The agent said that was the work.
+             *
+             * Completed rather than failed, and with whatever it passed -
+             * usually nothing, because the thing it made went somewhere the
+             * graph is not. Named the same way an ordinary answer is, so a
+             * node after this one reads it in the place it would have read
+             * prose. No shape to satisfy: the tool is not offered where the
+             * node is held to one.
+             */
+            runLog.write(
+                step.executionId,
+                step.nodeKey,
+                LogLevel.INFO,
+                "${agent.name} finished: the work was delivered, so there was nothing left to answer",
+            )
+            return StepResult(StepStatus.COMPLETED, expressions.named(step.outputName, finished.answer))
         } finally {
             // Whatever the turn did, and before anything else reads the
             // session: a line left open is one a page reads as still being

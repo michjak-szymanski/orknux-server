@@ -17,24 +17,24 @@ import tools.jackson.databind.ObjectMapper
  * advance and draw whether or not there was anything worth drawing. This is the
  * same drawing with the decision moved to where it is actually made.
  *
- * ### Why it is `draw_picture` and not a grant on the agent
+ * ### The grant says whether, the shed says where
  *
- * `ChatTools` argues at length that a bare `draw_picture` says nothing about
- * where the picture goes, and names its own `chat_draw_picture` for it. The
- * same argument puts this in a shed rather than in [AgentTools]: filing a
- * picture needs a run and a step to file it against, and only the thing running
- * the loop knows which those are. An agent granted this on its row would carry
- * it into a chat, where the run it needs does not exist.
+ * Whether an agent may draw is its own switch - `drawAccess`, beside Shells on
+ * its form - because that is a decision about the agent and somebody has to be
+ * able to see it and turn it off. Where the picture goes is not on the agent
+ * and cannot be: filing needs a run and a step to file against, and only the
+ * thing running the loop knows which those are. An agent that carried the tool
+ * itself would carry it into a chat, where the run it needs does not exist.
  *
  * The name stays plain because from inside a run there is exactly one place a
  * picture can go and the description says so. Its twin in a task is
  * `task_draw_picture` and in a chat `chat_draw_picture`; an agent is never
  * offered two of them at once.
  *
- * Offered only where it will work: see [StepPictures.offered]. An installation
- * with attachments off or a workspace that has chosen no image model has
- * nothing to draw with, and telling the model otherwise spends a turn teaching
- * it that.
+ * Offered only where it will work: the grant, plus [StepPictures.offered]. An
+ * installation with attachments off or a workspace that has chosen no image
+ * model has nothing to draw with, and telling the model otherwise spends a turn
+ * teaching it that.
  */
 @Service
 class StepPictureTools(
@@ -46,12 +46,19 @@ class StepPictureTools(
      * The shed for one step of one run, or null where there is nothing to draw
      * with.
      *
-     * Null rather than a shed that refuses everything, so the caller can hand
+     * Three things have to be true and they are asked in one place: the agent
+     * was granted pictures, the installation keeps attachments, and the
+     * workspace has chosen a model that draws. Null rather than a shed that
+     * refuses everything, so the caller hands
      * [io.mszymanski.orknux.server.chat.AgentConversation] nothing at all and
-     * the round is exactly the round it was before this existed.
+     * the round is exactly the round it was before this existed - which is
+     * also the rule `AgentTools` states: a model is only ever offered tools
+     * that will run.
+     *
+     * @param granted the agent's own switch, from its form beside Shells.
      */
-    fun shed(executionId: Long, nodeKey: String, workspaceId: Long): ToolShed? =
-        if (pictures.offered(workspaceId)) Shed(executionId, nodeKey, workspaceId) else null
+    fun shed(executionId: Long, nodeKey: String, workspaceId: Long, granted: Boolean = true): ToolShed? =
+        if (granted && pictures.offered(workspaceId)) Shed(executionId, nodeKey, workspaceId) else null
 
     private inner class Shed(
         private val executionId: Long,

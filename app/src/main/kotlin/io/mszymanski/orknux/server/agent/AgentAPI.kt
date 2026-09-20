@@ -301,6 +301,7 @@ class AgentAPI(
         if (input.orknuxAccess != null) agent.orknuxAccess = input.orknuxAccess
         if (input.shellAccess != null) agent.shellAccess = input.shellAccess
         if (input.artifactAccess != null) agent.artifactAccess = input.artifactAccess
+        if (input.drawAccess != null) agent.drawAccess = input.drawAccess
         if (input.memoryCatalogs != null) {
             agent.memoryCatalogs =
                 input.memoryCatalogs.map { it.trim() }.filter { it.isNotEmpty() }.distinct().toMutableList()
@@ -570,6 +571,9 @@ data class UpdateAgentInput(
     val shellAccess: Boolean? = null,
     /** Whether it may keep a file it made; on by default, see [Agent.artifactAccess]. */
     val artifactAccess: Boolean? = null,
+
+    /** Whether it may draw a picture; on by default, see [Agent.drawAccess]. */
+    val drawAccess: Boolean? = null,
     /** Same rule: null leaves it alone, an empty list clears it. */
     val memoryCatalogs: List<String>? = null,
     /** Which skill catalogs it may draw on; null leaves the grant alone. */
@@ -608,6 +612,7 @@ data class AgentView(
     /** Whether it may open a shell on one of the installation's machines. */
     val shellAccess: Boolean,
     val artifactAccess: Boolean,
+    val drawAccess: Boolean,
     val memoryCatalogs: List<String>,
     val skillCatalogs: List<String>,
     val tools: List<String>,
@@ -632,6 +637,7 @@ data class AgentView(
         orknuxAccess = agent.orknuxAccess,
         shellAccess = agent.shellAccess,
         artifactAccess = agent.artifactAccess,
+        drawAccess = agent.drawAccess,
         memoryCatalogs = agent.memoryCatalogs.toList(),
         skillCatalogs = agent.skillCatalogs.toList(),
         tools = agent.tools.toList(),

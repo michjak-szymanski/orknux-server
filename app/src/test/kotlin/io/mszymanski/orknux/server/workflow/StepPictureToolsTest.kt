@@ -28,6 +28,11 @@ import java.util.Optional
  * answer, because the answer is what the next round reasons from. A refusal is
  * a sentence the agent reads and works around, never an exception that loses
  * the round. Issue #349.
+ *
+ * Whether the agent was granted pictures at all is decided one level up, in
+ * [io.mszymanski.orknux.server.agent.AgentNodeRunner], because that is where
+ * the agent is: this knows about a run and a workspace, not about whose round
+ * it is.
  */
 class StepPictureToolsTest {
 
@@ -84,6 +89,16 @@ class StepPictureToolsTest {
         `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace(imageModelId = null)))
 
         assertThat(tools.shed(100, "ask", 9)).isNull()
+    }
+
+    @Test
+    fun `an agent that was not granted pictures is offered no tool`() {
+        `when`(settings.attachmentsEnabled()).thenReturn(true)
+        `when`(workspaces.findById(9)).thenReturn(Optional.of(workspace()))
+
+        assertThat(tools.shed(100, "ask", 9, granted = false)).isNull()
+        // And the installation being able to draw is not enough on its own.
+        assertThat(tools.shed(100, "ask", 9, granted = true)).isNotNull()
     }
 
     @Test

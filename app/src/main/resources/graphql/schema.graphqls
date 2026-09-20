@@ -2399,6 +2399,8 @@ type Agent {
     shellAccess: Boolean
     "Whether it may keep a file it made, on the workspace's Artifacts page. On by default."
     artifactAccess: Boolean!
+    "Whether it may draw a picture from a description of its own. On by default."
+    drawAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -3315,6 +3317,8 @@ input UpdateAgentInput {
     shellAccess: Boolean
     "Whether it may keep a file it made. On by default."
     artifactAccess: Boolean
+    "Whether it may draw a picture; null leaves the grant alone."
+    drawAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."

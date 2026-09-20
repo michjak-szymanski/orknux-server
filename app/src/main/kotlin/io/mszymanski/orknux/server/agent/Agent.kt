@@ -145,6 +145,22 @@ class Agent(
     @Column(name = "artifact_access", nullable = false)
     var artifactAccess: Boolean = true,
 
+    /**
+     * Whether it may draw a picture from a description it writes itself.
+     *
+     * On by default, and beside [artifactAccess] for the same reason: it opens
+     * no door onto anything that already exists. What it lets an agent do is
+     * make something of its own, filed where the run that made it is read, and
+     * the bounds that matter are on the drawing - a count per run, a prompt
+     * length, a workspace that has to have chosen an image model at all.
+     *
+     * It is a switch at all so that an agent which should not be spending on
+     * pictures can be told so, one agent at a time, without turning drawing off
+     * for the installation.
+     */
+    @Column(name = "draw_access", nullable = false)
+    var drawAccess: Boolean = true,
+
     /** MCP servers this agent may connect to, in the order they were added. */
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "agent_mcp_server", joinColumns = [JoinColumn(name = "agent_id")])

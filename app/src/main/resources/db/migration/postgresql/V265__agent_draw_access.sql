@@ -1,0 +1,16 @@
+-- Whether an agent may draw a picture, from a description it writes itself.
+--
+-- On by default, and for the same reason artifact_access is: it opens no door
+-- onto anything that already exists and could be damaged through it. What it
+-- lets an agent do is make something of its own, filed where the run that made
+-- it is read - and the bounds that matter are on the drawing (a count per run,
+-- a prompt length, a workspace that has to have chosen an image model at all)
+-- rather than on who may ask.
+--
+-- It is here so that an agent which should not be spending on pictures can be
+-- told so, one agent at a time, without turning drawing off for the
+-- installation.
+--
+-- TRUE for the rows already here: an installation upgrading into this should
+-- find it working rather than switched off everywhere.
+ALTER TABLE agent ADD COLUMN draw_access BOOLEAN NOT NULL DEFAULT TRUE;

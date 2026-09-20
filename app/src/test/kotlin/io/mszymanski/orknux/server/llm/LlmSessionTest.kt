@@ -135,8 +135,15 @@ class LlmSessionTest(
      * lines: a transcript is read as a conversation, and the question has to be
      * above the answer.
      */
+    /**
+     * Newest first unless asked otherwise, and the order it happened in on request.
+     *
+     * The default is the reverse of the order it was written in: a transcript is
+     * opened to see how a turn ended - the last tool call, the answer, the
+     * refusal - and reading that meant paging to the end first.
+     */
     @Test
-    fun `what was recorded is read back in the order it happened`() {
+    fun `what was recorded is read back newest first, and oldest first on request`() {
         val session = recorder.open(workspaceId, "issue", "42")
         recorder.userSaid(session, "Ask reviewer", "Why is the reply late?")
         recorder.toolCalled(session, "skill_load", """{"name":"codeReview"}""")
@@ -144,10 +151,16 @@ class LlmSessionTest(
         recorder.note(session, "Reviewer could not answer: the model refused")
 
         val lines = events(session)
-        assertThat(lines.map { it["kind"] }).containsExactly("USER", "TOOL", "AGENT", "SYSTEM")
+        assertThat(lines.map { it["kind"] }).containsExactly("SYSTEM", "AGENT", "TOOL", "USER")
         assertThat(lines.map { it["actor"] })
+            .containsExactly("system", "Reviewer", "skill_load", "Ask reviewer")
+
+        // And the way it happened, for somebody following a turn through.
+        val told = events(session, ascending = true)
+        assertThat(told.map { it["kind"] }).containsExactly("USER", "TOOL", "AGENT", "SYSTEM")
+        assertThat(told.map { it["actor"] })
             .containsExactly("Ask reviewer", "skill_load", "Reviewer", "system")
-        assertThat(lines[1]["content"] as String).contains("codeReview")
+        assertThat(told[1]["content"] as String).contains("codeReview")
 
         // The session's own clock moved with the last of them, which is what the
         // list is ordered by.
@@ -190,14 +203,18 @@ class LlmSessionTest(
         // one tool in a long session.
         assertThat(events(session, search = "skill_load").map { it["kind"] }).containsExactly("TOOL")
 
+        // Newest first, which is this list's order everywhere now.
         assertThat(events(session, kinds = "[TOOL, AGENT]").map { it["kind"] })
-            .containsExactly("TOOL", "AGENT")
+            .containsExactly("AGENT", "TOOL")
         // No kinds is every kind: a page that has cleared its checkboxes is
         // asking for everything, not for nothing.
         assertThat(events(session, kinds = "[]")).hasSize(3)
 
-        assertThat(events(session, ascending = false).map { it["kind"] })
+        // Newest first is the default; oldest first is what the press asks for.
+        assertThat(events(session).map { it["kind"] })
             .containsExactly("AGENT", "TOOL", "USER")
+        assertThat(events(session, ascending = true).map { it["kind"] })
+            .containsExactly("USER", "TOOL", "AGENT")
     }
 
     /**
@@ -303,7 +320,7 @@ class LlmSessionTest(
     @Test
     fun `a result too long to keep is cut, and names the tool to ask again`() {
         val session = recorder.open(workspaceId, "issue", "42")
-        val whole = "x".repeat(40_864)
+        val whole = listing(40_864)
         recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), whole)
 
         val recalled = requireNotNull(recorder.recalled(session).single().content)
@@ -312,7 +329,9 @@ class LlmSessionTest(
         assertThat(recalled).contains("Call orknux_issues again")
 
         // The record keeps all of it. The bound is on what a prompt may hold,
-        // not on what happened.
+        // not on what happened - and [SessionValueTrim] leaves a listing of
+        // short fields alone however long the listing is, so the two bounds do
+        // not meet here.
         assertThat(events.findAll().single().result).isEqualTo(whole)
     }
 
@@ -329,7 +348,7 @@ class LlmSessionTest(
     fun `what was said and what came back are two separate allowances`() {
         val session = recorder.open(workspaceId, "issue", "42")
         recorder.userSaid(session, "alice", "Which of these carry p1?")
-        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), "x".repeat(20_000))
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), listing(20_000))
         recorder.agentSaid(session, "Reviewer", "None of them do.")
 
         assertThat(recorder.remembered(session)).hasSize(2)
@@ -348,14 +367,14 @@ class LlmSessionTest(
         repeat(6) { page ->
             recorder.toolReturned(
                 recorder.toolCalled(session, "orknux_issues", """{"page":$page}"""),
-                "page $page " + "x".repeat(7_000),
+                """{"page":$page,"issues":${listing(7_000)}}""",
             )
         }
 
         val recalled = requireNotNull(recorder.recalled(session).single().content)
-        assertThat(recalled).contains("page 5").contains("page 4")
-        assertThat(recalled).doesNotContain("page 0")
-        assertThat(recalled.indexOf("page 4")).isLessThan(recalled.indexOf("page 5"))
+        assertThat(recalled).contains(""""page":5""").contains(""""page":4""")
+        assertThat(recalled).doesNotContain(""""page":0""")
+        assertThat(recalled.indexOf(""""page":4""")).isLessThan(recalled.indexOf(""""page":5"""))
     }
 
     /**
@@ -380,7 +399,7 @@ class LlmSessionTest(
     @Test
     fun `a smaller budget cuts a lookup that the default kept whole`() {
         val session = recorder.open(workspaceId, "issue", "42")
-        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), "x".repeat(6_000))
+        recorder.toolReturned(recorder.toolCalled(session, "orknux_issues", "{}"), listing(6_000))
 
         assertThat(requireNotNull(recorder.recalled(session).single().content))
             .doesNotContain("more characters were not kept")
@@ -398,6 +417,23 @@ class LlmSessionTest(
         assertThat(line["kind"]).isEqualTo("TOOL")
         assertThat(line["content"]).isEqualTo("{}")
         assertThat(line["result"]).isEqualTo("#220 labels=['p1']")
+    }
+
+    /**
+     * A lookup's answer of roughly this many characters, in fields none of
+     * which is long.
+     *
+     * What a real listing looks like, and what the four budget tests above need
+     * it to be. [SessionValueTrim] cuts any single value over
+     * [SessionValueTrim.LONGEST_VALUE] out on the way into the row, so a
+     * fixture of forty thousand identical characters is now a fixture of two
+     * hundred and fifty and would measure the trim rather than the thing these
+     * tests are about. Nothing in here is over that line, so the row keeps all
+     * of it and what is being asserted is still the recall budget.
+     */
+    private fun listing(characters: Int): String {
+        val issue = """{"id":220,"labels":["p1"],"title":"the export runs twice"}"""
+        return (1..characters / (issue.length + 1) + 1).joinToString(",", "[", "]") { issue }
     }
 
     private fun list(search: String? = null): List<Map<String, Any?>> {

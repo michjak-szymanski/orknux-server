@@ -34,6 +34,11 @@ import org.springframework.data.domain.PageRequest
  * tool call to reach `llm_session_event`, so there is no path around them. What
  * they take out, and the two different amounts they take, is written on each of
  * them - and neither claims to be complete.
+ *
+ * The same argument put [SessionValueTrim] here rather than at a call site. A
+ * payload that bloats a row is a property of the row, not of the tool that
+ * happened to send it, and a rule applied by whoever remembered to apply it
+ * would be a rule the next tool to carry an image quietly escapes.
  */
 @Service
 class LlmSessionRecorder(
@@ -126,13 +131,22 @@ class LlmSessionRecorder(
      * `llm_session_event` still holds whatever it held; a credential sitting in
      * there should be treated as disclosed and rotated.
      *
+     * **And the payloads are cut out**, by [SessionValueTrim], after the
+     * redaction and before the row is saved. An argument carrying a base64
+     * image or a rendered SVG is kilobytes of one field, and the arguments
+     * beside it - the ones that say what the call actually was - are then
+     * unreadable inside it. Only values over
+     * [SessionValueTrim.LONGEST_VALUE] are shortened, so an ordinary call is
+     * stored exactly as it arrived; the reasoning, and what it costs, is on
+     * [SessionValueTrim].
+     *
      * @return the line it was written on, to hand back to [toolReturned] when
      *   the tool answers, or null if it could not be written. Null rather than
      *   an exception for the reason [write] gives: a lost line of transcript is
      *   not a reason to fail the work that was being transcribed.
      */
     fun toolCalled(session: Long, tool: String, arguments: String): Long? =
-        write(session, LlmSessionEventKind.TOOL, tool, AuditRedaction.redact(arguments))
+        write(session, LlmSessionEventKind.TOOL, tool, SessionValueTrim.trim(AuditRedaction.redact(arguments)))
 
     /**
      * And what that call gave back, onto the line the call was written on.
@@ -142,9 +156,21 @@ class LlmSessionRecorder(
      * saying what was asked of it, and a line written only once the answer
      * existed would say nothing at all.
      *
-     * Kept whole, apart from what is a credential on sight. What a model may be
-     * shown of it again is bounded in [recalled], because that bound is about a
-     * prompt; the record holds what came back.
+     * Kept whole apart from two things: what is a credential on sight, and what
+     * is a payload rather than an answer. What a model may be shown of it again
+     * is bounded a third time, in [recalled], and that bound is a different
+     * kind - it is about how much of a prompt a lookup may take, and it changes
+     * nothing about the row.
+     *
+     * **The payloads go the same way they do in [toolCalled]**, through
+     * [SessionValueTrim] and on the same rule. A tool answering
+     * `{"image":"…6000 characters of base64…","id":"C123"}` was writing all six
+     * thousand of them into this column, every time it was called. Field by
+     * field rather than whole, so a listing of short fields - which is what
+     * most tools answer with - is stored exactly as it came back and can still
+     * be recalled in full. A result that is not JSON is shortened whole, which
+     * is the part with a cost on it: [SessionValueTrim] says what that cost is
+     * and why it is worth paying.
      *
      * **A narrow pass rather than the one [toolCalled] takes**, and the
      * difference is the whole of the decision. Arguments are a command line and
@@ -173,7 +199,7 @@ class LlmSessionRecorder(
         val line = event ?: return
         try {
             events.findByIdOrNull(line)?.let {
-                it.result = AuditRedaction.redactObvious(result)
+                it.result = SessionValueTrim.trim(AuditRedaction.redactObvious(result))
                 events.save(it)
                 // The line was already handed to anybody watching, with nothing
                 // on it. This is what turns a lookup that is running into one

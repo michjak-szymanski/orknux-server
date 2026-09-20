@@ -164,7 +164,16 @@ class LlmSessionAPI(
         val session = sessions.findByIdOrNull(sessionId) ?: throw LlmSessionNotFoundException(sessionId)
         access.requireVisible(session.workspaceId)
 
-        val direction = if (ascending == false) Sort.Direction.DESC else Sort.Direction.ASC
+        /*
+         * Newest first unless somebody asks otherwise.
+         *
+         * A transcript is read to find out what just happened - the last tool
+         * call, the answer, the refusal - and on a session of any length that
+         * meant paging to the end before the reading could start. The order it
+         * happened in is still one press away, and is what somebody wants when
+         * they are following a turn through rather than looking at its result.
+         */
+        val direction = if (ascending == true) Sort.Direction.ASC else Sort.Direction.DESC
         /*
          * The id is always the last word, whichever the order. A turn writes its
          * question, its tool calls and its answer inside the same millisecond,

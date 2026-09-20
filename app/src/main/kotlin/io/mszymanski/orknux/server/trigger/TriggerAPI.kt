@@ -57,9 +57,36 @@ class TriggerAPI(
 ) {
 
     @QueryMapping
-    fun workspaceTriggers(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): TriggerPage {
+    /** @param search what to look for in this list, or null for all of it. */
+    fun workspaceTriggers(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): TriggerPage {
         requireWorkspaceAccess(workspaceId)
-        return TriggerPage(triggers.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("name"))), ::describe)
+        // The shared ones only; see the note on workflowOwnedActions.
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
+
+        return TriggerPage(
+            if (looking.isEmpty()) {
+                triggers.findByWorkspaceIdAndWorkflowIdIsNull(workspaceId, paged)
+            } else {
+                triggers.searching(workspaceId, looking, paged)
+            },
+            ::describe,
+        )
+    }
+
+    /** The "Custom" triggers one workflow owns; see workflowOwnedActions. */
+    @QueryMapping
+    fun workflowOwnedTriggers(@Argument workspaceId: Long, @Argument workflowId: Long): List<TriggerView> {
+        requireWorkspaceAccess(workspaceId)
+        return triggers.findByWorkflowId(workflowId)
+            .filter { it.workspaceId == workspaceId }
+            .sortedBy { it.name }
+            .map(::describe)
     }
 
     @QueryMapping
@@ -79,6 +106,7 @@ class TriggerAPI(
         val trigger = triggers.save(
             WorkflowTrigger(
                 workspaceId = input.workspaceId,
+                workflowId = input.workflowId,
                 name = name,
                 type = input.type,
                 connectionId = input.connectionId.takeIf { input.type == TriggerType.INCOMING_CONNECTION },
@@ -280,6 +308,7 @@ class TriggerAPI(
         return TriggerView(
             id = requireNotNull(trigger.id),
             workspaceId = trigger.workspaceId,
+            workflowId = trigger.workflowId,
             name = trigger.name,
             type = trigger.type,
             connectionId = trigger.connectionId,
@@ -558,6 +587,8 @@ fun sixField(cron: String): String {
 
 data class CreateTriggerInput(
     val workspaceId: Long,
+    /** The workflow this belongs to, where it is that workflow's own; see V258. */
+    val workflowId: Long? = null,
     val name: String,
     val type: TriggerType,
     val connectionId: Long? = null,
@@ -631,6 +662,8 @@ data class UpdateTriggerInput(
 data class TriggerView(
     val id: Long,
     val workspaceId: Long,
+    /** The workflow this belongs to, or null for one the workspace shares. */
+    val workflowId: Long?,
     val name: String,
     val type: TriggerType,
     val connectionId: Long?,

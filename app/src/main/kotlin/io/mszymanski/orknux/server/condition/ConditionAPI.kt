@@ -39,9 +39,36 @@ class ConditionAPI(
 ) {
 
     @QueryMapping
-    fun workspaceConditions(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): ConditionPage {
+    /** @param search what to look for in this list, or null for all of it. */
+    fun workspaceConditions(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): ConditionPage {
         requireWorkspaceAccess(workspaceId)
-        return ConditionPage(conditions.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("name"))), ::describe)
+        // The shared ones only; see the note on workspaceActions.
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
+
+        return ConditionPage(
+            if (looking.isEmpty()) {
+                conditions.findByWorkspaceIdAndWorkflowIdIsNull(workspaceId, paged)
+            } else {
+                conditions.searching(workspaceId, looking, paged)
+            },
+            ::describe,
+        )
+    }
+
+    /** What one workflow owns; see the note on workflowOwnedActions. */
+    @QueryMapping
+    fun workflowOwnedConditions(@Argument workspaceId: Long, @Argument workflowId: Long): List<ConditionView> {
+        requireWorkspaceAccess(workspaceId)
+        return conditions.findByWorkflowId(workflowId)
+            .filter { it.workspaceId == workspaceId }
+            .sortedBy { it.name }
+            .map(::describe)
     }
 
     @QueryMapping
@@ -61,6 +88,7 @@ class ConditionAPI(
         val condition = conditions.save(
             WorkflowCondition(
                 workspaceId = input.workspaceId,
+                workflowId = input.workflowId,
                 name = name,
                 type = input.type,
                 property = input.property,
@@ -151,6 +179,7 @@ class ConditionAPI(
         return ConditionView(
             id = requireNotNull(condition.id),
             workspaceId = condition.workspaceId,
+            workflowId = condition.workflowId,
             name = condition.name,
             type = condition.type,
             typeLabel = typeLabel(condition.type),
@@ -345,6 +374,16 @@ fun typeLabel(type: ConditionType): String = type.name
 data class CreateConditionInput(
     val workspaceId: Long,
     val name: String,
+    /**
+     * The workflow this belongs to, where it is that workflow's own.
+     *
+     * Null is the ordinary case: a definition the workspace shares, listed on
+     * its page and pointable-at by anything. Set is "Custom" — made from a
+     * node by somebody who wanted this one node to do a thing rather than to
+     * add a name to a shared library — and it is left out of every list meant
+     * for choosing from.
+     */
+    val workflowId: Long? = null,
     val type: ConditionType,
     val property: ConditionProperty? = null,
     val check: ConditionCheck? = null,
@@ -402,6 +441,14 @@ data class ConditionArgumentView(
 data class ConditionView(
     val id: Long,
     val workspaceId: Long,
+    /**
+     * The workflow this belongs to, where it is that workflow's own.
+     *
+     * Null is the ordinary case - a definition the workspace shares. Set is
+     * "Custom": made from a node, left out of the workspace's list, and shown
+     * in no other workflow's picker.
+     */
+    val workflowId: Long?,
     val name: String,
     val type: ConditionType,
     val typeLabel: String,

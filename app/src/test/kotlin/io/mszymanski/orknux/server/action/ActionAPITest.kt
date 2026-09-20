@@ -95,6 +95,63 @@ class ActionAPITest(
         assertThat(audit.findAll().map { it.message }).contains("Action Send Slack Notification created")
     }
 
+    /**
+     * A workflow's own action is its own: off the workspace's list, on its.
+     *
+     * "Custom" is a definition made from a node, for that one node, rather
+     * than a name added to a library everything in the workspace can see. Two
+     * lists rather than one flag read at every call site: the workspace's page
+     * asks for what it shares, the editor asks for both, and neither has to
+     * know about the other's case.
+     */
+    @Test
+    fun `a workflow owns the actions made from its nodes, and the workspace list leaves them out`() {
+        val workflowId = graphQlTester.document(
+            """
+            mutation {
+              createWorkflow(input: { workspaceId: $workspaceId, name: "Nightly" }) { id }
+            }
+            """,
+        ).execute().path("createWorkflow.id").entity(Long::class.java).get()
+
+        graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, name: "Shared Call", type: EXECUTE, subtype: HTTP_REQUEST,
+                url: "https://example.test", method: "GET"
+              }) { workflowId }
+            }
+            """,
+        ).execute().path("createAction.workflowId").valueIsNull()
+
+        graphQlTester.document(
+            """
+            mutation {
+              createAction(input: {
+                workspaceId: $workspaceId, workflowId: $workflowId,
+                name: "This Node's Call", type: EXECUTE, subtype: HTTP_REQUEST,
+                url: "https://example.test", method: "GET"
+              }) { workflowId }
+            }
+            """,
+        ).execute().path("createAction.workflowId").entity(Long::class.java).isEqualTo(workflowId)
+
+        // The workspace's own page: the shared one only.
+        graphQlTester.document(
+            """query { workspaceActions(workspaceId: $workspaceId) { content { name } } }""",
+        ).execute()
+            .path("workspaceActions.content[*].name").entityList(String::class.java)
+            .containsExactly("Shared Call")
+
+        // The editor's second ask: what this workflow owns.
+        graphQlTester.document(
+            """query { workflowOwnedActions(workspaceId: $workspaceId, workflowId: $workflowId) { name } }""",
+        ).execute()
+            .path("workflowOwnedActions[*].name").entityList(String::class.java)
+            .containsExactly("This Node's Call")
+    }
+
     @Test
     fun `an HTTP action offers the call a node may vary, and answers with the response`() {
         graphQlTester.document(

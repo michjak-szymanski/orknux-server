@@ -17,6 +17,8 @@ import java.time.OffsetDateTime
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 
 /** What kind of event a trigger definition waits for. */
 enum class TriggerType {
@@ -68,6 +70,18 @@ class WorkflowTrigger(
 
     @Column(name = "workspace_id", nullable = false)
     val workspaceId: Long,
+
+    /**
+     * The workflow this belongs to, or null for one the whole workspace shares.
+     *
+     * Set means it is that workflow's own - the "Custom" a node offers: a
+     * trigger made where it is used rather than a name added to a library
+     * everything in the workspace reads. It does not appear on the workspace's
+     * page, no other workflow can point at it, and it goes when the workflow
+     * does. The same shape an action and a condition take; see V258.
+     */
+    @Column(name = "workflow_id")
+    var workflowId: Long? = null,
 
     @Column(nullable = false)
     var name: String,
@@ -181,6 +195,36 @@ class WorkflowTrigger(
 interface WorkflowTriggerRepository : JpaRepository<WorkflowTrigger, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkflowTrigger>
+
+    /** The shared ones: what the workspace's own list is. */
+    fun findByWorkspaceIdAndWorkflowIdIsNull(workspaceId: Long, pageable: Pageable): Page<WorkflowTrigger>
+
+    /**
+     * The same, narrowed to what a word appears in.
+     *
+     * The name, which is what a row shows that somebody could be remembering.
+     * Case-insensitive and a substring rather than a prefix: what people recall
+     * is a phrase from the middle of a name, not how it opened.
+     *
+     * Asked of the database rather than sieved in the browser because the list
+     * is paged - narrowing what arrived on page one would hide matches sitting
+     * on page four and quietly call that "no results".
+     */
+    @Query(
+        """
+        SELECT e FROM WorkflowTrigger e
+        WHERE e.workspaceId = :workspaceId AND e.workflowId IS NULL
+          AND LOWER(e.name) LIKE LOWER(CONCAT('%', :looking, '%'))
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<WorkflowTrigger>
+
+    /** What one workflow owns, for its editor and for what a copy takes along. */
+    fun findByWorkflowId(workflowId: Long): List<WorkflowTrigger>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): WorkflowTrigger?
 

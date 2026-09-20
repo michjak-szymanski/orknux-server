@@ -43,9 +43,47 @@ class ActionAPI(
 ) {
 
     @QueryMapping
-    fun workspaceActions(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): ActionPage {
+    /** @param search what to look for in this list, or null for all of it. */
+    fun workspaceActions(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): ActionPage {
         requireWorkspaceAccess(workspaceId)
-        return ActionPage(actions.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("name"))), ::describe)
+        /*
+         * The shared ones only. A definition a workflow owns is reachable from
+         * the node that made it and nowhere else, so listing it here would
+         * offer somebody a row they cannot use and did not ask for.
+         */
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
+
+        return ActionPage(
+            if (looking.isEmpty()) {
+                actions.findByWorkspaceIdAndWorkflowIdIsNull(workspaceId, paged)
+            } else {
+                actions.searching(workspaceId, looking, paged)
+            },
+            ::describe,
+        )
+    }
+
+    /**
+     * What one workflow owns: the "Custom" actions made from its own nodes.
+     *
+     * Its editor asks for these beside the workspace's list, because they are
+     * exactly what that list leaves out - without them a node pointing at one
+     * would show an empty picker, its action having been filtered out of the
+     * only list the page was given.
+     */
+    @QueryMapping
+    fun workflowOwnedActions(@Argument workspaceId: Long, @Argument workflowId: Long): List<ActionView> {
+        requireWorkspaceAccess(workspaceId)
+        return actions.findByWorkflowId(workflowId)
+            .filter { it.workspaceId == workspaceId }
+            .sortedBy { it.name }
+            .map(::describe)
     }
 
     @QueryMapping
@@ -65,6 +103,7 @@ class ActionAPI(
         val action = actions.save(
             WorkflowAction(
                 workspaceId = input.workspaceId,
+                workflowId = input.workflowId,
                 name = name,
                 type = input.type,
                 subtype = input.subtype,
@@ -186,6 +225,7 @@ class ActionAPI(
         return ActionView(
             id = requireNotNull(action.id),
             workspaceId = action.workspaceId,
+            workflowId = action.workflowId,
             name = action.name,
             type = action.type,
             subtype = action.subtype,
@@ -394,6 +434,16 @@ data class ActionHeaderInput(
 data class CreateActionInput(
     val workspaceId: Long,
     val name: String,
+    /**
+     * The workflow this belongs to, where it is that workflow's own.
+     *
+     * Null is the ordinary case: a definition the workspace shares, listed on
+     * its page and pointable-at by anything. Set is "Custom" — made from a
+     * node by somebody who wanted this one node to do a thing rather than to
+     * add a name to a shared library — and it is left out of every list meant
+     * for choosing from.
+     */
+    val workflowId: Long? = null,
     val type: ActionType,
     val subtype: ActionSubtype,
     val connectionId: Long? = null,
@@ -463,6 +513,14 @@ data class ActionParamView(val name: String, val type: ValueType) {
 data class ActionView(
     val id: Long,
     val workspaceId: Long,
+    /**
+     * The workflow this belongs to, where it is that workflow's own.
+     *
+     * Null is the ordinary case - a definition the workspace shares. Set is
+     * "Custom": made from a node, left out of the workspace's list, and shown
+     * in no other workflow's picker.
+     */
+    val workflowId: Long?,
     val name: String,
     val type: ActionType,
     val subtype: ActionSubtype,

@@ -19,6 +19,8 @@ import jakarta.persistence.Table
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 
 /** What a condition asks about. */
 enum class ConditionType {
@@ -120,6 +122,24 @@ class WorkflowCondition(
     @Column(name = "workspace_id", nullable = false)
     val workspaceId: Long,
 
+    /**
+     * The workflow this belongs to, or null for one the whole workspace shares.
+     *
+     * Set means it is that workflow's own: it does not appear in the
+     * workspace's list, nothing else can point at it, and it goes when the
+     * workflow does. That is the "Custom" a node offers - a definition made
+     * where it is used, by somebody who wanted this one node to do a thing
+     * rather than to add a name to a shared library.
+     *
+     * A row either way, deliberately. What a node points at is an id, and the
+     * runner, the validator, the export and the revisions all read one - so
+     * owning the row differently costs nothing downstream, while storing the
+     * definition on the node would mean teaching every one of them a second
+     * shape for where a definition comes from.
+     */
+    @Column(name = "workflow_id")
+    var workflowId: Long? = null,
+
     @Column(nullable = false, length = 120)
     var name: String,
 
@@ -193,6 +213,45 @@ class WorkflowCondition(
 interface WorkflowConditionRepository : JpaRepository<WorkflowCondition, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkflowCondition>
+
+    /**
+     * The shared ones: what the workspace's own list is.
+     *
+     * A definition a workflow owns is that workflow's own and is reachable
+     * only from the node that made it - so it is left out of every list meant
+     * for choosing from, which is what keeps "Custom" from filling the
+     * library with rows nobody named for anybody else.
+     */
+    fun findByWorkspaceIdAndWorkflowIdIsNull(workspaceId: Long, pageable: Pageable): Page<WorkflowCondition>
+
+    /**
+     * The same, narrowed to what a word appears in.
+     *
+     * The name, which is what a row shows that somebody could be remembering.
+     * Case-insensitive and a substring rather than a prefix: what people recall
+     * is a phrase from the middle of a name, not how it opened.
+     *
+     * Asked of the database rather than sieved in the browser because the list
+     * is paged - narrowing what arrived on page one would hide matches sitting
+     * on page four and quietly call that "no results".
+     */
+    @Query(
+        """
+        SELECT e FROM WorkflowCondition e
+        WHERE e.workspaceId = :workspaceId AND e.workflowId IS NULL
+          AND LOWER(e.name) LIKE LOWER(CONCAT('%', :looking, '%'))
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<WorkflowCondition>
+
+    fun findByWorkspaceIdAndWorkflowIdIsNull(workspaceId: Long): List<WorkflowCondition>
+
+    /** What one workflow owns, for the editor and for what a copy has to take along. */
+    fun findByWorkflowId(workflowId: Long): List<WorkflowCondition>
 
     fun findByWorkspaceId(workspaceId: Long): List<WorkflowCondition>
 

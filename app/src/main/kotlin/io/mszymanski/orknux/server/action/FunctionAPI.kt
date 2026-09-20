@@ -89,11 +89,21 @@ class FunctionAPI(
         // Narrower still: what one plugin brought. Wins over scope, since a
         // plugin id already says which side of that line it is on.
         @Argument pluginId: Long?,
+        /** What to look for in the name and the description, or null for all of them. */
+        @Argument search: String?,
     ): FunctionPage {
         requireWorkspaceAccess(workspaceId)
         val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
         val found = when {
             pluginId != null -> functions.findByPluginIdPaged(pluginId, paged)
+            /*
+             * A search answers across both origins rather than within whichever
+             * sieve is set. Somebody typing a name is looking for that function,
+             * and being told it is not here because a filter they set earlier
+             * excludes it is the list keeping a secret it could have told.
+             */
+            looking.isNotEmpty() -> functions.searching(workspaceId, looking, paged)
             scope == null -> functions.findByWorkspaceIdOrPlugin(workspaceId, paged)
             else -> functions.findByWorkspaceIdOrPluginScoped(workspaceId, scope, paged)
         }

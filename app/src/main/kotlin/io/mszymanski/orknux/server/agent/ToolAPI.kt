@@ -71,9 +71,25 @@ class ToolAPI(
 ) {
 
     @QueryMapping
-    fun workspaceTools(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): ToolPage {
+    /** @param search what to look for in this list, or null for all of it. */
+    fun workspaceTools(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): ToolPage {
         requireWorkspaceAccess(workspaceId)
-        return ToolPage(tools.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("name"))), ::describe)
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
+
+        return ToolPage(
+            if (looking.isEmpty()) {
+                tools.findByWorkspaceId(workspaceId, paged)
+            } else {
+                tools.searching(workspaceId, looking, paged)
+            },
+            ::describe,
+        )
     }
 
     @QueryMapping

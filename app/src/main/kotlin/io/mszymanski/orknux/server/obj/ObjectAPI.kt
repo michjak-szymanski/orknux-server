@@ -39,9 +39,25 @@ class ObjectAPI(
 ) {
 
     @QueryMapping
-    fun workspaceObjects(@Argument workspaceId: Long, @Argument page: Int?, @Argument size: Int?): ObjectPage {
+    /** @param search what to look for in this list, or null for all of it. */
+    fun workspaceObjects(
+        @Argument workspaceId: Long,
+        @Argument page: Int?,
+        @Argument size: Int?,
+        @Argument search: String?,
+    ): ObjectPage {
         requireWorkspaceAccess(workspaceId)
-        return ObjectPage(objects.findByWorkspaceId(workspaceId, pageRequest(page, size, Sort.by("name"))), ::describe)
+        val paged = pageRequest(page, size, Sort.by("name"))
+        val looking = search?.trim().orEmpty()
+
+        return ObjectPage(
+            if (looking.isEmpty()) {
+                objects.findByWorkspaceId(workspaceId, paged)
+            } else {
+                objects.searching(workspaceId, looking, paged)
+            },
+            ::describe,
+        )
     }
 
     @QueryMapping

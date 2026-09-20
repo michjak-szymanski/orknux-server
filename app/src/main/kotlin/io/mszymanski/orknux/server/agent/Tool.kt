@@ -22,6 +22,7 @@ import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
 import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 import java.time.OffsetDateTime
 
 /**
@@ -193,6 +194,31 @@ class AgentTool(
 interface AgentToolRepository : JpaRepository<AgentTool, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<AgentTool>
+
+    /**
+     * The same, narrowed to what a word appears in.
+     *
+     * The name and the description, which is what a row shows that somebody could be remembering.
+     * Case-insensitive and a substring rather than a prefix: what people recall
+     * is a phrase from the middle of a name, not how it opened.
+     *
+     * Asked of the database rather than sieved in the browser because the list
+     * is paged - narrowing what arrived on page one would hide matches sitting
+     * on page four and quietly call that "no results".
+     */
+    @Query(
+        """
+        SELECT e FROM AgentTool e
+        WHERE e.workspaceId = :workspaceId
+          AND (LOWER(e.name) LIKE LOWER(CONCAT('%', :looking, '%'))
+            OR LOWER(COALESCE(e.description, '')) LIKE LOWER(CONCAT('%', :looking, '%')))
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<AgentTool>
 
     fun findByWorkspaceIdAndName(workspaceId: Long, name: String): AgentTool?
 

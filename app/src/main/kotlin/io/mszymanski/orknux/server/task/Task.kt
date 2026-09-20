@@ -12,6 +12,7 @@ import jakarta.persistence.Table
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.repository.query.Param
 import org.springframework.data.jpa.repository.Query
 import java.time.OffsetDateTime
 
@@ -376,6 +377,46 @@ interface TaskRepository : JpaRepository<Task, Long> {
      * down.
      */
     fun findByWorkspaceIdOrderByCreatedAtDescIdDesc(workspaceId: Long, pageable: Pageable): Page<Task>
+
+    /**
+     * The same, narrowed to what a word appears in the title.
+     *
+     * The title is what a row shows and what somebody is remembering. Asked of
+     * the database rather than sieved in the browser because the list is paged
+     * - narrowing what arrived on page one would hide matches on page four.
+     *
+     * The status still applies where one is set, for the reason the two
+     * unsearched queries are two queries: "no filter" is a decision here and
+     * not a value.
+     */
+    @Query(
+        """
+        SELECT t FROM Task t
+        WHERE t.workspaceId = :workspaceId
+          AND LOWER(t.title) LIKE LOWER(CONCAT('%', :looking, '%'))
+        ORDER BY t.createdAt DESC, t.id DESC
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<Task>
+
+    @Query(
+        """
+        SELECT t FROM Task t
+        WHERE t.workspaceId = :workspaceId AND t.status = :status
+          AND LOWER(t.title) LIKE LOWER(CONCAT('%', :looking, '%'))
+        ORDER BY t.createdAt DESC, t.id DESC
+        """,
+    )
+    fun searchingWithStatus(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("status") status: TaskStatus,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<Task>
 
     fun findByWorkspaceIdAndStatusOrderByCreatedAtDescIdDesc(
         workspaceId: Long,

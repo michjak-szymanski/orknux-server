@@ -12,6 +12,32 @@ interface AgentRepository : JpaRepository<Agent, Long> {
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<Agent>
 
     /**
+     * The same, narrowed to what a word appears in.
+     *
+     * The name and the description, which are the two things a row shows that
+     * somebody could be remembering. Case-insensitive and a substring rather
+     * than a prefix: what people recall of a description is a phrase from the
+     * middle of it, not how it opened.
+     *
+     * Asked of the database rather than sieved in the browser because the list
+     * is paged - narrowing what arrived on page one would hide matches sitting
+     * on page four and quietly call that "no results".
+     */
+    @Query(
+        """
+        SELECT a FROM Agent a
+        WHERE a.workspaceId = :workspaceId
+          AND (LOWER(a.name) LIKE LOWER(CONCAT('%', :looking, '%'))
+            OR LOWER(COALESCE(a.description, '')) LIKE LOWER(CONCAT('%', :looking, '%')))
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<Agent>
+
+    /**
      * All of them, in an order somebody would recognise.
      *
      * Beside the paged one because two callers want the whole list rather than a

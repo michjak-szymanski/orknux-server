@@ -52,15 +52,23 @@ class TaskAPI(
         @Argument status: TaskStatus?,
         @Argument page: Int?,
         @Argument size: Int?,
+        /** What to look for in the title, or null for every task. */
+        @Argument search: String?,
     ): TaskPageView {
         access.requireVisible(workspaceId)
         val asked = PageRequest.of((page ?: 0).coerceAtLeast(0), (size ?: PAGE).coerceIn(1, BIGGEST_PAGE))
         // Two calls rather than a nullable status in one query, the way the
         // tracker's filter is: "no filter" is a decision here and not a value.
-        val found = if (status == null) {
-            tasks.findByWorkspaceIdOrderByCreatedAtDescIdDesc(workspaceId, asked)
-        } else {
-            tasks.findByWorkspaceIdAndStatusOrderByCreatedAtDescIdDesc(workspaceId, status, asked)
+        val looking = search?.trim().orEmpty()
+        val found = when {
+            looking.isEmpty() && status == null ->
+                tasks.findByWorkspaceIdOrderByCreatedAtDescIdDesc(workspaceId, asked)
+
+            looking.isEmpty() ->
+                tasks.findByWorkspaceIdAndStatusOrderByCreatedAtDescIdDesc(workspaceId, requireNotNull(status), asked)
+
+            status == null -> tasks.searching(workspaceId, looking, asked)
+            else -> tasks.searchingWithStatus(workspaceId, status, looking, asked)
         }
         return TaskPageView(found.totalElements.toInt(), found.content.map(::describe))
     }

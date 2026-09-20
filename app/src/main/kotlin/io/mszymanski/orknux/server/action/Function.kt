@@ -18,6 +18,7 @@ import jakarta.persistence.Table
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.Query
+import org.springframework.data.repository.query.Param
 import org.springframework.data.jpa.repository.JpaRepository
 import java.time.OffsetDateTime
 
@@ -397,6 +398,26 @@ interface WorkflowFunctionRepository : JpaRepository<WorkflowFunction, Long> {
      */
     @Query("select f from WorkflowFunction f where f.workspaceId = :workspaceId or f.scope = 'PLUGIN'")
     fun findByWorkspaceIdOrPlugin(workspaceId: Long, pageable: Pageable): Page<WorkflowFunction>
+
+    /**
+     * The same list, narrowed to what a word appears in.
+     *
+     * The name and the description. The population clause is the one above,
+     * unchanged, so a search can never surface a row the unsearched list would
+     * not have shown - and it is asked of the database rather than sieved in
+     * the browser because the list is paged.
+     */
+    @Query(
+        "select f from WorkflowFunction f " +
+            "where (f.workspaceId = :workspaceId or f.scope = \'PLUGIN\') " +
+            "and (lower(f.name) like lower(concat(\'%\', :looking, \'%\')) " +
+            "or lower(coalesce(f.description, \'\')) like lower(concat(\'%\', :looking, \'%\')))",
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<WorkflowFunction>
 
     /**
      * The same list, narrowed to one origin: the workspace's own rows, or the

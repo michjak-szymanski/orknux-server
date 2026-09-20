@@ -3,6 +3,8 @@ package io.mszymanski.orknux.server.workflow
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Pageable
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.repository.query.Param
+import org.springframework.data.jpa.repository.Query
 
 interface WorkflowRepository : JpaRepository<Workflow, Long> {
 
@@ -12,6 +14,32 @@ interface WorkflowRepository : JpaRepository<Workflow, Long> {
 interface WorkspaceWorkflowRepository : JpaRepository<WorkspaceWorkflow, Long> {
 
     fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkspaceWorkflow>
+
+    /**
+     * The same, narrowed to what a word appears in.
+     *
+     * The workflow's name and description, reached through the assignment -
+     * which is the row this list is of, and the workflow is what somebody is
+     * actually looking for. Asked of the database rather than sieved in the
+     * browser because the list is paged.
+     *
+     * The sort still comes from the pageable, so a search keeps whatever order
+     * the column headers are set to rather than silently reverting to one of
+     * this query\'s choosing.
+     */
+    @Query(
+        """
+        SELECT a FROM WorkspaceWorkflow a
+        WHERE a.workspaceId = :workspaceId
+          AND (LOWER(a.workflow.name) LIKE LOWER(CONCAT('%', :looking, '%'))
+            OR LOWER(COALESCE(a.workflow.description, '')) LIKE LOWER(CONCAT('%', :looking, '%')))
+        """,
+    )
+    fun searching(
+        @Param("workspaceId") workspaceId: Long,
+        @Param("looking") looking: String,
+        pageable: Pageable,
+    ): Page<WorkspaceWorkflow>
 
     /**
      * All of them, for a caller asking about the workspace rather than showing

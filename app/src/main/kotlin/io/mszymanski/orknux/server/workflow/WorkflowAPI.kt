@@ -61,10 +61,19 @@ class WorkflowAPI(
         @Argument size: Int?,
         @Argument order: WorkflowOrder?,
         @Argument ascending: Boolean?,
+        /** What to look for in the name and the description, or null for all of them. */
+        @Argument search: String?,
     ): WorkspaceWorkflowPage {
         requireWorkspaceAccess(workspaceId)
+        val paged = pageRequest(page, size, sortBy(order, ascending))
+        val looking = search?.trim().orEmpty()
+
         return WorkspaceWorkflowPage(
-            assignments.findByWorkspaceId(workspaceId, pageRequest(page, size, sortBy(order, ascending))),
+            if (looking.isEmpty()) {
+                assignments.findByWorkspaceId(workspaceId, paged)
+            } else {
+                assignments.searching(workspaceId, looking, paged)
+            },
         ) { assignment ->
             val workflowId = requireNotNull(assignment.workflow.id)
             // A workflow that is switched off is not started by the clock, so

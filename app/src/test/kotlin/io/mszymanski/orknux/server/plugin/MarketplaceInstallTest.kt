@@ -54,6 +54,8 @@ class MarketplaceInstallTest(
         offeredIcon = "http://${where()}/icons/greeter.svg"
         offeredAvailable = true
         refuseNewFields = false
+        refuseTags = false
+        offeredCategory = "chat"
         proxyRules.deleteAll()
         proxies.reload()
         relayed.clear()
@@ -217,6 +219,24 @@ class MarketplaceInstallTest(
      * Catalog screen goes on working. Without a digest, which is then a check
      * nobody can perform rather than a reason to refuse an install.
      */
+    /**
+     * And a marketplace still on `category` has its one word read as a tag.
+     *
+     * Which is what it was: one word for what a plugin is for. Without this
+     * rung the shelf loses its filter entirely against every marketplace that
+     * has not switched yet - the field is gone, not the plugins' need to be
+     * found by what they do.
+     */
+    @Test
+    fun `a marketplace still filing plugins under one category has it read as a tag`() {
+        refuseTags = true
+
+        val listing = catalog.marketplacePlugins().single()
+
+        assertThat(listing.tags).containsExactly("chat")
+        assertThat(listing.versions).isEmpty()
+    }
+
     @Test
     fun `a marketplace that refuses the newer fields still lists and still installs`() {
         refuseNewFields = true
@@ -356,6 +376,9 @@ class MarketplaceInstallTest(
         /** What the stub catalog currently offers; a test moves it. */
         var offeredVersion = "1.0.0"
 
+        /** What a marketplace still on the old field files it under. */
+        var offeredCategory = "chat"
+
         /** Where the listing says its face is; a test moves it off the marketplace. */
         var offeredIcon = ""
 
@@ -372,6 +395,12 @@ class MarketplaceInstallTest(
          * which fails the whole query rather than thinning the answer.
          */
         var refuseNewFields = false
+
+        /**
+         * A marketplace that has `category` and has never heard of `tags`,
+         * which is every one deployed before the switch.
+         */
+        var refuseTags = false
 
         /** The same hash the server computes over a downloaded file. */
         fun digestOf(source: String): String =
@@ -416,7 +445,13 @@ class MarketplaceInstallTest(
                 createContext("/graphql") { exchange ->
                     if (!keyed(exchange)) return@createContext refuse(exchange)
                     val asked = exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
-                    if (refuseNewFields && asked.contains("versions {")) {
+                    if (refuseTags && asked.contains(" tags ")) {
+                        return@createContext answer(
+                            exchange,
+                            """{"errors":[{"message":"Field 'tags' is undefined"}]}""",
+                        )
+                    }
+                    if ((refuseNewFields || refuseTags) && asked.contains("versions {")) {
                         return@createContext answer(
                             exchange,
                             """{"errors":[{"message":"Field 'versions' is undefined"}]}""",
@@ -440,6 +475,9 @@ class MarketplaceInstallTest(
                     val extras = when {
                         asked.contains("versions {") -> """"tags":["chat","search"],$history"""
                         asked.contains(" tags ") -> """"tags":["chat","search"]"""
+                        // The marketplace that has not switched yet: one word
+                        // for what a plugin is for, and no tags field at all.
+                        asked.contains(" category ") -> """"category":"$offeredCategory""""
                         else -> """"tags":[]"""
                     }
                     val offering = """

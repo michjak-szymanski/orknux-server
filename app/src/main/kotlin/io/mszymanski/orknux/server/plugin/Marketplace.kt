@@ -179,9 +179,18 @@ class Marketplace(
         rating = node.path("rating").takeIf { it.isNumber }?.asDouble(),
         reviews = node.path("reviews").asInt(0),
         published = node.path("published").asString(""),
-        // Never null on a marketplace that has them, and absent on one that
-        // does not - both read as no tags, which is what an older catalog is.
-        tags = node.path("tags").values().map { it.asString("") }.filter { it.isNotBlank() }.toList(),
+        /*
+         * Never null on a marketplace that has them, and absent on one that
+         * does not - both read as an empty list.
+         *
+         * A marketplace still on the old field answers one `category` instead,
+         * and it is read as a tag, because that is what it was: one word for
+         * what a plugin is for. Transitional, and only reachable through the
+         * rung below that asks for it - when every marketplace answers tags
+         * this and [WITH_CATEGORY] go together.
+         */
+        tags = node.path("tags").values().map { it.asString("") }.filter { it.isNotBlank() }.toList()
+            .ifEmpty { listOfNotNull(node.path("category").asString("").ifEmpty { null }) },
         versions = node.path("versions").values().map(::release).toList(),
     )
 
@@ -326,6 +335,20 @@ class Marketplace(
         const val WITH_TAGS = "$CORE_FIELDS tags "
 
         /**
+         * The rung for a marketplace that has not switched to tags yet.
+         *
+         * `category` was one word for what a plugin is for and `tags` are
+         * several, so a catalog still answering the old field has its word
+         * read as a tag of one - which keeps the shelf's filter working on
+         * every marketplace that is deployed today rather than only on the
+         * ones that have caught up.
+         *
+         * Transitional, and meant to be deleted: when nothing answers
+         * `category` any more this rung only costs a refused query.
+         */
+        const val WITH_CATEGORY = "$CORE_FIELDS category "
+
+        /**
          * What a listing is asked for, in the order it is asked.
          *
          * A rung at a time rather than all-or-nothing, because the fields did
@@ -336,7 +359,7 @@ class Marketplace(
          * well. So each step drops the newest thing and keeps the rest, and an
          * installation gets as much as its marketplace can say.
          */
-        val LADDER = listOf(FIELDS, WITH_TAGS, CORE_FIELDS)
+        val LADDER = listOf(FIELDS, WITH_TAGS, WITH_CATEGORY, CORE_FIELDS)
 
     }
 }

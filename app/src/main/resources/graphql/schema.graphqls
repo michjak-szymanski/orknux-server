@@ -4718,7 +4718,16 @@ type MarketplaceListing {
     "Markdown, from a public repository. Rendered sanitized by whoever shows it."
     description: String!
     version: String!
-    "An emoji, or the URL of a small image. Null where the catalog offers none."
+    """
+    The drawing itself, or an emoji. Null where the catalog offers none.
+
+    An icon hosted on the marketplace is fetched by this server and carried
+    here as its markup, so the picture reaches a screen through the same proxy
+    rules everything else does — a browser fetching it from the marketplace is
+    a call those rules have no say over, and on an installation whose egress is
+    a proxy it was a broken square on every row. A URL comes through unchanged
+    where it is hosted somewhere this server will not fetch from.
+    """
     icon: String
     "The same glyph for a dark ground; null where the catalog offers only one."
     iconDark: String

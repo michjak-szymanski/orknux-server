@@ -220,17 +220,17 @@ class Marketplace(
      * first.
      */
     private fun askedForFields(query: (String) -> Pair<String, Map<String, Any?>>): tools.jackson.databind.JsonNode {
-        val (whole, variables) = query(FIELDS)
-        return try {
-            asked(whole, variables)
-        } catch (refused: MarketplaceRefusedQueryException) {
-            log.info(
-                "the marketplace refused a listing's newer fields, asking for the older ones: {}",
-                refused.message,
-            )
-            val (fewer, sameVariables) = query(CORE_FIELDS)
-            asked(fewer, sameVariables)
+        var refusal: MarketplaceRefusedQueryException? = null
+        for (fields in LADDER) {
+            val (asking, variables) = query(fields)
+            try {
+                return asked(asking, variables)
+            } catch (refused: MarketplaceRefusedQueryException) {
+                refusal = refused
+                log.info("the marketplace refused a listing's fields, asking for fewer: {}", refused.message)
+            }
         }
+        throw refusal ?: MarketplaceUnreachableException("it refused every shape of the query")
     }
 
     /**
@@ -295,17 +295,6 @@ class Marketplace(
 
     private companion object {
         /**
-         * What a listing is asked for.
-         *
-         * Narrower than what the marketplace offers, and that is allowed to
-         * stay true: GraphQL breaks on asking for what is not there, never on
-         * leaving something out, so this server reads what it uses and a field
-         * added on the other side costs nothing until somebody wants it.
-         */
-        val FIELDS =
-            "$CORE_FIELDS category versions { version published replaced digest files available }"
-
-        /**
          * The fields every marketplace has ever answered with.
          *
          * What a listing falls back to when the whole query is refused. Kept
@@ -315,6 +304,34 @@ class Marketplace(
          */
         const val CORE_FIELDS =
             "key name author summary description version url icon iconDark downloads rating reviews published"
+
+        /**
+         * What a listing is asked for.
+         *
+         * Narrower than what the marketplace offers, and that is allowed to
+         * stay true: GraphQL breaks on asking for what is not there, never on
+         * leaving something out, so this server reads what it uses and a field
+         * added on the other side costs nothing until somebody wants it.
+         */
+        val FIELDS =
+            "$WITH_CATEGORY versions { version published replaced digest files available }"
+
+        /** Everything but the history, which is the field marketplaces stumble on first. */
+        const val WITH_CATEGORY = "$CORE_FIELDS category "
+
+        /**
+         * What a listing is asked for, in the order it is asked.
+         *
+         * A rung at a time rather than all-or-nothing, because the fields did
+         * not arrive together and neither did the marketplaces: the one this
+         * was written against declares `versions` and answers null for it
+         * under a non-null type, which fails the whole query - and asking for
+         * nothing new over that would hide `category`, which it answers
+         * perfectly well. So each step drops the newest thing and keeps the
+         * rest, and an installation gets as much as its marketplace can say.
+         */
+        val LADDER = listOf(FIELDS, WITH_CATEGORY, CORE_FIELDS)
+
     }
 }
 

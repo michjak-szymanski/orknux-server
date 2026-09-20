@@ -51,6 +51,7 @@ class MarketplaceInstallTest(
         audit.deleteAll()
         offeredVersion = "1.0.0"
         offeredDigest = digestOf(plugin)
+        offeredIcon = "http://${where()}/icons/greeter.svg"
         offeredAvailable = true
         refuseNewFields = false
         proxyRules.deleteAll()
@@ -64,7 +65,15 @@ class MarketplaceInstallTest(
 
         assertThat(before.key).isEqualTo("greeter")
         assertThat(before.author).isEqualTo("Orknux")
-        assertThat(before.icon).endsWith("/icons/greeter.svg")
+        /*
+         * The drawing, not the URL it is at.
+         *
+         * A screen putting the marketplace's URL in an `<img>` is the one call
+         * the catalog makes that this server does not - so on an installation
+         * whose egress is a proxy the rules were right, the catalog loaded,
+         * and every icon on the page was a broken square.
+         */
+        assertThat(before.icon).startsWith("<svg").contains("greeter-face")
         assertThat(before.installed).isFalse()
         assertThat(before.updatable).isFalse()
     }
@@ -214,7 +223,14 @@ class MarketplaceInstallTest(
 
         val listing = catalog.marketplacePlugins().single()
         assertThat(listing.key).isEqualTo("greeter")
-        assertThat(listing.category).isNull()
+        /*
+         * The history is gone and the category is not.
+         *
+         * A rung at a time: the marketplace this was written against declares
+         * `versions` and answers null for it, and asking for nothing new over
+         * that would hide a category it answers perfectly well.
+         */
+        assertThat(listing.category).isEqualTo("Chat")
         assertThat(listing.versions).isEmpty()
 
         val installed = requireNotNull(catalog.installMarketplacePlugin("greeter", accept = "lib/words.js").plugin)
@@ -281,7 +297,7 @@ class MarketplaceInstallTest(
             .describedAs("and the library it ships with")
             .isNotEmpty()
         assertThat(relayed.filter { it.endsWith("/greeter.svg") })
-            .describedAs("and its face, which is fetched once and stored")
+            .describedAs("and its face, which the catalog fetched before a browser could be asked to")
             .isNotEmpty()
 
         /*
@@ -292,6 +308,24 @@ class MarketplaceInstallTest(
          * be a 401 from the stub.
          */
         assertThat(plugins.findAll()).hasSize(1)
+    }
+
+    /**
+     * An icon the catalog points somewhere else is left as the URL it is.
+     *
+     * The marketplace's own host and nowhere else, because a catalog is
+     * somebody else's JSON: a listing whose icon pointed at an address on this
+     * network would otherwise be this server fetching it and handing the
+     * answer to a screen. Left as it stands rather than dropped - that is what
+     * the screen did with every icon before, so it is no worse than yesterday.
+     */
+    @Test
+    fun `an icon hosted away from the marketplace is not fetched by this server`() {
+        offeredIcon = "https://elsewhere.invalid/icon.svg"
+
+        val listing = catalog.marketplacePlugins().single()
+
+        assertThat(listing.icon).isEqualTo("https://elsewhere.invalid/icon.svg")
     }
 
     @Test
@@ -319,6 +353,9 @@ class MarketplaceInstallTest(
 
         /** What the stub catalog currently offers; a test moves it. */
         var offeredVersion = "1.0.0"
+
+        /** Where the listing says its face is; a test moves it off the marketplace. */
+        var offeredIcon = ""
 
         /** What the catalog says the plugin's bytes hash to; a test spoils it. */
         var offeredDigest = ""
@@ -398,12 +435,16 @@ class MarketplaceInstallTest(
                      * rather than papered over by a stub that always
                      * answers everything.
                      */
-                    val extras = if (asked.contains("versions {")) """"category":"Chat",$history""" else """"category":null"""
+                    val extras = when {
+                        asked.contains("versions {") -> """"category":"Chat",$history"""
+                        asked.contains(" category ") -> """"category":"Chat""""
+                        else -> """"category":null"""
+                    }
                     val offering = """
                         {"key":"greeter","name":"Greeter","author":"Orknux","summary":"Says hello.",
                          "description":"# Greeter","version":"$offeredVersion",
                          "url":"http://${where()}/plugins/greeter/greeter.js",
-                         "icon":"http://${where()}/icons/greeter.svg",
+                         "icon":"$offeredIcon",
                          "downloads":7,"rating":null,"reviews":0,"published":"2026-09-19",
                          $extras}
                     """.trimIndent()

@@ -23,6 +23,8 @@ import org.springframework.transaction.annotation.Transactional
 @Controller
 class MarketplaceAPI(
     private val marketplace: Marketplace,
+    /** The listings' faces, fetched here rather than by the browser. */
+    private val icons: MarketplaceIcons,
     private val plugins: PluginRepository,
     private val upload: PluginUploadAPI,
     private val sources: PluginSources,
@@ -48,7 +50,21 @@ class MarketplaceAPI(
         access.requireAdmin()
 
         val installed = plugins.findAll().associateBy { it.key }
-        return marketplace.offerings().map { offering ->
+        val offered = marketplace.offerings()
+
+        /*
+         * The faces, brought across before the rows are built.
+         *
+         * A listing's icon is a URL on the marketplace, and a screen putting
+         * that URL in an `<img>` is the one call the catalog makes that this
+         * server does not - so on an installation whose egress is a proxy the
+         * rules were right, the catalog loaded, and every icon was a broken
+         * square. Fetched together rather than one per row, so a dozen small
+         * files cost one wait instead of a dozen.
+         */
+        icons.warm(offered.flatMap { listOf(it.icon, it.iconDark) })
+
+        return offered.map { offering ->
             val here = installed[offering.key]
             MarketplaceListingView(
                 key = offering.key,
@@ -57,8 +73,8 @@ class MarketplaceAPI(
                 summary = offering.summary,
                 description = offering.description,
                 version = offering.version,
-                icon = offering.icon,
-                iconDark = offering.iconDark,
+                icon = icons.drawn(offering.icon),
+                iconDark = icons.drawn(offering.iconDark),
                 downloads = offering.downloads,
                 rating = offering.rating,
                 reviews = offering.reviews,
@@ -169,6 +185,10 @@ data class MarketplaceListingView(
     val summary: String,
     val description: String,
     val version: String,
+    /**
+     * The drawing itself, or an emoji - see [MarketplaceIcons] for why this is
+     * not the URL the marketplace answered with.
+     */
     val icon: String?,
     /** The same glyph for a dark ground; null where there is only the one. */
     val iconDark: String?,

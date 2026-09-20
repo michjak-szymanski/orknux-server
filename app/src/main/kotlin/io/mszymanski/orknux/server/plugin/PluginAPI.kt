@@ -524,35 +524,12 @@ class PluginUploadAPI(
     /**
      * The text if it is a drawing, and null if it is not.
      *
-     * Three places asked this and two of them asked it differently - one
-     * wanted `<svg` or `<?xml`, one wanted only `<svg`, and the zip path did
-     * not ask at all, which is how an icon whose file opens with a licence
-     * comment ended up stored and then printed as its own source on the
-     * screen.
-     *
-     * What is skipped is everything a real SVG file is allowed to open with
-     * before its root element: whitespace, an XML declaration, a doctype, and
-     * comments. Whatever is left has to be the `<svg` tag itself.
-     *
-     * This is a sanity check rather than a safety one. What makes somebody
-     * else's markup safe to draw is that it is put in an `<img>` as a data
-     * URI, where a browser renders it as a picture and runs nothing in it -
-     * the screen's job, not this one's.
+     * The rule itself is [drawingOrNull], which is shared with the catalog
+     * screen's own icon fetch - it was written here, and a second door
+     * answering it a second way is exactly how an icon whose file opens with a
+     * licence comment ended up stored and then printed as its own source.
      */
-    private fun drawing(text: String?): String? {
-        val held = text?.takeIf { it.length <= MOST_ICON_CHARS } ?: return null
-        var at = 0
-        while (at < held.length) {
-            when {
-                held[at].isWhitespace() -> at++
-                held.startsWith("<?", at) -> at = held.indexOf("?>", at).takeIf { it >= 0 }?.plus(2) ?: return null
-                held.startsWith("<!--", at) -> at = held.indexOf("-->", at).takeIf { it >= 0 }?.plus(3) ?: return null
-                held.startsWith("<!", at) -> at = held.indexOf('>', at).takeIf { it >= 0 }?.plus(1) ?: return null
-                else -> return held.takeIf { held.startsWith("<svg", at) }
-            }
-        }
-        return null
-    }
+    private fun drawing(text: String?): String? = drawingOrNull(text, MOST_ICON_CHARS)
 
     /**
      * The plugin's face, brought across rather than linked to.

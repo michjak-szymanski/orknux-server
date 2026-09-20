@@ -315,13 +315,33 @@ type Query {
         "By name when absent."
         order: WorkflowOrder,
         "Ascending when absent, so a column of names reads A to Z."
-        ascending: Boolean
+        ascending: Boolean,
+        "Only workflows whose name or description holds this. Absent is all of them."
+        search: String
     ): WorkspaceWorkflowPage!
     "The workspace's action catalogue: the blocks its workflows are built from."
-    workspaceActions(workspaceId: ID!, page: Int = 0, size: Int = 20): ActionPage!
+    workspaceActions(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ActionPage!
+
+    """
+    Everything this workspace's runs have produced, newest first.
+
+    A picture an image node drew was reachable only from the run that drew it,
+    which is no way to find one afterwards and no way to see what is taking up
+    the disk. Listed here instead, with a copy and a delete beside each.
+    """
+    workspaceArtifacts(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ArtifactPage!
+
+    """
+    The "Custom" actions one workflow owns - exactly what workspaceActions
+    leaves out. Its editor asks for both.
+    """
+    workflowOwnedActions(workspaceId: ID!, workflowId: ID!): [Action!]!
     action(id: ID!): Action
     "The workspace's conditions: the questions its workflows ask."
-    workspaceConditions(workspaceId: ID!, page: Int = 0, size: Int = 20): ConditionPage!
+    workspaceConditions(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ConditionPage!
+
+    """ The "Custom" conditions one workflow owns; see workflowOwnedActions. """
+    workflowOwnedConditions(workspaceId: ID!, workflowId: ID!): [Condition!]!
     condition(id: ID!): Condition
     """
     The workspace's JavaScript functions, callable from an action.
@@ -331,10 +351,13 @@ type Query {
     always showed. `pluginId` narrows further to what one plugin brought, and
     wins over scope.
     """
-    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope, pluginId: ID): FunctionPage!
+    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope, pluginId: ID, search: String): FunctionPage!
     function(id: ID!): Function
     "What starts a workspace's workflows, ordered by name."
-    workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerPage!
+    workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): TriggerPage!
+
+    "The \"Custom\" triggers one workflow owns; see workflowOwnedActions."
+    workflowOwnedTriggers(workspaceId: ID!, workflowId: ID!): [Trigger!]!
     trigger(id: ID!): Trigger
     "The events this installation can actually deliver; the picker offers these."
     supportedTriggerActions: [TriggerAction!]!
@@ -354,9 +377,9 @@ type Query {
     "What every trigger in one workspace has done, newest first."
     workspaceTriggerFirings(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
     "Agents configured by a workspace, ordered by name."
-    workspaceAgents(workspaceId: ID!, page: Int = 0, size: Int = 20): AgentPage!
+    workspaceAgents(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): AgentPage!
     "The JavaScript tools a workspace's agents may call, ordered by name."
-    workspaceTools(workspaceId: ID!, page: Int = 0, size: Int = 20): ToolPage!
+    workspaceTools(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ToolPage!
     tool(id: ID!): Tool
     "The chats the caller holds in this workspace: pinned first, then most recent."
     chatSessions(workspaceId: ID!): [ChatSession!]!
@@ -400,7 +423,7 @@ type Query {
     "Who has written in this catalog, which is what the author filter offers."
     memoryAuthors(catalogId: ID!): [String!]!
     "The workspace's objects: the shapes its workflows pass around."
-    workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20): ObjectPage!
+    workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ObjectPage!
     """
     The shapes the loaded plugins export, available in every workspace.
 
@@ -571,7 +594,7 @@ type Query {
         size: Int = 20,
         "By time when absent."
         order: LlmSessionEventOrder,
-        "Ascending when absent, which is the order it happened in."
+        "Descending when absent: newest first, which is what a transcript is opened for."
         ascending: Boolean
     ): LlmSessionEventPage!
     """
@@ -585,7 +608,9 @@ type Query {
         "Only tasks in this state. Absent is every state, not none."
         status: TaskStatus,
         page: Int = 0,
-        size: Int = 20
+        size: Int = 20,
+        "Only tasks whose title holds this. Absent is every title."
+        search: String
     ): TaskPage!
     "One task, by its id. Null when it is not one you can see."
     task(id: ID!): Task
@@ -1519,6 +1544,9 @@ type Mutation {
     "Saves the action settings form."
     updateAction(id: ID!, input: UpdateActionInput!): Action!
     deleteAction(id: ID!): Boolean!
+
+    """ Gone from the list and gone from the disk. False if there was no such artifact. """
+    deleteArtifact(id: ID!): Boolean!
     createTrigger(input: CreateTriggerInput!): Trigger!
     "Saves the trigger settings form."
     updateTrigger(id: ID!, input: UpdateTriggerInput!): Trigger!
@@ -2345,7 +2373,9 @@ type Agent {
     Plural and unnamed: an agent asks for a shell rather than for a particular
     host, and which one a session lands on is decided when it opens.
     """
-    shellAccess: Boolean!
+    shellAccess: Boolean
+    "Whether it may keep a file it made, on the workspace's Artifacts page. On by default."
+    artifactAccess: Boolean!
     "Memory catalogs this agent may read, by name."
     memoryCatalogs: [String!]!
     "Which skill catalogs it may draw on."
@@ -3260,6 +3290,8 @@ input UpdateAgentInput {
     orknuxAccess: Boolean
     "Whether it may open a shell on a machine; null leaves the grant alone."
     shellAccess: Boolean
+    "Whether it may keep a file it made. On by default."
+    artifactAccess: Boolean
     "Same rule: null leaves it alone, an empty list clears it."
     memoryCatalogs: [String!]
     "Null leaves the grant alone."
@@ -5073,6 +5105,8 @@ type SlackBotUser {
 
 "One entry in a workspace's trigger catalogue. It names no workflow: a workflow instances it with a trigger node."
 type Trigger {
+    "The workflow this belongs to, where it is that workflow's own."
+    workflowId: ID
     "How a webhook decides whether its caller may start anything."
     authType: WebhookAuthType!
     "The function that answers that, when one does."
@@ -5172,6 +5206,8 @@ type TriggerPage {
 }
 
 input CreateTriggerInput {
+    "The workflow this belongs to, where it is that workflow's own."
+    workflowId: ID
     "How a webhook decides whether its caller may start anything."
     authType: WebhookAuthType
     "The function that answers that; null when nothing does."
@@ -5767,10 +5803,51 @@ type ActionParam {
     display: String!
 }
 
+""" What made an artifact. One value today; the page is built to grow a second. """
+enum ArtifactKind {
+    IMAGE
+    TASK
+    SAVED
+}
+
+""" One thing a run produced: today a picture an image node drew. """
+type Artifact {
+    id: ID!
+    kind: ArtifactKind!
+    "Where it came from, named the way the page says it: \"Run #12\", \"Task #4\"."
+    source: String!
+    "The rest of the address of that, under the workspace."
+    sourcePath: String!
+    "What was asked for - the picture's caption."
+    prompt: String!
+    filename: String!
+    contentType: String!
+    sizeBytes: Float!
+    "Where the bytes are: the same address the run graph's img uses."
+    url: String!
+    drawnAt: String!
+}
+
+type ArtifactPage {
+    content: [Artifact!]!
+    page: Int!
+    size: Int!
+    totalElements: Int!
+    totalPages: Int!
+}
+
 "A reusable block a workflow is built from; an action node instances one."
 type Action {
     id: ID!
     workspaceId: ID!
+    """
+    The workflow this belongs to, where it is that workflow's own.
+
+    Null is the ordinary case - a definition the workspace shares. Set is
+    "Custom": made from a node, left out of the workspace's list, and shown in
+    no other workflow's picker.
+    """
+    workflowId: ID
     name: String!
     type: ActionType!
     subtype: ActionSubtype!
@@ -5876,6 +5953,15 @@ input ArgumentMappingInput {
 input CreateActionInput {
     workspaceId: ID!
     name: String!
+    """
+    The workflow this belongs to, where it is that workflow's own.
+
+    Null is the ordinary case: a definition the workspace shares. Set is what a
+    node's "Custom" makes — reachable from that node and left out of every list
+    meant for choosing from, so making one does not add a name to a library
+    nobody asked to grow.
+    """
+    workflowId: ID
     type: ActionType!
     subtype: ActionSubtype!
     connectionId: ID
@@ -5998,6 +6084,14 @@ input ConditionArgumentInput {
 type Condition {
     id: ID!
     workspaceId: ID!
+    """
+    The workflow this belongs to, where it is that workflow's own.
+
+    Null is the ordinary case - a definition the workspace shares. Set is
+    "Custom": made from a node, left out of the workspace's list, and shown in
+    no other workflow's picker.
+    """
+    workflowId: ID
     name: String!
     type: ConditionType!
     "\"Any Of\", for the badge and the form."
@@ -6032,6 +6126,15 @@ type ConditionPage {
 input CreateConditionInput {
     workspaceId: ID!
     name: String!
+    """
+    The workflow this belongs to, where it is that workflow's own.
+
+    Null is the ordinary case: a definition the workspace shares. Set is what a
+    node's "Custom" makes — reachable from that node and left out of every list
+    meant for choosing from, so making one does not add a name to a library
+    nobody asked to grow.
+    """
+    workflowId: ID
     type: ConditionType!
     property: ConditionProperty
     check: ConditionCheck

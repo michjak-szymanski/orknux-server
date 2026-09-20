@@ -36,6 +36,7 @@ CREATE TABLE agent
     icon                         varchar(40),
     orknux_access                boolean not null default false,
     shell_access                 boolean not null default false,
+    artifact_access              boolean not null default true,
     last_modified_at             timestamp not null default CURRENT_TIMESTAMP,
     last_modified_by             varchar(120) not null default '',
     memory_share                 integer,
@@ -967,6 +968,9 @@ CREATE TABLE workflow_action
 (
     id                           integer not null primary key autoincrement,
     workspace_id                 integer not null,
+    -- Set means the row is that workflow's own: not in the workspace's
+    -- list, pointed at by nothing else, and gone when the workflow is.
+    workflow_id                  integer,
     name                         varchar(120) not null,
     type                         varchar(16) not null,
     subtype                      varchar(24) not null,
@@ -1011,6 +1015,9 @@ CREATE TABLE workflow_condition
 (
     id                           integer not null primary key autoincrement,
     workspace_id                 integer not null,
+    -- Set means the row is that workflow's own: not in the workspace's
+    -- list, pointed at by nothing else, and gone when the workflow is.
+    workflow_id                  integer,
     name                         varchar(120) not null,
     type                         varchar(16) not null,
     property                     varchar(32),
@@ -1254,6 +1261,22 @@ CREATE TABLE workflow_publication
     constraint workflow_publication_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
 );
 
+CREATE TABLE workspace_artifact
+(
+    id                           integer not null primary key autoincrement,
+    workspace_id                 integer not null,
+    name                         varchar(255) not null,
+    description                  text not null,
+    content_type                 varchar(120) not null,
+    size_bytes                   integer not null,
+    location                     varchar(1000) not null,
+    saved_by                     varchar(255) not null,
+    saved_at                     timestamp not null default current_timestamp,
+    constraint workspace_artifact_workspace_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_workspace_artifact_workspace ON workspace_artifact (workspace_id, saved_at DESC);
+
 CREATE TABLE workflow_trigger
 (
     id                           integer not null primary key autoincrement,
@@ -1273,6 +1296,7 @@ CREATE TABLE workflow_trigger
     object_id                    integer,
     auth_type                    varchar(16) not null default 'NONE',
     auth_function_id             integer,
+    workflow_id                  integer,
     constraint uk_workflow_trigger_name UNIQUE (workspace_id, name),
     constraint ck_workflow_trigger_action CHECK (((action IS NULL) OR ((action) IN ('MENTION', 'REPLY', 'MESSAGE', 'ISSUE_CREATED', 'ISSUE_UPDATED')))),
     constraint ck_workflow_trigger_auth CHECK ((((auth_type) IN ('NONE', 'FUNCTION')) AND (((auth_type) != 'FUNCTION') OR (auth_function_id IS NOT NULL)))),
@@ -1280,7 +1304,8 @@ CREATE TABLE workflow_trigger
     constraint ck_workflow_trigger_type CHECK (((type) IN ('INCOMING_CONNECTION', 'SCHEDULED', 'WEBHOOK'))),
     constraint workflow_trigger_auth_function_id_fkey FOREIGN KEY (auth_function_id) REFERENCES workflow_function(id),
     constraint workflow_trigger_condition_id_fkey FOREIGN KEY (condition_id) REFERENCES workflow_condition(id),
-    constraint workflow_trigger_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE
+    constraint workflow_trigger_team_id_fkey FOREIGN KEY (workspace_id) REFERENCES workspace(id) ON DELETE CASCADE,
+    constraint workflow_trigger_workflow_id_fkey FOREIGN KEY (workflow_id) REFERENCES workflow(id) ON DELETE CASCADE
 );
 
 CREATE TABLE workflow_trigger_watch

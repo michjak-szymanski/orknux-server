@@ -1,5 +1,6 @@
 package io.mszymanski.orknux.server.workflow
 
+import io.mszymanski.orknux.server.obj.PropertyKind
 import jakarta.persistence.CollectionTable
 import jakarta.persistence.Column
 import jakarta.persistence.Embeddable
@@ -104,10 +105,45 @@ class NodeMapping(
      */
     @Column(name = "source_node_key", length = 64)
     var sourceNodeKey: String? = null,
+
+    /**
+     * What this field holds, where the node is the one naming it.
+     *
+     * An Object node with no saved shape carries fields of its own, and those
+     * had a name and a value and nothing else: a number written into one
+     * arrived downstream as the string `"3"`. This is the same question a saved
+     * object's property answers, asked in the other place somebody names a
+     * field - so it is answered in the same three parts and the same words.
+     *
+     * Null is untyped, and untyped is what every other mapping is: an action's
+     * parameter is typed by the function it belongs to, a condition's by its
+     * own. Nothing here overrides a definition; there is only ever something
+     * here where nothing else was going to say.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "field_kind", length = 16)
+    var fieldKind: PropertyKind? = null,
+
+    /** What a list holds, where [fieldKind] is `ARRAY` and it holds scalars. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "field_element_kind", length = 16)
+    var fieldElementKind: PropertyKind? = null,
+
+    /** The shape it points at, where it is one of those or a list of them. */
+    @Column(name = "field_ref_object_id")
+    var fieldRefObjectId: Long? = null,
 ) {
 
     /** A separate one saying the same thing, for a node being copied. */
-    fun copy() = NodeMapping(name = name, expression = expression, mode = mode, sourceNodeKey = sourceNodeKey)
+    fun copy() = NodeMapping(
+        name = name,
+        expression = expression,
+        mode = mode,
+        sourceNodeKey = sourceNodeKey,
+        fieldKind = fieldKind,
+        fieldElementKind = fieldElementKind,
+        fieldRefObjectId = fieldRefObjectId,
+    )
 }
 
 /** Whether a parameter holds something written or something read. */

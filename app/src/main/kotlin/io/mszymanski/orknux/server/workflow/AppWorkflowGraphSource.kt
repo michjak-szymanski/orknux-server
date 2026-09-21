@@ -203,6 +203,7 @@ class AppWorkflowGraphSource(
             expression = it.expression,
             reference = it.mode == MappingMode.REFERENCE,
             from = it.sourceNodeKey,
+            type = it.fieldKind?.name,
         )
     }
 

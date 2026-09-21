@@ -47,6 +47,7 @@ object WorkflowSnapshot {
                             "expression" to binding.expression,
                             "reference" to binding.reference,
                             "from" to binding.from,
+                            "type" to binding.type,
                         )
                     },
                     "retryAttempts" to node.retryAttempts,
@@ -100,6 +101,10 @@ object WorkflowSnapshot {
                             expression = text(binding, "expression").orEmpty(),
                             reference = binding.path("reference").asBoolean(false),
                             from = text(binding, "from"),
+                            // Absent from every snapshot published before a
+                            // field could say what it holds, and read as what it
+                            // meant then: text, whatever was written.
+                            type = text(binding, "type"),
                         )
                     },
                     // Absent from every snapshot published before a node could

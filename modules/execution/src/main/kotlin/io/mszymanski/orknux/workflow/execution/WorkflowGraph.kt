@@ -33,6 +33,19 @@ data class NodeBinding(
     val reference: Boolean = false,
     /** Which node produces the field, on a reference. Carried for the record. */
     val from: String? = null,
+    /**
+     * What the field was declared to hold, where anybody declared it.
+     *
+     * The name of a kind - `STRING`, `NUMBER`, `BOOLEAN`, `OBJECT`, `ARRAY` -
+     * rather than the kind itself, because what a shape is made of belongs to
+     * the half of the product that edits shapes and this module does not depend
+     * on it. All a run needs is whether the text somebody wrote is to be read as
+     * text or as the value it spells.
+     *
+     * Null is untyped, which is every parameter typed by the definition it
+     * belongs to and every field named before there was anywhere to say.
+     */
+    val type: String? = null,
 )
 
 data class GraphNode(

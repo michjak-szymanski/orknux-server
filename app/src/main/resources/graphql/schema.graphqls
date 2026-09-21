@@ -1954,6 +1954,20 @@ type NodeMapping {
     mode: MappingMode!
     "Which node produces the referenced field; what the canvas draws a line from."
     sourceNodeKey: String
+    """
+    What this field holds, where the node is the one naming it.
+
+    An Object node with no saved shape carries fields of its own, and this is
+    what one of them is - the same three parts a saved object's property has,
+    because it is the same question asked in the other place a field is named.
+    Null everywhere else: a parameter belonging to a function or a condition is
+    typed by the definition it belongs to.
+    """
+    fieldKind: PropertyKind
+    "What a list holds, where the kind is ARRAY and it holds scalars."
+    fieldElementKind: PropertyKind
+    "The object it points at, where it is one of those or a list of them."
+    fieldRefObjectId: ID
 }
 
 "Which way out of a node an edge leaves by."
@@ -2260,6 +2274,10 @@ input NodeMappingInput {
     expression: String!
     mode: MappingMode = VALUE
     sourceNodeKey: String
+    "What the field holds, where the node names its own. See `NodeMapping`."
+    fieldKind: PropertyKind
+    fieldElementKind: PropertyKind
+    fieldRefObjectId: ID
 }
 
 input WorkflowEdgeInput {

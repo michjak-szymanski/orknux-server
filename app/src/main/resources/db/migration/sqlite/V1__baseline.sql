@@ -1224,6 +1224,13 @@ CREATE TABLE workflow_node_mapping
     expression                   text not null,
     mode                         varchar(16) not null default 'VALUE',
     source_node_key              varchar(64),
+    -- What a field a node writes holds, where the node names its own fields.
+    -- The three a saved object's property has, asked here for the same reason.
+    -- Null is untyped, which is every mapping typed by the definition it
+    -- belongs to. See `V271__node_field_type.sql` on Postgres.
+    field_kind                   varchar(16),
+    field_element_kind           varchar(16),
+    field_ref_object_id          integer,
     primary key (workflow_node_id, position),
     constraint workflow_node_mapping_workflow_node_id_fkey FOREIGN KEY (workflow_node_id) REFERENCES workflow_node(id) ON DELETE CASCADE
 );

@@ -107,6 +107,7 @@ class NodeExpressions(private val mapper: ObjectMapper) {
                     expression = held["expression"]?.toString().orEmpty(),
                     reference = held["reference"] == true,
                     from = held["from"]?.toString(),
+                    type = held["type"]?.toString(),
                 )
 
                 else -> NodeBinding(expression = held?.toString() ?: return@mapNotNull null)
@@ -136,12 +137,43 @@ class NodeExpressions(private val mapper: ObjectMapper) {
         return if (value.isTextual) value.stringValue() else value.toString()
     }
 
-    /** The same, as JSON, for something being handed to a function. */
+    /**
+     * The same, as JSON, for something being handed to a function.
+     *
+     * A written value is text unless the field says what it holds. Where it
+     * does - an Object node's own field, which is the one place somebody names
+     * a field *and* fills it in - the text is read as the thing it spells: `3`
+     * typed into a number is the number 3 downstream rather than the string
+     * "3", and the flag a later condition asks about is a flag.
+     *
+     * What cannot be read that way is kept as the text it is. A field declared
+     * a number and left holding `soon` is somebody mid-edit or somebody who
+     * meant it; dropping the field, or failing the step over it, would lose
+     * work that the run can perfectly well carry and whoever reads it can
+     * perfectly well see.
+     */
     fun jsonOf(binding: NodeBinding, input: JsonNode?, trigger: JsonNode? = null): String {
-        if (!binding.reference) return mapper.writeValueAsString(binding.expression)
+        if (!binding.reference) return written(binding)
 
         val (source, path) = read(binding.expression, input, trigger)
         return path.fold(source) { node, step -> node?.get(step) }?.toString() ?: "null"
+    }
+
+    /** A written value, as what its field says it is - or as the text it is. */
+    private fun written(binding: NodeBinding): String {
+        val said = binding.expression
+        val parsed = when (binding.type) {
+            NUMBER -> said.trim().toBigDecimalOrNull()?.toString()
+            BOOLEAN -> said.trim().lowercase().takeIf { it == "true" || it == "false" }
+            OBJECT, ARRAY -> runCatching { mapper.readTree(said) }
+                .getOrNull()
+                ?.takeIf { it.isObject || it.isArray }
+                ?.toString()
+
+            // STRING, and every field nobody typed, are the text they hold.
+            else -> null
+        }
+        return parsed ?: mapper.writeValueAsString(said)
     }
 
     /**
@@ -158,5 +190,19 @@ class NodeExpressions(private val mapper: ObjectMapper) {
 
     private companion object {
         const val TRIGGER = "trigger"
+
+        /*
+         * The kinds a field can be declared, by name.
+         *
+         * Names rather than the enum, because what a shape is made of is
+         * `PropertyKind` in the half of the product that edits shapes, and a
+         * binding carries only what a run has to know. Spelled here so a kind
+         * that is renamed is one failing constant rather than five silent
+         * string comparisons.
+         */
+        const val NUMBER = "NUMBER"
+        const val BOOLEAN = "BOOLEAN"
+        const val OBJECT = "OBJECT"
+        const val ARRAY = "ARRAY"
     }
 }

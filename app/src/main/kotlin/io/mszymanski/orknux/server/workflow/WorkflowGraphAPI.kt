@@ -3,6 +3,7 @@ package io.mszymanski.orknux.server.workflow
 import io.mszymanski.orknux.server.action.WorkflowFunctionRepository
 import io.mszymanski.orknux.server.action.ActionParameters
 import io.mszymanski.orknux.server.agent.AgentRepository
+import io.mszymanski.orknux.server.obj.PropertyKind
 import io.mszymanski.orknux.server.obj.WorkflowObjectRepository
 import io.mszymanski.orknux.server.revision.ComponentRevisionKind
 import io.mszymanski.orknux.server.revision.ComponentRevisionRecorder
@@ -620,6 +621,13 @@ class WorkflowGraphAPI(
         // Only meaningful on a reference; kept off a value so a switch back does
         // not leave a node key nothing points at.
             sourceNodeKey = sent.sourceNodeKey?.takeIf { sent.mode == MappingMode.REFERENCE },
+            fieldKind = sent.fieldKind,
+            // The two halves of a type, each kept only where the kind they
+            // belong to is the one chosen: a field switched from a list of
+            // Tickets to a number would otherwise go on naming the Ticket.
+            fieldElementKind = sent.fieldElementKind?.takeIf { sent.fieldKind == PropertyKind.ARRAY },
+            fieldRefObjectId = sent.fieldRefObjectId
+                ?.takeIf { sent.fieldKind == PropertyKind.OBJECT || sent.fieldKind == PropertyKind.ARRAY },
         )
     }
 
@@ -804,6 +812,16 @@ data class NodeMappingInput(
     val expression: String,
     val mode: MappingMode = MappingMode.VALUE,
     val sourceNodeKey: String? = null,
+    /**
+     * What this field holds, where the node is the one naming it.
+     *
+     * Absent everywhere else, and absent is untyped: a parameter belonging to a
+     * function or a condition is typed by the definition, and a client saying
+     * otherwise would be a client overriding it. See [NodeMapping.fieldKind].
+     */
+    val fieldKind: PropertyKind? = null,
+    val fieldElementKind: PropertyKind? = null,
+    val fieldRefObjectId: Long? = null,
 )
 
 data class WorkflowEdgeInput(
@@ -898,7 +916,17 @@ data class WorkflowNodeView(
         y = node.positionY,
         inputs = inputs,
         outputs = outputs,
-        mappings = node.mappings.map { NodeMappingView(it.name, it.expression, it.mode, it.sourceNodeKey) },
+        mappings = node.mappings.map {
+            NodeMappingView(
+                it.name,
+                it.expression,
+                it.mode,
+                it.sourceNodeKey,
+                it.fieldKind,
+                it.fieldElementKind,
+                it.fieldRefObjectId,
+            )
+        },
     )
 }
 
@@ -907,6 +935,10 @@ data class NodeMappingView(
     val expression: String,
     val mode: MappingMode = MappingMode.VALUE,
     val sourceNodeKey: String? = null,
+    /** What the field holds, where the node names its own; see [NodeMapping.fieldKind]. */
+    val fieldKind: PropertyKind? = null,
+    val fieldElementKind: PropertyKind? = null,
+    val fieldRefObjectId: Long? = null,
 )
 
 data class WorkflowEdgeView(

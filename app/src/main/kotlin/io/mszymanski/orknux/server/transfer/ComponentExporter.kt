@@ -625,6 +625,12 @@ class ComponentExporter(
                 put("expression", mapping.expression)
                 put("mode", mapping.mode.name)
                 put("sourceNodeKey", mapping.sourceNodeKey)
+                // What the field holds, where the node named it. By the shape's
+                // name and not its id, like every other reference in a file: an
+                // id means nothing in the workspace this is opened in.
+                put("fieldKind", mapping.fieldKind?.name)
+                put("fieldElementKind", mapping.fieldElementKind?.name)
+                put("fieldObjectRef", mapping.fieldRefObjectId?.let { objects.findByIdOrNull(it)?.name })
             }
         }
     }

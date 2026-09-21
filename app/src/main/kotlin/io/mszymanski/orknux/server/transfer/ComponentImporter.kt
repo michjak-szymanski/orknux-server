@@ -551,7 +551,11 @@ class ComponentImporter(
                     // The shape an agent's answer is held to is an object like
                     // any other the graph points at.
                     drawn.text("outputShapeRef")?.let { ComponentKind.OBJECT to it },
-                )
+                ) + drawn.path("mappings").values().mapNotNull { mapping ->
+                    // And the shape one of the node's own fields is declared to
+                    // hold, which is one more object the file depends on.
+                    mapping.text("fieldObjectRef")?.let { ComponentKind.OBJECT to it }
+                }
             }
         }
     }
@@ -1033,6 +1037,13 @@ class ComponentImporter(
                             expression = mapping.text("expression").orEmpty(),
                             mode = mapping.enumOf("mode", MappingMode.VALUE, component),
                             sourceNodeKey = mapping.text("sourceNodeKey"),
+                            // Absent from every file written before a field
+                            // could say what it holds, and read as what it
+                            // meant then: nobody said.
+                            fieldKind = mapping.enumOrNull<PropertyKind>("fieldKind", component),
+                            fieldElementKind = mapping.enumOrNull<PropertyKind>("fieldElementKind", component),
+                            fieldRefObjectId = mapping.text("fieldObjectRef")
+                                ?.let { idFor(workspaceId, ComponentKind.OBJECT, it, resolved) },
                         )
                     }.toMutableList(),
                 )

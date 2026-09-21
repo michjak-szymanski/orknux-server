@@ -711,6 +711,10 @@ type Query {
 
     What each one has *done* is not here: a task's event log is an LLM session,
     so it is read with `llmSessionEvents` off the session id the task carries.
+
+    `order` is a column of the list - TASK, DOING, STATE, TURNS, STARTED - and
+    anything else is read as newest first, which is what this list has always
+    been. See `workspaceActions`.
     """
     workspaceTasks(
         workspaceId: ID!,
@@ -719,7 +723,9 @@ type Query {
         page: Int = 0,
         size: Int = 20,
         "Only tasks whose title holds this. Absent is every title."
-        search: String
+        search: String,
+        order: String,
+        ascending: Boolean
     ): TaskPage!
     "One task, by its id. Null when it is not one you can see."
     task(id: ID!): Task
@@ -781,7 +787,14 @@ type Query {
     componentDependants(kind: DependencyKind!, componentId: ID!): Dependants!
     "What one run did: the graph as it ran, per-node outcome, and its log."
     execution(id: ID!): ExecutionDetail
-    "Runs of a workspace's workflows, newest first."
+    """
+    Runs of a workspace's workflows, newest first.
+
+    `order` is a column of the list - RUN, WORKFLOW, STATUS, STARTED, TRIGGER -
+    and anything else is read as newest first, which is what this list has always
+    been. Duration is not an order: it is the distance between two columns and a
+    run still going has only one of them. See `workspaceActions`.
+    """
     workspaceExecutions(
         workspaceId: ID!,
         page: Int = 0,
@@ -790,7 +803,9 @@ type Query {
         workflowId: ID,
         "Only runs started in the last N days; omit for all time."
         days: Int,
-        search: String
+        search: String,
+        order: String,
+        ascending: Boolean
     ): ExecutionPage!
     """
     Every workflow this workspace has runs of, for the executions filter.

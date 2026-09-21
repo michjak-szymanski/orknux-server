@@ -23,6 +23,25 @@ class ExecutionService(
     private val logs: ExecutionLogRepository,
 ) {
 
+    /**
+     * The columns the runs list can be put in the order of. Issue #358.
+     *
+     * Duration is not one: it is the distance between two of these columns, and
+     * a run that has not finished has no second one - so the list would have to
+     * order by a value half its rows do not have. It stays a heading.
+     *
+     * The id breaks every tie, because runs of one workflow started in the same
+     * second are common and a page that shuffles between reads is a page nobody
+     * trusts.
+     */
+    private val orders = mapOf(
+        "STARTED" to listOf("startedAt", "id"),
+        "WORKFLOW" to listOf("workflowName", "startedAt"),
+        "STATUS" to listOf("status", "startedAt"),
+        "TRIGGER" to listOf("trigger", "startedAt"),
+        "RUN" to listOf("id"),
+    )
+
     fun executions(
         workspaceId: Long?,
         workflowId: Long?,
@@ -31,8 +50,19 @@ class ExecutionService(
         search: String?,
         page: Int?,
         size: Int?,
+        order: String? = null,
+        ascending: Boolean? = null,
     ): ExecutionPage {
-        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "startedAt"))
+        val asked = order?.trim()?.uppercase()?.takeIf { it in orders }
+        val fields = orders[asked] ?: orders.getValue("STARTED")
+        // Newest first where nobody has said otherwise, which is what a list of
+        // runs has always been read as.
+        val up = ascending ?: false
+        val pageable = pageRequest(
+            page,
+            size,
+            Sort.by(if (up) Sort.Direction.ASC else Sort.Direction.DESC, *fields.toTypedArray()),
+        )
         val since = days?.takeIf { it > 0 }?.let { OffsetDateTime.now().minusDays(it.toLong()) }
         val filter = executionFilter(workspaceId, workflowId, status, since, search?.trim()?.ifEmpty { null })
         return ExecutionPage(executions.findAll(filter, pageable))

@@ -376,7 +376,14 @@ interface TaskRepository : JpaRepository<Task, Long> {
      * is two: "no filter" is the caller's decision and not a value to pass
      * down.
      */
-    fun findByWorkspaceIdOrderByCreatedAtDescIdDesc(workspaceId: Long, pageable: Pageable): Page<Task>
+    /*
+     * Ordered by the page request rather than by a name or an ORDER BY. A fixed
+     * order wins over the sort on the `Pageable`, so a list to be read in
+     * whichever order somebody pressed a heading for cannot be fetched through
+     * one. Issue #358. Newest first is what the caller asks for when nobody has
+     * asked for anything else.
+     */
+    fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<Task>
 
     /**
      * The same, narrowed to what a word appears in the title.
@@ -394,7 +401,6 @@ interface TaskRepository : JpaRepository<Task, Long> {
         SELECT t FROM Task t
         WHERE t.workspaceId = :workspaceId
           AND LOWER(t.title) LIKE LOWER(CONCAT('%', :looking, '%'))
-        ORDER BY t.createdAt DESC, t.id DESC
         """,
     )
     fun searching(
@@ -408,7 +414,6 @@ interface TaskRepository : JpaRepository<Task, Long> {
         SELECT t FROM Task t
         WHERE t.workspaceId = :workspaceId AND t.status = :status
           AND LOWER(t.title) LIKE LOWER(CONCAT('%', :looking, '%'))
-        ORDER BY t.createdAt DESC, t.id DESC
         """,
     )
     fun searchingWithStatus(
@@ -418,7 +423,7 @@ interface TaskRepository : JpaRepository<Task, Long> {
         pageable: Pageable,
     ): Page<Task>
 
-    fun findByWorkspaceIdAndStatusOrderByCreatedAtDescIdDesc(
+    fun findByWorkspaceIdAndStatus(
         workspaceId: Long,
         status: TaskStatus,
         pageable: Pageable,

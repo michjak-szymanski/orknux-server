@@ -52,6 +52,8 @@ class WorkflowExecutionAPI(
         @Argument workflowId: Long?,
         @Argument days: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): RunPage {
         requireWorkspaceAccess(workspaceId)
         val found = runs.executions(
@@ -62,6 +64,8 @@ class WorkflowExecutionAPI(
             search = search?.trim()?.ifEmpty { null },
             page = page,
             size = size,
+            order = order,
+            ascending = ascending,
         )
         return RunPage(found, assignedIn(workspaceId))
     }

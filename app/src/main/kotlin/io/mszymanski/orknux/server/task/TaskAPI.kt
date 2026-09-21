@@ -8,6 +8,7 @@ import io.mszymanski.orknux.server.llm.LlmSessionRepository
 import io.mszymanski.orknux.server.security.WorkspaceAccess
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.PageRequest
 import org.springframework.data.repository.findByIdOrNull
 import org.springframework.graphql.data.method.annotation.Argument
@@ -45,6 +46,24 @@ class TaskAPI(
     private val views: TaskViews,
 ) {
 
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * Started is the fallback and reads newest first, which is what a list of
+     * tasks has always been. "Doing it" is the agent or the model a task was
+     * handed to, and which of the two it is decides where the name comes from -
+     * so ordering by it orders by the id of whichever one it holds, which groups
+     * a workspace's tasks by who is doing them without pretending to be
+     * alphabetical.
+     */
+    private val TASK_ORDERS = mapOf(
+        "TASK" to listOf("title"),
+        "DOING" to listOf("agentId", "modelId", "createdAt"),
+        "STATE" to listOf("status", "createdAt"),
+        "TURNS" to listOf("turnsSpent", "createdAt"),
+        "STARTED" to listOf("createdAt", "id"),
+    )
+
     @QueryMapping
     @Transactional(readOnly = true)
     fun workspaceTasks(
@@ -54,18 +73,24 @@ class TaskAPI(
         @Argument size: Int?,
         /** What to look for in the title, or null for every task. */
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): TaskPageView {
         access.requireVisible(workspaceId)
-        val asked = PageRequest.of((page ?: 0).coerceAtLeast(0), (size ?: PAGE).coerceIn(1, BIGGEST_PAGE))
+        val asked = PageRequest.of(
+            (page ?: 0).coerceAtLeast(0),
+            (size ?: PAGE).coerceIn(1, BIGGEST_PAGE),
+            sortBy(order, ascending, TASK_ORDERS, "STARTED", fallbackAscending = false),
+        )
         // Two calls rather than a nullable status in one query, the way the
         // tracker's filter is: "no filter" is a decision here and not a value.
         val looking = search?.trim().orEmpty()
         val found = when {
             looking.isEmpty() && status == null ->
-                tasks.findByWorkspaceIdOrderByCreatedAtDescIdDesc(workspaceId, asked)
+                tasks.findByWorkspaceId(workspaceId, asked)
 
             looking.isEmpty() ->
-                tasks.findByWorkspaceIdAndStatusOrderByCreatedAtDescIdDesc(workspaceId, requireNotNull(status), asked)
+                tasks.findByWorkspaceIdAndStatus(workspaceId, requireNotNull(status), asked)
 
             status == null -> tasks.searching(workspaceId, looking, asked)
             else -> tasks.searchingWithStatus(workspaceId, status, looking, asked)

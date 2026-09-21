@@ -109,10 +109,14 @@ class ActionAPITest(
         val workflowId = graphQlTester.document(
             """
             mutation {
-              createWorkflow(input: { workspaceId: $workspaceId, name: "Nightly" }) { id }
+              createWorkflow(input: { workspaceId: $workspaceId, name: "Nightly" }) { workflowId }
             }
             """,
-        ).execute().path("createWorkflow.id").entity(Long::class.java).get()
+            // The definition's id, not the assignment's: an owned action points
+            // at `workflow`, and the two ids are only ever the same number by
+            // accident - which is how this passed here and failed on a runner
+            // whose sequences had drifted apart.
+        ).execute().path("createWorkflow.workflowId").entity(Long::class.java).get()
 
         graphQlTester.document(
             """

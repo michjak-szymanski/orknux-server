@@ -50,18 +50,6 @@ A whole installation - database, directory, Temporal - is
 [`deploy/compose.yaml`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/compose.yaml)
 in the source repository.
 
-## Reading the tables
-
-Every setting is one environment variable, all prefixed alike, so
-`env | grep ORKNUX_` is an installation's whole configuration.
-
-**Required** answers: will this installation be wrong without it? **Yes** - set
-it, or the thing it configures does not work. **No** - the default is a real
-answer. **Conditional** - required only in the case named, ignored otherwise.
-
-The defaults are development defaults - a laptop against a local Postgres, LDAP
-and Temporal. Several are wrong in a deployment, and those say so.
-
 ## The one that matters most
 
 | Variable | What it does | Default | Required |
@@ -83,15 +71,13 @@ length, and whether every stored secret still reads with it.
 
 ## Database
 
-Postgres or SQLite. `ORKNUX_DB_URL` decides which, and nothing else does - the
-driver, dialect and migrations follow from it. Postgres is what a deployment
-should use; SQLite is a single file with nothing else to run, for an
-installation of one or a few. What that costs is in the README's **The
-database**.
+Postgres or SQLite. `ORKNUX_DB_URL` decides which and nothing else does: the
+driver, dialect and migrations follow from it. Postgres is for a deployment;
+SQLite is one file with nothing else to run, for an installation of one or a
+few. What that costs is in the README's **The database**.
 
-Under SQLite, give the file a path on a volume that outlives the container and
-make sure the directory exists: the server creates the file, not the directory,
-and says so by name.
+Under SQLite, put the file on a volume that outlives the container and make the
+directory yourself: the server creates the file, not the directory.
 
 ```
 ORKNUX_DB_URL: jdbc:sqlite:/data/orknux.db
@@ -118,23 +104,22 @@ is why.
 | `ORKNUX_AUTH_METHOD` | `LDAP`, `INTERNAL`, `OIDC`, or `NONE` to turn authentication off. | `LDAP` | No |
 | `ORKNUX_ADMIN_ROLE` | The role that sees the Admin section and every workspace. | `ROLE_ADMINS` | No |
 
-**How hard somebody may try.** A wrong password costs nothing until the allowance
-is spent, then a pause doubling to the ceiling. Nothing locks anybody out. The
-five `ORKNUX_SIGN_IN_*` variables tuning it, and the six
-`ORKNUX_PASSWORD_RESET_*` beside them, are in
-[the README's **Rate limits**](https://github.com/michjak-szymanski/orknux-server/blob/main/README.md#rate-limits);
-the defaults are right for almost every installation.
+**How hard somebody may try.** A wrong password costs nothing until the
+allowance is spent, then a pause doubling to a ceiling; nothing locks anybody
+out. The five `ORKNUX_SIGN_IN_*` and six `ORKNUX_PASSWORD_RESET_*` variables are
+in
+[the README's **Rate limits**](https://github.com/michjak-szymanski/orknux-server/blob/main/README.md#rate-limits),
+and their defaults suit almost every installation.
 
 **INTERNAL** - nothing to configure, which is the point. Username and password
 against this installation's own accounts, no directory or provider contacted. It
 is what `orknux/orknux-one` runs on, and what to set when the bootstrap
 administrator below is the way in.
 
-**NONE** - authentication off. Nobody signs in and every request acts as one
-identity that administers, so anyone reaching the port administers this
-installation: run it only behind a gate of your own. Never the default, never a
-fallback - an unrecognised value stops the server. Said at startup, on Doctor
-and across every page.
+**NONE** - authentication off. Every request acts as one identity that
+administers, so anyone reaching the port administers this installation: run it
+only behind a gate of your own. Never a fallback - an unrecognised value stops
+the server - and said at startup, on Doctor and across every page.
 
 **LDAP** - read only when `ORKNUX_AUTH_METHOD=LDAP`.
 
@@ -161,7 +146,7 @@ request.
 | `ORKNUX_OIDC_CLIENT_SECRET` | Its secret. | *none* | **Yes** under OIDC |
 | `ORKNUX_OIDC_SCOPES` | What is asked for, comma separated. | `openid,profile,email,groups` | No |
 | `ORKNUX_OIDC_USERNAME_CLAIM` | The claim to show as somebody's name. The subject is the fallback. | `preferred_username` | No |
-| `ORKNUX_OIDC_ROLES_CLAIM` | The claim carrying group or role membership; there is no standard one. Keycloak and Okta usually say `groups`, Entra `groups` or `roles`. Each value is treated as an LDAP group. | `groups` | No |
+| `ORKNUX_OIDC_ROLES_CLAIM` | The claim carrying group or role membership; there is no standard one. Keycloak and Okta usually say `groups`, Entra `groups` or `roles`. | `groups` | No |
 | `ORKNUX_OIDC_DISPLAY_NAME` | What the sign-in button says. | `single sign-on` | No |
 | `ORKNUX_OIDC_AUDIENCES` | Which audiences a bearer token may name, comma separated. **Read the paragraph below before upgrading an OIDC installation.** | *the client id* | **Conditional** - see below |
 
@@ -172,13 +157,12 @@ browser sign-in carries on working.
 has what each writes and what to set, and covers `orknux.security.role-mapping`,
 which is YAML only.
 
-**The first administrator.** With neither a directory nor OIDC there is nobody to
-create the administrator who could create you. Set both and one internal
-administrator is made at startup, with the `Administrators` role and a password
-on the ordinary sign-in form - which internal users may always use, whatever
-`ORKNUX_AUTH_METHOD` says. It only creates, so an existing account of that name
-is untouched. A password in a variable is a way in, not one to keep: sign in,
-change it, unset both.
+**The first administrator.** With neither a directory nor OIDC there is nobody
+to create the administrator who could create you. Set both and one is made at
+startup, with the `Administrators` role and a password on the ordinary sign-in
+form - which internal users may always use. It only creates, so an account of
+that name is untouched. A password in a variable is a way in, not one to keep:
+sign in, change it, unset both.
 [`deploy/README.md`](https://github.com/michjak-szymanski/orknux-server/blob/main/deploy/README.md#signing-in-without-a-directory)
 has the rest.
 
@@ -199,23 +183,22 @@ the log says what is missing.
 | `ORKNUX_MAIL_PORT` | Empty takes what the security below usually listens on: 587, 465 or 25. | *by security* | No |
 | `ORKNUX_MAIL_USERNAME` | Empty sends without authenticating. | *none* | No |
 | `ORKNUX_MAIL_PASSWORD` | That account's password. | *none* | No |
-| `ORKNUX_MAIL_SECURITY` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required not merely offered, so a server that stopped offering it is refused rather than sent the password in the clear. | `STARTTLS` | No |
+| `ORKNUX_MAIL_SECURITY` | `NONE`, `STARTTLS` or `TLS`. STARTTLS is required rather than offered, so a server that stopped offering it is refused. | `STARTTLS` | No |
 
 ## Runs
 
 Temporal is what makes a run durable: it survives a restart, retries a step, and
 can be looked at afterwards.
 
-What a trigger, a schedule or the API runs is the workflow **as published**, not
-as it is being edited - Run in the editor is the one thing using the draft. What
-is published is the **graph**: for the function, action, agent or condition its
-nodes call it holds an id, read live when the step runs, so editing a function
-changes what a published workflow does with no republish. The rest is in the
-README's **Publishing**.
+What a trigger, a schedule or the API runs is the workflow **as published** -
+Run in the editor is the one thing using the draft. Its nodes hold the *id* of
+the function or agent they call, read when the step runs, so editing one changes
+what a published workflow does with no republish. The README's **Publishing**
+has the rest.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
-| `ORKNUX_TEMPORAL_ENABLED` | `false` runs a workflow on the calling thread, no retries or resumption - for a single-process installation with no Temporal. The tests do that; a deployment should not. | `true` | No |
+| `ORKNUX_TEMPORAL_ENABLED` | `false` runs a workflow on the calling thread with no retries or resumption, for a single-process installation with no Temporal. A deployment should not. | `true` | No |
 | `ORKNUX_TEMPORAL_TARGET` | Host and port of the Temporal frontend. | `localhost:7233` | **Yes** in a deployment, unless Temporal is off |
 | `ORKNUX_TEMPORAL_NAMESPACE` | The Temporal namespace to run in. | `default` | No |
 | `ORKNUX_TEMPORAL_TASK_QUEUE` | The queue workers take work from. Change it to run two installations against one Temporal. | `orknux-workflow` | No |
@@ -227,16 +210,16 @@ README's **Publishing**.
 | `ORKNUX_TASK_MAX_TURNS` | How often a task's agent may be asked before stopping, unless the workspace sets its own. Copied onto a task at creation, as is the next, so a change spares one running. | `40` | No |
 | `ORKNUX_TASK_WORKING_TIME` | The longest a task may be *working*. Not wall clock: time parked waiting to be approved counts for none. | `2h` | No |
 | `ORKNUX_TASK_PATIENCE` | How long a parked task waits for a person. | `7d` | No |
-| `ORKNUX_TASK_SWEEP_MINUTES` | How long a task may sit at Queued before being handed over again, so a hand-over lost to a restart leaves nothing stranded. An installation carrying its own tasks sets this on Admin -> Settings instead and is shown a field; one running Temporal takes it from here and is shown none. | `5` | No |
-| `ORKNUX_EXECUTION_RETENTION_DAYS` | How long a finished run is kept before it is swept, with its steps. Admin -> Settings is the switch; this is the floor. A deleted workspace takes its runs with it whatever this says. | `90` | No |
+| `ORKNUX_TASK_SWEEP_MINUTES` | How long a task may sit at Queued before being handed over again, so a restart strands nothing. An installation carrying its own tasks sets this on Admin -> Settings instead. | `5` | No |
+| `ORKNUX_EXECUTION_RETENTION_DAYS` | How long a finished run is kept, with its steps. Admin -> Settings is the switch; this is the floor. | `90` | No |
 | `ORKNUX_EXECUTION_SWEEP_ENABLED` | `false` sweeps nothing on a timer. | `true` | No |
-| `ORKNUX_REVISION_RETENTION_DAYS` | How long a replaced version of a function, tool, skill or agent is kept, measured from when it stopped being current. Admin -> Settings is the switch. | `14` | No |
+| `ORKNUX_REVISION_RETENTION_DAYS` | How long a replaced version of a function, tool, skill or agent is kept, from when it stopped being current. Admin -> Settings is the switch. | `14` | No |
 | `ORKNUX_REVISION_SWEEP_ENABLED` | `false` keeps every version forever. | `true` | No |
 | `ORKNUX_REVISION_SWEEP_INTERVAL` | How often that sweep runs. | `6h` | No |
 | `ORKNUX_SCHEDULER_ENABLED` | The clock behind scheduled triggers. Its state is in the database, so one instance fires a schedule however many are running. | `true` | No |
 | `ORKNUX_SCHEDULER_POLLING_INTERVAL` | How often it looks for due work. | `10s` | No |
 | `ORKNUX_SCHEDULER_THREADS` | How many due schedules it may start at once. | `4` | No |
-| `ORKNUX_SCHEDULER_TICK_INTERVAL` | How often scheduled triggers are looked at, so the finest schedule this installation can keep. A cron of seconds is accepted whatever this says, but fires only on a tick. Each tick costs a query per trigger. | `10s` | No |
+| `ORKNUX_SCHEDULER_TICK_INTERVAL` | How often scheduled triggers are looked at: the finest schedule this installation keeps. A cron of seconds still fires only on a tick. | `10s` | No |
 
 ## What a workspace's code may do
 
@@ -253,37 +236,24 @@ stopped.
 | `ORKNUX_SCRIPT_STATEMENT_LIMIT` | How many statements one may execute - what catches a loop that never ends. | `5000000` | No |
 | `ORKNUX_SCRIPT_LOG_LEVEL` | The lowest level `orknux.log` keeps, decided inside the sandbox: `debug`, `info`, `warn`, `error`, `off`. | `info` | No |
 | `ORKNUX_PLUGIN_LOG_LEVEL` | The same, for plugins. Separate so debugging one does not turn up every function. | `info` | No |
-| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same, for a plugin, which is a bundle and takes longer to load. The floor an installation ships with: Admin -> Settings is the switch, 1 to 300 seconds, and what it holds wins. | `30000` | No |
+| `ORKNUX_PLUGIN_TIMEOUT_MILLIS` | The same for a plugin, which is a bundle and takes longer to load. The floor: Admin -> Settings is the switch, 1 to 300 seconds. | `30000` | No |
 | `ORKNUX_PLUGIN_STATEMENT_LIMIT` | The same, for a plugin. | `10000000` | No |
 | `ORKNUX_HTTP_REQUEST_TIMEOUT_SECONDS` | How long a workflow's own HTTP request may take. | `30` | No |
-| `ORKNUX_LIBRARY_REGISTRY_URL` | Where installing a library by name fetches from - once, on the server, into the database, through the proxy rules. Point it at a mirror, or empty to offer the upload alone. | `https://registry.npmjs.org` | No |
+| `ORKNUX_LIBRARY_REGISTRY_URL` | Where installing a library by name fetches from - once, into the database, through the proxy rules. Empty offers the upload alone. | `https://registry.npmjs.org` | No |
 | `ORKNUX_LIBRARY_REGISTRY_TIMEOUT` | How long it has to answer. | `30s` | No |
-
-## What an agent may do
-
-Every capability an agent has is decided per agent, on its own screen: which
-tools and skills it was granted, which connections it may name, whether it may
-reach the tracker, open a shell, keep an artifact, draw. Two of those rows are
-on until somebody turns them off rather than granted - `finish_answer`, which
-lets a turn end when the work has already been delivered somewhere else, and
-`picture_link`, which hands back markdown for a picture the agent drew. Neither
-reaches anything; they are how a turn ends and how a picture is placed.
-
-Nothing here is an environment variable. It is per agent, per workspace, and in
-the audit.
 
 ## Plugins and the marketplace
 
-A plugin is a bundle an installation loads and every workspace in it can then
-use - functions, tools, skills, object shapes and the libraries it embeds. They
-are written against `@orknux/plugin` and live in
+A plugin is a bundle this installation loads and every workspace can then use:
+functions, tools, skills, object shapes and the libraries it embeds. They are
+written against `@orknux/plugin` and live in
 [orknux-extension](https://github.com/michjak-szymanski/orknux-extension), so a
-new plugin does not mean a new server.
+new plugin is not a new server.
 
-The Plugins screen carries a catalog beside what is installed. The server
-fetches it, not the browser, so it goes out through the proxy rules above like
-every other outbound call, and what arrives is checked against the digest the
-catalog published before anything is loaded.
+The Plugins screen carries a catalog beside what is installed. The **server**
+fetches it, so it goes out through the proxy rules like every other outbound
+call, and what arrives is checked against the digest the catalog published
+before anything is loaded.
 
 | Variable | What it does | Default | Required |
 | --- | --- | --- | --- |
@@ -313,11 +283,11 @@ above are the installation's own relay; mail a *workflow* sends is a connection
 like any other, on the workspace's form.
 
 **A proxy is a rule, not an environment variable.** Rules live on **Admin ->
-Networking**, match the request URL, and carry every outbound call: model
-providers, connections, Slack's API and websocket, OIDC sign-in, a function's
-`orknux.http`, and the relay above. Each client is given them explicitly, so an
-`HTTPS_PROXY` in the environment is not what any of them uses. LDAP is not HTTP
-and cannot be carried by a rule at all.
+Networking**, match the request URL, and carry every outbound call - model
+providers, connections, Slack, OIDC, a function's `orknux.http`, the relay
+above. Each client is given them explicitly, so an `HTTPS_PROXY` in the
+environment is used by none of them. LDAP is not HTTP and cannot be carried by
+a rule at all.
 
 ## Chat, attachments and the tracker
 
@@ -339,21 +309,21 @@ and it needs nothing else configured here.
 | --- | --- | --- | --- |
 | `ORKNUX_PORT` | The port this server listens on inside the container. | `8080` | No |
 | `ORKNUX_ALLOWED_ORIGINS` | Where the interface is served from, when it is not this server. Comma separated; empty allows none, which is right once they share an origin. | `http://localhost:5173` | **Yes** where the interface is elsewhere |
-| `ORKNUX_BASE_URL` | Where the interface is reached from, as a browser spells it, and what a mailed reset link points at. Configured rather than read off the `Host` header, which a caller writes. | `http://localhost:5173` | **Yes** for password resets |
-| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`, any way `DataSize` reads. That endpoint is open by necessity, so more is refused with 413 before any trigger runs. | `1MB` | No |
-| `ORKNUX_ASYNC_REQUEST_TIMEOUT` | How long a request answered with a promise may stay open. The container's own thirty seconds would cut off the five minutes `orknux_news` may wait. | `330s` | No |
-| `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight, for a self-hosted tool behind an identity provider. Shorten it where that is not true. | `14d` | No |
+| `ORKNUX_BASE_URL` | Where the interface is reached from, as a browser spells it: what a mailed reset link points at, and the host on every picture link handed to a model. Configured rather than read off the `Host` header, which a caller writes. | `http://localhost:5173` | **Yes** for password resets |
+| `ORKNUX_WEBHOOK_MAX_BODY_SIZE` | The most a webhook caller may post to `/api/webhooks/…`. That endpoint is open by necessity, so more is refused with 413 before any trigger runs. | `1MB` | No |
+| `ORKNUX_ASYNC_REQUEST_TIMEOUT` | How long a request answered with a promise may stay open; the container's own thirty seconds would cut off the five minutes `orknux_news` may wait. | `330s` | No |
+| `ORKNUX_SESSION_TIMEOUT` | How long a session survives without being used. A fortnight suits a self-hosted tool behind an identity provider; shorten it otherwise. | `14d` | No |
 | `ORKNUX_SESSION_COOKIE_SAME_SITE` | `strict` where the interface shares this origin and nothing links into it; `lax` is what lets a link from elsewhere arrive signed in. | `lax` | No |
 | `ORKNUX_SESSION_COOKIE_HTTP_ONLY` | Keeps the session cookie out of reach of scripts. | `true` | No |
-| `OPENAI_LOG` | What the model SDK prints to stderr: `info` gives each call's method and URL, `debug` adds headers and bodies, credentials redacted. Set it when the question is which URL a provider was actually called at - this application's own log names the base address, not the path the SDK builds from it. | *none* | No |
-| `ORKNUX_LOG_LEVEL` | How much this application says: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`. Turns up its own code - triggers, model calls, task handover - and leaves the frameworks alone. | `INFO` | No |
-| `ORKNUX_LOG_LEVEL_ROOT` | The same for everything else on the classpath. Raise it when what is wrong is underneath this application rather than in it; `DEBUG` here is very loud. | `INFO` | No |
+| `OPENAI_LOG` | What the model SDK prints to stderr: `info` for each call's method and URL, `debug` for headers and bodies with credentials redacted. Set it when the question is which URL a provider was called at. | *none* | No |
+| `ORKNUX_LOG_LEVEL` | How much this application says: `TRACE` to `ERROR`. Its own code only - triggers, model calls, task handover - and not the frameworks. | `INFO` | No |
+| `ORKNUX_LOG_LEVEL_ROOT` | The same for everything else on the classpath, for when what is wrong is underneath this application. `DEBUG` here is very loud. | `INFO` | No |
 | `ORKNUX_LOG_FORMAT` | `plain` reads well in a terminal; `json` (one ECS object per line) is what a collector wants. Applies to console and file alike. | `plain` | No |
 | `ORKNUX_LOG_FILE` | Console always; name a file here and it is written to as well. Use an absolute path. | *none* (stdout only) | No |
 | `ORKNUX_LOG_MAX_FILE_SIZE` | When the log file rolls. Only consulted when a file is being written. | `10MB` | No |
 | `ORKNUX_LOG_MAX_HISTORY` | How many rolled files are kept. | `14` | No |
 | `ORKNUX_LOG_TOTAL_SIZE_CAP` | The ceiling on all of them together. | `1GB` | No |
-| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers an unauthenticated caller. A scrape describes the installation, so it needs a credential like anything else, and Prometheus can carry one; `true` only where the scrape crosses a network the scraper alone is on. | `false` | No |
+| `ORKNUX_METRICS_ANONYMOUS` | Whether `/actuator/prometheus` answers an unauthenticated caller. A scrape describes the installation, so `true` only where the scraper alone is on that network. | `false` | No |
 | `JAVA_OPTS` | Passed to the JVM. The default gives the heap three quarters of the container's memory limit. | `-XX:MaxRAMPercentage=75` | No |
 
 Sessions are kept in the database, so signing in outlives a restart and more

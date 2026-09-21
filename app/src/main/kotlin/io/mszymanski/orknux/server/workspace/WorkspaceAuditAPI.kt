@@ -28,6 +28,19 @@ class WorkspaceAuditAPI(
      * Asking for one workspace is the exception: that is the workspace's log, reached
      * through the same query, so it shows everything.
      */
+    /**
+     * The columns this feed can be put in the order of. Issue #358.
+     *
+     * The id breaks every tie for the reason the note on `workspaceAudit` gives:
+     * two entries written in the same moment sort alike by date, and the key is
+     * the only thing that orders them the same way twice.
+     */
+    private val AUDIT_ORDERS = mapOf(
+        "ACTION" to listOf("message", "id"),
+        "USER" to listOf("userId", "date", "id"),
+        "AT" to listOf("date", "id"),
+    )
+
     @QueryMapping
     fun workspaceAudit(
         @Argument workspaceId: Long?,
@@ -37,6 +50,8 @@ class WorkspaceAuditAPI(
         @Argument category: WorkspaceAuditCategory?,
         @Argument userId: String?,
         @Argument days: Int?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): WorkspaceAuditPage {
         /*
          * Newest first, and `id` to break a tie.
@@ -52,7 +67,7 @@ class WorkspaceAuditAPI(
          * The key is monotonic, so within one instant it orders them the way
          * the date orders them everywhere else.
          */
-        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date", "id"))
+        val pageable = pageRequest(page, size, sortBy(order, ascending, AUDIT_ORDERS, "AT", fallbackAscending = false))
         val since = days?.takeIf { it > 0 }?.let { OffsetDateTime.now().minusDays(it.toLong()) }
         val term = search?.trim()?.ifEmpty { null }
 
@@ -100,14 +115,16 @@ class WorkspaceAuditAPI(
         @Argument category: WorkspaceAuditCategory?,
         @Argument userId: String?,
         @Argument days: Int?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): WorkspaceAuditPage {
         val workspace = workspaces.findByIdOrNull(workspaceId) ?: throw WorkspaceNotFoundException(workspaceId)
         access.requireVisible(workspace)
 
         /*
-         * The same tie, in the query that pages the whole installation's log.
+         * The same tie, and the same columns, as the installation's own log.
          */
-        val pageable = pageRequest(page, size, Sort.by(Sort.Direction.DESC, "date", "id"))
+        val pageable = pageRequest(page, size, sortBy(order, ascending, AUDIT_ORDERS, "AT", fallbackAscending = false))
         val since = days?.takeIf { it > 0 }?.let { OffsetDateTime.now().minusDays(it.toLong()) }
         val term = search?.trim()?.ifEmpty { null }
 

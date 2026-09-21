@@ -84,7 +84,10 @@ type Query {
         category: WorkspaceAuditCategory,
         userId: String,
         "Only entries from the last N days; omit for all time."
-        days: Int
+        days: Int,
+        "A column of the feed - ACTION, USER, AT. Newest first when absent."
+        order: String,
+        ascending: Boolean
     ): WorkspaceAuditPage!
     "The users who appear in the admin audit log, for the filter."
     auditUsers: [String!]!
@@ -748,7 +751,10 @@ type Query {
         category: WorkspaceAuditCategory,
         userId: String,
         "Only entries from the last N days; omit for all time."
-        days: Int
+        days: Int,
+        "A column of the feed - ACTION, USER, AT. Newest first when absent."
+        order: String,
+        ascending: Boolean
     ): WorkspaceAuditPage!
     "The users who appear in a workspace's audit log, for the filter."
     workspaceActivityUsers(workspaceId: ID!): [String!]!

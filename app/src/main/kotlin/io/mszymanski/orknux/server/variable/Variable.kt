@@ -146,11 +146,19 @@ class WorkspaceVariable(
 
 interface WorkspaceVariableRepository : JpaRepository<WorkspaceVariable, Long> {
 
-    fun findByWorkspaceIdOrderByNameAsc(workspaceId: Long, pageable: Pageable): Page<WorkspaceVariable>
+    /*
+     * Ordered by the page request and not by these method names. An `OrderBy` in
+     * a name wins over the sort on the `Pageable`, so a list that is to be read
+     * in whichever order somebody pressed a heading for cannot be fetched
+     * through one - it would quietly come back by name whatever was asked.
+     * Issue #358. The order these had, by name, is what the caller passes when
+     * nobody has asked for another.
+     */
+    fun findByWorkspaceId(workspaceId: Long, pageable: Pageable): Page<WorkspaceVariable>
 
-    fun findByCatalogIdOrderByNameAsc(catalogId: Long, pageable: Pageable): Page<WorkspaceVariable>
+    fun findByCatalogId(catalogId: Long, pageable: Pageable): Page<WorkspaceVariable>
 
-    fun findByCatalogIdAndNameContainingIgnoreCaseOrderByNameAsc(
+    fun findByCatalogIdAndNameContainingIgnoreCase(
         catalogId: Long,
         name: String,
         pageable: Pageable,
@@ -162,7 +170,7 @@ interface WorkspaceVariableRepository : JpaRepository<WorkspaceVariable, Long> {
     fun findByCatalogId(catalogId: Long): List<WorkspaceVariable>
 
     /** The list's search box: by name, since the value is not something to search. */
-    fun findByWorkspaceIdAndNameContainingIgnoreCaseOrderByNameAsc(
+    fun findByWorkspaceIdAndNameContainingIgnoreCase(
         workspaceId: Long,
         name: String,
         pageable: Pageable,

@@ -20,6 +20,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -56,6 +57,21 @@ class TriggerAPI(
     private val dependants: ComponentDependants,
 ) {
 
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * Two headings are not orders. Source is the name of whatever the trigger
+     * listens on, resolved row by row, and Last fired comes from the firing log
+     * - a different table, whose newest row per trigger is not something this
+     * query can order by without becoming a different query.
+     */
+    private val TRIGGER_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "TYPE" to listOf("type", "name"),
+        "ACTION" to listOf("action", "name"),
+        "STATUS" to listOf("enabled", "name"),
+    )
+
     @QueryMapping
     /** @param search what to look for in this list, or null for all of it. */
     fun workspaceTriggers(
@@ -63,10 +79,12 @@ class TriggerAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): TriggerPage {
         requireWorkspaceAccess(workspaceId)
         // The shared ones only; see the note on workflowOwnedActions.
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, TRIGGER_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return TriggerPage(

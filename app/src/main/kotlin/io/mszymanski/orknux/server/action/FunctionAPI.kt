@@ -22,6 +22,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import io.mszymanski.orknux.workflow.script.ScriptArity
 import io.mszymanski.orknux.workflow.script.ScriptResult
 import io.mszymanski.orknux.workflow.script.ScriptRunner
@@ -77,6 +78,19 @@ class FunctionAPI(
      * that brought it, because "where did this come from" is the first thing
      * somebody asks about a function they did not write.
      */
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * The Parameters column is a count of what the function declares, and the
+     * declaration is a collection rather than a column, so there is nothing to
+     * order by. It stays a heading.
+     */
+    private val FUNCTION_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "RETURN_TYPE" to listOf("returnType", "name"),
+        "LAST_MODIFIED" to listOf("lastModifiedAt"),
+    )
+
     @QueryMapping
     fun workspaceFunctions(
         @Argument workspaceId: Long,
@@ -91,9 +105,11 @@ class FunctionAPI(
         @Argument pluginId: Long?,
         /** What to look for in the name and the description, or null for all of them. */
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): FunctionPage {
         requireWorkspaceAccess(workspaceId)
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, FUNCTION_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
         val found = when {
             pluginId != null -> functions.findByPluginIdPaged(pluginId, paged)

@@ -7,6 +7,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -58,6 +59,19 @@ class VariableAPI(
     }
 
     /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * The Value column is not one. A variable's value is a secret more often
+     * than not - it is stored encrypted and never handed back - so there is
+     * nothing to order the rows by and nothing an order would mean.
+     */
+    private val VARIABLE_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "DESCRIPTION" to listOf("description", "name"),
+        "TYPE" to listOf("type", "name"),
+    )
+
+    /**
      * One page of variables: a catalog's, or the whole workspace's.
      *
      * @param catalogId which catalog to look in; omitted, every variable the
@@ -72,22 +86,24 @@ class VariableAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): VariablePage {
         requireWorkspaceAccess(workspaceId)
         val looking = search?.trim().orEmpty()
-        val pageable = pageRequest(page, size, Sort.by("name"))
+        val pageable = pageRequest(page, size, sortBy(order, ascending, VARIABLE_ORDERS, "NAME"))
 
         val catalog = catalogId?.let { requireCatalog(it, workspaceId) }
         val held = when {
-            catalog == null && looking.isEmpty() -> variables.findByWorkspaceIdOrderByNameAsc(workspaceId, pageable)
-            catalog == null -> variables.findByWorkspaceIdAndNameContainingIgnoreCaseOrderByNameAsc(
+            catalog == null && looking.isEmpty() -> variables.findByWorkspaceId(workspaceId, pageable)
+            catalog == null -> variables.findByWorkspaceIdAndNameContainingIgnoreCase(
                 workspaceId,
                 looking,
                 pageable,
             )
 
-            looking.isEmpty() -> variables.findByCatalogIdOrderByNameAsc(requireNotNull(catalog.id), pageable)
-            else -> variables.findByCatalogIdAndNameContainingIgnoreCaseOrderByNameAsc(
+            looking.isEmpty() -> variables.findByCatalogId(requireNotNull(catalog.id), pageable)
+            else -> variables.findByCatalogIdAndNameContainingIgnoreCase(
                 requireNotNull(catalog.id),
                 looking,
                 pageable,

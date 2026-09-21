@@ -389,10 +389,34 @@ type Query {
     always showed. `pluginId` narrows further to what one plugin brought, and
     wins over scope.
     """
-    workspaceFunctions(workspaceId: ID!, page: Int = 0, size: Int = 20, scope: FunctionScope, pluginId: ID, search: String): FunctionPage!
+    workspaceFunctions(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        scope: FunctionScope,
+        pluginId: ID,
+        search: String,
+        "A column of the list - NAME, RETURN_TYPE, LAST_MODIFIED. See `workspaceActions`."
+        order: String,
+        ascending: Boolean
+    ): FunctionPage!
     function(id: ID!): Function
-    "What starts a workspace's workflows, ordered by name."
-    workspaceTriggers(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): TriggerPage!
+    """
+    What starts a workspace's workflows.
+
+    `order` is a column of the list - NAME, TYPE, ACTION, STATUS - and anything
+    else is read as the list's usual order rather than refused, which is by name.
+    Source and Last fired are not orders: one is resolved row by row and the
+    other lives in the firing log. See `workspaceActions`.
+    """
+    workspaceTriggers(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): TriggerPage!
 
     "The \"Custom\" triggers one workflow owns; see workflowOwnedActions."
     workflowOwnedTriggers(workspaceId: ID!, workflowId: ID!): [Trigger!]!
@@ -594,13 +618,20 @@ type Query {
     The workspace's variables: named values its functions are handed. A catalogId
     narrows it to one catalog; a blank search is no filter rather than a search for
     nothing. Values are never returned.
+
+    `order` is a column of the list - NAME, DESCRIPTION, TYPE - and anything else
+    is read as the list's usual order rather than refused, which is by name. The
+    value is not an order: it is a secret more often than not, stored encrypted
+    and never handed back. See `workspaceActions`.
     """
     workspaceVariables(
         workspaceId: ID!,
         catalogId: ID,
         search: String,
         page: Int = 0,
-        size: Int = 20
+        size: Int = 20,
+        order: String,
+        ascending: Boolean
     ): VariablePage!
     variable(id: ID!): Variable
     workflowObject(id: ID!): WorkflowObject

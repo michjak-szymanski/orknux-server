@@ -255,7 +255,7 @@ class SecretMigrationTest(
      * `@Entity`, which is Spring's own scanner rather than the JPA metamodel the
      * production code asks, and counts the annotated fields it finds.
      *
-     * And it names the nine, because "nine of something" is not a review and
+     * And it names the ten, because "ten of something" is not a review and
      * this list is the one an auditor wants to read.
      */
     @Test
@@ -263,6 +263,9 @@ class SecretMigrationTest(
         assertThat(columns.all.map { it.toString() }).containsExactlyInAnyOrder(
             "mcp_server.secret",
             "model_provider.secret",
+            // A plugin's secret parameter, typed in rather than pointed at a
+            // variable, V263.
+            "plugin_parameter.secret_value",
             "proxy_rule.password",
             "shell.key_passphrase",
             "shell.private_key",
@@ -274,7 +277,7 @@ class SecretMigrationTest(
         )
 
         assertThat(columns.all)
-            .describedAs("a tenth encrypted field anywhere on the classpath is a tenth swept column")
+            .describedAs("an eleventh encrypted field anywhere on the classpath is an eleventh swept column")
             .hasSize(annotatedFieldsOnTheClasspath())
     }
 

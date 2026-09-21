@@ -109,12 +109,15 @@ class PublishedDefinitionsTest(
         graph(functionAction(functionId))
         publish()
 
-        assertThat(published().output).isEqualTo("""{"said":"first"}""")
+        // Joined to the payload under `result` rather than replacing it: a step's
+        // answer is something a run gains, not something it becomes. The node
+        // names no output, so it lands under the port's own name.
+        assertThat(published().output).isEqualTo("""{"result":{"said":"first"}}""")
 
         // The graph is untouched. Only the function the node calls is edited.
         rewrite(functionId, """export default function answer() { return { said: "second" }; }""")
 
-        assertThat(published().output).isEqualTo("""{"said":"second"}""")
+        assertThat(published().output).isEqualTo("""{"result":{"said":"second"}}""")
     }
 
     /**
@@ -181,7 +184,10 @@ class PublishedDefinitionsTest(
             }
 
         // Nothing was deleted, so the published run still answers.
-        assertThat(published().output).isEqualTo("""{"said":"first"}""")
+        // Joined to the payload under `result` rather than replacing it: a step's
+        // answer is something a run gains, not something it becomes. The node
+        // names no output, so it lands under the port's own name.
+        assertThat(published().output).isEqualTo("""{"result":{"said":"first"}}""")
     }
 
     /**

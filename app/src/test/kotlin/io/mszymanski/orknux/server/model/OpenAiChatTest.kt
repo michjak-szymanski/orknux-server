@@ -161,6 +161,35 @@ class OpenAiChatTest {
         assertThat(answered.outputTokens).isEqualTo(2)
     }
 
+    /**
+     * A provider that was asked to stream and answered with a whole body.
+     *
+     * `stream: true` is a request, not a guarantee: a local server, or a proxy
+     * in front of one, may answer with the completion in one ordinary JSON
+     * body. Read for frames that are not there, that came back as an empty
+     * answer - and empty reaches the run as "the provider answered with no
+     * message", a silence this reader invented rather than one the model
+     * produced. So it is asked once more without streaming.
+     */
+    @Test
+    fun `a provider that ignores the streaming flag is still read`() {
+        // `streamed` stays null, so the stub answers with ordinary JSON.
+        answer = words("Hello anyway.")
+
+        val seen = mutableListOf<String>()
+        val outcome = chat().stream(provider(), model(), listOf(ChatTurn("user", "Hi")), emptyList(), {}) { seen += it }
+
+        val answered = outcome as OpenAiChat.Outcome.Answered
+        assertThat(answered.said).isEqualTo("Hello anyway.")
+        // The watcher is told once, because that is how it arrived: one piece,
+        // which is what the provider sent.
+        assertThat(seen).containsExactly("Hello anyway.")
+        // Twice: the streaming attempt, then the one that was answered.
+        assertThat(bodies).hasSize(2)
+        assertThat(bodies.first()).contains("\"stream\":true")
+        assertThat(bodies.last()).doesNotContain("\"stream\":true")
+    }
+
     @Test
     fun `a call streamed a fragment at a time is put back together`() {
         streamed = listOf(

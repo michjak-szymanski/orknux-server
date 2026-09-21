@@ -79,6 +79,23 @@ have failed.
   page or a PDF into a picture, and three more Slack doors — follow a message
   link, name a mention, write one.
 
+- 🛑 **An agent can say the work is done and stop.** `finish_answer`, offered to
+  an agent inside a run. A round ends when the model writes prose instead of
+  asking for another tool, which assumes the answer *is* the prose — and an
+  agent that posted its own reply to Slack has nothing left to write. Asked for
+  an answer anyway it either repeated the message or answered with nothing,
+  which reads as a failure, which is retried, which posts the whole thing twice.
+  The step now finishes rather than failing, with whatever the agent passed —
+  usually nothing, because the thing it made went somewhere the graph is not.
+
+- 🔗 **A picture has an address when an agent asks for one.** `picture_link` in
+  a run and `task_picture_link` in a task: pass the key a drawing answered with
+  and get markdown back, for putting the picture at a particular point in what
+  is being written. The drawing itself still answers with a key and never a
+  link, because a key is what a tool that uploads a file takes; this is the
+  other case, asked for on purpose. Only that run's or that task's own pictures
+  resolve.
+
 - ⏱️ **How long a plugin may run is a setting.** A plugin call is bounded by the
   number on the Settings screen rather than the one the server was started with:
   1–300 seconds, 30 by default. That page now has one Save at the top for every
@@ -123,6 +140,14 @@ have failed.
   "Onboarding".
 
 ### 🐛 Fixed
+
+- 📡 **A provider that ignores `stream: true` is still read.** `stream: true` is
+  a request, not a guarantee, and a local server or a proxy in front of one may
+  answer with the whole completion in one ordinary body. Read for frames that
+  were not there, that came back as "the provider answered with no message" — a
+  silence invented by the reader — and the step failed. A stream that carried
+  nothing at all is now asked once more without streaming, and what that says is
+  the answer.
 
 - 📎 **A file shared in Slack reaches the agent.** It arrives with the message
   and is carried on the thread's other messages too, so "look at this" works

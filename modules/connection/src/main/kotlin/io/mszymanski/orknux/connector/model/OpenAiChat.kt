@@ -209,6 +209,29 @@ class OpenAiChat(private val clients: ModelClients, private val probe: ModelProv
 
         hand(tags.finish())
 
+        /*
+         * A stream that carried nothing at all, from a provider that answered
+         * the request anyway.
+         *
+         * `stream: true` is a request, not a guarantee. A local server, or a
+         * proxy in front of one, may answer a streaming call with the whole
+         * completion in one ordinary body - and the SDK, reading for frames
+         * that are not there, finds nothing and hands back an empty answer.
+         * That reaches the run as "the provider answered with no message",
+         * which is a silence this reader invented rather than one the model
+         * produced.
+         *
+         * So it is asked once more, without streaming, and whatever that says
+         * is the answer. Only where *nothing* arrived: a stream that carried a
+         * word, a thought or a tool call was a stream, and asking again would
+         * be asking a model to do its work twice.
+         */
+        if (whole.isEmpty() && thinking.isEmpty() && gathered.isEmpty()) {
+            return complete(provider, model, turns, tools).also {
+                if (it is Outcome.Answered && it.said.isNotEmpty()) onChunk(it.said)
+            }
+        }
+
         return Outcome.Answered(
             said = whole.toString(),
             calls = gathered.values.mapNotNull { it.asCall() },

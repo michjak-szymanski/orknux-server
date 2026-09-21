@@ -987,6 +987,16 @@ it into a chat that has no document to resolve an address against, and the reade
 sees the construction rather than the picture. `save_artifact` is the one tool
 that answers with a link, because an artifact *is* a thing at an address.
 
+**Placing one.** What a drawing tool answers is a key, and a key is not an
+address. An agent that wants the picture at a particular point in what it is
+writing asks for one: `picture_link` in a run, `task_picture_link` in a task,
+both taking the key and answering with markdown. Only that run's or that task's
+own pictures resolve — a key is a row id, and a guessed number is told there is
+nothing under it rather than handed somebody else's work. Both are on for every
+agent until somebody unticks them in its Tools list; the switch is for an agent
+whose answers are read somewhere this installation is not, where an address here
+resolves to nothing.
+
 ### Artifacts
 
 Everything a workspace has made, in one place: pictures its runs drew, documents
@@ -1179,6 +1189,30 @@ graph is drawn before it is finished. An agent with no model does fail the step,
 because that is a configuration somebody has to fix. And an agent a node
 instances cannot be deleted while the node exists — the same rule a condition
 follows.
+
+### Saying the work is done
+
+An agent inside a run answers by writing prose: the round ends when the model
+stops asking for tools. That assumes the answer *is* the prose, and often it is
+not — an agent answering a Slack mention posted its reply itself, with the
+connection's own tool, because that is how a file or a picture reaches somebody.
+Asked for an answer anyway, it either repeated the message it had already sent
+or answered with nothing, which the provider reports as an empty message, which
+the run reads as a failure, which is retried, which posts the whole thing a
+second time.
+
+`finish_answer` is that ending said deliberately. The model calls it, the round
+ends there, and the step is **completed** with whatever was passed — usually
+nothing, because what the agent made went somewhere the graph is not, and
+inventing prose to fill the field would be the run telling the next node
+something the agent never said.
+
+It is on for every agent until somebody turns it off, which is the opposite way
+round from the grants: those are a list of what an agent was *given*, and an
+ending reaches nothing and takes nothing. It is drawn in the Tools list all the
+same, because that list is where somebody looks to see what an agent may do. Not
+offered where the node's answer is held to a shape: a step that must produce an
+object cannot be finished without one.
 
 ### Sessions
 

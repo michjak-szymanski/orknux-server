@@ -335,8 +335,11 @@ class SlackReplyTriggerTest(
             .execute().path("createTrigger.id").entity(Long::class.java).get()
         instance(trigger)
 
+        // Two messages, not one message twice: the second carries its own ts,
+        // or the dedupe that stops Slack's retries running a workflow again
+        // reads it as the delivery it already handled.
         publisher.publishEvent(reply(parentUserId = WATCHED_BOT))
-        publisher.publishEvent(reply(parentUserId = SECOND_BOT))
+        publisher.publishEvent(reply(parentUserId = SECOND_BOT, ts = "1700000000.000300"))
 
         assertThat(started()).hasSize(2)
     }
@@ -499,7 +502,16 @@ class SlackReplyTriggerTest(
 
     private fun started() = runs.executions(workspaceId, null, null, null, null, null, null).content
 
-    private fun reply(parentUserId: String?) = IncomingEvent(
+    /**
+     * @param ts which message this is, in Slack's own words.
+     *
+     * A parameter because the same `ts` twice is the same message twice, and
+     * the same message twice runs nothing twice - Slack retries a delivery it
+     * thinks was not acknowledged, and a workflow that ran again for it would
+     * post its answer a second time. A test firing two *different* replies has
+     * to say they are different.
+     */
+    private fun reply(parentUserId: String?, ts: String = "1700000000.000200") = IncomingEvent(
         connectionId = listeningId,
         workspaceId = workspaceId,
         action = IncomingAction.REPLY,
@@ -507,7 +519,7 @@ class SlackReplyTriggerTest(
         context = buildMap {
             put("channel", "C42")
             put("user", "U0000ALICE")
-            put("ts", "1700000000.000200")
+            put("ts", ts)
             put("threadTs", "1700000000.000100")
             parentUserId?.let { put("parentUserId", it) }
         },

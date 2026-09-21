@@ -262,28 +262,38 @@ class TeamsPluginTest(
     }
 
     /**
-     * The token has nowhere to live but the encrypted column.
+     * The token has nowhere to live but an encrypted column, and now it has one.
      *
-     * The parameter is declared `secret`, which refuses a typed-in value, so the
-     * only way to answer it is to point at one of the workspace's variables.
-     * Checked as the refusal an operator actually meets rather than as a
+     * Typing it in used to be refused, because what was typed was stored as
+     * typed and shown back on the page - a fact about the column rather than
+     * about secrets. A secret now lands in the column that encrypts, and
+     * nothing carries it back out: the screen is told that a value is set and
+     * never what it is. Checked as the operator meets it rather than as a
      * property of the declaration, because the declaration is the plugin's word
      * and this is the server's.
      */
     @Test
-    fun `the token cannot be typed into the plugin's settings`() {
-        graphQlTester.document(
+    fun `the token can be typed into the plugin's settings, and never comes back out`() {
+        val answered = graphQlTester.document(
             """
             mutation {
               setPluginParameter(
                 workspaceId: $workspaceId, pluginId: $pluginId,
                 name: "webhookSecret", literal: "pasted-in-here"
-              ) { missing }
+              ) { missing parameters { name secret secretSet literal } }
             }
             """,
-        ).execute().errors().satisfy { errors ->
-            assertThat(errors.single().message).contains("webhookSecret")
-        }
+        ).execute()
+
+        assertThat(answered.path("setPluginParameter.missing").entityList(String::class.java).get())
+            .doesNotContain("webhookSecret")
+
+        val rows = answered.path("setPluginParameter.parameters").entityList(Map::class.java).get()
+        val token = rows.single { it["name"] == "webhookSecret" }
+        assertThat(token["secret"]).isEqualTo(true)
+        assertThat(token["secretSet"]).isEqualTo(true)
+        // What was typed is not handed back, to this screen or any other.
+        assertThat(token["literal"]).isNull()
     }
 
     /** What was said, with the webhook's own mention taken off it. */

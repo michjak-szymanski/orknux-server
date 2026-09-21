@@ -276,6 +276,30 @@ class ModelChatClient(
                 )
             }
 
+            /*
+             * A provider that ignored `stream: true` and sent the whole thing.
+             *
+             * Allowed, and it happens: a local server, a proxy in front of one,
+             * an endpoint that only does blocking. Read as a stream there are no
+             * `data:` frames to find, so the answer came back empty and the run
+             * failed on a silence this reader had invented. What it sent is a
+             * complete response, so it is read as one.
+             */
+            val kind = response.headers().firstValue("content-type").orElse("")
+            if (!kind.contains("event-stream", ignoreCase = true)) {
+                val body = response.body().bufferedReader().use { it.readText() }
+                hangup?.letGo()
+                if (hangup?.hungUp == true) return ChatCompletion.Failed(HUNG_UP, permanent = false)
+                return wholeAnswer(
+                    modelId,
+                    ready,
+                    body,
+                    (System.nanoTime() - started) / 1_000_000,
+                    told = onChunk,
+                    thought = onThinking,
+                )
+            }
+
             val whole = StringBuilder()
             val thinking = StringBuilder()
             var input = 0L
@@ -546,6 +570,75 @@ class ModelChatClient(
     }
 
     /**
+     * One whole response, read as an answer or as a round that asked for tools.
+     *
+     * Its own function because two paths arrive at it. The blocking call is the
+     * obvious one; the other is a *streaming* call whose provider answered with
+     * an ordinary body anyway, which is allowed and happens - `stream: true` is
+     * a request, not a guarantee, and a server that ignores it sends the whole
+     * completion in one piece. Read as a stream, that body has no `data:` lines
+     * in it, so nothing was found and the round came back "the provider
+     * answered with no message" - a silence invented by the reader.
+     *
+     * @param told what to hand the text to, for the caller that is watching a
+     *   stream. The answer arrives in one piece rather than in frames, which is
+     *   what the provider sent; there is nothing to be done about that but say
+     *   it once.
+     * @param thought the same for the reasoning.
+     */
+    private fun wholeAnswer(
+        modelId: Long,
+        ready: Prepared.Call,
+        body: String,
+        millis: Long,
+        told: (String) -> Unit = {},
+        thought: (String) -> Unit = {},
+    ): ChatCompletion {
+        val (input, output) = tokensOf(body)
+        val named = if (ready.anthropic) anthropicReasoning(body) else openAiReasoning(body)
+
+        // A model that asked for tools has not answered yet, and its text —
+        // if it sent any — is thinking aloud rather than a reply.
+        val asked = if (ready.anthropic) anthropicCalls(body) else openAiCalls(body)
+        if (asked.isNotEmpty()) {
+            val raw = (if (ready.anthropic) anthropicContent(body) else openAiContent(body)).orEmpty()
+            val split = split(raw, named)
+            if (split.thought.isNotEmpty()) thought(split.thought)
+            return counted(
+                modelId,
+                ChatCompletion.CalledTools(
+                    calls = asked,
+                    /*
+                     * The turn handed back carries what the model said and not
+                     * what it thought. It goes into the next request as the
+                     * assistant turn that asked for these tools, and a provider
+                     * handed back its own reasoning as ordinary assistant text
+                     * either rejects it - Anthropic checks a signature on a
+                     * thinking block - or reads it as the model's words, which
+                     * is exactly the confusion between thinking and saying that
+                     * this whole change is about.
+                     */
+                    turn = ChatTurn("assistant", split.said, asked = asked),
+                    millis = millis,
+                    inputTokens = input,
+                    outputTokens = output,
+                    reasoning = split.thought,
+                ),
+            )
+        }
+
+        val raw = (if (ready.anthropic) anthropicContent(body) else openAiContent(body))
+            ?: return ChatCompletion.Failed("The provider answered with no message", permanent = false)
+        val split = split(raw, named)
+        if (split.said.isBlank()) {
+            return ChatCompletion.Failed("The provider answered with no message", permanent = false)
+        }
+        if (split.thought.isNotEmpty()) thought(split.thought)
+        told(split.said)
+        return counted(modelId, ChatCompletion.Answered(split.said, millis, input, output, split.thought))
+    }
+
+    /**
      * @param tools what the model may call. Empty means it answers or fails —
      *   which is every caller that is not running an agent.
      */
@@ -570,46 +663,7 @@ class ModelChatClient(
                     permanent = settled(response.statusCode()),
                 )
             }
-            val (input, output) = tokensOf(response.body())
-            val named = if (ready.anthropic) anthropicReasoning(response.body()) else openAiReasoning(response.body())
-
-            // A model that asked for tools has not answered yet, and its text —
-            // if it sent any — is thinking aloud rather than a reply.
-            val asked = if (ready.anthropic) anthropicCalls(response.body()) else openAiCalls(response.body())
-            if (asked.isNotEmpty()) {
-                val raw = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
-                    .orEmpty()
-                val split = split(raw, named)
-                return counted(
-                    modelId,
-                    ChatCompletion.CalledTools(
-                        calls = asked,
-                        /*
-                         * The turn handed back carries what the model said and
-                         * not what it thought. It goes into the next request as
-                         * the assistant turn that asked for these tools, and a
-                         * provider handed back its own reasoning as ordinary
-                         * assistant text either rejects it - Anthropic checks a
-                         * signature on a thinking block - or reads it as the
-                         * model's words, which is exactly the confusion between
-                         * thinking and saying that this whole change is about.
-                         */
-                        turn = ChatTurn("assistant", split.said, asked = asked),
-                        millis = millis,
-                        inputTokens = input,
-                        outputTokens = output,
-                        reasoning = split.thought,
-                    ),
-                )
-            }
-
-            val raw = (if (ready.anthropic) anthropicContent(response.body()) else openAiContent(response.body()))
-                ?: return ChatCompletion.Failed("The provider answered with no message", permanent = false)
-            val split = split(raw, named)
-            if (split.said.isBlank()) {
-                return ChatCompletion.Failed("The provider answered with no message", permanent = false)
-            }
-            counted(modelId, ChatCompletion.Answered(split.said, millis, input, output, split.thought))
+            wholeAnswer(modelId, ready, response.body(), millis)
         } catch (failure: Exception) {
             // Nothing came back at all: a socket that closed, a name that did
             // not resolve, the request timeout running out on a model still

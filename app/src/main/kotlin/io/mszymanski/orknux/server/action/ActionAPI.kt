@@ -11,6 +11,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -42,6 +43,25 @@ class ActionAPI(
     private val dependants: ComponentDependants,
 ) {
 
+    /**
+     * The columns this list can be put in the order of, and what each means in
+     * the database. Issue #358.
+     *
+     * Not every heading is here. The parameter counts are read off the
+     * settings - `inputsOf` finds the placeholders - so there is no stored
+     * number to order by, and ordering a page of twenty by a count computed
+     * after the page was chosen would order the wrong twenty. Those two stay
+     * headings rather than becoming controls that lie.
+     *
+     * The name breaks every tie: two actions of the same type in no particular
+     * order is a list that shuffles between reads of the same page.
+     */
+    private val ACTION_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "TYPE" to listOf("type", "name"),
+        "SUBTYPE" to listOf("subtype", "name"),
+    )
+
     @QueryMapping
     /** @param search what to look for in this list, or null for all of it. */
     fun workspaceActions(
@@ -49,6 +69,8 @@ class ActionAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): ActionPage {
         requireWorkspaceAccess(workspaceId)
         /*
@@ -56,7 +78,7 @@ class ActionAPI(
          * the node that made it and nowhere else, so listing it here would
          * offer somebody a row they cannot use and did not ask for.
          */
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, ACTION_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return ActionPage(

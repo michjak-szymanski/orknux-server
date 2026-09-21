@@ -319,8 +319,23 @@ type Query {
         "Only workflows whose name or description holds this. Absent is all of them."
         search: String
     ): WorkspaceWorkflowPage!
-    "The workspace's action catalogue: the blocks its workflows are built from."
-    workspaceActions(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ActionPage!
+    """
+    The workspace's action catalogue: the blocks its workflows are built from.
+
+    `order` is a column of the list - NAME, TYPE, SUBTYPE - and anything else is
+    read as the list's usual order rather than refused: a table that will not
+    load over an order nobody can see is worse than a table in the wrong one.
+    The parameter counts are not orders; they are read off the settings, so
+    there is no stored number to sort by.
+    """
+    workspaceActions(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): ActionPage!
 
     """
     Everything this workspace's runs have produced, newest first.

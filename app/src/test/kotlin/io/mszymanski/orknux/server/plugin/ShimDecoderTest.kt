@@ -19,9 +19,12 @@ import java.nio.file.Path
  */
 class ShimDecoderTest {
 
-    private val shim = Files.readString(
-        Path.of("C:/Users/micha/Projects/orknux-extension/plugins/shim.mjs"),
-    )
+    /*
+     * The shim as it ships, read from the other repository. Lazily and through
+     * [Extension], so a machine without that checkout skips these rather than
+     * failing on a path that only ever existed on one developer's disk.
+     */
+    private val shim by lazy { Extension.read("plugins/shim.mjs") }
 
     private fun probe(permissions: Set<PluginPermission>): String {
         val source = shim + """

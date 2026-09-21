@@ -20,13 +20,66 @@ import java.util.Base64
  * has no rasteriser - so this is the one path that cannot be checked by looking
  * at either half on its own.
  */
+/**
+ * Where the plugins are, for the two tests that read one.
+ *
+ * They live in `orknux-extension` now, which is a different repository and not
+ * a submodule of this one - so a machine that has it has it *somewhere*, and a
+ * runner has it nowhere. `ORKNUX_EXTENSION` names the checkout; the default is
+ * a sibling folder, which is where a developer who cloned both has it.
+ *
+ * A test that needs a file which is not there is **skipped** rather than failed:
+ * what it measures is a contract between two repositories, and the absence of
+ * the other one is not a fault in this one. It was an absolute path on one
+ * developer's machine, which passed there and could not pass anywhere else -
+ * `C:/Users/.../orknux-extension/...` in a test that CI runs.
+ */
+object Extension {
+
+    /**
+     * The checkout, wherever it is.
+     *
+     * Beside this repository by default - found by walking up to the root of
+     * this one rather than by counting `..`, because surefire runs in the
+     * module directory and a relative path written from the repository root
+     * lands a level in.
+     */
+    private val root: java.nio.file.Path by lazy {
+        System.getenv("ORKNUX_EXTENSION")?.let { return@lazy java.nio.file.Path.of(it) }
+        var here: java.nio.file.Path? = java.nio.file.Path.of("").toAbsolutePath()
+        while (here != null && !java.nio.file.Files.exists(here.resolve(".git"))) here = here.parent
+        (here ?: java.nio.file.Path.of("").toAbsolutePath()).parent.resolve("orknux-extension")
+    }
+
+    /** One file inside it, or null where this machine has no checkout. */
+    fun file(inside: String): java.nio.file.Path? =
+        root.resolve(inside).takeIf { java.nio.file.Files.exists(it) }
+
+    /** Reads one, and skips the test where it is not here. */
+    fun read(inside: String): String {
+        val path = file(inside)
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+            path != null,
+            "The orknux-extension checkout is not beside this one, so $inside cannot be read. " +
+                "Clone it as a sibling, or point ORKNUX_EXTENSION at it.",
+        )
+        return java.nio.file.Files.readString(requireNotNull(path))
+    }
+}
+
 class MermaidPngTest {
 
     private val mapper = ObjectMapper()
     private val renderer = SvgRenderer()
 
-    private val bundle: String =
-        Files.readString(Path.of("C:/Users/micha/Projects/orknux-extension/plugins/mermaid/mermaid.js"))
+    /*
+     * The plugin as it ships, read from the other repository.
+     *
+     * Lazily, because the field is built before any test runs and a machine
+     * without that checkout would fail the class rather than skip its tests -
+     * which is what this did with an absolute path on one developer's machine.
+     */
+    private val bundle: String by lazy { Extension.read("plugins/mermaid/mermaid.js") }
 
     /** Only the capability the plugin asked for, answered the way the server answers it. */
     private val host = io.mszymanski.orknux.workflow.script.PluginHost { capability, argument, _ ->

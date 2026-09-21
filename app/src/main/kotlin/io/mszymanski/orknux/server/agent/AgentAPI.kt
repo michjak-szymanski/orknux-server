@@ -15,6 +15,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -95,6 +96,18 @@ class AgentAPI(
         return SessionMemoryBudgetView(budgets.resolve(share, workspaceId, model))
     }
 
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * Status is whether the agent is switched on, which is what the column
+     * draws; nothing else on the row is stored anywhere else.
+     */
+    private val AGENT_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "DESCRIPTION" to listOf("description", "name"),
+        "STATUS" to listOf("enabled", "name"),
+    )
+
     @QueryMapping
     /** @param search what to look for in the name and the description, or null for all of them. */
     fun workspaceAgents(
@@ -102,9 +115,11 @@ class AgentAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): AgentPage {
         requireWorkspaceAccess(workspaceId)
-        val pageable = pageRequest(page, size, Sort.by("name"))
+        val pageable = pageRequest(page, size, sortBy(order, ascending, AGENT_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return AgentPage(

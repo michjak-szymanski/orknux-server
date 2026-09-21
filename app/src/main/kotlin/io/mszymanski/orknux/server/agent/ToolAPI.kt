@@ -31,6 +31,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import io.mszymanski.orknux.workflow.script.ScriptArity
 import io.mszymanski.orknux.workflow.script.ScriptRunner
 import org.springframework.data.domain.Page
@@ -70,6 +71,14 @@ class ToolAPI(
     private val variables: WorkspaceVariableRepository,
 ) {
 
+    /** The columns this list can be put in the order of. Issue #358. */
+    private val TOOL_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "DESCRIPTION" to listOf("description", "name"),
+        "STATUS" to listOf("enabled", "name"),
+        "LAST_MODIFIED" to listOf("lastModifiedAt"),
+    )
+
     @QueryMapping
     /** @param search what to look for in this list, or null for all of it. */
     fun workspaceTools(
@@ -77,9 +86,11 @@ class ToolAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): ToolPage {
         requireWorkspaceAccess(workspaceId)
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, TOOL_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return ToolPage(

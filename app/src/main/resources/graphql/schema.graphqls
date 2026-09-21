@@ -324,7 +324,8 @@ type Query {
 
     `order` is a column of the list - NAME, TYPE, SUBTYPE - and anything else is
     read as the list's usual order rather than refused: a table that will not
-    load over an order nobody can see is worse than a table in the wrong one.
+    load over an order nobody can see, because it was stored months ago and the
+    column has gone, is worse than a table in the wrong order.
     The parameter counts are not orders; they are read off the settings, so
     there is no stored number to sort by.
     """
@@ -360,8 +361,22 @@ type Query {
     """
     workflowOwnedActions(workspaceId: ID!, workflowId: ID!): [Action!]!
     action(id: ID!): Action
-    "The workspace's conditions: the questions its workflows ask."
-    workspaceConditions(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ConditionPage!
+    """
+    The workspace's conditions: the questions its workflows ask. The shared ones
+    only, like the actions above.
+
+    `order` is a column of the list - NAME, TYPE - and anything else is read as
+    the list's usual order rather than refused, which is by name. See
+    `workspaceActions`.
+    """
+    workspaceConditions(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): ConditionPage!
 
     """ The "Custom" conditions one workflow owns; see workflowOwnedActions. """
     workflowOwnedConditions(workspaceId: ID!, workflowId: ID!): [Condition!]!
@@ -399,10 +414,36 @@ type Query {
     triggerFirings(triggerId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
     "What every trigger in one workspace has done, newest first."
     workspaceTriggerFirings(workspaceId: ID!, page: Int = 0, size: Int = 20): TriggerFiringPage!
-    "Agents configured by a workspace, ordered by name."
-    workspaceAgents(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): AgentPage!
-    "The JavaScript tools a workspace's agents may call, ordered by name."
-    workspaceTools(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ToolPage!
+    """
+    Agents configured by a workspace.
+
+    `order` is a column of the list - NAME, DESCRIPTION, STATUS - and anything
+    else is read as the list's usual order rather than refused, which is by
+    name. See `workspaceActions`.
+    """
+    workspaceAgents(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): AgentPage!
+    """
+    The JavaScript tools a workspace's agents may call.
+
+    `order` is a column of the list - NAME, DESCRIPTION, STATUS, LAST_MODIFIED -
+    and anything else is read as the list's usual order rather than refused,
+    which is by name. See `workspaceActions`.
+    """
+    workspaceTools(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): ToolPage!
     tool(id: ID!): Tool
     "The chats the caller holds in this workspace: pinned first, then most recent."
     chatSessions(workspaceId: ID!): [ChatSession!]!
@@ -445,8 +486,22 @@ type Query {
     ): MemoryPage!
     "Who has written in this catalog, which is what the author filter offers."
     memoryAuthors(catalogId: ID!): [String!]!
-    "The workspace's objects: the shapes its workflows pass around."
-    workspaceObjects(workspaceId: ID!, page: Int = 0, size: Int = 20, search: String): ObjectPage!
+    """
+    The workspace's objects: the shapes its workflows pass around.
+
+    `order` is a column of the list - NAME, DESCRIPTION, SOURCE, LAST_MODIFIED -
+    and anything else is read as the list's usual order rather than refused,
+    which is by name. The field count is the size of a collection, so there is
+    nothing to order by and it stays a heading. See `workspaceActions`.
+    """
+    workspaceObjects(
+        workspaceId: ID!,
+        page: Int = 0,
+        size: Int = 20,
+        search: String,
+        order: String,
+        ascending: Boolean
+    ): ObjectPage!
     """
     The shapes the loaded plugins export, available in every workspace.
 

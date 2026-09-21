@@ -9,6 +9,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -38,6 +39,22 @@ class ObjectAPI(
     private val dependants: ComponentDependants,
 ) {
 
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * Source is which of the two owners a shape has - a workspace drew it, or a
+     * plugin exports it - so ordering by it groups the workspace's own together,
+     * which is what somebody pressing that heading is asking for. The field
+     * count is the size of a collection and has no column of its own to order
+     * by, so it stays a heading.
+     */
+    private val OBJECT_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "DESCRIPTION" to listOf("description", "name"),
+        "SOURCE" to listOf("pluginId", "name"),
+        "LAST_MODIFIED" to listOf("lastModifiedAt"),
+    )
+
     @QueryMapping
     /** @param search what to look for in this list, or null for all of it. */
     fun workspaceObjects(
@@ -45,9 +62,11 @@ class ObjectAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): ObjectPage {
         requireWorkspaceAccess(workspaceId)
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, OBJECT_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return ObjectPage(

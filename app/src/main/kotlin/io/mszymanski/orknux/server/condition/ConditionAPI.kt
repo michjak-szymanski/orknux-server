@@ -12,6 +12,7 @@ import io.mszymanski.orknux.server.workspace.WorkspaceAuditCategory
 import io.mszymanski.orknux.server.workspace.WorkspaceAuditRecorder
 import io.mszymanski.orknux.server.workspace.WorkspaceRepository
 import io.mszymanski.orknux.server.workspace.pageRequest
+import io.mszymanski.orknux.server.workspace.sortBy
 import org.springframework.data.domain.Page
 import org.springframework.data.domain.Sort
 import org.springframework.data.repository.findByIdOrNull
@@ -38,6 +39,19 @@ class ConditionAPI(
     private val auditRecorder: WorkspaceAuditRecorder,
 ) {
 
+    /**
+     * The columns this list can be put in the order of. Issue #358.
+     *
+     * The Description column is a sentence assembled from what the condition
+     * asks - there is no stored description - so it is a heading and not an
+     * order. The name breaks the tie on type, or a page of conditions sharing
+     * one type would shuffle between reads.
+     */
+    private val CONDITION_ORDERS = mapOf(
+        "NAME" to listOf("name"),
+        "TYPE" to listOf("type", "name"),
+    )
+
     @QueryMapping
     /** @param search what to look for in this list, or null for all of it. */
     fun workspaceConditions(
@@ -45,10 +59,12 @@ class ConditionAPI(
         @Argument page: Int?,
         @Argument size: Int?,
         @Argument search: String?,
+        @Argument order: String?,
+        @Argument ascending: Boolean?,
     ): ConditionPage {
         requireWorkspaceAccess(workspaceId)
         // The shared ones only; see the note on workspaceActions.
-        val paged = pageRequest(page, size, Sort.by("name"))
+        val paged = pageRequest(page, size, sortBy(order, ascending, CONDITION_ORDERS, "NAME"))
         val looking = search?.trim().orEmpty()
 
         return ConditionPage(

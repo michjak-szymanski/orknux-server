@@ -9,6 +9,7 @@ import jakarta.persistence.GenerationType
 import jakarta.persistence.Id
 import jakarta.persistence.Table
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.jpa.repository.Query
 import org.springframework.stereotype.Service
 import java.time.OffsetDateTime
 
@@ -168,6 +169,39 @@ interface IssueEventRepository : JpaRepository<IssueEvent, Long> {
      * reads of the same issue is a list nobody trusts.
      */
     fun findByIssueIdOrderByAtAscIdAsc(issueId: Long): List<IssueEvent>
+
+    /**
+     * The labels this workspace has put on an issue, most recently put on
+     * first.
+     *
+     * The history is asked rather than the issues, because "recently used" is
+     * about the moment somebody reached for a label and not about the issues
+     * that happen to be carrying it: an issue edited today does not make a
+     * label somebody stuck on it in March a label anybody is using now.
+     *
+     * Only what was added - a row with a `became` - counts. Taking a label off
+     * is also a use of it, but offering it back at the top of the list is
+     * offering somebody the thing they just decided against.
+     *
+     * A label added and later removed everywhere still comes back here, so the
+     * caller keeps only the ones still in use.
+     *
+     * The id breaks the tie, for the reason one issue's history is read by it:
+     * a save that puts three labels on writes its rows in the same instant, and
+     * a clock is not what decides which of them was typed first.
+     */
+    @Query(
+        """
+        select e.became from IssueEvent e, Issue i
+        where i.id = e.issueId
+          and i.workspaceId = :workspaceId
+          and e.kind = io.mszymanski.orknux.server.issue.IssueEventKind.LABEL
+          and e.became is not null
+        group by e.became
+        order by max(e.at) desc, max(e.id) desc
+        """,
+    )
+    fun labelsLastAddedIn(workspaceId: Long): List<String>
 }
 
 /**

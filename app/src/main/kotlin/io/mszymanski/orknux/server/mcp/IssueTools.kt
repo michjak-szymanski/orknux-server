@@ -440,6 +440,17 @@ class IssueTools(
         // for somebody added to an issue that was already there, and that is where
         // it still gets said.
         newsDesk.opened(made, currentUser(scope))
+        /*
+         * The labels an issue is filed with are recorded like any other.
+         *
+         * A label put on at the door and one added a day later are the same
+         * act, and a history that only heard about the second read as though
+         * the first had always been there - with nobody's name against it. It
+         * is also what "recently used" is read from, and a tracker where every
+         * label arrives with the issue would otherwise have no record of a
+         * label being used at all.
+         */
+        history.labelsChanged(made, emptySet(), made.labels.toSet(), currentUser(scope))
 
         return mapper.writeValueAsString(
             mapOf(

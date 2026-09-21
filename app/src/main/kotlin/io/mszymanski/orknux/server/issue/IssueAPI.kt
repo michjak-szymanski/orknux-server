@@ -71,6 +71,7 @@ class IssueAPI(
     private val access: WorkspaceAccess,
     private val newsDesk: IssueNewsDesk,
     private val history: IssueHistoryRecorder,
+    private val events: IssueEventRepository,
     private val attachments: IssueAttachmentRepository,
     private val links: IssueLinkRepository,
     private val relations: IssueRelationRepository,
@@ -194,11 +195,28 @@ class IssueAPI(
         return issues.findByWorkspaceIdAndNumber(workspaceId, number)?.let(::describe)
     }
 
-    /** Every label in use here, so the filter offers what exists rather than a box. */
+    /**
+     * Every label in use here, so the filter offers what exists rather than a
+     * box - the ones this workspace has reached for lately first.
+     *
+     * A tracker settles into a handful of labels it is actually using and a
+     * long tail of ones it used once, and the alphabet files both in the same
+     * place. The box under the label field offers six, so alphabetical order
+     * meant six labels beginning with whatever letter somebody favoured in
+     * March, and the milestone everything is being tagged with this week was
+     * not among them.
+     *
+     * What the history has not heard of follows, in the alphabet: labels on
+     * issues filed before any of this was recorded are a list read by name.
+     */
     @QueryMapping
     fun workspaceIssueLabels(@Argument workspaceId: Long): List<String> {
         requireWorkspaceAccess(workspaceId)
-        return issues.labelsIn(workspaceId)
+        val inUse = issues.labelsIn(workspaceId)
+        val held = inUse.toSet()
+        val lately = events.labelsLastAddedIn(workspaceId).filter { it in held }
+        val recent = lately.toSet()
+        return lately + inUse.filterNot { it in recent }
     }
 
     /**
@@ -254,6 +272,17 @@ class IssueAPI(
         audit.record(workspaceId, WorkspaceAuditCategory.WORKSPACE, "Issue #${made.number} \"$title\" opened")
         newsDesk.assigned(made, currentUser())
         newsDesk.opened(made, currentUser())
+        /*
+         * The labels an issue is filed with are recorded like any other.
+         *
+         * A label put on at the door and one added a day later are the same
+         * act, and a history that only heard about the second read as though
+         * the first had always been there - with nobody's name against it. It
+         * is also what "recently used" is read from, and a tracker where every
+         * label arrives with the issue would otherwise have no record of a
+         * label being used at all.
+         */
+        history.labelsChanged(made, emptySet(), made.labels.toSet(), currentUser())
         return describe(made)
     }
 

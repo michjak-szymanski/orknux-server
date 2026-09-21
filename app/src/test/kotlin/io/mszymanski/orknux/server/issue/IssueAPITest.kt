@@ -292,4 +292,62 @@ class IssueAPITest(
             .errors().expect { it.message?.contains("needs a title") == true }
             .verify()
     }
+
+    /**
+     * What a workspace has reached for lately is offered first.
+     *
+     * The box under the label field offers six of them, so the order is the
+     * whole of whether the label somebody wants is on the screen. A tracker
+     * settles into a handful it is using and a long tail it used once, and the
+     * alphabet files both together.
+     *
+     * The tail is what the history has never seen - labels on issues filed
+     * before any of this was recorded - and those are read by name.
+     */
+    @Test
+    fun `labels are offered most recently used first, and the rest by name`() {
+        /*
+         * Filed straight into the table, the way an issue that predates the
+         * history is: no event was ever written for this label.
+         */
+        issues.save(
+            Issue(
+                workspaceId = workspaceId,
+                number = 900,
+                title = "Filed before any of this was recorded",
+                reporter = "alice",
+                labels = mutableSetOf("ancient"),
+            ),
+        )
+
+        file("The trigger fires twice", labels = """["timing"]""")
+        val late = file("The reply is late", labels = """["slack"]""")
+        graphQlTester.document(
+            """mutation { updateIssue(id: $late, input: { labels: ["slack", "urgent"] }) { id } }""",
+        ).execute().path("updateIssue.id").hasValue()
+
+        graphQlTester.document("""{ workspaceIssueLabels(workspaceId: $workspaceId) }""")
+            .execute()
+            .path("workspaceIssueLabels").entityList(String::class.java)
+            .containsExactly("urgent", "slack", "timing", "ancient")
+    }
+
+    /**
+     * A label taken off everything stops being offered.
+     *
+     * The history keeps saying it was used, because it was; the list is of
+     * labels in use, and reading the history alone would offer back every
+     * label the workspace ever abandoned.
+     */
+    @Test
+    fun `a label nothing carries any more is not offered`() {
+        val id = file("The reply is late", labels = """["slack"]""")
+        graphQlTester.document(
+            """mutation { updateIssue(id: $id, input: { labels: ["timing"] }) { id } }""",
+        ).execute().path("updateIssue.id").hasValue()
+
+        graphQlTester.document("""{ workspaceIssueLabels(workspaceId: $workspaceId) }""")
+            .execute()
+            .path("workspaceIssueLabels").entityList(String::class.java).containsExactly("timing")
+    }
 }

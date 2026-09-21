@@ -259,6 +259,19 @@ stopped.
 | `ORKNUX_LIBRARY_REGISTRY_URL` | Where installing a library by name fetches from - once, on the server, into the database, through the proxy rules. Point it at a mirror, or empty to offer the upload alone. | `https://registry.npmjs.org` | No |
 | `ORKNUX_LIBRARY_REGISTRY_TIMEOUT` | How long it has to answer. | `30s` | No |
 
+## What an agent may do
+
+Every capability an agent has is decided per agent, on its own screen: which
+tools and skills it was granted, which connections it may name, whether it may
+reach the tracker, open a shell, keep an artifact, draw. Two of those rows are
+on until somebody turns them off rather than granted - `finish_answer`, which
+lets a turn end when the work has already been delivered somewhere else, and
+`picture_link`, which hands back markdown for a picture the agent drew. Neither
+reaches anything; they are how a turn ends and how a picture is placed.
+
+Nothing here is an environment variable. It is per agent, per workspace, and in
+the audit.
+
 ## Plugins and the marketplace
 
 A plugin is a bundle an installation loads and every workspace in it can then

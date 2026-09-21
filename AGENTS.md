@@ -299,6 +299,23 @@ is reported to the module rather than cascaded.
   function has nobody, so `forScripts` is a decision about what holds it in:
   reading a thread is bounded by the run's own workspace, and `NETWORK_REQUEST`
   by the installation's proxy rules. Write the reason beside the entry.
+- **A default-on switch is a column, not a grant.** The name-grants in
+  `agent.tools` are a list of what an agent was *given*; anything that should be
+  on for every agent until somebody turns it off is a boolean on the agent -
+  `artifactAccess`, `finishAccess`, `pictureLinkAccess` - drawn as a row in the
+  Tools list because that list is where somebody looks, and folded in and out of
+  the granted names by the form. Adding one to the list instead means every
+  agent that predates it has it switched off.
+- **A shed is how the loop is talked to, not a capability.** `finish_answer`
+  ends the round because the work went somewhere the graph is not; `task_done`
+  is the same idea. If a new tool is really the *caller* being addressed by the
+  model inside its loop, it belongs in a `ToolShed` and not in `AgentTools`.
+- **`stream: true` is a request, not a guarantee.** A provider may answer a
+  streaming call with one ordinary body, and a reader looking for frames finds
+  nothing and reports a silence the model never produced. Both client paths ask
+  again without streaming where a stream carried nothing at all; a stub that
+  answers plain JSON is therefore a valid provider, which is why the suite's
+  stubs are left as they are.
 - **Core does not name a plugin's tool.** The note on a drawn picture told a
   model to call `slack_uploadBinary`, which exists only where that plugin is
   loaded - so the instruction was wrong on every installation that had not

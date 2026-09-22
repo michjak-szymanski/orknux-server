@@ -15,6 +15,24 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.8.2
+
+### 🐛 Fixed
+
+- 🔒 **A trusted certificate is trusted by everything that goes out, not only by
+  MCP.** The list under Admin → Networking was read by exactly one client:
+  `McpClient` fetched the context and set it itself, while every other outbound
+  call - a plugin's HTTP request, a model, an action, a webhook - was built from
+  `ProxyRouter.builder()` and got the JVM's roots alone. So an administrator who
+  pasted their internal authority in found their MCP servers reachable and their
+  Confluence plugin still failing to build a chain, with nothing on any screen to
+  explain the difference. The builder attaches the context now, so everything
+  built from it inherits both the proxy rules and the trust - and a plugin's
+  client is rebuilt when the list changes, so an authority added while the server
+  is running is picked up without a restart. Installations that have added no
+  certificate are unaffected: no context is attached where there is nothing to
+  attach, which is the path they were already on.
+
 ## 0.9.8.1
 
 ### 🔧 Changed

@@ -357,6 +357,12 @@ jobs:
       # latest follows main; a vX.Y.Z tag also publishes X.Y.Z and X.Y so a
       # deployment can pin as loosely or as tightly as it wants. Every build is
       # tagged with its commit as well, which is the only tag that never moves.
+      #
+      # Matched rather than parsed as semver. A patch on a released line is
+      # numbered 0.9.8.1, which has four parts and is therefore not semver at
+      # all: `type=semver` quietly produced no version tag for it, so the job
+      # went green having published an image nobody could pin to. A pattern that
+      # takes what follows the `v` works for both shapes.
       - name: Work out tags
         id: meta
         uses: docker/metadata-action@v5
@@ -364,8 +370,8 @@ jobs:
           images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=v(.*),group=1
+            type=match,pattern=v(\d+\.\d+),group=1
             type=sha,format=long
 
       - name: Build and push
@@ -441,7 +447,8 @@ jobs:
       # The same scheme as the server image, so a person can pin both to one
       # version: latest follows main, a vX.Y.Z tag also publishes X.Y.Z and X.Y,
       # and every build is tagged with its commit, which is the tag that never
-      # moves.
+      # moves. Matched rather than parsed as semver, for the reason written
+      # against the server image above: 0.9.8.1 has four parts.
       - name: Work out tags
         id: meta
         uses: docker/metadata-action@v5
@@ -449,8 +456,8 @@ jobs:
           images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_ONE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=v(.*),group=1
+            type=match,pattern=v(\d+\.\d+),group=1
             type=sha,format=long
 
       - name: Build and push

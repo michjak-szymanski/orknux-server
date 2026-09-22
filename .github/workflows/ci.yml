@@ -369,7 +369,7 @@ jobs:
         with:
           images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=match,pattern=v(.*),group=1
             type=match,pattern=v(\d+\.\d+),group=1
             type=sha,format=long
@@ -455,7 +455,7 @@ jobs:
         with:
           images: ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME_ONE }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
             type=match,pattern=v(.*),group=1
             type=match,pattern=v(\d+\.\d+),group=1
             type=sha,format=long

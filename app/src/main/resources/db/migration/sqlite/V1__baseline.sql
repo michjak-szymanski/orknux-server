@@ -1227,7 +1227,7 @@ CREATE TABLE workflow_node_mapping
     -- What a field a node writes holds, where the node names its own fields.
     -- The three a saved object's property has, asked here for the same reason.
     -- Null is untyped, which is every mapping typed by the definition it
-    -- belongs to. See `V271__node_field_type.sql` on Postgres.
+    -- belongs to. See `V272__node_field_type.sql` on Postgres.
     field_kind                   varchar(16),
     field_element_kind           varchar(16),
     field_ref_object_id          integer,

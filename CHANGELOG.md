@@ -15,6 +15,21 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.8.1
+
+### 🔧 Changed
+
+- ⏱️ **How many rounds of tool calls an agent gets is a setting.** It was eight,
+  written into the code, and an agent holding twenty tools spent three of them
+  listing and loading before the work began: what came back was "kept looking
+  things up without reaching an answer", with everything it had gathered thrown
+  away and nothing anybody could change about it. Admin → Settings now carries
+  the number every agent follows, and an agent whose work is longer carries its
+  own on its page - empty there means "follow the installation". Between 2 and
+  100 at both doors; `ORKNUX_CHAT_MAX_ROUNDS` sets what a fresh installation
+  starts on, and the quick chat panel follows the installation's number too.
+  Nothing changes for an installation that leaves it alone: eight is still eight.
+
 ## 0.9.8
 
 ### ✨ Added

@@ -15,6 +15,21 @@ released together, under one version, and a reader who has to hold two
 changelogs side by side to work out what a release contains is a reader we
 have failed.
 
+## 0.9.8.3
+
+### 🐛 Fixed
+
+🧠 **An agent can write down what it was told.** `memory_save` failed for every
+agent that is not being driven by a signed-in person - one answering a Slack
+message, one running as a workflow node, one working a task. It came back "No
+authenticated user to attribute this change to", and because the failure was in
+the audit line written inside the same transaction as the memory, the memory was
+rolled back with it: nothing was stored, and an agent that said it would remember
+had nothing to show when asked. It worked from a chat, which is the one place
+somebody is signed in, so it read as intermittent rather than broken. The line is
+recorded the way an automated action already is, naming the agent - which is the
+name the memory itself was always filed under.
+
 ## 0.9.8.2
 
 ### 🐛 Fixed
